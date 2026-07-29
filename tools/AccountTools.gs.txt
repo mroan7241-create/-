@@ -8,6 +8,90 @@
  */
 
 /**
+ * (0) تشخيص: يكشف سبب أي خطأ غامض قبل تشغيل بقية الأدوات.
+ *     مغلّفة بالكامل حتى لا تُظهر رسالة "خطأ غير معروف" أبدًا.
+ */
+function diagnose() {
+  var lines = [];
+  function say(text) { lines.push(text); }
+
+  say('═══ تشخيص المشروع ═══');
+
+  // 1) هل السكربت مرتبط بملف جداول؟
+  var ss = null;
+  try {
+    ss = SpreadsheetApp.getActiveSpreadsheet();
+  } catch (error) {
+    say('✗ تعذر الوصول إلى SpreadsheetApp: ' + error.message);
+  }
+
+  if (!ss) {
+    say('✗ السكربت غير مرتبط بأي ملف Google Sheets.');
+    say('  الحل: افتح ملف الجداول ← الإضافات ← Apps Script،');
+    say('  أو استخدم النسخة المرتبطة بالملف بدل هذه.');
+    Logger.log(lines.join('\n'));
+    return lines.join('\n');
+  }
+
+  say('✓ الملف المرتبط : ' + ss.getName());
+  say('  المعرّف       : ' + ss.getId());
+  say('  المالك/الحساب : ' + (function () {
+    try { return Session.getEffectiveUser().getEmail() || '(غير متاح)'; }
+    catch (e) { return '(غير متاح)'; }
+  }()));
+
+  // 2) هل الأوراق المطلوبة موجودة؟
+  var required = ['إعدادات المشروع', 'المستخدمون', 'الجمعيات', 'المستفيدون',
+    'الأجهزة', 'المناديب', 'التسليمات', 'إدارة الأنشطة',
+    'شواهد الأنشطة الرئيسية', 'سجل العمليات'];
+
+  var present = ss.getSheets().map(function (s) { return s.getName(); });
+  say('');
+  say('الأوراق الموجودة فعليًا (' + present.length + '):');
+  present.forEach(function (name) { say('  • ' + name); });
+
+  var missing = required.filter(function (name) { return present.indexOf(name) < 0; });
+  say('');
+  if (missing.length) {
+    say('✗ أوراق مفقودة (' + missing.length + '): ' + missing.join('، '));
+  } else {
+    say('✓ جميع الأوراق العشرة موجودة.');
+  }
+
+  // 3) كم حسابًا في ورقة المستخدمين؟
+  var users = ss.getSheetByName('المستخدمون');
+  if (!users) {
+    say('✗ ورقة "المستخدمون" غير موجودة — لا يمكن استرجاع حساب الإدارة.');
+  } else {
+    var lastRow = users.getLastRow();
+    say('✓ ورقة "المستخدمون" فيها ' + Math.max(0, lastRow - 1) + ' حسابًا.');
+    if (lastRow < 2) {
+      say('  ⚠ لا توجد حسابات. النظام لم تُنشأ له بيانات دخول بعد.');
+    }
+  }
+
+  // 4) هل القفل الأمني مفتوح؟
+  var unlocked = false;
+  try {
+    unlocked = PropertiesService.getScriptProperties()
+      .getProperty('ALLOW_ADMIN_RESET') === 'YES';
+  } catch (error) {
+    say('✗ تعذر قراءة خصائص المشروع: ' + error.message);
+  }
+  say('');
+  say(unlocked
+    ? '✓ القفل ALLOW_ADMIN_RESET مفتوح — يمكن تشغيل resetAdminPassword.'
+    : '⚠ القفل ALLOW_ADMIN_RESET غير مضبوط بعد.');
+
+  say('═══ انتهى التشخيص ═══');
+
+  var report = lines.join('\n');
+  Logger.log(report);
+  return report;
+}
+
+
+/**
  * (1) يعرض الحسابات الموجودة دون إظهار أي كلمة مرور.
  *     شغّلها أولًا لتعرف بريد الإدارة الصحيح.
  */
