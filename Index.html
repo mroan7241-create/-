@@ -59,21 +59,24 @@
     :focus-visible{outline:2px solid var(--zad-700);outline-offset:2px}
     ::selection{background:var(--zad-200);color:var(--zad-900)}
 
-    /* ---------- Brand Lockup ---------- */
-    .lockup{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
-    .lockup-mark{display:flex;align-items:center;gap:11px;min-width:max-content}
+    /* ---------- Brand Lockup ----------
+       الزاد هو الشعار الرئيسي دائمًا في الصف الأول.
+       الشريك في صف مستقل تحت خط فاصل هادئ — لا دمج ولا خلفية خلف أي شعار. */
+    .lockup{display:inline-flex;flex-direction:column;align-items:flex-start;gap:11px;max-width:100%}
+    .lockup-mark{display:flex;align-items:center;gap:11px}
     .lockup-logo{height:46px;width:auto;object-fit:contain;display:block;background:none}
-    .lockup-fallback{width:44px;height:46px;display:grid;place-items:center;color:var(--zad-700)}
+    .lockup-fallback{width:42px;height:46px;flex:none;display:grid;place-items:center;color:var(--zad-700)}
     .lockup-fallback svg{width:100%;height:100%;display:block}
     .lockup-text strong{display:block;font-family:var(--font-display);font-weight:800;font-size:17px;color:var(--zad-800);line-height:1.25}
     .lockup-text span{display:block;font-size:12px;color:var(--muted)}
-    .lockup-rule{width:1px;align-self:stretch;min-height:40px;background:var(--line-strong)}
-    .lockup-partner{display:flex;align-items:center;gap:11px}
+    .lockup-partner{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+      padding-top:11px;border-top:1px solid var(--line-strong);width:100%}
     .lockup-partner .partner-label{font-size:10.5px;color:var(--muted);letter-spacing:.02em;white-space:nowrap}
-    .lockup-partner-logo{height:44px;width:auto;object-fit:contain;display:block;background:none}
-    .lockup.on-dark .lockup-text strong{color:#fff}
-    .lockup.on-dark .lockup-text span,.lockup.on-dark .partner-label{color:rgba(255,255,255,.7)}
-    .lockup.on-dark .lockup-rule{background:rgba(255,255,255,.24)}
+    .lockup-partner .partner-name{font-weight:700;font-size:13.5px;color:var(--zad-800);line-height:1.3}
+    .lockup-partner-logo{height:40px;width:auto;object-fit:contain;display:block;background:none}
+    .lockup.on-dark .lockup-text strong,.lockup.on-dark .partner-name{color:#fff}
+    .lockup.on-dark .lockup-text span,.lockup.on-dark .partner-label{color:rgba(255,255,255,.72)}
+    .lockup.on-dark .lockup-partner{border-top-color:rgba(255,255,255,.22)}
     .lockup.on-dark .lockup-fallback{color:var(--gold-400)}
 
     /* ---------- Buttons ---------- */
@@ -548,9 +551,8 @@
       }
       var partner = BRAND.partnerLogo
         ? '<img class="lockup-partner-logo" src="' + esc(BRAND.partnerLogo) + '" alt="' + esc(BRAND.partnerName) + '">'
-        : '<span class="lockup-text"><strong>' + esc(BRAND.partnerName) + '</strong></span>';
+        : '<span class="partner-name">' + esc(BRAND.partnerName) + '</span>';
       return '<div class="lockup' + onDark + '">' + identity
-        + '<span class="lockup-rule" aria-hidden="true"></span>'
         + '<div class="lockup-partner"><span class="partner-label">' + esc(BRAND.partnerLabel) + '</span>'
         + partner + '</div></div>';
     }
@@ -949,7 +951,7 @@
         + '<div class="metas">'
         + '<div class="meta"><small>الموقع</small><strong>' + esc(item.region) + ' · ' + esc(item.city) + '</strong></div>'
         + '<div class="meta"><small>الأسرة</small><strong>' + fmt(item.familyCount) + ' أفراد'
-        + (item.socialSecurity ? ' · ضمان' : '') + '</strong></div></div>'
+        + (item.socialSecurity ? '، ضمان' : '') + '</strong></div></div>'
         + '<div class="tags">' + needTags(item.needs) + '</div>'
         + '<div class="card-actions">'
         + '<button class="btn btn-ghost btn-sm" data-act="view-beneficiary" data-id="' + esc(item.id) + '">التفاصيل</button>'
@@ -978,7 +980,7 @@
         + '<div class="meta wide"><small>العنوان الدقيق</small><strong>' + esc(item.address) + '</strong></div>'
         + '<div class="meta"><small>التواصل</small><strong dir="ltr" class="mono">' + esc(item.phone)
         + (item.phone2 ? ' / ' + esc(item.phone2) : '') + '</strong></div>'
-        + '<div class="meta"><small>عدد الأفراد</small><strong>' + fmt(item.familyCount) + ' · '
+        + '<div class="meta"><small>عدد الأفراد</small><strong>' + fmt(item.familyCount) + ' أفراد، '
         + (item.socialSecurity ? 'مستفيد ضمان' : 'غير مستفيد ضمان') + '</strong></div>'
         + '<div class="meta"><small>الحالة الاجتماعية</small><strong>' + esc(item.socialStatus || '—') + '</strong></div>'
         + '<div class="meta"><small>الدخل الشهري</small><strong>' + money(item.income) + '</strong></div>'
