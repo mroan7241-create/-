@@ -1,0 +1,2017 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#8E1B45">
+  <title>نظام متابعة توزيع الأجهزة | جمعية الزاد</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    /* ============================================================
+       نظام تصميم جمعية الزاد — Design Tokens
+       اللون الأساسي: العنابي. المساعد: الذهبي. الحياد: رملي فاتح.
+       ============================================================ */
+    :root{
+      /* هوية الزاد — العنابي */
+      --zad-950:#4A0A22; --zad-900:#5E0E2C; --zad-800:#75123A;
+      --zad-700:#8E1B45; --zad-600:#A32B4C; --zad-500:#B3423F;
+      --zad-400:#C05A4C; --zad-300:#D98C81; --zad-200:#EDC4BD; --zad-100:#F8E6E2;
+      /* التدرج الرسمي المستخرج من هوية التقرير السنوي */
+      --zad-gradient:linear-gradient(115deg,var(--zad-900) 0%,var(--zad-700) 42%,var(--zad-400) 100%);
+      --zad-gradient-soft:linear-gradient(115deg,rgba(94,14,44,.06),rgba(192,90,76,.10));
+      /* الذهبي المساعد — من رمز الزاد */
+      --gold-700:#B07C12; --gold-600:#C9901A; --gold-500:#E2A62E;
+      --gold-400:#EEBE5E; --gold-200:#F7E3B6; --gold-100:#FDF4E2;
+      /* الحياد */
+      --ink:#2A1520; --ink-soft:#5A4650; --muted:#867078;
+      --paper:#FFFFFF; --surface:#FDFAF9; --canvas:#F6F1EF;
+      --line:#EDE1E4; --line-strong:#E0CDD3;
+      /* الحالات — مشتقة لتنسجم مع العنابي */
+      --ok:#1E7A57; --ok-bg:#E4F2EB;
+      --info:#2C6288; --info-bg:#E4EDF4;
+      --warn:#9C6B12; --warn-bg:#FBF0DC;
+      --bad:#A8283C; --bad-bg:#FBE6E9;
+      --neutral:#6D6068; --neutral-bg:#F0EAEC;
+      /* الشكل */
+      --r-sm:10px; --r-md:14px; --r-lg:20px; --r-xl:26px; --r-pill:999px;
+      --sh-1:0 1px 2px rgba(42,21,32,.05);
+      --sh-2:0 6px 18px rgba(42,21,32,.06);
+      --sh-3:0 18px 44px rgba(42,21,32,.12);
+      --sh-4:0 30px 70px rgba(42,21,32,.20);
+      --focus:0 0 0 3px rgba(142,27,69,.22);
+      --font:"IBM Plex Sans Arabic","Tajawal","Segoe UI",Tahoma,Arial,sans-serif;
+      --font-display:"Tajawal","IBM Plex Sans Arabic",Tahoma,Arial,sans-serif;
+    }
+
+    *,*::before,*::after{box-sizing:border-box}
+    html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+    body{margin:0;background:var(--canvas);color:var(--ink);font-family:var(--font);font-size:15px;line-height:1.7;min-height:100vh;-webkit-font-smoothing:antialiased}
+    h1,h2,h3,h4{font-family:var(--font-display);line-height:1.3;margin:0}
+    button,input,select,textarea{font:inherit;color:inherit}
+    button{cursor:pointer;border:0;background:none}
+    button[disabled]{opacity:.55;cursor:not-allowed}
+    a{color:inherit}
+    img{max-width:100%}
+    .hidden{display:none!important}
+    .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    :focus-visible{outline:2px solid var(--zad-700);outline-offset:2px}
+    ::selection{background:var(--zad-200);color:var(--zad-900)}
+
+    /* ---------- Brand Lockup ---------- */
+    .lockup{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+    .lockup-mark{display:flex;align-items:center;gap:11px;min-width:max-content}
+    .lockup-logo{height:46px;width:auto;object-fit:contain;display:block;background:none}
+    .lockup-fallback{width:44px;height:46px;display:grid;place-items:center;color:var(--zad-700)}
+    .lockup-fallback svg{width:100%;height:100%;display:block}
+    .lockup-text strong{display:block;font-family:var(--font-display);font-weight:800;font-size:17px;color:var(--zad-800);line-height:1.25}
+    .lockup-text span{display:block;font-size:12px;color:var(--muted)}
+    .lockup-rule{width:1px;align-self:stretch;min-height:40px;background:var(--line-strong)}
+    .lockup-partner{display:flex;align-items:center;gap:11px}
+    .lockup-partner .partner-label{font-size:10.5px;color:var(--muted);letter-spacing:.02em;white-space:nowrap}
+    .lockup-partner-logo{height:44px;width:auto;object-fit:contain;display:block;background:none}
+    .lockup.on-dark .lockup-text strong{color:#fff}
+    .lockup.on-dark .lockup-text span,.lockup.on-dark .partner-label{color:rgba(255,255,255,.7)}
+    .lockup.on-dark .lockup-rule{background:rgba(255,255,255,.24)}
+    .lockup.on-dark .lockup-fallback{color:var(--gold-400)}
+
+    /* ---------- Buttons ---------- */
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:11px 18px;border-radius:var(--r-md);font-weight:700;font-size:14px;transition:background .18s,color .18s,box-shadow .18s,transform .18s;white-space:nowrap}
+    .btn:active{transform:translateY(1px)}
+    .btn-primary{background:var(--zad-700);color:#fff;box-shadow:0 8px 20px rgba(142,27,69,.22)}
+    .btn-primary:hover:not([disabled]){background:var(--zad-800)}
+    .btn-gold{background:var(--gold-500);color:#3B2A05;box-shadow:0 8px 20px rgba(226,166,46,.26)}
+    .btn-gold:hover:not([disabled]){background:var(--gold-600);color:#fff}
+    .btn-soft{background:var(--zad-100);color:var(--zad-800)}
+    .btn-soft:hover:not([disabled]){background:var(--zad-200)}
+    .btn-ghost{background:var(--paper);color:var(--ink);border:1px solid var(--line-strong)}
+    .btn-ghost:hover:not([disabled]){border-color:var(--zad-300);color:var(--zad-800)}
+    .btn-danger{background:var(--bad-bg);color:var(--bad)}
+    .btn-danger:hover:not([disabled]){background:var(--bad);color:#fff}
+    .btn-link{min-height:auto;padding:4px 2px;color:var(--zad-700);font-weight:700;font-size:13px}
+    .btn-link:hover{text-decoration:underline}
+    .btn-block{width:100%}
+    .btn-sm{min-height:38px;padding:8px 13px;font-size:13px}
+
+    /* ---------- Forms ---------- */
+    .field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
+    .field>label{font-size:12.5px;font-weight:700;color:var(--ink-soft)}
+    .field .hint{font-size:11.5px;color:var(--muted)}
+    .field .err{font-size:11.5px;color:var(--bad);font-weight:700}
+    .control{width:100%;min-height:46px;border:1px solid var(--line-strong);background:var(--paper);border-radius:var(--r-md);padding:11px 14px;outline:0;transition:border-color .15s,box-shadow .15s}
+    .control:hover{border-color:var(--zad-300)}
+    .control:focus{border-color:var(--zad-700);box-shadow:var(--focus)}
+    .control[disabled]{background:var(--canvas);color:var(--muted)}
+    .field.invalid .control{border-color:var(--bad);box-shadow:0 0 0 3px rgba(168,40,60,.14)}
+    textarea.control{min-height:100px;resize:vertical;line-height:1.7}
+    select.control{appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(14px) calc(50% - 2px),calc(19px) calc(50% - 2px);background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-left:38px}
+    .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px}
+    .span-2{grid-column:1/-1}
+    .pledge{display:flex;gap:11px;align-items:flex-start;background:var(--gold-100);border:1px solid var(--gold-200);padding:14px;border-radius:var(--r-md);margin:8px 0 4px;font-size:13px;line-height:1.75}
+    .pledge input{margin-top:5px;width:18px;height:18px;accent-color:var(--zad-700);flex:none}
+    .choice-grid{display:flex;gap:8px;flex-wrap:wrap}
+    .choice{display:inline-flex;align-items:center;gap:7px;background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--r-pill);padding:9px 14px;font-size:13px;cursor:pointer;transition:.15s;min-height:42px}
+    .choice:hover{border-color:var(--zad-300)}
+    .choice input{accent-color:var(--zad-700);width:16px;height:16px}
+    .choice:has(input:checked){background:var(--zad-100);border-color:var(--zad-600);color:var(--zad-800);font-weight:700}
+
+    /* ---------- Login ---------- */
+    .login{min-height:100vh;display:grid;grid-template-columns:minmax(380px,540px) 1fr;background:var(--surface)}
+    .login-panel{padding:clamp(26px,5vw,68px);display:flex;flex-direction:column;justify-content:center;background:var(--paper);position:relative;z-index:1}
+    .login-panel .lockup{margin-bottom:clamp(26px,5vh,52px)}
+    .login-panel h1{font-size:clamp(28px,3.4vw,42px);color:var(--zad-800);margin-bottom:12px;letter-spacing:-.01em}
+    .login-lede{color:var(--ink-soft);font-size:15.5px;margin:0 0 28px;max-width:44ch}
+    .segmented{display:flex;background:var(--canvas);padding:5px;border-radius:var(--r-md);margin-bottom:22px;gap:4px}
+    .segmented button{flex:1;min-height:42px;border-radius:10px;color:var(--muted);font-weight:700;font-size:13.5px;transition:.18s}
+    .segmented button[aria-selected="true"]{background:var(--paper);color:var(--zad-800);box-shadow:var(--sh-2)}
+    .login-art{position:relative;overflow:hidden;display:grid;place-items:center;padding:60px;background:var(--zad-gradient)}
+    .login-art::before,.login-art::after{content:"";position:absolute;border-radius:50%;border:1px solid rgba(255,255,255,.16)}
+    .login-art::before{width:min(60vw,620px);aspect-ratio:1}
+    .login-art::after{width:min(42vw,430px);aspect-ratio:1;border-color:rgba(226,166,46,.3)}
+    .art-card{position:relative;z-index:1;text-align:center;max-width:440px;color:#fff}
+    .art-seal{width:76px;height:76px;margin:0 auto 22px;border-radius:50%;border:1.5px solid rgba(226,166,46,.6);display:grid;place-items:center;color:var(--gold-400)}
+    .art-seal svg{width:40px;height:40px}
+    .art-card h2{font-size:27px;margin-bottom:12px}
+    .art-card p{color:rgba(255,255,255,.78);margin:0 0 26px}
+    .art-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;border-top:1px solid rgba(255,255,255,.18);padding-top:22px}
+    .art-stats strong{display:block;font-family:var(--font-display);font-size:22px;color:var(--gold-400)}
+    .art-stats span{font-size:11.5px;color:rgba(255,255,255,.7)}
+
+    /* ---------- App shell ---------- */
+    .shell{min-height:100vh}
+    .sidebar{position:fixed;inset-block:0;inset-inline-end:0;width:268px;background:var(--zad-950);background-image:linear-gradient(180deg,var(--zad-900),var(--zad-950));color:#fff;padding:20px 14px;display:flex;flex-direction:column;z-index:40}
+    .sidebar .lockup{padding:6px 8px 20px;border-bottom:1px solid rgba(255,255,255,.12);margin-bottom:18px}
+    .nav{display:flex;flex-direction:column;gap:3px;overflow-y:auto}
+    .nav button{display:flex;align-items:center;gap:11px;width:100%;min-height:46px;padding:11px 13px;border-radius:var(--r-md);color:rgba(255,255,255,.7);font-weight:600;font-size:14px;text-align:start;transition:.16s;position:relative}
+    .nav button:hover{background:rgba(255,255,255,.08);color:#fff}
+    .nav button[aria-current="page"]{background:rgba(255,255,255,.12);color:#fff;font-weight:700}
+    .nav button[aria-current="page"]::before{content:"";position:absolute;inset-inline-end:0;inset-block:11px;width:3px;border-radius:3px;background:var(--gold-500)}
+    .nav .ico{width:22px;text-align:center;flex:none;color:var(--gold-400);font-size:15px}
+    .side-foot{margin-top:auto;padding-top:16px;border-top:1px solid rgba(255,255,255,.12)}
+    .side-user{padding:4px 8px 12px}
+    .side-user strong{display:block;font-size:14px}
+    .side-user span{display:block;font-size:12px;color:rgba(255,255,255,.6)}
+
+    .main{margin-inline-end:268px;min-height:100vh;display:flex;flex-direction:column}
+    .topbar{min-height:76px;background:rgba(253,250,249,.9);backdrop-filter:blur(12px);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 28px;position:sticky;top:0;z-index:30}
+    .topbar h2{font-size:20px;color:var(--zad-800)}
+    .topbar .crumb{font-size:12px;color:var(--muted)}
+    .top-actions{display:flex;align-items:center;gap:9px}
+    .menu-btn{display:none}
+    .content{padding:24px 28px 56px;max-width:1560px;width:100%;margin-inline:auto;flex:1}
+
+    /* ---------- Hero ---------- */
+    .hero{position:relative;overflow:hidden;background:var(--zad-gradient);color:#fff;border-radius:var(--r-xl);padding:26px 30px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;gap:22px;flex-wrap:wrap}
+    .hero::after{content:"";position:absolute;inset-inline-start:-90px;top:-120px;width:280px;height:280px;border-radius:50%;border:44px solid rgba(226,166,46,.14);pointer-events:none}
+    .hero h1{font-size:clamp(20px,2.4vw,27px);margin-bottom:6px}
+    .hero p{margin:0;color:rgba(255,255,255,.76);font-size:14px}
+    .hero-chip{position:relative;z-index:1;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);padding:11px 16px;border-radius:var(--r-md);font-size:13px;white-space:nowrap}
+
+    /* ---------- KPI ---------- */
+    .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:20px}
+    .kpi{position:relative;overflow:hidden;background:var(--paper);border:1px solid var(--line);border-radius:var(--r-lg);padding:18px 20px;box-shadow:var(--sh-1);min-height:126px;display:flex;flex-direction:column}
+    .kpi::after{content:"";position:absolute;inset-inline-start:-26px;bottom:-34px;width:78px;height:78px;border-radius:26px;background:var(--zad-100);transform:rotate(18deg)}
+    .kpi.accent::after{background:var(--gold-100)}
+    .kpi-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+    .kpi-top span{font-size:12.5px;font-weight:700;color:var(--muted)}
+    .kpi-ico{position:relative;z-index:1;width:36px;height:36px;flex:none;border-radius:11px;background:var(--zad-100);color:var(--zad-700);display:grid;place-items:center;font-size:16px}
+    .kpi.accent .kpi-ico{background:var(--gold-100);color:var(--gold-700)}
+    .kpi strong{position:relative;z-index:1;font-family:var(--font-display);font-size:31px;font-weight:800;color:var(--zad-800);margin-top:auto;line-height:1.1}
+    .kpi small{position:relative;z-index:1;color:var(--muted);font-size:12px}
+
+    /* ---------- Panels ---------- */
+    .cols{display:grid;grid-template-columns:1.4fr .85fr;gap:18px}
+    .panel{background:var(--paper);border:1px solid var(--line);border-radius:var(--r-lg);padding:20px;box-shadow:var(--sh-1)}
+    .panel+.panel{margin-top:18px}
+    .panel-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:16px}
+    .panel-head h3{font-size:17px;color:var(--zad-800)}
+    .panel-head p{margin:3px 0 0;color:var(--muted);font-size:12.5px}
+
+    /* ---------- Toolbar ---------- */
+    .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+    .search{position:relative;flex:1;min-width:230px}
+    .search .control{padding-inline-start:42px}
+    .search .glyph{position:absolute;inset-inline-start:15px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none}
+    .toolbar select.control{width:auto;min-width:172px}
+    .result-count{font-size:12.5px;color:var(--muted);margin-inline-start:auto}
+
+    /* ---------- Status ---------- */
+    .status{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:var(--r-pill);font-size:11.5px;font-weight:700;white-space:nowrap;border:1px solid transparent}
+    .status::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+    .status.good{background:var(--ok-bg);color:var(--ok);border-color:rgba(30,122,87,.2)}
+    .status.info{background:var(--info-bg);color:var(--info);border-color:rgba(44,98,136,.2)}
+    .status.warn{background:var(--warn-bg);color:var(--warn);border-color:rgba(156,107,18,.22)}
+    .status.bad{background:var(--bad-bg);color:var(--bad);border-color:rgba(168,40,60,.2)}
+    .status.neutral{background:var(--neutral-bg);color:var(--neutral);border-color:rgba(109,96,104,.18)}
+
+    /* ---------- Progress ---------- */
+    .bar{display:flex;align-items:center;gap:12px}
+    .bar-track{height:9px;flex:1;background:var(--canvas);border-radius:var(--r-pill);overflow:hidden}
+    .bar-fill{height:100%;border-radius:var(--r-pill);background:linear-gradient(90deg,var(--zad-700),var(--zad-400));transition:width .5s ease}
+    .bar-fill.gold{background:linear-gradient(90deg,var(--gold-600),var(--gold-400))}
+    .bar-val{font-family:var(--font-display);font-weight:800;color:var(--zad-800);min-width:44px;text-align:end;font-size:14px}
+    .ring{--p:0;width:76px;height:76px;flex:none;border-radius:50%;background:conic-gradient(var(--zad-700) calc(var(--p)*1%),var(--canvas) 0);display:grid;place-items:center}
+    .ring::before{content:attr(data-value);width:56px;height:56px;border-radius:50%;background:var(--paper);display:grid;place-items:center;font-family:var(--font-display);font-size:13px;font-weight:800;color:var(--zad-800)}
+
+    /* ---------- Cards ---------- */
+    .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:14px}
+    .card{background:var(--paper);border:1px solid var(--line);border-radius:var(--r-lg);padding:18px;transition:box-shadow .2s,transform .2s,border-color .2s;display:flex;flex-direction:column}
+    .card:hover{transform:translateY(-2px);box-shadow:var(--sh-3);border-color:var(--zad-200)}
+    .card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px}
+    .card-head h3{font-size:16px;color:var(--zad-800)}
+    .card-head p{margin:3px 0 0;font-size:12px;color:var(--muted)}
+    .metas{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:10px 0}
+    .meta{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 11px;min-width:0}
+    .meta small{display:block;color:var(--muted);font-size:10.5px;margin-bottom:2px}
+    .meta strong{display:block;font-size:13px;color:var(--ink);font-weight:700;overflow-wrap:anywhere}
+    .meta.wide{grid-column:1/-1}
+    .tags{display:flex;gap:6px;flex-wrap:wrap}
+    .tag{display:inline-flex;align-items:center;gap:5px;background:var(--zad-100);color:var(--zad-800);border-radius:var(--r-sm);padding:5px 10px;font-size:11.5px;font-weight:600}
+    .tag.plain{background:var(--surface);color:var(--muted);border:1px solid var(--line);font-weight:500}
+    .card-actions{display:flex;gap:8px;margin-top:auto;padding-top:14px}
+    .card-actions .btn{flex:1}
+
+    /* ---------- Table ---------- */
+    .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r-md);background:var(--paper)}
+    table.data{width:100%;border-collapse:collapse;min-width:820px}
+    table.data th{background:var(--surface);color:var(--ink-soft);padding:12px 14px;text-align:start;font-size:12px;font-weight:700;white-space:nowrap;border-bottom:1px solid var(--line)}
+    table.data td{padding:13px 14px;border-top:1px solid var(--line);font-size:13.5px;vertical-align:middle}
+    table.data tbody tr:hover td{background:var(--surface)}
+    .mono{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--muted);direction:ltr;display:inline-block;unicode-bidi:isolate}
+    .muted{color:var(--muted)}
+
+    /* ---------- Rows ---------- */
+    .rows{display:flex;flex-direction:column}
+    .row-item{display:grid;grid-template-columns:1.4fr 1fr auto;gap:14px;align-items:center;padding:13px 2px;border-bottom:1px solid var(--line)}
+    .row-item:last-child{border-bottom:0}
+    .row-item strong{font-size:13.5px;color:var(--ink)}
+    .row-item small{display:block;color:var(--muted);font-size:12px}
+    .alert{border-inline-start:3px solid;padding:12px 14px;border-radius:var(--r-sm);background:var(--surface);margin-bottom:9px}
+    .alert:last-child{margin-bottom:0}
+    .alert.critical{border-color:var(--bad);background:var(--bad-bg)}
+    .alert.high{border-color:var(--gold-600);background:var(--gold-100)}
+    .alert strong{display:block;font-size:13px}
+    .alert small{color:var(--ink-soft);font-size:12px}
+
+    /* ---------- Empty / skeleton ---------- */
+    .empty{text-align:center;padding:44px 22px;color:var(--muted)}
+    .empty .glyph{width:60px;height:60px;margin:0 auto 14px;border-radius:50%;background:var(--zad-100);color:var(--zad-600);display:grid;place-items:center;font-size:25px}
+    .empty h3{color:var(--zad-800);font-size:16px;margin-bottom:6px}
+    .empty p{margin:0 auto;max-width:42ch;font-size:13.5px}
+    .empty .btn{margin-top:16px}
+    .sk{background:linear-gradient(90deg,var(--canvas) 25%,var(--surface) 50%,var(--canvas) 75%);background-size:200% 100%;animation:sk 1.3s linear infinite;border-radius:var(--r-md)}
+    @keyframes sk{to{background-position:-200% 0}}
+    .sk-kpi{height:126px}.sk-line{height:14px;margin-bottom:9px}.sk-card{height:210px}
+    @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+    /* ---------- Modal ---------- */
+    .backdrop{position:fixed;inset:0;background:rgba(35,10,22,.55);backdrop-filter:blur(3px);z-index:70;display:grid;place-items:center;padding:18px;animation:fade .18s}
+    @keyframes fade{from{opacity:0}}
+    .modal{background:var(--paper);width:min(760px,100%);max-height:92vh;display:flex;flex-direction:column;border-radius:var(--r-xl);box-shadow:var(--sh-4);animation:pop .22s cubic-bezier(.2,.8,.3,1)}
+    @keyframes pop{from{transform:translateY(14px) scale(.98);opacity:0}}
+    .modal-head{padding:20px 24px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:14px;flex:none}
+    .modal-head h3{font-size:18px;color:var(--zad-800)}
+    .modal-body{padding:22px 24px;overflow-y:auto;flex:1}
+    .modal-foot{padding:16px 24px;border-top:1px solid var(--line);display:flex;gap:9px;justify-content:flex-end;flex-wrap:wrap;flex:none;background:var(--surface);border-radius:0 0 var(--r-xl) var(--r-xl)}
+    .x-btn{width:38px;height:38px;flex:none;border-radius:50%;background:var(--canvas);color:var(--ink-soft);display:grid;place-items:center;font-size:19px;line-height:1}
+    .x-btn:hover{background:var(--zad-100);color:var(--zad-800)}
+    .code-reveal{text-align:center;padding:20px;background:var(--gold-100);border:1px dashed var(--gold-400);border-radius:var(--r-md)}
+    .code-reveal .code{font-family:ui-monospace,Consolas,monospace;font-size:27px;font-weight:700;color:var(--zad-800);letter-spacing:.06em;direction:ltr;margin:10px 0;unicode-bidi:isolate}
+
+    /* ---------- Toast ---------- */
+    .toasts{position:fixed;inset-inline-start:20px;bottom:20px;z-index:100;display:flex;flex-direction:column;gap:9px;max-width:min(400px,calc(100vw - 40px))}
+    .toast{display:flex;align-items:flex-start;gap:10px;background:var(--zad-900);color:#fff;padding:13px 16px;border-radius:var(--r-md);box-shadow:var(--sh-3);font-size:13.5px;animation:slide .24s}
+    @keyframes slide{from{transform:translateY(12px);opacity:0}}
+    .toast.error{background:var(--bad)}
+    .toast.success{background:var(--ok)}
+    .toast .glyph{flex:none;font-weight:800}
+
+    /* ---------- Delegate mobile ---------- */
+    .dg{min-height:100vh;background:var(--canvas);padding-bottom:34px}
+    .dg-top{background:var(--zad-gradient);color:#fff;padding:20px 18px 30px;border-radius:0 0 var(--r-xl) var(--r-xl);position:relative;overflow:hidden}
+    .dg-top::after{content:"";position:absolute;inset-inline-start:-70px;top:-90px;width:210px;height:210px;border-radius:50%;border:36px solid rgba(226,166,46,.14)}
+    .dg-top .lockup{margin-bottom:20px;position:relative;z-index:1}
+    .dg-top h2{font-size:20px;margin-bottom:3px;position:relative;z-index:1}
+    .dg-top>p{margin:0 0 18px;color:rgba(255,255,255,.75);font-size:13px;position:relative;z-index:1}
+    .dg-stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;position:relative;z-index:1}
+    .dg-stats div{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.16);padding:13px 15px;border-radius:var(--r-md)}
+    .dg-stats strong{display:block;font-family:var(--font-display);font-size:25px;line-height:1.2}
+    .dg-stats span{font-size:11.5px;color:rgba(255,255,255,.75)}
+    .dg-body{max-width:700px;margin-inline:auto;padding:16px}
+    .dg-nav{display:flex;gap:8px;margin-bottom:14px}
+    .dg-nav .btn{flex:1}
+    .dg-nav .btn.icon{flex:none;width:46px;padding:0}
+    .dg-card{background:var(--paper);border:1px solid var(--line);border-radius:var(--r-lg);padding:17px;margin-bottom:12px;box-shadow:var(--sh-1)}
+    .dg-card h3{font-size:16px;color:var(--zad-800)}
+    .dg-addr{color:var(--ink-soft);font-size:13px;margin:8px 0 12px;display:flex;gap:7px;align-items:flex-start}
+    .dg-acts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
+    .dg-acts>*{display:flex;align-items:center;justify-content:center;min-height:46px;border-radius:var(--r-md);text-decoration:none;font-size:12.5px;font-weight:700;text-align:center;padding:8px 4px}
+    .a-call{background:var(--info-bg);color:var(--info)}
+    .a-wa{background:var(--ok-bg);color:var(--ok)}
+    .a-map{background:var(--gold-100);color:var(--gold-700)}
+    .a-state{background:var(--neutral-bg);color:var(--neutral);grid-column:span 1}
+    .a-deliver{background:var(--zad-700);color:#fff;grid-column:span 2;box-shadow:0 6px 16px rgba(142,27,69,.22)}
+
+    /* ---------- Proof upload ---------- */
+    .drop{border:2px dashed var(--line-strong);border-radius:var(--r-lg);padding:22px;text-align:center;background:var(--surface)}
+    .drop input[type=file]{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+    .drop .btn{margin-bottom:6px}
+    .proof-img{max-width:100%;max-height:270px;border-radius:var(--r-md);margin-top:12px;border:1px solid var(--line)}
+
+    /* ---------- Boot / fatal ---------- */
+    .boot{min-height:100vh;display:grid;place-items:center;padding:24px;text-align:center;color:var(--zad-800)}
+    .boot .spin{width:42px;height:42px;margin:0 auto 16px;border-radius:50%;border:3px solid var(--zad-100);border-top-color:var(--zad-700);animation:spin .8s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .fatal{max-width:720px;background:var(--paper);border:1px solid var(--line);border-radius:var(--r-lg);padding:28px;text-align:start;box-shadow:var(--sh-2)}
+    .fatal pre{direction:ltr;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--canvas);padding:13px;border-radius:var(--r-sm);font-size:12px}
+
+    /* ---------- Responsive ---------- */
+    @media(max-width:1180px){
+      .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .cols{grid-template-columns:1fr}
+      .login{grid-template-columns:1fr}
+      .login-art{display:none}
+      .login-panel{max-width:640px;width:100%;margin-inline:auto}
+      .sidebar{width:236px}.main{margin-inline-end:236px}
+    }
+    @media(max-width:820px){
+      body{font-size:14.5px}
+      .sidebar{transform:translateX(-110%);transition:transform .25s ease;width:274px;box-shadow:var(--sh-4)}
+      html[dir=rtl] .sidebar{transform:translateX(110%)}
+      .sidebar.open,html[dir=rtl] .sidebar.open{transform:none}
+      .main{margin-inline-end:0}
+      .menu-btn{display:inline-flex}
+      .scrim{position:fixed;inset:0;background:rgba(35,10,22,.45);z-index:35}
+      .topbar{padding:10px 15px;min-height:66px}
+      .topbar h2{font-size:17px}
+      .content{padding:16px 14px 40px}
+      .hero{padding:20px;flex-direction:column;align-items:flex-start}
+      .kpis{gap:10px}
+      .kpi{padding:15px;min-height:112px}
+      .kpi strong{font-size:26px}
+      .cards{grid-template-columns:1fr}
+      .form-grid{grid-template-columns:1fr}
+      .span-2{grid-column:auto}
+      .panel{padding:16px}
+      .row-item{grid-template-columns:1fr auto}
+      .row-item>.hide-sm{display:none}
+      .backdrop{padding:0;place-items:end stretch}
+      .modal{max-height:94vh;border-radius:var(--r-xl) var(--r-xl) 0 0;width:100%}
+      .modal-foot{border-radius:0}
+      .modal-foot .btn{flex:1}
+      .toasts{inset-inline:12px;bottom:12px;max-width:none}
+      .lockup-logo,.lockup-partner-logo{height:38px}
+    }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <main class="boot"><div><div class="spin"></div><strong>جاري تحميل نظام متابعة توزيع الأجهزة…</strong></div></main>
+  </div>
+  <div id="modalRoot"></div>
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+
+  <script>
+    /* حارس الإقلاع: يعرض سبب أي عطل قبل جاهزية التطبيق فقط. */
+    (function () {
+      window.__zadReady = false;
+      window.onerror = function (message, source, line, column) {
+        if (window.__zadReady) return false;
+        var target = document.getElementById('root');
+        if (!target) return false;
+        var detail = String(message || 'خطأ غير معروف') + ' — ' + String(line || '?') + ':' + String(column || '?');
+        detail = detail.replace(/[&<>]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c]; });
+        target.innerHTML = '<main class="boot"><div class="fatal"><h2>تعذر تشغيل الواجهة</h2>'
+          + '<p>صوّر هذه الرسالة وأرسلها للمطور، ثم تأكد من فتح أحدث رابط نشر.</p>'
+          + '<pre>' + detail + '</pre></div></main>';
+        return false;
+      };
+    }());
+  </script>
+
+  <script>
+    'use strict';
+
+    /* ============================================================
+       0) ثوابت وأدوات أساسية
+       ============================================================ */
+
+    /* يُبنى الفاصل من رموزه لمنع أي أداة نشر من اقتطاع الشرطتين. */
+    var SLASHES = String.fromCharCode(47, 47);
+    var HTTPS = 'https:' + SLASHES;
+
+    /**
+     * أصول الهوية البصرية.
+     * ضع هنا نسخة PNG/SVG **مفرّغة الخلفية** لكل شعار بصيغة data URI.
+     * إذا تُركت فارغة يعرض النظام بديلًا نصيًا أنيقًا بدل أي مربع أسود.
+     */
+    var BRAND = {
+      zadLogo: '',
+      partnerLogo: '',
+      partnerName: 'مؤسسة سليمان أبانمي الأهلية',
+      partnerLabel: 'بالشراكة مع'
+    };
+
+    var ICONS = {
+      dashboard: '▦', beneficiaries: '☗', associations: '◉', devices: '▤',
+      delegates: '➤', activities: '◇', audit: '≡', settings: '⚙'
+    };
+    var NAV_LABELS = {
+      dashboard: 'لوحة البيانات', beneficiaries: 'المستفيدون', associations: 'الجمعيات',
+      devices: 'الأجهزة', delegates: 'المناديب', activities: 'متابعة المشروع',
+      audit: 'سجل العمليات', settings: 'الإعدادات'
+    };
+    var NAV_HINTS = {
+      dashboard: 'ملخص تنفيذي لحالة المشروع', beneficiaries: 'ملفات المستفيدين والاحتياج',
+      associations: 'الجمعيات المشاركة ونسب إنجازها', devices: 'مخزون الأجهزة ومسارها',
+      delegates: 'فريق التسليم الميداني', activities: 'مراحل المشروع وأنشطته',
+      audit: 'سجل غير قابل للتعديل لكل إجراء', settings: 'بيانات الحساب والأمان'
+    };
+    var BENEFICIARY_FILTERS = ['جديد', 'تحت المراجعة', 'معتمد', 'بانتظار الأجهزة', 'جاري التسليم', 'تم التسليم', 'تعذر التسليم', 'ملغي'];
+    var DEVICE_FILTERS = ['بالمستودع', 'مخصص', 'مع المندوب', 'تم التسليم', 'تالف'];
+    var NEED_OPTIONS = ['ثلاجة', 'غسالة', 'فرن', 'مكيف', 'فريزر', 'سخان'];
+    var SOCIAL_STATUSES = ['يتيم', 'أرملة', 'مطلق/مطلقة', 'متزوج/متزوجة', 'أخرى'];
+    var FAILED_REASONS = ['لم يتم التواصل', 'لا يرد', 'طلب تأجيل', 'العنوان غير صحيح', 'غير موجود', 'رفض الاستلام'];
+
+    var $ = function (selector, scope) { return (scope || document).querySelector(selector); };
+    var $$ = function (selector, scope) { return Array.prototype.slice.call((scope || document).querySelectorAll(selector)); };
+
+    function esc(value) {
+      return String(value === undefined || value === null ? '' : value).replace(/[&<>"']/g, function (c) {
+        return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'}[c];
+      });
+    }
+    function fmt(value) { return new Intl.NumberFormat('ar-SA').format(Number(value) || 0); }
+    function money(value) { return fmt(value) + ' ر.س'; }
+    function pct(value) { return Math.max(0, Math.min(100, Number(value) || 0)); }
+
+    function safeSession(action, key, value) {
+      try {
+        if (action === 'get') return sessionStorage.getItem(key) || '';
+        if (action === 'set') sessionStorage.setItem(key, value);
+        if (action === 'remove') sessionStorage.removeItem(key);
+      } catch (ignore) { /* الوضع الخاص يمنع التخزين */ }
+      return '';
+    }
+
+    /* ============================================================
+       1) الحالة والاتصال بالخادم
+       ============================================================ */
+
+    var state = {
+      token: safeSession('get', 'zad_token'),
+      user: null,
+      data: null,
+      page: 'dashboard',
+      loginType: 'association',
+      search: '',
+      filter: '',
+      delegatePage: 'list',
+      loading: false,
+      inflight: 0,
+      proofData: '',
+      pendingRows: []
+    };
+
+    function api(method) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      return new Promise(function (resolve, reject) {
+        if (!(window.google && google.script && google.script.run)) {
+          reject(new Error('افتح النظام من رابط تطبيق Google Apps Script المنشور.'));
+          return;
+        }
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(function (error) {
+            reject(new Error((error && error.message) || 'تعذر الاتصال بالخادم. تحقق من الاتصال وحاول مجددًا.'));
+          })[method].apply(null, args);
+      });
+    }
+
+    /** يمنع النقر المتكرر ويعرض حالة انشغال موحدة. */
+    function busy(on) {
+      state.inflight = Math.max(0, state.inflight + (on ? 1 : -1));
+      var isBusy = state.inflight > 0;
+      state.loading = isBusy;
+      document.body.style.cursor = isBusy ? 'progress' : '';
+      $$('[data-act]').forEach(function (el) {
+        if (el.tagName === 'BUTTON') el.disabled = isBusy;
+      });
+    }
+
+    function toast(message, kind) {
+      var stack = $('#toasts');
+      if (!stack) return;
+      var el = document.createElement('div');
+      el.className = 'toast ' + (kind || '');
+      var glyph = document.createElement('span');
+      glyph.className = 'glyph';
+      glyph.textContent = kind === 'error' ? '!' : '✓';
+      var text = document.createElement('span');
+      text.textContent = message;
+      el.appendChild(glyph);
+      el.appendChild(text);
+      stack.appendChild(el);
+      setTimeout(function () { el.remove(); }, kind === 'error' ? 6000 : 3800);
+    }
+
+    function reportError(error) {
+      var message = (error && error.message) || 'حدث خطأ غير متوقع. حاول مجددًا.';
+      toast(message, 'error');
+      if (message.indexOf('انتهت الجلسة') >= 0) doLogout(false);
+    }
+
+    /* ============================================================
+       2) مكوّنات العرض المشتركة
+       ============================================================ */
+
+    var ZAD_SEAL_SVG = '<svg viewBox="0 0 48 52" aria-hidden="true" focusable="false">'
+      + '<path d="M6 4h27a9 9 0 0 1 9 9v20a15 15 0 0 1-15 15H6z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/>'
+      + '<path d="M24 16v18M24 20c-4 0-6-2-6-5 3 0 6 2 6 5zm0 0c4 0 6-2 6-5-3 0-6 2-6 5zm0 8c-4 0-6-2-6-5 3 0 6 2 6 5zm0 0c4 0 6-2 6-5-3 0-6 2-6 5z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>'
+      + '</svg>';
+
+    /**
+     * Brand Lockup موحّد: شعار الزاد رئيسيًا، وشعار الشريك بجانبه بفاصل هادئ.
+     * لا يُطبّق أي خلفية أو ظل أو قص على أي شعار.
+     */
+    function lockup(options) {
+      options = options || {};
+      var onDark = options.onDark ? ' on-dark' : '';
+      var mark = BRAND.zadLogo
+        ? '<img class="lockup-logo" src="' + esc(BRAND.zadLogo) + '" alt="جمعية الزاد">'
+        : '<span class="lockup-fallback" aria-hidden="true">' + ZAD_SEAL_SVG + '</span>';
+      var identity = '<div class="lockup-mark">' + mark
+        + '<span class="lockup-text"><strong>جمعية الزاد</strong><span>مشروع توزيع الأجهزة</span></span></div>';
+      if (options.compact || !options.partner) {
+        return '<div class="lockup' + onDark + '">' + identity + '</div>';
+      }
+      var partner = BRAND.partnerLogo
+        ? '<img class="lockup-partner-logo" src="' + esc(BRAND.partnerLogo) + '" alt="' + esc(BRAND.partnerName) + '">'
+        : '<span class="lockup-text"><strong>' + esc(BRAND.partnerName) + '</strong></span>';
+      return '<div class="lockup' + onDark + '">' + identity
+        + '<span class="lockup-rule" aria-hidden="true"></span>'
+        + '<div class="lockup-partner"><span class="partner-label">' + esc(BRAND.partnerLabel) + '</span>'
+        + partner + '</div></div>';
+    }
+
+    function statusClass(value) {
+      if (['تم التسليم', 'معتمد', 'نشط', 'نشطة', 'مكتملة', 'مكتمل'].indexOf(value) >= 0) return 'good';
+      if (['تعذر التسليم', 'ملغي', 'تالف', 'متأخر', 'متأخرة', 'غير نشط', 'غير نشطة'].indexOf(value) >= 0) return 'bad';
+      if (['جاري التسليم', 'جاري التجهيز', 'خرج مع المندوب', 'قيد التنفيذ', 'جارٍ', 'مع المندوب'].indexOf(value) >= 0) return 'info';
+      if (['تحت المراجعة', 'بانتظار الأجهزة', 'مخصص', 'جديد'].indexOf(value) >= 0) return 'warn';
+      return 'neutral';
+    }
+    /** الحالة تُميَّز بالنص والشكل معًا، لا باللون وحده. */
+    function statusChip(value) {
+      return '<span class="status ' + statusClass(value) + '">' + esc(value || 'غير محدد') + '</span>';
+    }
+
+    function emptyState(options) {
+      var action = options.action
+        ? '<button class="btn btn-primary" data-act="' + esc(options.action) + '">' + esc(options.actionLabel) + '</button>'
+        : '';
+      return '<div class="empty"><div class="glyph" aria-hidden="true">' + (options.glyph || '◇') + '</div>'
+        + '<h3>' + esc(options.title) + '</h3><p>' + esc(options.body || '') + '</p>' + action + '</div>';
+    }
+
+    function skeletonCards(count) {
+      var out = '';
+      for (var i = 0; i < (count || 6); i++) out += '<div class="sk sk-card"></div>';
+      return '<div class="cards">' + out + '</div>';
+    }
+
+    function bar(value, gold) {
+      var p = pct(value);
+      return '<div class="bar"><div class="bar-track"><div class="bar-fill' + (gold ? ' gold' : '')
+        + '" style="width:' + p + '%"></div></div><span class="bar-val">' + fmt(p) + '%</span></div>';
+    }
+    function ring(value) {
+      var p = pct(value);
+      return '<div class="ring" style="--p:' + p + '" data-value="' + fmt(p) + '%" role="img" aria-label="نسبة الإنجاز '
+        + fmt(p) + ' بالمئة"></div>';
+    }
+
+    function optionList(values, selected, allLabel) {
+      var out = '';
+      if (allLabel) {
+        out += '<option value=""' + (selected ? '' : ' selected') + '>' + esc(allLabel) + '</option>';
+      }
+      values.forEach(function (value) {
+        out += '<option value="' + esc(value) + '"' + (selected === value ? ' selected' : '') + '>' + esc(value) + '</option>';
+      });
+      return out;
+    }
+
+    function toolbar(options) {
+      var filters = options.filters
+        ? '<label class="sr-only" for="filterSelect">تصفية حسب الحالة</label>'
+          + '<select class="control" id="filterSelect" data-act="set-filter">' + options.filters + '</select>'
+        : '';
+      return '<div class="toolbar"><div class="search">'
+        + '<span class="glyph" aria-hidden="true">⌕</span>'
+        + '<label class="sr-only" for="searchBox">بحث</label>'
+        + '<input class="control" id="searchBox" type="search" data-act="set-search" value="' + esc(state.search)
+        + '" placeholder="' + esc(options.placeholder) + '" autocomplete="off">'
+        + '</div>' + filters + (options.extra || '')
+        + '<span class="result-count">' + esc(options.count) + '</span></div>';
+    }
+
+    /* ============================================================
+       3) البحث والتصفية
+       ============================================================ */
+
+    function matches(item, fields) {
+      var query = state.search.trim().toLowerCase();
+      if (query) {
+        var hit = fields.some(function (field) {
+          return String(item[field] || '').toLowerCase().indexOf(query) >= 0;
+        });
+        if (!hit) return false;
+      }
+      if (!state.filter) return true;
+      return item.status === state.filter || item.deliveryStatus === state.filter;
+    }
+    function applyFilters(items, fields) {
+      return (items || []).filter(function (item) { return matches(item, fields); });
+    }
+
+    function associationName(id) {
+      var list = state.data.associations || [];
+      for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i].name;
+      var own = state.data.association;
+      return own && own.id === id ? own.name : '—';
+    }
+    function delegateName(id) {
+      var list = state.data.delegates || [];
+      for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i].name;
+      return 'غير معيّن';
+    }
+    function findBeneficiary(id) {
+      var list = state.data.beneficiaries || [];
+      for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+      return null;
+    }
+    function needGlyph(name) {
+      name = String(name || '');
+      if (name.indexOf('ثلا') >= 0) return '❄';
+      if (name.indexOf('غسال') >= 0) return '◍';
+      if (name.indexOf('فرن') >= 0) return '▦';
+      if (name.indexOf('مكيف') >= 0) return '✣';
+      if (name.indexOf('فريزر') >= 0) return '❅';
+      if (name.indexOf('سخان') >= 0) return '♨';
+      return '▣';
+    }
+    function needTags(list, emptyText) {
+      if (!list || !list.length) return '<span class="tag plain">' + esc(emptyText || 'لم يُسجّل احتياج') + '</span>';
+      return list.map(function (item) {
+        return '<span class="tag">' + needGlyph(item) + ' ' + esc(item) + '</span>';
+      }).join('');
+    }
+
+    /* ============================================================
+       4) شاشة الدخول
+       ============================================================ */
+
+    function renderLogin() {
+      var isDelegate = state.loginType === 'delegate';
+      var fields = isDelegate
+        ? '<div class="field"><label for="loginCode">رمز دخول المندوب</label>'
+          + '<input class="control" id="loginCode" name="code" dir="ltr" autocomplete="one-time-code" '
+          + 'placeholder="MND-84KQ2P" required aria-describedby="codeHint">'
+          + '<span class="hint" id="codeHint">الرمز مكوّن من MND- وستة رموز، تحصل عليه من جمعيتك.</span></div>'
+        : '<div class="field"><label for="loginEmail">البريد الإلكتروني</label>'
+          + '<input class="control" id="loginEmail" name="email" type="email" dir="ltr" '
+          + 'autocomplete="username" placeholder="name@example.org" required></div>'
+          + '<div class="field"><label for="loginPassword">كلمة المرور</label>'
+          + '<input class="control" id="loginPassword" name="password" type="password" dir="ltr" '
+          + 'autocomplete="current-password" required></div>';
+
+      $('#root').innerHTML = '<main class="login">'
+        + '<section class="login-panel">' + lockup({partner: true})
+        + '<h1>منظومة واحدة،<br>من الاعتماد حتى التسليم.</h1>'
+        + '<p class="login-lede">متابعة دقيقة للأجهزة والمستفيدين والجمعيات، مع توثيق كامل ومؤرّخ لكل عملية تسليم.</p>'
+        + '<div class="segmented" role="tablist" aria-label="نوع الدخول">'
+        + '<button type="button" role="tab" data-act="login-type" data-value="association" aria-selected="'
+        + (!isDelegate) + '">دخول الإدارة والجمعيات</button>'
+        + '<button type="button" role="tab" data-act="login-type" data-value="delegate" aria-selected="'
+        + isDelegate + '">دخول المندوب</button></div>'
+        + '<form id="loginForm" data-act="submit-login" novalidate>' + fields
+        + '<button class="btn btn-primary btn-block" type="submit">'
+        + (isDelegate ? 'دخول المندوب' : 'تسجيل الدخول') + '</button></form></section>'
+        + '<aside class="login-art"><div class="art-card">'
+        + '<div class="art-seal" aria-hidden="true">' + ZAD_SEAL_SVG + '</div>'
+        + '<h2>زادٌ ونَماء</h2>'
+        + '<p>أثرٌ موثّق يصل إلى بيت المستفيد، ويُقاس في كل مرحلة.</p>'
+        + '<div class="art-stats">'
+        + '<div><strong>١</strong><span>منظومة موحّدة</span></div>'
+        + '<div><strong>٣</strong><span>أدوار تشغيلية</span></div>'
+        + '<div><strong>١٠٠٪</strong><span>توثيق بالصورة</span></div>'
+        + '</div></div></aside></main>';
+
+      var first = $('#loginForm .control');
+      if (first) first.focus();
+    }
+
+    function submitLogin(form) {
+      if (!form.reportValidity()) return;
+      var data = new FormData(form);
+      var payload = state.loginType === 'delegate'
+        ? {type: 'delegate', code: data.get('code')}
+        : {type: 'user', email: data.get('email'), password: data.get('password')};
+      busy(true);
+      api('login', payload).then(function (result) {
+        state.token = result.token;
+        state.user = result.user;
+        state.data = result.bootstrap;
+        safeSession('set', 'zad_token', result.token);
+        state.page = 'dashboard';
+        render();
+        toast('مرحبًا بك، ' + (result.user && result.user.name ? result.user.name : ''), 'success');
+      }, reportError).then(function () { busy(false); });
+    }
+
+    /* ============================================================
+       5) الهيكل العام
+       ============================================================ */
+
+    function navFor(role) {
+      if (role === 'ADMIN') {
+        return ['dashboard', 'beneficiaries', 'associations', 'devices', 'delegates', 'activities', 'audit', 'settings'];
+      }
+      return ['dashboard', 'beneficiaries', 'devices', 'delegates', 'audit', 'settings'];
+    }
+
+    function render() {
+      if (!state.data) { renderLogin(); return; }
+      if (state.data.role === 'DELEGATE') { renderDelegate(); return; }
+
+      var role = state.data.role;
+      var items = navFor(role);
+      var navHtml = items.map(function (key) {
+        return '<button type="button" data-act="go" data-value="' + key + '"'
+          + (state.page === key ? ' aria-current="page"' : '') + '>'
+          + '<span class="ico" aria-hidden="true">' + ICONS[key] + '</span>' + esc(NAV_LABELS[key]) + '</button>';
+      }).join('');
+
+      var actorName = (state.user && state.user.name)
+        || (state.data.association && state.data.association.name) || 'مستخدم النظام';
+      var actorRole = role === 'ADMIN' ? 'مدير النظام'
+        : (state.data.association ? state.data.association.name : 'حساب الجمعية');
+
+      $('#root').innerHTML = '<div class="shell">'
+        + '<aside class="sidebar" id="sidebar"><div class="sidebar-inner">'
+        + lockup({compact: true, onDark: true})
+        + '<nav class="nav" aria-label="التنقل الرئيسي">' + navHtml + '</nav></div>'
+        + '<div class="side-foot"><div class="side-user"><strong>' + esc(actorName) + '</strong>'
+        + '<span>' + esc(actorRole) + '</span></div>'
+        + '<button class="btn btn-ghost btn-block btn-sm" data-act="logout">تسجيل الخروج</button></div></aside>'
+        + '<div class="main"><header class="topbar">'
+        + '<div><h2>' + esc(NAV_LABELS[state.page] || 'لوحة البيانات') + '</h2>'
+        + '<span class="crumb">' + esc(NAV_HINTS[state.page] || '') + '</span></div>'
+        + '<div class="top-actions">'
+        + '<button class="btn btn-ghost btn-sm menu-btn" data-act="toggle-menu" aria-label="فتح القائمة">☰</button>'
+        + '<button class="btn btn-ghost btn-sm" data-act="refresh">↻ تحديث</button>'
+        + pageAction(role) + '</div></header>'
+        + '<div class="content" id="content">' + renderPage() + '</div></div></div>';
+    }
+
+    function pageAction(role) {
+      if (state.page === 'beneficiaries' && (role === 'ASSOCIATION' || role === 'ADMIN')) {
+        return '<button class="btn btn-primary btn-sm" data-act="new-beneficiary">＋ مستفيد</button>';
+      }
+      if (state.page === 'delegates' && role === 'ASSOCIATION') {
+        return '<button class="btn btn-primary btn-sm" data-act="new-delegate">＋ مندوب</button>';
+      }
+      if (state.page === 'associations' && role === 'ADMIN') {
+        return '<button class="btn btn-primary btn-sm" data-act="new-association">＋ جمعية</button>';
+      }
+      if (state.page === 'devices' && role === 'ADMIN') {
+        return '<button class="btn btn-primary btn-sm" data-act="new-device">＋ جهاز</button>';
+      }
+      return '';
+    }
+
+    function renderPage() {
+      var pages = {
+        dashboard: renderDashboard, beneficiaries: renderBeneficiaries,
+        associations: renderAssociations, devices: renderDevices,
+        delegates: renderDelegates, activities: renderActivities,
+        audit: renderAudit, settings: renderSettings
+      };
+      return (pages[state.page] || renderDashboard)();
+    }
+
+    function goTo(page) {
+      state.page = page;
+      state.search = '';
+      state.filter = '';
+      render();
+      var sidebar = $('#sidebar');
+      if (sidebar) sidebar.classList.remove('open');
+      var scrim = $('.scrim');
+      if (scrim) scrim.remove();
+      window.scrollTo(0, 0);
+    }
+
+    /* ============================================================
+       6) لوحة البيانات
+       ============================================================ */
+
+    function kpiCard(item) {
+      return '<article class="kpi' + (item.accent ? ' accent' : '') + '">'
+        + '<div class="kpi-top"><span>' + esc(item.label) + '</span>'
+        + '<span class="kpi-ico" aria-hidden="true">' + item.glyph + '</span></div>'
+        + '<strong>' + (typeof item.value === 'number' ? fmt(item.value) : esc(item.value)) + '</strong>'
+        + '<small>' + esc(item.hint) + '</small></article>';
+    }
+
+    function renderDashboard() {
+      var s = state.data.summary || {};
+      var isAdmin = state.data.role === 'ADMIN';
+      var kpis = isAdmin ? [
+        {label: 'المستفيدون', value: s.beneficiaries, hint: 'ملف مستفيد', glyph: ICONS.beneficiaries},
+        {label: 'الجمعيات', value: s.associations, hint: 'جمعية مشاركة', glyph: ICONS.associations},
+        {label: 'إجمالي الأجهزة', value: s.devices, hint: 'جهاز مسجّل', glyph: ICONS.devices},
+        {label: 'المناديب النشطون', value: s.delegates, hint: 'مندوب ميداني', glyph: ICONS.delegates},
+        {label: 'بالمستودع', value: s.devicesWarehouse, hint: 'جهاز جاهز للتخصيص', glyph: '▣'},
+        {label: 'قيد التسليم', value: s.devicesAllocated, hint: 'مخصص أو مع المندوب', glyph: '◫'},
+        {label: 'تم تسليمها', value: s.devicesDelivered, hint: 'جهاز موثّق بالصورة', glyph: '✓', accent: true},
+        {label: 'نسبة الإنجاز', value: fmt(s.deliveryRate) + '٪', hint: 'من المستفيدين', glyph: '↗', accent: true}
+      ] : [
+        {label: 'المستفيدون', value: s.beneficiaries, hint: 'ملف مستفيد', glyph: ICONS.beneficiaries},
+        {label: 'الأجهزة المعتمدة', value: s.devices, hint: 'جهاز للجمعية', glyph: ICONS.devices},
+        {label: 'الأجهزة المستلمة', value: (s.devices || 0) - (s.devicesWarehouse || 0), hint: 'خرجت من المستودع', glyph: '◫'},
+        {label: 'الأجهزة المسلّمة', value: s.devicesDelivered, hint: 'وصلت للمستفيد', glyph: '✓', accent: true},
+        {label: 'نسبة الإنجاز', value: fmt(s.deliveryRate) + '٪', hint: 'من المستفيدين', glyph: '↗', accent: true},
+        {label: 'المناديب', value: s.delegates, hint: 'مندوب نشط', glyph: ICONS.delegates}
+      ];
+
+      var activitiesBlock = '';
+      if (isAdmin && s.totalActivities) {
+        activitiesBlock = '<div style="margin-top:22px;padding-top:20px;border-top:1px solid var(--line)">'
+          + '<div class="panel-head"><div><h3>إنجاز أنشطة المشروع</h3><p>'
+          + fmt(s.completedActivities) + ' من ' + fmt(s.totalActivities) + ' نشاطًا مكتملًا</p></div></div>'
+          + bar(s.activityRate, true) + '</div>';
+      }
+
+      var sideTitle = isAdmin ? 'التنبيهات الإدارية' : 'آخر العمليات';
+      var sideHint = isAdmin ? 'عناصر تستلزم متابعة أو تدخّلًا' : 'أحدث التغييرات على سجلات جمعيتك';
+      var sideBody = isAdmin ? renderAlerts() : renderAuditRows(6);
+
+      var welcome = state.data.association ? state.data.association.name : 'فريق إدارة المشروع';
+      var todayLabel = '';
+      try {
+        todayLabel = new Intl.DateTimeFormat('ar-SA', {dateStyle: 'full'}).format(new Date());
+      } catch (ignore) { todayLabel = state.data.generatedAt || ''; }
+
+      return '<section class="hero"><div><h1>مرحبًا، ' + esc(welcome) + '</h1>'
+        + '<p>ملخّص تنفيذي لحالة المشروع والتوزيع في لحظة واحدة.</p></div>'
+        + '<div class="hero-chip">' + esc(todayLabel) + '</div></section>'
+        + '<section class="kpis">' + kpis.map(kpiCard).join('') + '</section>'
+        + '<section class="cols"><div class="panel">'
+        + '<div class="panel-head"><div><h3>تقدّم التسليم</h3><p>نسبة وصول الأجهزة إلى المستفيدين</p></div>'
+        + ring(s.deliveryRate) + '</div>' + bar(s.deliveryRate) + activitiesBlock + '</div>'
+        + '<div class="panel"><div class="panel-head"><div><h3>' + esc(sideTitle) + '</h3>'
+        + '<p>' + esc(sideHint) + '</p></div></div>' + sideBody + '</div></section>'
+        + '<section class="panel"><div class="panel-head"><div><h3>آخر العمليات</h3>'
+        + '<p>سجل حيّ ومؤرّخ لأحدث الإجراءات</p></div>'
+        + '<button class="btn btn-link" data-act="go" data-value="audit">عرض الكل ←</button></div>'
+        + renderAuditRows(7) + '</section>';
+    }
+
+    function renderAlerts() {
+      var list = state.data.alerts || [];
+      if (!list.length) {
+        return emptyState({glyph: '✓', title: 'لا توجد تنبيهات', body: 'كل المؤشرات ضمن النطاق الطبيعي حاليًا.'});
+      }
+      return list.slice(0, 6).map(function (item) {
+        return '<div class="alert ' + (item.level === 'critical' ? 'critical' : 'high') + '">'
+          + '<strong>' + esc(item.title) + '</strong>'
+          + '<small>' + esc(item.message) + ' · ' + esc(item.section) + '</small></div>';
+      }).join('');
+    }
+
+    function renderAuditRows(limit) {
+      var rows = (state.data.audit || []).slice(0, limit);
+      if (!rows.length) {
+        return emptyState({glyph: '≡', title: 'لا توجد عمليات مسجّلة', body: 'ستظهر هنا كل إجراءات النظام فور حدوثها.'});
+      }
+      return '<div class="rows">' + rows.map(function (row) {
+        return '<div class="row-item"><div><strong>' + esc(row.action) + '</strong>'
+          + '<small>' + esc(row.user) + ' · ' + esc(row.section) + '</small></div>'
+          + '<div class="hide-sm muted">' + esc(row.at) + '</div>'
+          + '<span class="mono">' + esc(row.recordId || '—') + '</span></div>';
+      }).join('') + '</div>';
+    }
+
+    /* ============================================================
+       7) المستفيدون
+       ============================================================ */
+
+    function renderBeneficiaries() {
+      var all = state.data.beneficiaries || [];
+      var items = applyFilters(all, ['name', 'id', 'city', 'region', 'phone']);
+      var canManage = state.data.role === 'ASSOCIATION';
+      var extra = canManage
+        ? '<button class="btn btn-soft" data-act="bulk-import">⇧ إضافة بالجملة</button>' : '';
+
+      if (!all.length) {
+        return emptyState({
+          glyph: ICONS.beneficiaries,
+          title: 'لم يُضف أي مستفيد بعد',
+          body: 'ابدأ بإضافة مستفيد واحد، أو ارفع النموذج المعتمد لإضافة دفعة كاملة.',
+          action: canManage ? 'new-beneficiary' : '',
+          actionLabel: '＋ إضافة أول مستفيد'
+        });
+      }
+
+      var body = items.length
+        ? '<div class="cards">' + items.map(beneficiaryCard).join('') + '</div>'
+        : emptyState({glyph: '⌕', title: 'لا نتائج مطابقة', body: 'جرّب تعديل كلمة البحث أو إعادة الفلتر إلى «كل الحالات».'});
+
+      return toolbar({
+        placeholder: 'ابحث بالاسم أو الرقم أو المدينة…',
+        filters: optionList(BENEFICIARY_FILTERS, state.filter, 'كل الحالات'),
+        extra: extra,
+        count: fmt(items.length) + ' من ' + fmt(all.length)
+      }) + body;
+    }
+
+    function beneficiaryCard(item) {
+      var canAssign = state.data.role === 'ASSOCIATION' && item.deliveryStatus !== 'تم التسليم';
+      var assignBtn = canAssign
+        ? '<button class="btn btn-soft btn-sm" data-act="assign-delegate" data-id="' + esc(item.id) + '">'
+          + (item.delegateId ? 'تغيير المندوب' : 'تعيين مندوب') + '</button>' : '';
+      return '<article class="card"><div class="card-head"><div>'
+        + '<h3>' + esc(item.name) + '</h3><p class="mono">' + esc(item.id) + '</p></div>'
+        + statusChip(item.deliveryStatus) + '</div>'
+        + '<div class="metas">'
+        + '<div class="meta"><small>الموقع</small><strong>' + esc(item.region) + ' · ' + esc(item.city) + '</strong></div>'
+        + '<div class="meta"><small>الأسرة</small><strong>' + fmt(item.familyCount) + ' أفراد'
+        + (item.socialSecurity ? ' · ضمان' : '') + '</strong></div></div>'
+        + '<div class="tags">' + needTags(item.needs) + '</div>'
+        + '<div class="card-actions">'
+        + '<button class="btn btn-ghost btn-sm" data-act="view-beneficiary" data-id="' + esc(item.id) + '">التفاصيل</button>'
+        + assignBtn + '</div></article>';
+    }
+
+    function viewBeneficiary(id) {
+      var item = findBeneficiary(id);
+      if (!item) { toast('تعذر العثور على ملف المستفيد.', 'error'); return; }
+
+      var devices = (state.data.devices || []).filter(function (device) { return device.beneficiaryId === id; });
+      var deviceTable = devices.length
+        ? '<div class="table-wrap" style="margin-top:12px"><table class="data" style="min-width:0">'
+          + '<thead><tr><th>الجهاز</th><th>الرقم</th><th>الحالة</th></tr></thead><tbody>'
+          + devices.map(function (device) {
+            return '<tr><td>' + needGlyph(device.name) + ' ' + esc(device.name) + '</td>'
+              + '<td class="mono">' + esc(device.id) + '</td><td>' + statusChip(device.status) + '</td></tr>';
+          }).join('') + '</tbody></table></div>'
+        : '<p class="muted" style="margin-top:10px">لم تُخصَّص أجهزة لهذا المستفيد بعد.</p>';
+
+      var body = '<div class="card-head"><div><h3>' + esc(item.name) + '</h3>'
+        + '<p class="mono">' + esc(item.id) + '</p></div>' + statusChip(item.status) + '</div>'
+        + '<div class="metas">'
+        + '<div class="meta"><small>الجمعية</small><strong>' + esc(associationName(item.associationId)) + '</strong></div>'
+        + '<div class="meta"><small>المنطقة والمدينة</small><strong>' + esc(item.region) + ' · ' + esc(item.city) + '</strong></div>'
+        + '<div class="meta wide"><small>العنوان الدقيق</small><strong>' + esc(item.address) + '</strong></div>'
+        + '<div class="meta"><small>التواصل</small><strong dir="ltr" class="mono">' + esc(item.phone)
+        + (item.phone2 ? ' / ' + esc(item.phone2) : '') + '</strong></div>'
+        + '<div class="meta"><small>عدد الأفراد</small><strong>' + fmt(item.familyCount) + ' · '
+        + (item.socialSecurity ? 'مستفيد ضمان' : 'غير مستفيد ضمان') + '</strong></div>'
+        + '<div class="meta"><small>الحالة الاجتماعية</small><strong>' + esc(item.socialStatus || '—') + '</strong></div>'
+        + '<div class="meta"><small>الدخل الشهري</small><strong>' + money(item.income) + '</strong></div>'
+        + '<div class="meta"><small>حالة التسليم</small><strong>' + esc(item.deliveryStatus) + '</strong></div>'
+        + '<div class="meta"><small>المندوب</small><strong>' + esc(delegateName(item.delegateId)) + '</strong></div>'
+        + '</div>'
+        + '<h4 style="margin:18px 0 8px;color:var(--zad-800)">الاحتياج والأجهزة</h4>'
+        + '<div class="tags">' + needTags(item.needs) + '</div>' + deviceTable
+        + '<h4 style="margin:18px 0 8px;color:var(--zad-800)">التواريخ والملاحظات</h4>'
+        + '<p class="muted" style="font-size:13px">إنشاء الطلب: ' + esc(item.createdAt || '—')
+        + ' · آخر تحديث: ' + esc(item.updatedAt || '—')
+        + ' · التسليم: ' + esc(item.deliveredAt || 'لم يتم') + '</p>'
+        + '<p style="white-space:pre-wrap">' + esc(item.notes || 'لا توجد ملاحظات مسجّلة.') + '</p>';
+
+      var footer = '';
+      if (state.data.role === 'ASSOCIATION' && item.deliveryStatus !== 'تم التسليم') {
+        footer = '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>'
+          + '<button class="btn btn-soft" data-act="edit-beneficiary" data-id="' + esc(item.id) + '">تعديل البيانات</button>'
+          + '<button class="btn btn-primary" data-act="assign-delegate" data-id="' + esc(item.id) + '">تعيين المندوب</button>';
+      }
+      openModal('ملف المستفيد', body, footer);
+    }
+
+    function beneficiaryForm(id) {
+      var item = (id && findBeneficiary(id)) || {};
+      var isEdit = Boolean(id);
+      var selected = item.needs || [];
+
+      var needsHtml = NEED_OPTIONS.map(function (need) {
+        var checked = selected.indexOf(need) >= 0 ? ' checked' : '';
+        return '<label class="choice"><input type="checkbox" name="needs" value="' + esc(need) + '"' + checked + '>'
+          + '<span>' + needGlyph(need) + ' ' + esc(need) + '</span></label>';
+      }).join('');
+
+      var body = '<form id="beneficiaryForm" class="form-grid" novalidate>'
+        + '<input type="hidden" name="id" value="' + esc(id || '') + '">'
+        + textField('name', 'الاسم الكامل', item.name, {required: true, max: 120, span: true})
+        + textField('phone', 'رقم الجوال', item.phone, {required: true, ltr: true, hint: 'مثال: 05XXXXXXXX'})
+        + textField('phone2', 'رقم جوال إضافي', item.phone2, {ltr: true, hint: 'اختياري'})
+        + textField('region', 'المنطقة', item.region, {required: true, max: 80})
+        + textField('city', 'المدينة', item.city, {required: true, max: 80})
+        + textField('address', 'العنوان الدقيق', item.address, {required: true, max: 250, span: true,
+            hint: 'الحي والشارع وأقرب معلم — يستخدمه المندوب للوصول.'})
+        + '<div class="field"><label for="f_familyCount">عدد الأفراد</label>'
+        + '<input class="control" id="f_familyCount" name="familyCount" type="number" min="1" max="99" value="'
+        + esc(item.familyCount || '') + '" required></div>'
+        + '<div class="field"><label for="f_socialStatus">الحالة الاجتماعية</label>'
+        + '<select class="control" id="f_socialStatus" name="socialStatus">'
+        + optionList(SOCIAL_STATUSES, item.socialStatus, '— اختر —') + '</select></div>'
+        + '<div class="field"><label for="f_income">الدخل الشهري (ر.س)</label>'
+        + '<input class="control" id="f_income" name="income" type="number" min="0" max="1000000" value="'
+        + esc(item.income || 0) + '"></div>'
+        + '<div class="field"><label for="f_socialSecurity">الضمان الاجتماعي</label>'
+        + '<select class="control" id="f_socialSecurity" name="socialSecurity">'
+        + '<option value="نعم"' + (item.socialSecurity ? ' selected' : '') + '>نعم</option>'
+        + '<option value="لا"' + (item.socialSecurity ? '' : ' selected') + '>لا</option></select></div>'
+        + '<div class="field span-2"><label>الأجهزة المطلوبة</label>'
+        + '<div class="choice-grid">' + needsHtml + '</div></div>'
+        + '<div class="field span-2"><label for="f_notes">ملاحظات</label>'
+        + '<textarea class="control" id="f_notes" name="notes" maxlength="1000">' + esc(item.notes || '') + '</textarea></div>'
+        + '<label class="pledge span-2"><input type="checkbox" name="pledge" required>'
+        + '<span>أتعهّد بأن جميع بيانات المستفيدين المضافة صحيحة وتم التحقق منها، وأن الجمعية تتحمّل مسؤولية '
+        + 'صحة البيانات واستحقاق المستفيدين للدعم.</span></label></form>';
+
+      var footer = '<button class="btn btn-ghost" data-act="close-modal">إلغاء</button>'
+        + '<button class="btn btn-primary" data-act="save-beneficiary">'
+        + (isEdit ? 'حفظ التعديلات' : 'اعتماد وإضافة المستفيد') + '</button>';
+
+      openModal(isEdit ? 'تعديل بيانات المستفيد' : 'إضافة مستفيد', body, footer);
+    }
+
+    function textField(name, label, value, options) {
+      options = options || {};
+      return '<div class="field' + (options.span ? ' span-2' : '') + '">'
+        + '<label for="f_' + name + '">' + esc(label) + '</label>'
+        + '<input class="control" id="f_' + name + '" name="' + name + '" value="' + esc(value || '') + '"'
+        + (options.ltr ? ' dir="ltr"' : '') + (options.required ? ' required' : '')
+        + (options.max ? ' maxlength="' + options.max + '"' : '') + '>'
+        + (options.hint ? '<span class="hint">' + esc(options.hint) + '</span>' : '') + '</div>';
+    }
+
+    function saveBeneficiary() {
+      var form = $('#beneficiaryForm');
+      if (!form || !form.reportValidity()) return;
+      var data = new FormData(form);
+      var association = state.data.association || {};
+      var payload = {
+        id: data.get('id') || '',
+        name: data.get('name'),
+        phone: data.get('phone'),
+        phone2: data.get('phone2'),
+        region: data.get('region'),
+        city: data.get('city'),
+        address: data.get('address'),
+        familyCount: data.get('familyCount'),
+        socialStatus: data.get('socialStatus'),
+        income: data.get('income'),
+        socialSecurity: data.get('socialSecurity'),
+        needs: data.getAll('needs'),
+        notes: data.get('notes'),
+        associationId: association.id || ''
+      };
+      busy(true);
+      api('saveBeneficiary', state.token, payload).then(function (result) {
+        state.data = result.data;
+        closeModal();
+        render();
+        toast('تم حفظ بيانات المستفيد.', 'success');
+      }, reportError).then(function () { busy(false); });
+    }
+
+    /* ---------- تعيين المندوب ---------- */
+
+    function assignDelegateModal(id) {
+      var actives = (state.data.delegates || []).filter(function (d) { return d.status === 'نشط'; });
+      var beneficiary = findBeneficiary(id);
+      if (!actives.length) {
+        openModal('تعيين مندوب', emptyState({
+          glyph: ICONS.delegates,
+          title: 'لا يوجد مندوبون نشطون',
+          body: 'أضف مندوبًا وفعّله أولًا، ثم أعد المحاولة.'
+        }), '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>');
+        return;
+      }
+      var options = actives.map(function (d) {
+        return '<option value="' + esc(d.id) + '"' + (beneficiary && beneficiary.delegateId === d.id ? ' selected' : '')
+          + '>' + esc(d.name) + ' — ' + fmt(d.assigned) + ' مهمة حالية</option>';
+      }).join('');
+      var body = (beneficiary ? '<p class="muted">المستفيد: <strong>' + esc(beneficiary.name) + '</strong></p>' : '')
+        + '<div class="field"><label for="delegateSelect">اختر المندوب</label>'
+        + '<select class="control" id="delegateSelect">' + options + '</select>'
+        + '<span class="hint">سينتقل المستفيد إلى حالة «جاري التجهيز» وتظهر بطاقته في تطبيق المندوب.</span></div>';
+      openModal('تعيين مندوب', body,
+        '<button class="btn btn-ghost" data-act="close-modal">إلغاء</button>'
+        + '<button class="btn btn-primary" data-act="save-assign" data-id="' + esc(id) + '">حفظ وإحالة</button>');
+    }
+
+    function saveAssign(id) {
+      var select = $('#delegateSelect');
+      if (!select) { toast('اختر المندوب أولًا.', 'error'); return; }
+      busy(true);
+      api('assignDelegate', state.token, id, select.value).then(function (result) {
+        state.data = result.data;
+        closeModal();
+        render();
+        toast('تمت إحالة المستفيد إلى المندوب.', 'success');
+      }, reportError).then(function () { busy(false); });
+    }
+
+    /* ---------- الاستيراد بالجملة ---------- */
+
+    function bulkImportModal() {
+      state.pendingRows = [];
+      var body = '<p class="muted">ارفع النموذج المعتمد بصيغة Excel أو CSV. الأعمدة المطلوبة: '
+        + 'الاسم، المنطقة، المدينة، العنوان، الجوال، عدد الأفراد، الضمان الاجتماعي، الحالة الاجتماعية، '
+        + 'الدخل، الاحتياج، الملاحظات.</p>'
+        + '<div class="drop"><label class="btn btn-primary" for="bulkFile">اختيار ملف</label>'
+        + '<input id="bulkFile" type="file" data-act="bulk-file" '
+        + 'accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv">'
+        + '<p class="muted" id="bulkSummary" style="margin:10px 0 0">لم يتم اختيار ملف بعد.</p></div>'
+        + '<label class="pledge"><input id="bulkPledge" type="checkbox">'
+        + '<span>أتعهّد بأن جميع بيانات المستفيدين المضافة صحيحة وتم التحقق منها، وأن الجمعية تتحمّل مسؤولية '
+        + 'صحة البيانات واستحقاق المستفيدين للدعم.</span></label>';
+      openModal('إضافة المستفيدين بالجملة', body,
+        '<button class="btn btn-ghost" data-act="close-modal">إلغاء</button>'
+        + '<button class="btn btn-primary" data-act="run-import">استيراد المستفيدين</button>');
+    }
+
+    function setBulkSummary(message) {
+      var node = $('#bulkSummary');
+      if (node) node.textContent = message;
+    }
+
+    function handleBulkFile(input) {
+      var file = input && input.files ? input.files[0] : null;
+      if (!file) return;
+      state.pendingRows = [];
+      var reader = new FileReader();
+      var lower = String(file.name || '').toLowerCase();
+
+      if (lower.slice(-4) === '.csv') {
+        reader.onload = function () {
+          try {
+            state.pendingRows = parseCsv(reader.result);
+            setBulkSummary('السجلات الجاهزة: ' + fmt(state.pendingRows.length) + ' · السجلات الخاطئة: 0');
+          } catch (error) {
+            state.pendingRows = [];
+            setBulkSummary(error.message || 'تعذر قراءة ملف CSV.');
+          }
+        };
+        reader.onerror = function () { setBulkSummary('تعذر قراءة الملف.'); };
+        reader.readAsText(file, 'UTF-8');
+        return;
+      }
+
+      setBulkSummary('جارٍ مراجعة ملف Excel على الخادم…');
+      reader.onload = function () {
+        busy(true);
+        api('inspectBeneficiaryExcel', state.token, {dataUrl: reader.result, name: file.name})
+          .then(function (result) {
+            state.pendingRows = result.ok ? (result.rows || []) : [];
+            var details = (result.errors || []).map(function (item) {
+              return 'صف ' + item.row + ': ' + item.message;
+            }).join(' | ');
+            setBulkSummary('الصحيحة: ' + fmt(result.validCount) + ' · الخاطئة: ' + fmt(result.errorCount)
+              + (details ? ' — ' + details : ''));
+          }, function (error) {
+            state.pendingRows = [];
+            reportError(error);
+            setBulkSummary('تعذر مراجعة الملف.');
+          }).then(function () { busy(false); });
+      };
+      reader.onerror = function () { setBulkSummary('تعذر قراءة الملف.'); };
+      reader.readAsDataURL(file);
+    }
+
+    function parseCsv(text) {
+      var lines = String(text).replace(/^﻿/, '').split(/\r?\n/).filter(function (line) {
+        return String(line).trim() !== '';
+      });
+      if (lines.length < 2) throw new Error('الملف لا يحتوي على سجلات تحت صف العناوين.');
+      var columns = ['name', 'region', 'city', 'address', 'phone', 'familyCount',
+        'socialSecurity', 'socialStatus', 'income', 'needs', 'notes'];
+      return lines.slice(1).map(function (line) {
+        var cells = line.split(',').map(function (cell) {
+          return cell.trim().replace(/^"|"$/g, '');
+        });
+        var row = {};
+        columns.forEach(function (key, index) { row[key] = cells[index] || ''; });
+        return row;
+      });
+    }
+
+    function runImport() {
+      var pledge = $('#bulkPledge');
+      if (!state.pendingRows.length) { toast('اختر ملفًا صحيحًا أولًا.', 'error'); return; }
+      if (!pledge || !pledge.checked) { toast('يجب الموافقة على التعهّد قبل الاستيراد.', 'error'); return; }
+      busy(true);
+      api('importBeneficiaries', state.token, state.pendingRows, true).then(function (result) {
+        if (!result.ok) {
+          var details = (result.errors || []).map(function (item) {
+            return 'صف ' + item.row + ': ' + item.message;
+          }).join(' | ');
+          setBulkSummary('الصحيحة: ' + fmt(result.validCount) + ' · الخاطئة: ' + fmt(result.errorCount)
+            + (details ? ' — ' + details : ''));
+          toast('الاستيراد متوقف: صحّح السجلات الخاطئة أولًا.', 'error');
+          return;
+        }
+        state.data = result.data;
+        closeModal();
+        render();
+        toast('تم استيراد ' + fmt(result.imported) + ' مستفيدًا.', 'success');
+      }, reportError).then(function () { busy(false); });
+    }
+
+    /* ============================================================
+       8) الجمعيات
+       ============================================================ */
+
+    function renderAssociations() {
+      var all = state.data.associations || [];
+      var items = applyFilters(all, ['name', 'id', 'city', 'region', 'category']);
+      if (!all.length) {
+        return emptyState({glyph: ICONS.associations, title: 'لا توجد جمعيات مسجّلة',
+          body: 'أضف الجمعية المشاركة الأولى وأنشئ حسابها لتبدأ بإدخال مستفيديها.',
+          action: 'new-association', actionLabel: '＋ إضافة جمعية'});
+      }
+      var body = items.length ? '<div class="cards">' + items.map(function (a) {
+        return '<article class="card"><div class="card-head"><div><h3>' + esc(a.name) + '</h3>'
+          + '<p>' + esc(a.category || 'جمعية أهلية') + ' · ' + esc(a.city) + '</p></div>' + ring(a.progress) + '</div>'
+          + '<div class="metas">'
+          + '<div class="meta"><small>الحالة</small><strong>' + esc(a.status || '—') + '</strong></div>'
+          + '<div class="meta"><small>المستفيدون</small><strong>' + fmt(a.beneficiaries) + '</strong></div>'
+          + '<div class="meta"><small>الأجهزة المعتمدة</small><strong>' + fmt(a.approvedDevices) + '</strong></div>'
+          + '<div class="meta"><small>المسلّمة</small><strong>' + fmt(a.deliveredDevices) + '</strong></div></div>'
+          + '<div class="card-actions">'
+          + '<button class="btn btn-ghost btn-sm" data-act="view-association" data-id="' + esc(a.id) + '">صفحة الجمعية</button>'
+          + '<button class="btn btn-soft btn-sm" data-act="edit-association" data-id="' + esc(a.id) + '">تعديل</button>'
+          + '</div></article>';
+      }).join('') + '</div>'
+        : emptyState({glyph: '⌕', title: 'لا نتائج مطابقة', body: 'جرّب كلمة بحث أخرى.'});
+
+      return toolbar({placeholder: 'ابحث باسم الجمعية أو المدينة…', filters: '',
+        count: fmt(items.length) + ' من ' + fmt(all.length)}) + body;
+    }
+
+    function findAssociation(id) {
+      var list = state.data.associations || [];
+      for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+      return null;
+    }
+
+    function viewAssociation(id) {
+      var a = findAssociation(id);
+      if (!a) { toast('تعذر العثور على الجمعية.', 'error'); return; }
+      var body = '<div class="card-head"><div><h3>' + esc(a.name) + '</h3>'
+        + '<p class="mono">' + esc(a.id) + '</p></div>' + statusChip(a.status) + '</div>'
+        + '<div class="metas">'
+        + '<div class="meta"><small>التصنيف</small><strong>' + esc(a.category || '—') + '</strong></div>'
+        + '<div class="meta"><small>الموقع</small><strong>' + esc(a.region) + ' · ' + esc(a.city) + '</strong></div>'
+        + '<div class="meta"><small>التواصل</small><strong dir="ltr" class="mono">' + esc(a.phone) + '</strong></div>'
+        + '<div class="meta"><small>البريد</small><strong dir="ltr" class="mono">' + esc(a.email) + '</strong></div>'
+        + '<div class="meta"><small>المستفيدون</small><strong>' + fmt(a.beneficiaries) + '</strong></div>'
+        + '<div class="meta"><small>المناديب</small><strong>' + fmt(a.delegates) + '</strong></div>'
+        + '<div class="meta"><small>المعتمدة / المستلمة</small><strong>' + fmt(a.approvedDevices) + ' / '
+        + fmt(a.receivedDevices) + '</strong></div>'
+        + '<div class="meta"><small>المسلّمة</small><strong>' + fmt(a.deliveredDevices) + '</strong></div></div>'
+        + '<h4 style="margin:18px 0 8px;color:var(--zad-800)">نسبة إنجاز التسليم</h4>' + bar(a.progress);
+      openModal('صفحة الجمعية', body, '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>');
+    }
+
+    function associationForm(id) {
+      var a = (id && findAssociation(id)) || {};
+      var isEdit = Boolean(id);
+      var credentials = isEdit ? '' : '<div class="field span-2"><label for="f_password">كلمة مرور حساب الجمعية</label>'
+        + '<input class="control" id="f_password" name="password" type="password" dir="ltr" minlength="10" required>'
+        + '<span class="hint">١٠ خانات على الأقل، وتضم حروفًا وأرقامًا. سلّمها لمسؤول الجمعية عبر قناة آمنة.</span></div>';
+      var body = '<form id="associationForm" class="form-grid" novalidate>'
+        + '<input type="hidden" name="id" value="' + esc(id || '') + '">'
+        + textField('name', 'اسم الجمعية', a.name, {required: true, max: 150, span: true})
+        + textField('category', 'التصنيف', a.category, {max: 80, hint: 'مثال: جمعية أهلية'})
+        + '<div class="field"><label for="f_status">الحالة</label>'
+        + '<select class="control" id="f_status" name="status">'
+        + '<option value="نشطة"' + (a.status === 'غير نشطة' ? '' : ' selected') + '>نشطة</option>'
+        + '<option value="غير نشطة"' + (a.status === 'غير نشطة' ? ' selected' : '') + '>غير نشطة</option>'
+        + '</select></div>'
+        + textField('region', 'المنطقة', a.region, {required: true, max: 80})
+        + textField('city', 'المدينة', a.city, {required: true, max: 80})
+        + textField('phone', 'رقم التواصل', a.phone, {required: true, ltr: true})
+        + '<div class="field"><label for="f_email">البريد الإلكتروني</label>'
+        + '<input class="control" id="f_email" name="email" type="email" dir="ltr" value="' + esc(a.email || '')
+        + '" required></div>' + credentials + '</form>';
+      openModal(isEdit ? 'تعديل بيانات الجمعية' : 'إضافة جمعية',
+        body,
+        '<button class="btn btn-ghost" data-act="close-modal">إلغاء</button>'
+        + '<button class="btn btn-primary" data-act="save-association">'
+        + (isEdit ? 'حفظ التعديلات' : 'إنشاء الجمعية وحسابها') + '</button>');
+    }
+
+    function saveAssociation() {
+      var form = $('#associationForm');
+      if (!form || !form.reportValidity()) return;
+      var data = new FormData(form);
+      var payload = {
+        id: data.get('id') || '',
+        name: data.get('name'),
+        category: data.get('category'),
+        region: data.get('region'),
+        city: data.get('city'),
+        phone: data.get('phone'),
+        email: data.get('email'),
+        status: data.get('status')
+      };
+      if (data.get('password')) payload.password = data.get('password');
+      busy(true);
+      api('saveAssociation', state.token, payload).then(function (result) {
+        state.data = result.data;
+        closeModal();
+        render();
+        toast('تم حفظ بيانات الجمعية.', 'success');
+      }, reportError).then(function () { busy(false); });
+    }
+
+    /* ============================================================
+       9) الأجهزة
+       ============================================================ */
+
+    function renderDevices() {
+      var all = state.data.devices || [];
+      var items = applyFilters(all, ['name', 'id', 'type', 'beneficiaryId']);
+      var isAdmin = state.data.role === 'ADMIN';
+      if (!all.length) {
+        return emptyState({glyph: ICONS.devices, title: 'لا توجد أجهزة مسجّلة',
+          body: isAdmin ? 'أضف الأجهزة إلى المستودع ثم خصّصها للجمعيات والمستفيدين.'
+            : 'لم تُعتمد أجهزة لجمعيتك بعد.',
+          action: isAdmin ? 'new-device' : '', actionLabel: '＋ إضافة جهاز'});
+      }
+      var rows = items.map(function (device) {
+        var beneficiary = findBeneficiary(device.beneficiaryId);
+        return '<tr><td><strong>' + needGlyph(device.name) + ' ' + esc(device.name) + '</strong></td>'
+          + '<td class="mono">' + esc(device.id) + '</td>'
+          + '<td>' + esc(device.type) + '</td>'
+          + '<td>' + esc(associationName(device.associationId)) + '</td>'
+          + '<td>' + esc(beneficiary ? beneficiary.name : '—') + '</td>'
+          + '<td>' + statusChip(device.status) + '</td>'
+          + '<td class="muted">' + esc(device.createdAt || '—') + '</td>'
+          + (isAdmin ? '<td><button class="btn btn-link" data-act="edit-device" data-id="'
+            + esc(device.id) + '">تعديل</button></td>' : '') + '</tr>';
+      }).join('');
+
+      var table = items.length
+        ? '<div class="table-wrap"><table class="data"><thead><tr>'
+          + '<th>الجهاز</th><th>رقم الجهاز</th><th>النوع</th><th>الجمعية</th><th>المستفيد</th>'
+          + '<th>الحالة</th><th>تاريخ الإضافة</th>' + (isAdmin ? '<th>إجراء</th>' : '')
+          + '</tr></thead><tbody>' + rows + '</tbody></table></div>'
+        : emptyState({glyph: '⌕', title: 'لا نتائج مطابقة', body: 'جرّب تعديل البحث أو الفلتر.'});
+
+      return toolbar({placeholder: 'ابحث باسم الجهاز أو رقمه…',
+        filters: optionList(DEVICE_FILTERS, state.filter, 'كل الحالات'),
+        count: fmt(items.length) + ' من ' + fmt(all.length)}) + table;
+    }
+
+    function findDevice(id) {
+      var list = state.data.devices || [];
+      for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+      return null;
+    }
+
+    function deviceForm(id) {
+      var d = (id && findDevice(id)) || {};
+      var associations = state.data.associations || [];
+      var associationOptions = '<option value="">— بالمستودع المركزي —</option>'
+        + associations.map(function (a) {
+          return '<option value="' + esc(a.id) + '"' + (d.associationId === a.id ? ' selected' : '')
+            + '>' + esc(a.name) + '</option>';
+        }).join('');
+      var beneficiaryOptions = '<option value="">— غير مخصص —</option>'
+        + (state.data.beneficiaries || []).map(function (b) {
+          return '<option value="' + esc(b.id) + '"' + (d.beneficiaryId === b.id ? ' selected' : '')
+            + '>' + esc(b.name) + ' (' + esc(b.id) + ')</option>';
+        }).join('');
+
+      var body = '<form id="deviceForm" class="form-grid" novalidate>'
+        + '<input type="hidden" name="id" value="' + esc(id || '') + '">'
+        + textField('name', 'اسم الجهاز', d.name, {required: true, max: 100})
+        + textField('type', 'النوع', d.type, {required: true, max: 80, hint: 'مثال: أجهزة كهربائية منزلية'})
+        + '<div class="field"><label for="f_assoc">الجمعية</label>'
+        + '<select class="control" id="f_assoc" name="associationId">' + associationOptions + '</select></div>'
+        + '<div class="field"><label for="f_ben">المستفيد</label>'
+        + '<select class="control" id="f_ben" name="beneficiaryId">' + beneficiaryOptions + '</select></div>'
+        + '<div class="field span-2"><label for="f_status">حالة الجهاز</label>'
+        + '<select class="control" id="f_status" name="status">' + optionList(DEVICE_FILTERS, d.status || 'بالمستودع')
+        + '</select></div>'
+        + '<div class="field span-2"><label for="f_notes">ملاحظات</label>'
+        + '<textarea class="control" id="f_notes" name="notes" maxlength="500">' + esc(d.notes || '') + '</textarea></div>'
+        + '</form>';
+
+      openModal(id ? 'تعديل بيانات الجهاز' : 'إضافة جهاز', body,
+        '<button class="btn btn-ghost" data-act="close-modal">إلغاء</button>'
+        + '<button class="btn btn-primary" data-act="save-device">حفظ الجهاز</button>');
+    }
+
+    function saveDevice() {
+      var form = $('#deviceForm');
+      if (!form || !form.reportValidity()) return;
+      var data = new FormData(form);
+      busy(true);
+      api('saveDevice', state.token, {
+        id: data.get('id') || '',
+        name: data.get('name'),
+        type: data.get('type'),
+        associationId: data.get('associationId'),
+        beneficiaryId: data.get('beneficiaryId'),
+        status: data.get('status'),
+        notes: data.get('notes')
+      }).then(function (result) {
+        state.data = result.data;
+        closeModal();
+        render();
+        toast('تم حفظ بيانات الجهاز.', 'success');
+      }, reportError).then(function () { busy(false); });
+    }
+
+    /* ============================================================
+       10) المناديب
+       ============================================================ */
+
+    function renderDelegates() {
+      var all = state.data.delegates || [];
+      var items = applyFilters(all, ['name', 'id', 'phone']);
+      var canManage = state.data.role === 'ASSOCIATION';
+      if (!all.length) {
+        return emptyState({glyph: ICONS.delegates, title: 'لا يوجد مناديب',
+          body: 'أضف مندوبًا ليستلم مهام التسليم الميداني ويوثّقها بالصورة.',
+          action: canManage ? 'new-delegate' : '', actionLabel: '＋ إضافة مندوب'});
+      }
+      var body = items.length ? '<div class="cards">' + items.map(function (d) {
+        var actions = canManage
+          ? '<div class="card-actions">'
+            + '<button class="btn btn-ghost btn-sm" data-act="regen-code" data-id="' + esc(d.id) + '">رمز جديد</button>'
+            + '<button class="btn ' + (d.status === 'نشط' ? 'btn-danger' : 'btn-soft') + ' btn-sm" '
+            + 'data-act="toggle-delegate" data-id="' + esc(d.id) + '" data-value="'
+            + (d.status === 'نشط' ? 'غير نشط' : 'نشط') + '">'
+            + (d.status === 'نشط' ? 'تعطيل' : 'تفعيل') + '</button></div>'
+          : '';
+        return '<article class="card"><div class="card-head"><div><h3>' + esc(d.name) + '</h3>'
+          + '<p class="mono">' + esc(d.id) + '</p></div>' + statusChip(d.status) + '</div>'
+          + '<div class="metas">'
+          + '<div class="meta"><small>رقم الجوال</small><strong dir="ltr" class="mono">' + esc(d.phone) + '</strong></div>'
+          + '<div class="meta"><small>مهام حالية</small><strong>' + fmt(d.assigned) + '</strong></div>'
+          + '<div class="meta"><small>تم خدمتهم</small><strong>' + fmt(d.served) + '</strong></div>'
+          + '<div class="meta"><small>آخر دخول</small><strong>' + esc(d.lastLogin || 'لم يدخل') + '</strong></div>'
+          + '</div>' + actions + '</article>';
+      }).join('') + '</div>'
+        : emptyState({glyph: '⌕', title: 'لا نتائج مطابقة', body: 'جرّب كلمة بحث أخرى.'});
+
+      return toolbar({placeholder: 'ابحث باسم المندوب أو رقمه…', filters: '',
+        count: fmt(items.length) + ' من ' + fmt(all.length)}) + body;
+    }
+
+    function delegateForm() {
+      var body = '<form id="delegateForm" class="form-grid" novalidate>'
+        + textField('name', 'اسم المندوب', '', {required: true, max: 120, span: true})
+        + textField('phone', 'رقم الجوال', '', {required: true, ltr: true, span: true,
+            hint: 'يُستخدم للتواصل ولا يُستخدم للدخول. الدخول يتم برمز يُنشئه النظام.'})
+        + '</form>';
+      openModal('إضافة مندوب', body,
+        '<button class="btn btn-ghost" data-act="close-modal">إلغاء</button>'
+        + '<button class="btn btn-primary" data-act="save-delegate">إنشاء المندوب ورمز الدخول</button>');
+    }
+
+    function showAccessCode(title, code, note) {
+      openModal(title,
+        '<div class="code-reveal"><p class="muted">رمز دخول المندوب</p>'
+        + '<div class="code">' + esc(code) + '</div>'
+        + '<p class="muted">' + esc(note) + '</p></div>',
+        '<button class="btn btn-primary" data-act="close-and-refresh">تم، أغلق</button>');
+    }
+
+    function saveDelegate() {
+      var form = $('#delegateForm');
+      if (!form || !form.reportValidity()) return;
+      var data = new FormData(form);
+      var association = state.data.association || {};
+      busy(true);
+      api('saveDelegate', state.token, {
+        name: data.get('name'), phone: data.get('phone'), associationId: association.id || ''
+      }).then(function (result) {
+        state.data = result.data;
+        showAccessCode('تم إنشاء المندوب', result.accessCode,
+          'اعرض الرمز للمندوب الآن — لن يظهر مرة أخرى. يمكنك إنشاء بديل في أي وقت.');
+      }, reportError).then(function () { busy(false); });
+    }
+
+    function regenerateCode(id) {
+      if (!window.confirm('سيتوقف الرمز الحالي فورًا ولن يستطيع المندوب الدخول به. هل تريد المتابعة؟')) return;
+      busy(true);
+      api('regenerateDelegateCode', state.token, id).then(function (result) {
+        showAccessCode('رمز الدخول الجديد', result.accessCode, 'الرمز السابق لم يعد صالحًا.');
+      }, reportError).then(function () { busy(false); });
+    }
+
+    function toggleDelegate(id, next) {
+      var verb = next === 'نشط' ? 'تفعيل' : 'تعطيل';
+      if (!window.confirm('هل تريد ' + verb + ' هذا المندوب؟')) return;
+      busy(true);
+      api('setDelegateStatus', state.token, id, next).then(function (result) {
+        state.data = result.data;
+        render();
+        toast('تم ' + verb + ' المندوب.', 'success');
+      }, reportError).then(function () { busy(false); });
+    }
+
+    /* ============================================================
+       11) الأنشطة وسجل العمليات والإعدادات
+       ============================================================ */
+
+    function renderActivities() {
+      var stages = state.data.stages || [];
+      var activities = state.data.activities || [];
+      if (!activities.length) {
+        return emptyState({glyph: ICONS.activities, title: 'لا توجد أنشطة مسجّلة',
+          body: 'تُقرأ الأنشطة من ورقة «إدارة الأنشطة» في الملف. أضف الصفوف هناك لتظهر هنا.'});
+      }
+      var late = activities.filter(function (x) { return x.status === 'متأخر'; });
+      var stagesHtml = stages.length ? stages.map(function (s) {
+        return '<div style="padding:12px 0;border-bottom:1px solid var(--line)">'
+          + '<div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:8px">'
+          + '<div><strong>' + esc(s.name || 'مرحلة غير مسماة') + '</strong> ' + statusChip(s.status) + '</div></div>'
+          + bar(s.progress) + '</div>';
+      }).join('') : emptyState({glyph: '◇', title: 'لا توجد مراحل', body: ''});
+
+      var lateHtml = late.length ? late.map(function (x) {
+        return '<div class="alert critical"><strong>' + esc(x.subActivity || x.mainActivity) + '</strong>'
+          + '<small>' + esc(x.owner || 'بلا مسؤول') + ' · متأخر ' + fmt(x.delayDays) + ' يومًا</small></div>';
+      }).join('') : emptyState({glyph: '✓', title: 'لا أنشطة متأخرة', body: 'الجدول الزمني منضبط حاليًا.'});
+
+      return '<section class="cols">'
+        + '<div class="panel"><div class="panel-head"><div><h3>مراحل المشروع</h3>'
+        + '<p>المسار التنفيذي المجمّع</p></div></div>' + stagesHtml + '</div>'
+        + '<div class="panel"><div class="panel-head"><div><h3>الأنشطة المتأخرة</h3>'
+        + '<p>مرتّبة حسب الحاجة للتدخل</p></div></div>' + lateHtml + '</div></section>'
+        + '<section class="panel"><div class="panel-head"><div><h3>جميع الأنشطة</h3>'
+        + '<p>تفاصيل التنفيذ والشواهد</p></div></div>'
+        + '<div class="table-wrap"><table class="data"><thead><tr>'
+        + '<th>المرحلة</th><th>النشاط الرئيسي</th><th>النشاط الفرعي</th><th>المسؤول</th>'
+        + '<th>النهاية</th><th>الإنجاز</th><th>الحالة</th><th>الشاهد</th></tr></thead><tbody>'
+        + activities.map(function (x) {
+          return '<tr><td>' + esc(x.stage) + '</td><td>' + esc(x.mainActivity) + '</td>'
+            + '<td>' + esc(x.subActivity) + '</td><td>' + esc(x.owner) + '</td>'
+            + '<td class="muted">' + esc(x.endDate || '—') + '</td><td>' + fmt(x.progress) + '٪</td>'
+            + '<td>' + statusChip(x.status) + '</td>'
+            + '<td>' + (x.evidenceUrl
+              ? '<a href="' + esc(x.evidenceUrl) + '" target="_blank" rel="noopener noreferrer">فتح ↗</a>'
+              : '<span class="muted">—</span>') + '</td></tr>';
+        }).join('') + '</tbody></table></div></section>';
+    }
+
+    function renderAudit() {
+      return '<section class="panel"><div class="panel-head"><div><h3>سجل العمليات</h3>'
+        + '<p>سجل غير قابل للتعديل من الواجهة، يوثّق كل إجراء في النظام</p></div></div>'
+        + renderAuditRows(200) + '</section>';
+    }
+
+    function renderSettings() {
+      var isAdmin = state.data.role === 'ADMIN';
+      var a = state.data.association || {};
+      var profile = isAdmin
+        ? '<div class="panel"><div class="panel-head"><div><h3>حساب الإدارة</h3>'
+          + '<p>بيانات مدير النظام</p></div></div>'
+          + '<div class="metas"><div class="meta wide"><small>الاسم</small><strong>'
+          + esc((state.user && state.user.name) || '—') + '</strong></div>'
+          + '<div class="meta wide"><small>الدور</small><strong>مدير النظام — صلاحية كاملة</strong></div></div>'
+          + '<p class="muted" style="font-size:13px">صلاحيات الإدارة تُفرض في الخادم، ولا تعتمد على إخفاء الأزرار.</p></div>'
+        : '<div class="panel"><div class="panel-head"><div><h3>بيانات الجمعية</h3>'
+          + '<p>تحديث وسائل التواصل المرتبطة بالحساب</p></div></div>'
+          + '<form id="associationSettings" novalidate>'
+          + '<div class="field"><label for="s_name">اسم الجمعية</label>'
+          + '<input class="control" id="s_name" value="' + esc(a.name || '') + '" disabled></div>'
+          + '<div class="field"><label for="s_phone">أرقام التواصل</label>'
+          + '<input class="control" id="s_phone" name="phone" dir="ltr" value="' + esc(a.phone || '') + '" required></div>'
+          + '<div class="field"><label for="s_email">البريد الإلكتروني</label>'
+          + '<input class="control" id="s_email" name="email" type="email" dir="ltr" value="'
+          + esc(a.email || '') + '" required></div>'
+          + '<div class="field"><label for="s_loc">الموقع</label>'
+          + '<input class="control" id="s_loc" value="' + esc((a.region || '') + ' · ' + (a.city || '')) + '" disabled></div>'
+          + '<button class="btn btn-primary" type="button" data-act="save-settings">حفظ التغييرات</button></form></div>';
+
+      return '<section class="cols">' + profile
+        + '<div class="panel"><div class="panel-head"><div><h3>تغيير كلمة المرور</h3>'
+        + '<p>استخدم كلمة قوية لا تقل عن ١٠ خانات وتضم حروفًا وأرقامًا</p></div></div>'
+        + '<form id="passwordForm" novalidate>'
+        + '<div class="field"><label for="p_current">كلمة المرور الحالية</label>'
+        + '<input class="control" id="p_current" name="current" type="password" autocomplete="current-password" required></div>'
+        + '<div class="field"><label for="p_next">كلمة المرور الجديدة</label>'
+        + '<input class="control" id="p_next" name="next" type="password" minlength="10" '
+        + 'autocomplete="new-password" required></div>'
+        + '<div class="field"><label for="p_confirm">تأكيد كلمة المرور</label>'
+        + '<input class="control" id="p_confirm" name="confirm" type="password" minlength="10" '
+        + 'autocomplete="new-password" required></div>'
+        + '<button class="btn btn-soft" type="button" data-act="save-password">تغيير كلمة المرور</button></form>'
+        + '<hr style="border:0;border-top:1px solid var(--line);margin:22px 0">'
+        + '<button class="btn btn-danger" data-act="logout">تسجيل الخروج من هذا الجهاز</button>'
+        + '</div></section>';
+    }
+
+    function saveAssociationSettings() {
+      var form = $('#associationSettings');
+      if (!form || !form.reportValidity()) return;
+      var data = new FormData(form);
+      busy(true);
+      api('updateAssociationSettings', state.token, {phone: data.get('phone'), email: data.get('email')})
+        .then(function (result) {
+          state.data = result.data;
+          render();
+          toast('تم حفظ إعدادات الجمعية.', 'success');
+        }, reportError).then(function () { busy(false); });
+    }
+
+    function savePassword() {
+      var form = $('#passwordForm');
+      if (!form || !form.reportValidity()) return;
+      var data = new FormData(form);
+      if (data.get('next') !== data.get('confirm')) {
+        toast('تأكيد كلمة المرور غير مطابق.', 'error');
+        return;
+      }
+      busy(true);
+      api('changePassword', state.token, data.get('current'), data.get('next')).then(function () {
+        form.reset();
+        toast('تم تغيير كلمة المرور بنجاح.', 'success');
+      }, reportError).then(function () { busy(false); });
+    }
+
+    /* ============================================================
+       12) واجهة المندوب (جوال)
+       ============================================================ */
+
+    function renderDelegate() {
+      var d = state.data.delegate || {};
+      var s = state.data.summary || {};
+      var listTab = state.delegatePage === 'list';
+      $('#root').innerHTML = '<main class="dg"><header class="dg-top">' + lockup({partner: true, onDark: true})
+        + '<h2>أهلًا ' + esc(d.name) + '</h2><p>مهام التسليم الخاصة بك اليوم</p>'
+        + '<div class="dg-stats">'
+        + '<div><strong>' + fmt(s.remaining) + '</strong><span>مستفيدون متبقّون</span></div>'
+        + '<div><strong>' + fmt(s.deliveredToday) + '</strong><span>تم تسليمهم اليوم</span></div>'
+        + '</div></header><section class="dg-body"><div class="dg-nav">'
+        + '<button class="btn ' + (listTab ? 'btn-primary' : 'btn-ghost') + '" data-act="dg-tab" data-value="list">قائمة المهام</button>'
+        + '<button class="btn ' + (listTab ? 'btn-ghost' : 'btn-primary') + '" data-act="dg-tab" data-value="history">السجل</button>'
+        + '<button class="btn btn-ghost icon" data-act="dg-settings" aria-label="الإعدادات">⚙</button></div>'
+        + (listTab ? renderDelegateList() : renderDelegateHistory()) + '</section></main>';
+    }
+
+    function phoneIntl(value) {
+      var digits = String(value || '').replace(/\D/g, '');
+      return digits.charAt(0) === '0' ? '966' + digits.slice(1) : digits;
+    }
+
+    function renderDelegateList() {
+      var list = state.data.beneficiaries || [];
+      if (!list.length) {
+        return '<div class="dg-card">' + emptyState({glyph: '✓', title: 'أنجزت جميع مهامك',
+          body: 'لا يوجد مستفيدون متبقّون في قائمتك حاليًا.'}) + '</div>';
+      }
+      return list.map(function (item) {
+        var devices = (item.devices || []).map(function (device) {
+          return '<span class="tag">' + needGlyph(device.name) + ' ' + esc(device.name)
+            + ' <span class="mono">' + esc(device.id) + '</span></span>';
+        }).join('') || '<span class="tag plain">لا توجد أجهزة مخصصة</span>';
+
+        var whatsappUrl = HTTPS + 'wa.me/' + phoneIntl(item.phone);
+        var mapsQuery = encodeURIComponent(String(item.address || '') + ' ' + String(item.city || ''));
+        var mapsUrl = HTTPS + 'www.google.com/maps/search/?api=1&query=' + mapsQuery;
+        var canDeliver = (item.devices || []).length > 0;
+
+        return '<article class="dg-card"><div class="card-head"><div>'
+          + '<h3>' + esc(item.name) + '</h3><p class="muted">' + esc(item.city) + '</p></div>'
+          + statusChip(item.deliveryStatus) + '</div>'
+          + '<p class="dg-addr"><span aria-hidden="true">◉</span><span>' + esc(item.address) + '</span></p>'
+          + '<div class="tags">' + devices + '</div>'
+          + '<div class="dg-acts">'
+          + '<a class="a-wa" href="' + esc(whatsappUrl) + '" target="_blank" rel="noopener noreferrer">واتساب</a>'
+          + '<a class="a-call" href="tel:' + esc(item.phone) + '">اتصال</a>'
+          + '<a class="a-map" href="' + esc(mapsUrl) + '" target="_blank" rel="noopener noreferrer">الموقع</a>'
+          + '<button class="a-state" data-act="dg-status" data-id="' + esc(item.id) + '">تعذّر</button>'
+          + '<button class="a-deliver" data-act="dg-deliver" data-id="' + esc(item.id) + '"'
+          + (canDeliver ? '' : ' disabled title="لا توجد أجهزة مخصصة"') + '>تأكيد التسليم</button>'
+          + '</div></article>';
+      }).join('');
+    }
+
+    function renderDelegateHistory() {
+      var list = state.data.history || [];
+      if (!list.length) {
+        return '<div class="dg-card">' + emptyState({glyph: '≡', title: 'لا توجد تسليمات سابقة',
+          body: 'سيظهر هنا كل تسليم وثّقته بالصورة.'}) + '</div>';
+      }
+      return '<div class="dg-card"><div class="rows">' + list.map(function (x) {
+        return '<div class="row-item"><div><strong>' + esc(x.beneficiaryName) + '</strong>'
+          + '<small>' + esc((x.devices || []).join('، ') || '—') + '</small></div>'
+          + '<div class="muted">' + esc(x.deliveredAt) + '</div>'
+          + '<span class="status good">موثّق</span></div>';
+      }).join('') + '</div></div>';
+    }
+
+    function delegateStatusModal(id) {
+      var item = findBeneficiary(id);
+      var body = (item ? '<p class="muted">المستفيد: <strong>' + esc(item.name) + '</strong></p>' : '')
+        + '<div class="field"><label for="failedReason">سبب تعذّر التسليم</label>'
+        + '<select class="control" id="failedReason">' + optionList(FAILED_REASONS, '') + '</select></div>'
+        + '<div class="field"><label for="failedNotes">ملاحظات (اختياري)</label>'
+        + '<textarea class="control" id="failedNotes" maxlength="500"></textarea></div>';
+      openModal('تحديث حالة المستفيد', body,
+        '<button class="btn btn-ghost" data-act="close-modal">إلغاء</button>'
+        + '<button class="btn btn-soft" data-act="dg-save-status" data-id="' + esc(id) + '">حفظ الحالة</button>');
+    }
+
+    function saveDelegateStatus(id) {
+      var reason = $('#failedReason');
+      var notes = $('#failedNotes');
+      if (!reason) return;
+      busy(true);
+      api('updateDeliveryStatus', state.token, id, reason.value, notes ? notes.value : '')
+        .then(function (result) {
+          state.data = result.data;
+          closeModal();
+          renderDelegate();
+          toast('تم تحديث حالة المستفيد.', 'success');
+        }, reportError).then(function () { busy(false); });
+    }
+
+    function deliveryModal(id) {
+      var item = findBeneficiary(id);
+      if (!item) { toast('تعذر العثور على المستفيد.', 'error'); return; }
+      state.proofData = '';
+      var devices = (item.devices || []).map(function (device) {
+        return '<span class="tag">' + needGlyph(device.name) + ' ' + esc(device.name)
+          + ' <span class="mono">' + esc(device.id) + '</span></span>';
+      }).join('');
+      var body = '<h3 style="color:var(--zad-800);margin-bottom:4px">' + esc(item.name) + '</h3>'
+        + '<p class="muted" style="margin:0 0 14px">' + esc(item.address) + '</p>'
+        + '<div class="tags">' + devices + '</div>'
+        + '<div class="drop" style="margin-top:18px">'
+        + '<label class="btn btn-primary" for="proofFile">التقاط أو اختيار صورة الإثبات</label>'
+        + '<input id="proofFile" type="file" data-act="proof-file" accept="image/jpeg,image/png,image/webp" '
+        + 'capture="environment">'
+        + '<p class="muted" style="margin:8px 0 0" id="proofHint">JPG أو PNG أو WEBP — بحد أقصى ٦ ميجابايت.</p>'
+        + '<img id="proofPreview" class="proof-img hidden" alt="معاينة إثبات التسليم"></div>'
+        + '<label class="pledge"><input id="deliveryConfirm" type="checkbox">'
+        + '<span>أؤكّد أنني سلّمت الأجهزة المذكورة أعلاه إلى المستفيد، وأن الصورة المرفقة إثبات صحيح للتسليم.</span></label>';
+      openModal('توثيق التسليم', body,
+        '<button class="btn btn-ghost" data-act="close-modal">إلغاء</button>'
+        + '<button class="btn btn-primary" data-act="dg-save-delivery" data-id="' + esc(id) + '">تم التسليم</button>');
+    }
+
+    function handleProofFile(input) {
+      var file = input.files && input.files[0];
+      if (!file) return;
+      if (file.size > 6 * 1024 * 1024) {
+        toast('حجم الصورة يتجاوز ٦ ميجابايت. صوّر بجودة أقل.', 'error');
+        input.value = '';
+        return;
+      }
+      if (['image/jpeg', 'image/png', 'image/webp'].indexOf(file.type) < 0) {
+        toast('صيغة الصورة غير مدعومة. استخدم JPG أو PNG أو WEBP.', 'error');
+        input.value = '';
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function () {
+        state.proofData = reader.result;
+        var img = $('#proofPreview');
+        var hint = $('#proofHint');
+        if (img) { img.src = state.proofData; img.classList.remove('hidden'); }
+        if (hint) hint.textContent = 'تم إرفاق الصورة. راجعها قبل التأكيد.';
+      };
+      reader.onerror = function () { toast('تعذر قراءة الصورة.', 'error'); };
+      reader.readAsDataURL(file);
+    }
+
+    function saveDelivery(id) {
+      var confirmBox = $('#deliveryConfirm');
+      if (!state.proofData) { toast('أرفق صورة إثبات التسليم أولًا.', 'error'); return; }
+      if (!confirmBox || !confirmBox.checked) { toast('يجب تأكيد إتمام التسليم.', 'error'); return; }
+      busy(true);
+      api('confirmDelivery', state.token, {
+        beneficiaryId: id, proofDataUrl: state.proofData, confirmed: true
+      }).then(function (result) {
+        state.proofData = '';
+        state.data = result.data;
+        closeModal();
+        renderDelegate();
+        toast('تم توثيق التسليم بنجاح.', 'success');
+      }, reportError).then(function () { busy(false); });
+    }
+
+    function delegateSettings() {
+      var d = state.data.delegate || {};
+      openModal('الإعدادات',
+        '<div class="metas">'
+        + '<div class="meta"><small>اسم المندوب</small><strong>' + esc(d.name) + '</strong></div>'
+        + '<div class="meta"><small>رقم الجوال</small><strong dir="ltr" class="mono">' + esc(d.phone) + '</strong></div>'
+        + '<div class="meta"><small>الحالة</small><strong>' + esc(d.status) + '</strong></div>'
+        + '<div class="meta"><small>رقم المندوب</small><strong class="mono">' + esc(d.id) + '</strong></div></div>'
+        + '<p class="muted" style="font-size:13px">إذا فقدت رمز الدخول، تواصل مع جمعيتك لإنشاء رمز جديد.</p>',
+        '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>'
+        + '<button class="btn btn-danger" data-act="logout">تسجيل الخروج</button>');
+    }
+
+    /* ============================================================
+       13) النوافذ المنبثقة
+       ============================================================ */
+
+    var lastFocused = null;
+
+    function openModal(title, body, footer) {
+      lastFocused = document.activeElement;
+      $('#modalRoot').innerHTML = '<div class="backdrop" data-act="backdrop">'
+        + '<section class="modal" role="dialog" aria-modal="true" aria-label="' + esc(title) + '">'
+        + '<header class="modal-head"><h3>' + esc(title) + '</h3>'
+        + '<button class="x-btn" data-act="close-modal" aria-label="إغلاق">×</button></header>'
+        + '<div class="modal-body">' + body + '</div>'
+        + (footer ? '<footer class="modal-foot">' + footer + '</footer>' : '')
+        + '</section></div>';
+      var focusable = $('.modal .control, .modal button:not(.x-btn)');
+      if (focusable) focusable.focus();
+    }
+
+    function closeModal() {
+      $('#modalRoot').innerHTML = '';
+      if (lastFocused && document.contains(lastFocused)) lastFocused.focus();
+      lastFocused = null;
+    }
+
+    /* ============================================================
+       14) الجلسة
+       ============================================================ */
+
+    function restoreSession() {
+      if (!state.token) { renderLogin(); return; }
+      $('#root').innerHTML = '<main class="boot"><div><div class="spin"></div>'
+        + '<strong>جارٍ استعادة الجلسة…</strong></div></main>';
+      api('getBootstrapData', state.token).then(function (data) {
+        state.data = data;
+        state.user = data.user || {role: data.role, name: 'المستخدم'};
+        render();
+      }, function () {
+        safeSession('remove', 'zad_token');
+        state.token = '';
+        renderLogin();
+      });
+    }
+
+    function doLogout(callServer) {
+      var finish = function () {
+        safeSession('remove', 'zad_token');
+        state.token = '';
+        state.user = null;
+        state.data = null;
+        state.proofData = '';
+        state.pendingRows = [];
+        closeModal();
+        renderLogin();
+      };
+      if (callServer !== false && state.token) {
+        api('logout', state.token).then(finish, finish);
+        return;
+      }
+      finish();
+    }
+
+    function refreshData() {
+      busy(true);
+      api('getBootstrapData', state.token).then(function (data) {
+        state.data = data;
+        render();
+        toast('تم تحديث البيانات.', 'success');
+      }, reportError).then(function () { busy(false); });
+    }
+
+    function toggleMenu() {
+      var sidebar = $('#sidebar');
+      if (!sidebar) return;
+      var open = sidebar.classList.toggle('open');
+      var scrim = $('.scrim');
+      if (open && !scrim) {
+        var node = document.createElement('div');
+        node.className = 'scrim';
+        node.setAttribute('data-act', 'toggle-menu');
+        document.body.appendChild(node);
+      } else if (!open && scrim) {
+        scrim.remove();
+      }
+    }
+
+    /* ============================================================
+       15) توجيه الأحداث — لا يوجد أي inline handler في هذا الملف
+       ============================================================ */
+
+    var CLICK_ACTIONS = {
+      'go': function (el) { goTo(el.getAttribute('data-value')); },
+      'login-type': function (el) { state.loginType = el.getAttribute('data-value'); renderLogin(); },
+      'logout': function () { doLogout(true); },
+      'refresh': refreshData,
+      'toggle-menu': toggleMenu,
+      'close-modal': closeModal,
+      'close-and-refresh': function () { closeModal(); render(); },
+      'new-beneficiary': function () { beneficiaryForm(''); },
+      'edit-beneficiary': function (el) { closeModal(); beneficiaryForm(el.getAttribute('data-id')); },
+      'view-beneficiary': function (el) { viewBeneficiary(el.getAttribute('data-id')); },
+      'save-beneficiary': saveBeneficiary,
+      'assign-delegate': function (el) { closeModal(); assignDelegateModal(el.getAttribute('data-id')); },
+      'save-assign': function (el) { saveAssign(el.getAttribute('data-id')); },
+      'bulk-import': bulkImportModal,
+      'run-import': runImport,
+      'new-association': function () { associationForm(''); },
+      'edit-association': function (el) { associationForm(el.getAttribute('data-id')); },
+      'view-association': function (el) { viewAssociation(el.getAttribute('data-id')); },
+      'save-association': saveAssociation,
+      'new-device': function () { deviceForm(''); },
+      'edit-device': function (el) { deviceForm(el.getAttribute('data-id')); },
+      'save-device': saveDevice,
+      'new-delegate': delegateForm,
+      'save-delegate': saveDelegate,
+      'regen-code': function (el) { regenerateCode(el.getAttribute('data-id')); },
+      'toggle-delegate': function (el) { toggleDelegate(el.getAttribute('data-id'), el.getAttribute('data-value')); },
+      'save-settings': saveAssociationSettings,
+      'save-password': savePassword,
+      'dg-tab': function (el) { state.delegatePage = el.getAttribute('data-value'); renderDelegate(); },
+      'dg-settings': delegateSettings,
+      'dg-status': function (el) { delegateStatusModal(el.getAttribute('data-id')); },
+      'dg-save-status': function (el) { saveDelegateStatus(el.getAttribute('data-id')); },
+      'dg-deliver': function (el) { deliveryModal(el.getAttribute('data-id')); },
+      'dg-save-delivery': function (el) { saveDelivery(el.getAttribute('data-id')); }
+    };
+
+    document.addEventListener('click', function (event) {
+      var backdrop = event.target.classList && event.target.classList.contains('backdrop');
+      if (backdrop) { closeModal(); return; }
+      var el = event.target.closest ? event.target.closest('[data-act]') : null;
+      if (!el) return;
+      var action = el.getAttribute('data-act');
+      if (action === 'backdrop' || action === 'set-search' || action === 'set-filter'
+        || action === 'bulk-file' || action === 'proof-file') return;
+      var handler = CLICK_ACTIONS[action];
+      if (!handler) return;
+      event.preventDefault();
+      handler(el);
+    });
+
+    var searchTimer = null;
+    document.addEventListener('input', function (event) {
+      var el = event.target;
+      if (!el.getAttribute || el.getAttribute('data-act') !== 'set-search') return;
+      var value = el.value;
+      window.clearTimeout(searchTimer);
+      searchTimer = window.setTimeout(function () {
+        state.search = value;
+        render();
+        var box = $('#searchBox');
+        if (box) {
+          box.focus();
+          box.setSelectionRange(box.value.length, box.value.length);
+        }
+      }, 220);
+    });
+
+    document.addEventListener('change', function (event) {
+      var el = event.target;
+      var action = el.getAttribute ? el.getAttribute('data-act') : null;
+      if (action === 'set-filter') { state.filter = el.value; render(); return; }
+      if (action === 'bulk-file') { handleBulkFile(el); return; }
+      if (action === 'proof-file') { handleProofFile(el); }
+    });
+
+    document.addEventListener('submit', function (event) {
+      var form = event.target;
+      if (!form.getAttribute || form.getAttribute('data-act') !== 'submit-login') return;
+      event.preventDefault();
+      submitLogin(form);
+    });
+
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && $('#modalRoot').innerHTML) closeModal();
+    });
+
+    /* ============================================================
+       16) الإقلاع
+       ============================================================ */
+
+    window.__zadReady = true;
+    restoreSession();
+  </script>
+</body>
+</html>
