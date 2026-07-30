@@ -295,6 +295,11 @@ app.state.page = 'devices';
 app.render();
 assert('الجمعية لا ترى زر إضافة جهاز', !out().includes('new-device'));
 
+app.beneficiaryForm('');
+assert('نموذج المستفيد يعرض حقلي الإحداثيات وزر تحديد الموقع', registry.modalRoot.innerHTML.includes('name="lat"')
+  && registry.modalRoot.innerHTML.includes('name="lng"') && registry.modalRoot.innerHTML.includes('use-my-location'));
+app.closeModal();
+
 /* ---------------- 4) البحث والفلاتر ---------------- */
 
 section('4) البحث والفلترة');
@@ -368,6 +373,26 @@ setRole(DELEGATE_DATA);
 app.state.delegatePage = 'history';
 app.renderDelegate();
 assert('تبويب السجل يعمل', out().includes('نورة السالم'));
+
+app.state.delegatePage = 'route';
+app.state.delegateRoute = null;
+app.renderDelegate();
+assert('تبويب مسار اليوم يعرض زر تحديد الموقع', out().includes('delegate-locate'));
+assert('مستفيد بلا إحداثيات يظهر في قائمة منفصلة قبل حساب المسار', out().includes('بلا إحداثيات'));
+
+assert('haversineKm تُعيد صفرًا لنفس النقطة', app.haversineKm(24.7, 46.6, 24.7, 46.6) === 0);
+const riyadhJeddahKm = app.haversineKm(24.7136, 46.6753, 21.4858, 39.1925);
+assert('haversineKm تحسب مسافة واقعية تقريبًا بين الرياض وجدة (٨٠٠–٩٥٠ كم)',
+  riyadhJeddahKm > 800 && riyadhJeddahKm < 950);
+
+app.state.delegateRoute = {
+  origin: {lat: 24.7, lng: 46.6},
+  ordered: [{item: Object.assign({}, DELEGATE_DATA.beneficiaries[0], {lat: 24.71, lng: 46.61}), distanceKm: 1.4}]
+};
+app.renderDelegate();
+assert('مسار محسوب يعرض ترتيب المستفيد والمسافة التقريبية', out().includes('1.4 كم تقريبًا'));
+assert('مسار محسوب يستخدم رابط خرائط بالإحداثيات الدقيقة', out().includes('query=24.71,46.61'));
+app.state.delegateRoute = null;
 app.state.delegatePage = 'list';
 
 const emptyDelegate = Object.assign({}, DELEGATE_DATA, { beneficiaries: [] });

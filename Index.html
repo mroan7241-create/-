@@ -481,7 +481,8 @@
       proofData: '',
       pendingRows: [],
       referenceData: null,
-      activityTab: ''
+      activityTab: '',
+      delegateRoute: null
     };
 
     function api(method) {
@@ -1095,6 +1096,16 @@
         + regionCityFields(item.region, item.city, 'f')
         + textField('address', 'العنوان الدقيق', item.address, {required: true, max: 250, span: true,
             hint: 'الحي والشارع وأقرب معلم — يستخدمه المندوب للوصول.'})
+        + '<div class="field"><label for="f_lat">خط العرض (اختياري)</label>'
+        + '<input class="control" id="f_lat" name="lat" type="number" step="any" dir="ltr" min="15" max="33" value="'
+        + esc(item.lat != null ? item.lat : '') + '"></div>'
+        + '<div class="field"><label for="f_lng">خط الطول (اختياري)</label>'
+        + '<input class="control" id="f_lng" name="lng" type="number" step="any" dir="ltr" min="33" max="56" value="'
+        + esc(item.lng != null ? item.lng : '') + '"></div>'
+        + '<div class="field span-2"><button type="button" class="btn btn-ghost btn-sm" data-act="use-my-location">'
+        + '📍 استخدم الموقع الحالي لتعبئة الإحداثيات</button>'
+        + '<span class="hint">اختياري — يحسّن دقة موقع المستفيد على الخريطة ويرتّب مسار المندوب اليومي تلقائيًا.'
+        + ' اتركه فارغًا إن لم تكن متأكدًا؛ العنوان النصي يبقى يعمل بدونه.</span></div>'
         + '<div class="field"><label for="f_familyCount">عدد الأفراد</label>'
         + '<input class="control" id="f_familyCount" name="familyCount" type="number" min="1" max="99" value="'
         + esc(item.familyCount || '') + '" required></div>'
@@ -1192,7 +1203,8 @@
         socialSecurity: data.get('socialSecurity'),
         needs: data.getAll('needs'),
         notes: data.get('notes'),
-        associationId: association.id || ''
+        associationId: association.id || '',
+        lat: data.get('lat'), lng: data.get('lng')
       };
       busy(true);
       api('saveBeneficiary', state.token, payload).then(function (result) {
@@ -1201,6 +1213,25 @@
         render();
         toast('تم حفظ بيانات المستفيد.', 'success');
       }, reportError).then(function () { busy(false); });
+    }
+
+    /**
+     * موقع جغرافي مجاني بالكامل عبر navigator.geolocation المدمج في
+     * المتصفح — بلا أي مفتاح API أو خدمة مدفوعة. يعمل فقط عند منح
+     * المستخدم إذن الموقع صراحة؛ يفشل بصمت مع رسالة عربية واضحة
+     * وإلا يبقى الحقلان فارغين اختياريَّين كما كانا.
+     */
+    function fillCurrentLocation() {
+      if (!navigator.geolocation) { toast('المتصفح لا يدعم تحديد الموقع.', 'error'); return; }
+      toast('يُطلَب إذن الموقع من المتصفح…', 'success');
+      navigator.geolocation.getCurrentPosition(function (position) {
+        var latField = $('#f_lat'); var lngField = $('#f_lng');
+        if (latField) latField.value = position.coords.latitude.toFixed(6);
+        if (lngField) lngField.value = position.coords.longitude.toFixed(6);
+        toast('تم تعبئة الإحداثيات من موقعك الحالي.', 'success');
+      }, function () {
+        toast('تعذّر الحصول على الموقع — تحقق من إذن الموقع في المتصفح.', 'error');
+      }, {enableHighAccuracy: true, timeout: 10000});
     }
 
     /* ---------- تعيين المندوب ---------- */
@@ -1967,17 +1998,112 @@
     function renderDelegate() {
       var d = state.data.delegate || {};
       var s = state.data.summary || {};
-      var listTab = state.delegatePage === 'list';
+      var tab = state.delegatePage || 'list';
+      var tabBody = tab === 'list' ? renderDelegateList()
+        : tab === 'route' ? renderDelegateRoute()
+        : renderDelegateHistory();
       $('#root').innerHTML = '<main class="dg"><header class="dg-top">' + lockup({partner: true, onDark: true})
         + '<h2>أهلًا ' + esc(d.name) + '</h2><p>مهام التسليم الخاصة بك اليوم</p>'
         + '<div class="dg-stats">'
         + '<div><strong>' + fmt(s.remaining) + '</strong><span>مستفيدون متبقّون</span></div>'
         + '<div><strong>' + fmt(s.deliveredToday) + '</strong><span>تم تسليمهم اليوم</span></div>'
         + '</div></header><section class="dg-body"><div class="dg-nav">'
-        + '<button class="btn ' + (listTab ? 'btn-primary' : 'btn-ghost') + '" data-act="dg-tab" data-value="list">قائمة المهام</button>'
-        + '<button class="btn ' + (listTab ? 'btn-ghost' : 'btn-primary') + '" data-act="dg-tab" data-value="history">السجل</button>'
+        + '<button class="btn ' + (tab === 'list' ? 'btn-primary' : 'btn-ghost') + '" data-act="dg-tab" data-value="list">قائمة المهام</button>'
+        + '<button class="btn ' + (tab === 'route' ? 'btn-primary' : 'btn-ghost') + '" data-act="dg-tab" data-value="route">مسار اليوم</button>'
+        + '<button class="btn ' + (tab === 'history' ? 'btn-primary' : 'btn-ghost') + '" data-act="dg-tab" data-value="history">السجل</button>'
         + '<button class="btn btn-ghost icon" data-act="dg-settings" aria-label="الإعدادات">⚙</button></div>'
-        + (listTab ? renderDelegateList() : renderDelegateHistory()) + '</section></main>';
+        + tabBody + '</section></main>';
+    }
+
+    /** المسافة التقريبية بالكيلومترات بين نقطتين — صيغة Haversine، بلا أي خدمة أو مفتاح API. */
+    function haversineKm(lat1, lng1, lat2, lng2) {
+      var toRad = function (deg) { return deg * Math.PI / 180; };
+      var R = 6371;
+      var dLat = toRad(lat2 - lat1);
+      var dLng = toRad(lng2 - lng1);
+      var a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+        + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    /**
+     * مسار تقريبي مجاني بالكامل: يرتّب المستفيدين ذوي الإحداثيات حسب
+     * القرب من موقع المندوب الحالي (أقرب أولًا فأقرب من كل نقطة تالية
+     * — خوارزمية "أقرب جار" البسيطة)، بلا أي واجهة برمجية مدفوعة
+     * للتوجيه أو المسافات. من لا تتوفر له إحداثيات يبقى في قائمة
+     * منفصلة يُعتمَد فيها على العنوان النصي كما كان دائمًا.
+     */
+    function startDelegateRoute() {
+      if (!navigator.geolocation) { toast('المتصفح لا يدعم تحديد الموقع.', 'error'); return; }
+      toast('يُطلَب إذن الموقع من المتصفح…', 'success');
+      navigator.geolocation.getCurrentPosition(function (position) {
+        var origin = {lat: position.coords.latitude, lng: position.coords.longitude};
+        var withCoords = (state.data.beneficiaries || []).filter(function (b) { return b.lat != null && b.lng != null; });
+        var remaining = withCoords.slice();
+        var ordered = [];
+        var cursor = origin;
+        while (remaining.length) {
+          var nearestIndex = 0;
+          var nearestDist = Infinity;
+          remaining.forEach(function (b, i) {
+            var dist = haversineKm(cursor.lat, cursor.lng, b.lat, b.lng);
+            if (dist < nearestDist) { nearestDist = dist; nearestIndex = i; }
+          });
+          var next = remaining.splice(nearestIndex, 1)[0];
+          ordered.push({item: next, distanceKm: haversineKm(cursor.lat, cursor.lng, next.lat, next.lng)});
+          cursor = next;
+        }
+        state.delegateRoute = {origin: origin, ordered: ordered};
+        render();
+        toast('تم ترتيب المسار حسب القرب من موقعك.', 'success');
+      }, function () {
+        toast('تعذّر الحصول على الموقع — تحقق من إذن الموقع في المتصفح.', 'error');
+      }, {enableHighAccuracy: true, timeout: 10000});
+    }
+
+    function renderDelegateRoute() {
+      var all = state.data.beneficiaries || [];
+      if (!all.length) {
+        return '<div class="dg-card">' + emptyState({glyph: '✓', title: 'أنجزت جميع مهامك',
+          body: 'لا يوجد مستفيدون متبقّون في قائمتك حاليًا.'}) + '</div>';
+      }
+      var withoutCoords = all.filter(function (b) { return b.lat == null || b.lng == null; });
+      var intro = '<div class="dg-card"><p>يرتّب هذا المسار المستفيدين الأقرب لموقعك الحالي أولًا، اعتمادًا على '
+        + 'إحداثيات مسجَّلة في ملفاتهم فقط — تقريبي، بلا توجيه فعلي عبر الطرق.</p>'
+        + '<button class="btn btn-primary btn-sm" data-act="delegate-locate">📍 ترتيب المسار من موقعي الحالي</button></div>';
+
+      if (!state.delegateRoute) {
+        var noCoordsNote = withoutCoords.length
+          ? emptyState({glyph: '◇', title: fmt(withoutCoords.length) + ' مستفيدًا بلا إحداثيات',
+              body: 'لن يدخلوا في الترتيب التلقائي — استخدم العنوان النصي من قائمة المهام للوصول إليهم.'})
+          : '';
+        return intro + noCoordsNote;
+      }
+
+      var orderedHtml = state.delegateRoute.ordered.map(function (entry, index) {
+        var item = entry.item;
+        var mapsUrl = HTTPS + 'www.google.com/maps/search/?api=1&query=' + item.lat + ',' + item.lng;
+        return '<article class="dg-card"><div class="card-head"><div>'
+          + '<h3>' + (index + 1) + '. ' + esc(item.name) + '</h3>'
+          + '<p class="muted">' + esc(item.city) + ' · على بُعد ' + entry.distanceKm.toFixed(1) + ' كم تقريبًا</p></div>'
+          + statusChip(item.deliveryStatus) + '</div>'
+          + '<p class="dg-addr"><span aria-hidden="true">◉</span><span>' + esc(item.address) + '</span></p>'
+          + '<div class="dg-acts">'
+          + '<a class="a-map" href="' + esc(mapsUrl) + '" target="_blank" rel="noopener noreferrer">الموقع الدقيق</a>'
+          + '<button class="a-deliver" data-act="dg-deliver" data-id="' + esc(item.id) + '"'
+          + ((item.devices || []).length ? '' : ' disabled title="لا توجد أجهزة مخصصة"') + '>تأكيد التسليم</button>'
+          + '</div></article>';
+      }).join('');
+
+      var withoutCoordsHtml = withoutCoords.length
+        ? '<div class="panel-head" style="margin-top:16px"><div><h3>بلا إحداثيات (' + fmt(withoutCoords.length) + ')</h3>'
+          + '<p>اعتمد على العنوان النصي من قائمة المهام</p></div></div>'
+          + withoutCoords.map(function (b) {
+            return '<div class="dg-card"><strong>' + esc(b.name) + '</strong> — <span class="muted">' + esc(b.address) + '</span></div>';
+          }).join('')
+        : '';
+
+      return intro + orderedHtml + withoutCoordsHtml;
     }
 
     /**
@@ -2010,7 +2136,9 @@
         }).join('') || '<span class="tag plain">لا توجد أجهزة مخصصة</span>';
 
         var whatsappUrl = HTTPS + 'wa.me/' + phoneIntl(item.phone);
-        var mapsQuery = encodeURIComponent(String(item.address || '') + ' ' + String(item.city || ''));
+        var mapsQuery = (item.lat != null && item.lng != null)
+          ? item.lat + ',' + item.lng
+          : encodeURIComponent(String(item.address || '') + ' ' + String(item.city || ''));
         var mapsUrl = HTTPS + 'www.google.com/maps/search/?api=1&query=' + mapsQuery;
         var canDeliver = (item.devices || []).length > 0;
 
@@ -2215,6 +2343,7 @@
         state.proofData = '';
         state.pendingRows = [];
         state.referenceData = null;
+        state.delegateRoute = null;
         closeModal();
         renderLogin();
       };
@@ -2274,6 +2403,8 @@
       },
       'save-activity': saveActivity,
       'activity-tab': function (el) { state.activityTab = el.getAttribute('data-value') || ''; render(); },
+      'use-my-location': fillCurrentLocation,
+      'delegate-locate': startDelegateRoute,
       'logout': function () { doLogout(true); },
       'refresh': refreshData,
       'toggle-menu': toggleMenu,

@@ -32,7 +32,7 @@ const HEADERS = Object.freeze({
   'إعدادات المشروع': ['المفتاح', 'القيمة', 'الوصف'],
   'المستخدمون': ['رقم المستخدم', 'الاسم', 'البريد الإلكتروني', 'كلمة المرور المشفرة', 'الملح', 'الدور', 'رقم الجمعية', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول'],
   'الجمعيات': ['رقم الجمعية', 'اسم الجمعية', 'التصنيف', 'المنطقة', 'المدينة', 'أرقام التواصل', 'البريد الإلكتروني', 'الحالة', 'تاريخ الإنشاء'],
-  'المستفيدون': ['رقم المستفيد', 'رقم الجمعية', 'الاسم', 'المنطقة', 'المدينة', 'العنوان', 'رقم الجوال', 'رقم جوال إضافي', 'عدد الأفراد', 'ضمان اجتماعي', 'الحالة الاجتماعية', 'مبلغ الدخل', 'الاحتياج', 'حالة المستفيد', 'حالة التسليم', 'رقم المندوب', 'الملاحظات', 'تاريخ الإنشاء', 'تاريخ التسليم', 'آخر تحديث'],
+  'المستفيدون': ['رقم المستفيد', 'رقم الجمعية', 'الاسم', 'المنطقة', 'المدينة', 'العنوان', 'رقم الجوال', 'رقم جوال إضافي', 'عدد الأفراد', 'ضمان اجتماعي', 'الحالة الاجتماعية', 'مبلغ الدخل', 'الاحتياج', 'حالة المستفيد', 'حالة التسليم', 'رقم المندوب', 'الملاحظات', 'تاريخ الإنشاء', 'تاريخ التسليم', 'آخر تحديث', 'خط العرض', 'خط الطول'],
   'الأجهزة': ['رقم الجهاز', 'اسم الجهاز', 'النوع', 'رقم الجمعية', 'رقم المستفيد', 'حالة الجهاز', 'تاريخ الإضافة', 'تاريخ التسليم', 'ملاحظات'],
   'المناديب': ['رقم المندوب', 'رقم الجمعية', 'اسم المندوب', 'رقم الجوال', 'رمز الدخول المشفر', 'الملح', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول'],
   'التسليمات': ['رقم التسليم', 'رقم المستفيد', 'رقم المندوب', 'أرقام الأجهزة', 'الحالة', 'سبب التعذر', 'الملاحظات', 'رابط الإثبات', 'تاريخ ووقت التسليم', 'تاريخ الإنشاء'],
@@ -576,6 +576,7 @@ function saveBeneficiary(token, payload) {
     if (String(existing['حالة التسليم']) === 'تم التسليم') throw new Error('لا يمكن تعديل بيانات مستفيد تم تسليمه');
   }
   const place = validateRegionCity_(payload.region, payload.city);
+  const coordinates = optionalCoordinate_(payload.lat, payload.lng);
   const values = {
     'رقم الجمعية': associationId,
     'الاسم': requiredText_(payload.name, 'اسم المستفيد', 120),
@@ -593,7 +594,9 @@ function saveBeneficiary(token, payload) {
     'حالة التسليم': existing ? String(existing['حالة التسليم']) : 'لم يبدأ',
     'رقم المندوب': existing ? String(existing['رقم المندوب'] || '') : '',
     'الملاحظات': cleanText_(payload.notes, 1000),
-    'آخر تحديث': now_()
+    'آخر تحديث': now_(),
+    'خط العرض': coordinates.lat,
+    'خط الطول': coordinates.lng
   };
   let id;
   if (existing) {
@@ -1343,7 +1346,9 @@ function normalizeBeneficiary_(row) {
     notes: String(row['الملاحظات'] || ''),
     createdAt: formatDate_(parseDate_(row['تاريخ الإنشاء'])),
     deliveredAt: formatDateTime_(parseDate_(row['تاريخ التسليم'])),
-    updatedAt: formatDateTime_(parseDate_(row['آخر تحديث']))
+    updatedAt: formatDateTime_(parseDate_(row['آخر تحديث'])),
+    lat: row['خط العرض'] !== undefined && row['خط العرض'] !== '' ? safeNumber_(row['خط العرض']) : null,
+    lng: row['خط الطول'] !== undefined && row['خط الطول'] !== '' ? safeNumber_(row['خط الطول']) : null
   };
 }
 
@@ -1722,6 +1727,23 @@ function boundedNumber_(value, min, max, label) {
   const number = Number(value);
   if (!isFinite(number) || number < min || number > max) throw new Error(label + ' غير صحيح');
   return number;
+}
+
+/**
+ * إحداثيات اختيارية بالكامل (تُترك فارغة كما كانت دائمًا إن لم تُدخَل).
+ * عند إدخالها تُحصر ضمن مربع إحداثيات المملكة تقريبًا لرفض أخطاء
+ * إدخال واضحة (مثل عكس خط العرض والطول) دون فرض دقة كاملة.
+ */
+function optionalCoordinate_(lat, lng) {
+  if (lat === '' || lat === null || lat === undefined || lng === '' || lng === null || lng === undefined) {
+    return {lat: '', lng: ''};
+  }
+  const latNum = Number(lat);
+  const lngNum = Number(lng);
+  if (!isFinite(latNum) || !isFinite(lngNum) || latNum < 15 || latNum > 33 || lngNum < 33 || lngNum > 56) {
+    throw new Error('الإحداثيات خارج نطاق المملكة المتوقع — تحقق من خط العرض والطول');
+  }
+  return {lat: latNum, lng: lngNum};
 }
 
 function normalizeNeeds_(needs) {
