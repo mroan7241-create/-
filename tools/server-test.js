@@ -283,6 +283,127 @@ assert('الترحيل يعتمد على المعاينة نفسها (مصدر �
 throws('previewPhoneNormalization يفشل بأمان بلا شيت مرتبط (بيئة الاختبار) بدل قراءة بيانات فاسدة',
   () => S.previewPhoneNormalization());
 
+/* -------- 14) بوابة تقديم الجمعيات ودورة الاعتماد (بمحاكاة شيت كاملة) -------- */
+
+section('14) بوابة تقديم الجمعيات: تقديم، قبول، رفض');
+
+function buildMockSpreadsheet() {
+  const data = {};
+  function makeSheet(name) {
+    if (!data[name]) data[name] = [];
+    const rows = data[name];
+    return {
+      getLastRow: () => rows.length,
+      getLastColumn: () => (rows[0] || []).length,
+      getDataRange: () => ({
+        getValues: () => rows.map(r => r.slice()),
+        getDisplayValues: () => rows.map(r => r.map(String))
+      }),
+      getRange: (r1, c1, numRows, numCols) => ({
+        getValues: () => {
+          if (r1 === 1 && numRows === undefined) return [rows[0] || []];
+          return rows.slice(r1 - 1, r1 - 1 + (numRows || rows.length - r1 + 1)).map(r => r.slice());
+        },
+        getDisplayValues: () => [(rows[0] || []).map(String)],
+        setValues: values => { values.forEach((row, i) => { rows[r1 - 1 + i] = row.slice(); }); },
+        setValue: value => { rows[r1 - 1] = rows[r1 - 1] || []; rows[r1 - 1][c1 - 1] = value; },
+        setBackground() { return this; }, setFontColor() { return this; }, setFontWeight() { return this; },
+        setHorizontalAlignment() { return this; }, setWrap() { return this; }, setDataValidation() { return this; }
+      }),
+      setFrozenRows: () => {}, autoResizeColumns: () => {}, getMaxRows: () => rows.length,
+      appendRow: row => { rows.push(row.slice()); }
+    };
+  }
+  return {
+    getSheetByName: name => (data[name] ? makeSheet(name) : null),
+    insertSheet: name => makeSheet(name),
+    getSheets: () => Object.keys(data).map(makeSheet)
+  };
+}
+
+const props2 = {}; const cache2 = {};
+const sandbox2 = Object.assign({}, sandbox, {
+  Utilities: sandbox.Utilities,
+  PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k in props2 ? props2[k] : null), setProperty: (k, v) => { props2[k] = String(v); }, deleteProperty: k => { delete props2[k]; } }) },
+  CacheService: { getScriptCache: () => ({ get: k => (k in cache2 ? cache2[k] : null), put: (k, v) => { cache2[k] = v; }, remove: k => { delete cache2[k]; } }) },
+  SpreadsheetApp: { getActiveSpreadsheet: () => mockSs }
+});
+const mockSs = buildMockSpreadsheet();
+sandbox2.globalThis = sandbox2;
+vm.createContext(sandbox2);
+vm.runInContext(source, sandbox2, { filename: 'Code.gs(applications)' });
+const S2 = sandbox2;
+const ALL_HEADERS = {
+  'إعدادات المشروع': ['المفتاح', 'القيمة', 'الوصف'],
+  'المستخدمون': ['رقم المستخدم', 'الاسم', 'البريد الإلكتروني', 'كلمة المرور المشفرة', 'الملح', 'الدور', 'رقم الجمعية', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول'],
+  'الجمعيات': ['رقم الجمعية', 'اسم الجمعية', 'التصنيف', 'المنطقة', 'المدينة', 'أرقام التواصل', 'البريد الإلكتروني', 'الحالة', 'تاريخ الإنشاء'],
+  'المستفيدون': ['رقم المستفيد', 'رقم الجمعية', 'الاسم', 'المنطقة', 'المدينة', 'العنوان', 'رقم الجوال', 'رقم جوال إضافي', 'عدد الأفراد', 'ضمان اجتماعي', 'الحالة الاجتماعية', 'مبلغ الدخل', 'الاحتياج', 'حالة المستفيد', 'حالة التسليم', 'رقم المندوب', 'الملاحظات', 'تاريخ الإنشاء', 'تاريخ التسليم', 'آخر تحديث'],
+  'الأجهزة': ['رقم الجهاز', 'اسم الجهاز', 'النوع', 'رقم الجمعية', 'رقم المستفيد', 'حالة الجهاز', 'تاريخ الإضافة', 'تاريخ التسليم', 'ملاحظات'],
+  'المناديب': ['رقم المندوب', 'رقم الجمعية', 'اسم المندوب', 'رقم الجوال', 'رمز الدخول المشفر', 'الملح', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول'],
+  'التسليمات': ['رقم التسليم', 'رقم المستفيد', 'رقم المندوب', 'أرقام الأجهزة', 'الحالة', 'سبب التعذر', 'الملاحظات', 'رابط الإثبات', 'تاريخ ووقت التسليم', 'تاريخ الإنشاء'],
+  'إدارة الأنشطة': ['ترتيب المرحلة', 'اسم المرحلة', 'ترتيب النشاط الرئيسي', 'اسم النشاط الرئيسي', 'اسم النشاط الفرعي', 'المسؤول', 'تاريخ البداية', 'تاريخ النهاية', 'نسبة الإنجاز', 'الحالة', 'رابط الشاهد', 'ملاحظات'],
+  'شواهد الأنشطة الرئيسية': ['اسم المرحلة', 'اسم النشاط الرئيسي', 'رابط الشاهد', 'حالة الاعتماد', 'ملاحظات', 'تاريخ الرفع'],
+  'سجل العمليات': ['رقم العملية', 'رقم المستخدم', 'اسم المستخدم', 'الدور', 'العملية', 'القسم', 'رقم السجل', 'ملاحظات', 'التاريخ والوقت'],
+  'طلبات انضمام الجمعيات': ['رقم الطلب', 'اسم الجمعية', 'التصنيف', 'المنطقة', 'المدينة', 'أرقام التواصل', 'البريد الإلكتروني', 'اسم المسؤول', 'ملاحظات مقدّم الطلب', 'الحالة', 'سبب الرفض', 'رقم الجمعية الناتجة', 'تاريخ التقديم', 'تاريخ المراجعة', 'المراجع']
+};
+Object.keys(ALL_HEADERS).forEach(name => S2.ensureSheet_(mockSs, name, ALL_HEADERS[name]));
+
+assert('استقبال الطلبات غير مفعّل بلا شيت (يفشل بأمان لا يكسر التطبيق)', (() => {
+  const emptySandbox = { console, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp, Error, isNaN, isFinite, parseInt, parseFloat, Set, Utilities: sandbox.Utilities, PropertiesService: sandbox.PropertiesService, CacheService: { getScriptCache: () => ({ get: () => null, put: () => {}, remove: () => {} }) }, LockService: sandbox.LockService, ScriptApp: sandbox.ScriptApp, SpreadsheetApp: { getActiveSpreadsheet: () => null }, HtmlService: sandbox.HtmlService, DriveApp: {}, UrlFetchApp: {} };
+  emptySandbox.globalThis = emptySandbox;
+  vm.createContext(emptySandbox);
+  vm.runInContext(source, emptySandbox, { filename: 'Code.gs(noSheet)' });
+  try { emptySandbox.submitAssociationApplication({name: 'جمعية', category: 'جمعية أهلية', region: 'الرياض', city: 'الرياض', contactName: 'أحمد', phone: '0501234567', email: 'a@example.org'}); return false; }
+  catch (error) { return error.message.indexOf('غير مفعّل') >= 0; }
+})());
+
+const submitted = S2.submitAssociationApplication({
+  name: 'جمعية الأمل الخيرية', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
+  contactName: 'سالم العتيبي', phone: '0501234567', email: 'amal@example.org', notes: 'طلب أول'
+});
+assert('submitAssociationApplication ينجح ويعيد رقم طلب', submitted.ok && /^APP-/.test(submitted.id));
+
+throws('يرفض طلبًا مكررًا بنفس البريد وهو قيد المراجعة', () => S2.submitAssociationApplication({
+  name: 'جمعية أخرى', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
+  contactName: 'سالم', phone: '0559876543', email: 'amal@example.org'
+}), 'قيد المراجعة');
+
+throws('يرفض طلبًا مكررًا بنفس رقم الجوال وهو قيد المراجعة', () => S2.submitAssociationApplication({
+  name: 'جمعية ثالثة', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
+  contactName: 'سالم', phone: '0501234567', email: 'other@example.org'
+}), 'قيد المراجعة');
+
+const adminSession = S2.createSession_({id: 'USR-ADMIN-TEST', name: 'مدير الاختبار', role: 'ADMIN', associationId: ''});
+const beforeAccept = S2.listAssociationApplications(adminSession.token);
+assert('listAssociationApplications يُعيد الطلب قيد المراجعة', beforeAccept.applications.length === 1 && beforeAccept.applications[0].status === 'قيد المراجعة');
+
+const accepted = S2.reviewAssociationApplication(adminSession.token, submitted.id, 'accept', '');
+assert('قبول الطلب ينشئ جمعية ورقم جمعية', accepted.ok && /^ASC-/.test(accepted.associationId));
+assert('قبول الطلب يعيد كلمة مرور مؤقتة قوية', (() => {
+  try { S2.assertStrongPassword_(accepted.temporaryPassword); return true; } catch (e) { return false; }
+})());
+
+const loginResult = S2.loginUser_('amal@example.org', accepted.temporaryPassword);
+assert('الحساب المُنشأ تلقائيًا يعمل فورًا بكلمة المرور المؤقتة', loginResult.ok && loginResult.user.role === 'ASSOCIATION');
+
+throws('لا يمكن البتّ في طلب سبق قبوله', () => S2.reviewAssociationApplication(adminSession.token, submitted.id, 'accept', ''), 'سبق البتّ');
+
+const submitted2 = S2.submitAssociationApplication({
+  name: 'جمعية النور', category: 'جمعية أهلية', region: 'مكة المكرمة', city: 'جدة',
+  contactName: 'منى القحطاني', phone: '0559998877', email: 'noor@example.org'
+});
+throws('الرفض يتطلب سببًا نصيًا', () => S2.reviewAssociationApplication(adminSession.token, submitted2.id, 'reject', '  '), 'مطلوب');
+const rejected = S2.reviewAssociationApplication(adminSession.token, submitted2.id, 'reject', 'بيانات غير مكتملة');
+assert('الرفض ينجح دون إنشاء حساب', rejected.ok && !S2.findUserByEmail_('noor@example.org'));
+const afterReject = S2.listAssociationApplications(adminSession.token);
+const rejectedRow = afterReject.applications.find(x => x.id === submitted2.id);
+assert('حالة الطلب المرفوض وسببه محفوظان', rejectedRow.status === 'مرفوض' && rejectedRow.rejectionReason === 'بيانات غير مكتملة');
+
+throws('غير الإدارة لا يمكنه مراجعة الطلبات', () => {
+  const assocSession = S2.createSession_({id: 'USR-ASSOC-TEST', name: 'جمعية', role: 'ASSOCIATION', associationId: accepted.associationId});
+  S2.reviewAssociationApplication(assocSession.token, submitted2.id, 'accept', '');
+});
+
 /* -------- النتيجة -------- */
 
 console.log('\n' + '='.repeat(56));

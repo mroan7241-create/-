@@ -417,16 +417,17 @@
     };
 
     var ICONS = {
-      dashboard: '▦', beneficiaries: '☗', associations: '◉', devices: '▤',
+      dashboard: '▦', applications: '✉', beneficiaries: '☗', associations: '◉', devices: '▤',
       delegates: '➤', activities: '◇', audit: '≡', settings: '⚙'
     };
     var NAV_LABELS = {
-      dashboard: 'لوحة البيانات', beneficiaries: 'المستفيدون', associations: 'الجمعيات',
+      dashboard: 'لوحة البيانات', applications: 'طلبات الانضمام', beneficiaries: 'المستفيدون', associations: 'الجمعيات',
       devices: 'الأجهزة', delegates: 'المناديب', activities: 'متابعة المشروع',
       audit: 'سجل العمليات', settings: 'الإعدادات'
     };
     var NAV_HINTS = {
-      dashboard: 'ملخص تنفيذي لحالة المشروع', beneficiaries: 'ملفات المستفيدين والاحتياج',
+      dashboard: 'ملخص تنفيذي لحالة المشروع', applications: 'مراجعة طلبات الجمعيات الجديدة واعتمادها',
+      beneficiaries: 'ملفات المستفيدين والاحتياج',
       associations: 'الجمعيات المشاركة ونسب إنجازها', devices: 'مخزون الأجهزة ومسارها',
       delegates: 'فريق التسليم الميداني', activities: 'مراحل المشروع وأنشطته',
       audit: 'سجل غير قابل للتعديل لكل إجراء', settings: 'بيانات الحساب والأمان'
@@ -436,6 +437,7 @@
     var NEED_OPTIONS = ['ثلاجة', 'غسالة', 'فرن', 'مكيف', 'فريزر', 'سخان'];
     var SOCIAL_STATUSES = ['يتيم', 'أرملة', 'مطلق/مطلقة', 'متزوج/متزوجة', 'أخرى'];
     var FAILED_REASONS = ['لم يتم التواصل', 'لا يرد', 'طلب تأجيل', 'العنوان غير صحيح', 'غير موجود', 'رفض الاستلام'];
+    var APPLICATION_STATUSES = ['قيد المراجعة', 'مقبول', 'مرفوض'];
 
     var $ = function (selector, scope) { return (scope || document).querySelector(selector); };
     var $$ = function (selector, scope) { return Array.prototype.slice.call((scope || document).querySelectorAll(selector)); };
@@ -559,10 +561,10 @@
     }
 
     function statusClass(value) {
-      if (['تم التسليم', 'معتمد', 'نشط', 'نشطة', 'مكتملة', 'مكتمل'].indexOf(value) >= 0) return 'good';
-      if (['تعذر التسليم', 'ملغي', 'تالف', 'متأخر', 'متأخرة', 'غير نشط', 'غير نشطة'].indexOf(value) >= 0) return 'bad';
+      if (['تم التسليم', 'معتمد', 'نشط', 'نشطة', 'مكتملة', 'مكتمل', 'مقبول'].indexOf(value) >= 0) return 'good';
+      if (['تعذر التسليم', 'ملغي', 'تالف', 'متأخر', 'متأخرة', 'غير نشط', 'غير نشطة', 'مرفوض'].indexOf(value) >= 0) return 'bad';
       if (['جاري التسليم', 'جاري التجهيز', 'خرج مع المندوب', 'قيد التنفيذ', 'جارٍ', 'مع المندوب'].indexOf(value) >= 0) return 'info';
-      if (['تحت المراجعة', 'بانتظار الأجهزة', 'مخصص', 'جديد'].indexOf(value) >= 0) return 'warn';
+      if (['تحت المراجعة', 'بانتظار الأجهزة', 'مخصص', 'جديد', 'قيد المراجعة'].indexOf(value) >= 0) return 'warn';
       return 'neutral';
     }
     /** الحالة تُميَّز بالنص والشكل معًا، لا باللون وحده. */
@@ -701,7 +703,10 @@
         + isDelegate + '">دخول المندوب</button></div>'
         + '<form id="loginForm" data-act="submit-login" novalidate>' + fields
         + '<button class="btn btn-primary btn-block" type="submit">'
-        + (isDelegate ? 'دخول المندوب' : 'تسجيل الدخول') + '</button></form></section>'
+        + (isDelegate ? 'دخول المندوب' : 'تسجيل الدخول') + '</button></form>'
+        + (isDelegate ? '' : '<button type="button" class="btn btn-ghost btn-block" data-act="show-apply">'
+          + 'تقديم طلب انضمام جمعية جديدة</button>')
+        + '</section>'
         + '<aside class="login-art"><div class="art-card">'
         + '<div class="art-seal" aria-hidden="true">' + ZAD_SEAL_SVG + '</div>'
         + '<h2>زادٌ ونَماء</h2>'
@@ -735,13 +740,61 @@
       }, reportError).then(function () { busy(false); });
     }
 
+    /**
+     * نموذج عام (بلا تسجيل دخول) لتقديم طلب انضمام جمعية جديدة. الإدارة
+     * تراجعه لاحقًا من صفحة "طلبات الانضمام" فتقبله أو ترفضه.
+     */
+    function renderApplyForm() {
+      $('#root').innerHTML = '<main class="login">'
+        + '<section class="login-panel">' + lockup({partner: true})
+        + '<h1>طلب انضمام جمعية جديدة</h1>'
+        + '<p class="login-lede">عبّئ بيانات جمعيتك وسيتم التواصل معكم بعد مراجعة الطلب من إدارة المشروع.</p>'
+        + '<form id="applyForm" class="form-grid" data-act="submit-application" novalidate>'
+        + textField('name', 'اسم الجمعية', '', {required: true, max: 150, span: true})
+        + associationCategoryField('')
+        + regionCityFields('', '', 'ap')
+        + textField('contactName', 'اسم المسؤول', '', {required: true, max: 100})
+        + textField('phone', 'رقم التواصل', '', {required: true, ltr: true})
+        + '<div class="field span-2"><label for="f_email">البريد الإلكتروني</label>'
+        + '<input class="control" id="f_email" name="email" type="email" dir="ltr" required></div>'
+        + '<div class="field span-2"><label for="f_notes">ملاحظات إضافية (اختياري)</label>'
+        + '<textarea class="control" id="f_notes" name="notes" maxlength="500"></textarea></div>'
+        + '<div class="span-2" style="display:flex;gap:10px;flex-wrap:wrap">'
+        + '<button class="btn btn-primary" type="submit">إرسال الطلب</button>'
+        + '<button type="button" class="btn btn-ghost" data-act="back-to-login">رجوع لتسجيل الدخول</button>'
+        + '</div></form></section>'
+        + '<aside class="login-art"><div class="art-card">'
+        + '<div class="art-seal" aria-hidden="true">' + ZAD_SEAL_SVG + '</div>'
+        + '<h2>شراكة موثّقة</h2>'
+        + '<p>كل طلب يُراجَع يدويًا قبل إنشاء حساب الجمعية، لضمان دقة البيانات وسلامة الشراكة.</p>'
+        + '</div></aside></main>';
+      var first = $('#applyForm .control');
+      if (first) first.focus();
+    }
+
+    function submitApplication(form) {
+      if (!form.reportValidity()) return;
+      var data = new FormData(form);
+      var payload = {
+        name: data.get('name'), category: data.get('category'),
+        region: data.get('region'), city: data.get('city'),
+        contactName: data.get('contactName'), phone: data.get('phone'),
+        email: data.get('email'), notes: data.get('notes')
+      };
+      busy(true);
+      api('submitAssociationApplication', payload).then(function (result) {
+        renderLogin();
+        toast(result.message || 'تم استلام طلب الانضمام.', 'success');
+      }, reportError).then(function () { busy(false); });
+    }
+
     /* ============================================================
        5) الهيكل العام
        ============================================================ */
 
     function navFor(role) {
       if (role === 'ADMIN') {
-        return ['dashboard', 'beneficiaries', 'associations', 'devices', 'delegates', 'activities', 'audit', 'settings'];
+        return ['dashboard', 'applications', 'beneficiaries', 'associations', 'devices', 'delegates', 'activities', 'audit', 'settings'];
       }
       return ['dashboard', 'beneficiaries', 'devices', 'delegates', 'audit', 'settings'];
     }
@@ -798,7 +851,7 @@
 
     function renderPage() {
       var pages = {
-        dashboard: renderDashboard, beneficiaries: renderBeneficiaries,
+        dashboard: renderDashboard, applications: renderApplications, beneficiaries: renderBeneficiaries,
         associations: renderAssociations, devices: renderDevices,
         delegates: renderDelegates, activities: renderActivities,
         audit: renderAudit, settings: renderSettings
@@ -1306,6 +1359,102 @@
 
       return toolbar({placeholder: 'ابحث باسم الجمعية أو المدينة…', filters: '',
         count: fmt(items.length) + ' من ' + fmt(all.length)}) + body;
+    }
+
+    function findApplication(id) {
+      var list = state.data.applications || [];
+      for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+      return null;
+    }
+
+    function renderApplications() {
+      var all = state.data.applications || [];
+      var items = applyFilters(all, ['name', 'id', 'city', 'region', 'email', 'phone', 'contactName']);
+      if (!all.length) {
+        return emptyState({glyph: ICONS.applications, title: 'لا توجد طلبات انضمام',
+          body: 'ستظهر هنا طلبات الجمعيات الجديدة فور تقديمها من صفحة تسجيل الدخول العامة.'});
+      }
+      var filters = optionList(APPLICATION_STATUSES, state.filter, 'كل الحالات');
+      var body = items.length ? '<div class="cards">' + items.map(function (a) {
+        return '<article class="card"><div class="card-head"><div><h3>' + esc(a.name) + '</h3>'
+          + '<p>' + esc(a.category || '—') + ' · ' + esc(a.city) + '</p></div>' + statusChip(a.status) + '</div>'
+          + '<div class="metas">'
+          + '<div class="meta"><small>المسؤول</small><strong>' + esc(a.contactName) + '</strong></div>'
+          + '<div class="meta"><small>التاريخ</small><strong>' + esc(a.submittedAt) + '</strong></div></div>'
+          + '<div class="card-actions">'
+          + '<button class="btn btn-ghost btn-sm" data-act="view-application" data-id="' + esc(a.id) + '">التفاصيل</button>'
+          + (a.status === 'قيد المراجعة'
+            ? '<button class="btn btn-primary btn-sm" data-act="accept-application" data-id="' + esc(a.id) + '">قبول</button>'
+              + '<button class="btn btn-soft btn-sm" data-act="reject-application" data-id="' + esc(a.id) + '">رفض</button>'
+            : '')
+          + '</div></article>';
+      }).join('') + '</div>'
+        : emptyState({glyph: '⌕', title: 'لا نتائج مطابقة', body: 'جرّب تصفية أو كلمة بحث أخرى.'});
+
+      return toolbar({placeholder: 'ابحث باسم الجمعية أو البريد أو الجوال…', filters: filters,
+        count: fmt(items.length) + ' من ' + fmt(all.length)}) + body;
+    }
+
+    function viewApplication(id) {
+      var a = findApplication(id);
+      if (!a) { toast('تعذر العثور على الطلب.', 'error'); return; }
+      var body = '<div class="card-head"><div><h3>' + esc(a.name) + '</h3>'
+        + '<p class="mono">' + esc(a.id) + '</p></div>' + statusChip(a.status) + '</div>'
+        + '<div class="metas">'
+        + '<div class="meta"><small>التصنيف</small><strong>' + esc(a.category || '—') + '</strong></div>'
+        + '<div class="meta"><small>الموقع</small><strong>' + esc(a.region) + ' · ' + esc(a.city) + '</strong></div>'
+        + '<div class="meta"><small>المسؤول</small><strong>' + esc(a.contactName) + '</strong></div>'
+        + '<div class="meta"><small>التواصل</small><strong dir="ltr" class="mono">' + esc(a.phone) + '</strong></div>'
+        + '<div class="meta"><small>البريد</small><strong dir="ltr" class="mono">' + esc(a.email) + '</strong></div>'
+        + '<div class="meta"><small>تاريخ التقديم</small><strong>' + esc(a.submittedAt) + '</strong></div></div>'
+        + (a.notes ? '<h4 style="margin:18px 0 8px;color:var(--zad-800)">ملاحظات مقدّم الطلب</h4><p>' + esc(a.notes) + '</p>' : '')
+        + (a.status === 'مرفوض' ? '<h4 style="margin:18px 0 8px;color:var(--zad-800)">سبب الرفض</h4><p>' + esc(a.rejectionReason) + '</p>' : '')
+        + (a.status === 'مقبول' ? '<p class="hint">تم إنشاء الجمعية برقم ' + esc(a.resultingAssociationId) + '</p>' : '');
+      var footer = a.status === 'قيد المراجعة'
+        ? '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>'
+          + '<button class="btn btn-soft" data-act="reject-application" data-id="' + esc(a.id) + '">رفض</button>'
+          + '<button class="btn btn-primary" data-act="accept-application" data-id="' + esc(a.id) + '">قبول وإنشاء الجمعية</button>'
+        : '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>';
+      openModal('طلب انضمام جمعية', body, footer);
+    }
+
+    function rejectApplicationModal(id) {
+      var a = findApplication(id);
+      if (!a) { toast('تعذر العثور على الطلب.', 'error'); return; }
+      var body = '<form id="rejectForm" class="form-grid" novalidate>'
+        + '<div class="field span-2"><label for="f_reason">سبب الرفض</label>'
+        + '<textarea class="control" id="f_reason" name="reason" maxlength="300" required></textarea>'
+        + '<span class="hint">سيظهر هذا السبب في سجل الطلب.</span></div></form>';
+      openModal('رفض طلب: ' + a.name, body,
+        '<button class="btn btn-ghost" data-act="close-modal">إلغاء</button>'
+        + '<button class="btn btn-primary" data-act="save-reject-application" data-id="' + esc(id) + '">تأكيد الرفض</button>');
+    }
+
+    function decideApplication(id, decision) {
+      var payload = {};
+      if (decision === 'reject') {
+        var form = $('#rejectForm');
+        if (!form || !form.reportValidity()) return;
+        payload.reason = new FormData(form).get('reason');
+      } else if (!window.confirm('تأكيد قبول الطلب؟ سيتم إنشاء سجل الجمعية وحساب دخولها فورًا.')) {
+        return;
+      }
+      busy(true);
+      api('reviewAssociationApplication', state.token, id, decision, payload.reason || '').then(function (result) {
+        state.data = result.data;
+        closeModal();
+        render();
+        if (decision === 'accept') {
+          openModal('تم إنشاء الجمعية',
+            '<p>تم قبول الطلب وإنشاء حساب الجمعية بنجاح.</p>'
+            + '<div class="metas"><div class="meta"><small>رقم الجمعية</small><strong class="mono">' + esc(result.associationId) + '</strong></div>'
+            + '<div class="meta"><small>كلمة المرور المؤقتة</small><strong class="mono" dir="ltr">' + esc(result.temporaryPassword) + '</strong></div></div>'
+            + '<p class="hint">سلّم هذه الكلمة لمسؤول الجمعية عبر قناة آمنة الآن — لن تُعرض مرة أخرى. يُنصح بتغييرها من داخل النظام بعد أول دخول.</p>',
+            '<button class="btn btn-primary" data-act="close-modal">تم</button>');
+        } else {
+          toast('تم رفض الطلب.', 'success');
+        }
+      }, reportError).then(function () { busy(false); });
     }
 
     function findAssociation(id) {
@@ -1991,6 +2140,12 @@
     var CLICK_ACTIONS = {
       'go': function (el) { goTo(el.getAttribute('data-value')); },
       'login-type': function (el) { state.loginType = el.getAttribute('data-value'); renderLogin(); },
+      'show-apply': function () { loadReferenceDataOnce(); renderApplyForm(); },
+      'back-to-login': renderLogin,
+      'view-application': function (el) { viewApplication(el.getAttribute('data-id')); },
+      'accept-application': function (el) { decideApplication(el.getAttribute('data-id'), 'accept'); },
+      'reject-application': function (el) { rejectApplicationModal(el.getAttribute('data-id')); },
+      'save-reject-application': function (el) { decideApplication(el.getAttribute('data-id'), 'reject'); },
       'logout': function () { doLogout(true); },
       'refresh': refreshData,
       'toggle-menu': toggleMenu,
@@ -2117,9 +2272,9 @@
 
     document.addEventListener('submit', function (event) {
       var form = event.target;
-      if (!form.getAttribute || form.getAttribute('data-act') !== 'submit-login') return;
-      event.preventDefault();
-      submitLogin(form);
+      var action = form.getAttribute && form.getAttribute('data-act');
+      if (action === 'submit-login') { event.preventDefault(); submitLogin(form); return; }
+      if (action === 'submit-application') { event.preventDefault(); submitApplication(form); return; }
     });
 
     document.addEventListener('keydown', function (event) {

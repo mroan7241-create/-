@@ -152,7 +152,13 @@ const ADMIN_DATA = {
   }],
   stages: [{ name: 'التجهيز', progress: 60, status: 'قيد التنفيذ' }],
   alerts: [{ level: 'critical', title: 'نشاط متأخر', message: 'توقيع العقود', section: 'الأنشطة' }],
-  audit: [{ user: 'مدير النظام', action: 'إضافة مستفيد', section: 'المستفيدون', recordId: 'BEN-000001', at: '2026/07/20 09:00' }]
+  audit: [{ user: 'مدير النظام', action: 'إضافة مستفيد', section: 'المستفيدون', recordId: 'BEN-000001', at: '2026/07/20 09:00' }],
+  applications: [{
+    id: 'APP-000001', name: 'جمعية الأمل', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
+    phone: '0501112222', email: 'amal@example.org', contactName: 'سالم العتيبي', notes: '',
+    status: 'قيد المراجعة', rejectionReason: '', resultingAssociationId: '',
+    submittedAt: '2026/07/29 09:00', reviewedAt: '', reviewer: ''
+  }]
 };
 
 const ASSOCIATION_DATA = Object.assign({}, ADMIN_DATA, {
@@ -189,7 +195,14 @@ assert('لا تعرض مربعًا خلف الشعار', !out().includes('backgr
 app.state.loginType = 'delegate';
 app.renderLogin();
 assert('تبديل تبويب المندوب يعرض حقل الرمز', out().includes('رمز دخول المندوب'));
+assert('لا يظهر رابط تقديم طلب انضمام في وضع دخول المندوب', !out().includes('show-apply'));
 app.state.loginType = 'association';
+app.renderLogin();
+assert('يظهر رابط تقديم طلب انضمام جمعية في شاشة الدخول', out().includes('show-apply'));
+app.renderApplyForm();
+assert('ترسم نموذج طلب الانضمام العام', out().includes('submit-application'));
+assert('نموذج الطلب يطلب اسم الجمعية والبريد', out().includes('name="name"') && out().includes('name="email"'));
+app.renderLogin();
 
 /* ---------------- 2) لوحة الإدارة ---------------- */
 
@@ -199,7 +212,7 @@ const adminNav = app.navFor('ADMIN');
 assert('قائمة الإدارة تحتوي الجمعيات والأنشطة', adminNav.includes('associations') && adminNav.includes('activities'));
 assert('قائمة الإدارة تتضمن الإعدادات (تغيير كلمة المرور)', adminNav.includes('settings'));
 
-const adminPages = ['dashboard', 'beneficiaries', 'associations', 'devices', 'delegates', 'activities', 'audit', 'settings'];
+const adminPages = ['dashboard', 'applications', 'beneficiaries', 'associations', 'devices', 'delegates', 'activities', 'audit', 'settings'];
 adminPages.forEach(page => {
   app.state.page = page;
   app.state.search = '';
@@ -215,6 +228,15 @@ assert('زر إضافة جمعية يظهر للإدارة', out().includes('new
 app.state.page = 'devices';
 app.render();
 assert('زر إضافة جهاز يظهر للإدارة', out().includes('new-device'));
+
+app.state.page = 'applications';
+app.render();
+assert('طلب قيد المراجعة يعرض زري قبول ورفض', out().includes('accept-application') && out().includes('reject-application'));
+assert('قائمة الإدارة تعرض تبويب طلبات الانضمام', adminNav.includes('applications'));
+app.viewApplication('APP-000001');
+const applicationBody = registry.modalRoot.innerHTML;
+assert('نافذة تفاصيل الطلب تعرض بيانات مقدّم الطلب', applicationBody.includes('سالم العتيبي') && applicationBody.includes('amal@example.org'));
+app.closeModal();
 
 /* ---------------- 3) لوحة الجمعية ---------------- */
 
