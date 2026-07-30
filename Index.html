@@ -967,8 +967,7 @@
       }).join('');
     }
 
-    function renderAuditRows(limit) {
-      var rows = (state.data.audit || []).slice(0, limit);
+    function auditRowsHtml(rows) {
       if (!rows.length) {
         return emptyState({glyph: '≡', title: 'لا توجد عمليات مسجّلة', body: 'ستظهر هنا كل إجراءات النظام فور حدوثها.'});
       }
@@ -978,6 +977,22 @@
           + '<div class="hide-sm muted">' + esc(row.at) + '</div>'
           + '<span class="mono">' + esc(row.recordId || '—') + '</span></div>';
       }).join('') + '</div>';
+    }
+
+    function renderAuditRows(limit) {
+      return auditRowsHtml((state.data.audit || []).slice(0, limit));
+    }
+
+    /** يبحث في المستخدم/الإجراء/القسم/رقم السجل معًا، ويصفّي بالقسم عبر state.filter. */
+    function filterAuditRows(all) {
+      var query = state.search.trim().toLowerCase();
+      return all.filter(function (row) {
+        if (state.filter && row.section !== state.filter) return false;
+        if (!query) return true;
+        return [row.user, row.action, row.section, row.recordId].some(function (value) {
+          return String(value || '').toLowerCase().indexOf(query) >= 0;
+        });
+      });
     }
 
     /* ============================================================
@@ -1916,9 +1931,19 @@
     }
 
     function renderAudit() {
+      var all = state.data.audit || [];
+      var sections = [];
+      all.forEach(function (row) { if (row.section && sections.indexOf(row.section) === -1) sections.push(row.section); });
+      sections.sort();
+      var items = filterAuditRows(all);
+      var toolbarHtml = all.length
+        ? toolbar({placeholder: 'ابحث بالمستخدم أو الإجراء أو رقم السجل…',
+            filters: optionList(sections, state.filter, 'كل الأقسام'),
+            count: fmt(items.length) + ' من ' + fmt(all.length)})
+        : '';
       return '<section class="panel"><div class="panel-head"><div><h3>سجل العمليات</h3>'
         + '<p>سجل غير قابل للتعديل من الواجهة، يوثّق كل إجراء في النظام</p></div></div>'
-        + renderAuditRows(200) + '</section>';
+        + toolbarHtml + auditRowsHtml(items.slice(0, 300)) + '</section>';
     }
 
     function renderSettings() {

@@ -327,6 +327,25 @@ app.render();
 assert('الفلتر بحالة غير مطابقة يُخفي السجل', !out().includes('فاطمة العتيبي'));
 app.state.filter = '';
 
+setRole(ADMIN_DATA);
+app.state.page = 'audit'; app.state.search = ''; app.state.filter = ''; app.render();
+assert('سجل العمليات يعرض شريط بحث وتصفية بالقسم', out().includes('data-act="set-search"') && out().includes('data-act="set-filter"'));
+assert('سجل العمليات يعرض السجل الموجود افتراضيًا', out().includes('إضافة مستفيد'));
+app.state.search = 'مدير النظام';
+app.render();
+assert('البحث في سجل العمليات باسم المستخدم يُرجع نتيجة', out().includes('إضافة مستفيد'));
+app.state.search = 'عملية لا وجود لها إطلاقًا';
+app.render();
+assert('بحث بلا نتائج في سجل العمليات يعرض حالة فارغة', out().includes('لا توجد عمليات مسجّلة'));
+app.state.search = '';
+app.state.filter = 'المستفيدون';
+app.render();
+assert('تصفية سجل العمليات بالقسم الصحيح تُبقي السجل', out().includes('إضافة مستفيد'));
+app.state.filter = 'الجمعيات';
+app.render();
+assert('تصفية سجل العمليات بقسم آخر تُخفي السجل غير المطابق', !out().includes('إضافة مستفيد'));
+app.state.filter = '';
+
 /* ---------------- 5) الحالات الفارغة ---------------- */
 
 section('5) الحالات الفارغة');
