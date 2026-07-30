@@ -100,6 +100,7 @@ const sandbox = {
   setTimeout, clearTimeout
 };
 sandbox.window = sandbox;
+sandbox.scrollTo = () => {};
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 
@@ -228,6 +229,15 @@ assert('زر إضافة جمعية يظهر للإدارة', out().includes('new
 app.state.page = 'devices';
 app.render();
 assert('زر إضافة جهاز يظهر للإدارة', out().includes('new-device'));
+
+app.state.page = 'dashboard';
+app.render();
+assert('مؤشر المستفيدين في لوحة الإدارة قابل للنقر', out().includes('data-act="kpi-nav"') && out().includes('data-page="beneficiaries"'));
+const fakeKpiEl = { getAttribute: k => ({ 'data-page': 'devices', 'data-filter': 'تم التسليم' })[k] };
+app.CLICK_ACTIONS['kpi-nav'](fakeKpiEl);
+assert('النقر على مؤشر "تم تسليمها" ينقل لصفحة الأجهزة', app.state.page === 'devices');
+assert('النقر على المؤشر يطبّق فلتر الحالة المرتبط به', app.state.filter === 'تم التسليم');
+app.state.page = 'dashboard'; app.state.filter = ''; app.render();
 
 app.state.page = 'applications';
 app.render();

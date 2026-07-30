@@ -174,6 +174,9 @@
     /* ---------- KPI ---------- */
     .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:20px}
     .kpi{position:relative;overflow:hidden;background:var(--paper);border:1px solid var(--line);border-radius:var(--r-lg);padding:18px 20px;box-shadow:var(--sh-1);min-height:126px;display:flex;flex-direction:column}
+    button.kpi{font:inherit;text-align:start;width:100%;color:inherit;-webkit-appearance:none;appearance:none}
+    .kpi-clickable{cursor:pointer;transition:transform .12s ease,box-shadow .12s ease}
+    .kpi-clickable:hover,.kpi-clickable:focus-visible{transform:translateY(-2px);box-shadow:var(--sh-2);outline:2px solid var(--zad-700);outline-offset:2px}
     .kpi::after{content:"";position:absolute;inset-inline-start:-26px;bottom:-34px;width:78px;height:78px;border-radius:26px;background:var(--zad-100);transform:rotate(18deg)}
     .kpi.accent::after{background:var(--gold-100)}
     .kpi-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
@@ -876,32 +879,38 @@
        ============================================================ */
 
     function kpiCard(item) {
-      return '<article class="kpi' + (item.accent ? ' accent' : '') + '">'
+      var tag = item.page ? 'button' : 'article';
+      var attrs = item.page
+        ? ' type="button" class="kpi kpi-clickable' + (item.accent ? ' accent' : '') + '" data-act="kpi-nav" '
+          + 'data-page="' + esc(item.page) + '" data-filter="' + esc(item.filter || '') + '" '
+          + 'aria-label="عرض ' + esc(item.label) + ' في ' + esc(NAV_LABELS[item.page] || item.page) + '"'
+        : ' class="kpi' + (item.accent ? ' accent' : '') + '"';
+      return '<' + tag + attrs + '>'
         + '<div class="kpi-top"><span>' + esc(item.label) + '</span>'
         + '<span class="kpi-ico" aria-hidden="true">' + item.glyph + '</span></div>'
         + '<strong>' + (typeof item.value === 'number' ? fmt(item.value) : esc(item.value)) + '</strong>'
-        + '<small>' + esc(item.hint) + '</small></article>';
+        + '<small>' + esc(item.hint) + '</small></' + tag + '>';
     }
 
     function renderDashboard() {
       var s = state.data.summary || {};
       var isAdmin = state.data.role === 'ADMIN';
       var kpis = isAdmin ? [
-        {label: 'المستفيدون', value: s.beneficiaries, hint: 'ملف مستفيد', glyph: ICONS.beneficiaries},
-        {label: 'الجمعيات', value: s.associations, hint: 'جمعية مشاركة', glyph: ICONS.associations},
-        {label: 'إجمالي الأجهزة', value: s.devices, hint: 'جهاز مسجّل', glyph: ICONS.devices},
-        {label: 'المناديب النشطون', value: s.delegates, hint: 'مندوب ميداني', glyph: ICONS.delegates},
-        {label: 'بالمستودع', value: s.devicesWarehouse, hint: 'جهاز جاهز للتخصيص', glyph: '▣'},
-        {label: 'قيد التسليم', value: s.devicesAllocated, hint: 'مخصص أو مع المندوب', glyph: '◫'},
-        {label: 'تم تسليمها', value: s.devicesDelivered, hint: 'جهاز موثّق بالصورة', glyph: '✓', accent: true},
-        {label: 'نسبة الإنجاز', value: fmt(s.deliveryRate) + '٪', hint: 'من المستفيدين', glyph: '↗', accent: true}
+        {label: 'المستفيدون', value: s.beneficiaries, hint: 'ملف مستفيد', glyph: ICONS.beneficiaries, page: 'beneficiaries'},
+        {label: 'الجمعيات', value: s.associations, hint: 'جمعية مشاركة', glyph: ICONS.associations, page: 'associations'},
+        {label: 'إجمالي الأجهزة', value: s.devices, hint: 'جهاز مسجّل', glyph: ICONS.devices, page: 'devices'},
+        {label: 'المناديب النشطون', value: s.delegates, hint: 'مندوب ميداني', glyph: ICONS.delegates, page: 'delegates'},
+        {label: 'بالمستودع', value: s.devicesWarehouse, hint: 'جهاز جاهز للتخصيص', glyph: '▣', page: 'devices', filter: 'بالمستودع'},
+        {label: 'قيد التسليم', value: s.devicesAllocated, hint: 'مخصص أو مع المندوب', glyph: '◫', page: 'devices', filter: 'مع المندوب'},
+        {label: 'تم تسليمها', value: s.devicesDelivered, hint: 'جهاز موثّق بالصورة', glyph: '✓', accent: true, page: 'devices', filter: 'تم التسليم'},
+        {label: 'نسبة الإنجاز', value: fmt(s.deliveryRate) + '٪', hint: 'من المستفيدين', glyph: '↗', accent: true, page: 'beneficiaries', filter: 'تم التسليم'}
       ] : [
-        {label: 'المستفيدون', value: s.beneficiaries, hint: 'ملف مستفيد', glyph: ICONS.beneficiaries},
-        {label: 'الأجهزة المعتمدة', value: s.devices, hint: 'جهاز للجمعية', glyph: ICONS.devices},
-        {label: 'الأجهزة المستلمة', value: (s.devices || 0) - (s.devicesWarehouse || 0), hint: 'خرجت من المستودع', glyph: '◫'},
-        {label: 'الأجهزة المسلّمة', value: s.devicesDelivered, hint: 'وصلت للمستفيد', glyph: '✓', accent: true},
-        {label: 'نسبة الإنجاز', value: fmt(s.deliveryRate) + '٪', hint: 'من المستفيدين', glyph: '↗', accent: true},
-        {label: 'المناديب', value: s.delegates, hint: 'مندوب نشط', glyph: ICONS.delegates}
+        {label: 'المستفيدون', value: s.beneficiaries, hint: 'ملف مستفيد', glyph: ICONS.beneficiaries, page: 'beneficiaries'},
+        {label: 'الأجهزة المعتمدة', value: s.devices, hint: 'جهاز للجمعية', glyph: ICONS.devices, page: 'devices'},
+        {label: 'الأجهزة المستلمة', value: (s.devices || 0) - (s.devicesWarehouse || 0), hint: 'خرجت من المستودع', glyph: '◫', page: 'devices'},
+        {label: 'الأجهزة المسلّمة', value: s.devicesDelivered, hint: 'وصلت للمستفيد', glyph: '✓', accent: true, page: 'devices', filter: 'تم التسليم'},
+        {label: 'نسبة الإنجاز', value: fmt(s.deliveryRate) + '٪', hint: 'من المستفيدين', glyph: '↗', accent: true, page: 'beneficiaries', filter: 'تم التسليم'},
+        {label: 'المناديب', value: s.delegates, hint: 'مندوب نشط', glyph: ICONS.delegates, page: 'delegates'}
       ];
 
       var activitiesBlock = '';
@@ -937,13 +946,19 @@
         + renderAuditRows(7) + '</section>';
     }
 
+    var ALERT_SECTION_PAGE = {
+      'طلبات الانضمام': 'applications', 'الأنشطة': 'activities', 'الشواهد': 'activities',
+      'الجمعيات': 'associations', 'الأجهزة': 'devices'
+    };
     function renderAlerts() {
       var list = state.data.alerts || [];
       if (!list.length) {
         return emptyState({glyph: '✓', title: 'لا توجد تنبيهات', body: 'كل المؤشرات ضمن النطاق الطبيعي حاليًا.'});
       }
       return list.slice(0, 6).map(function (item) {
-        return '<div class="alert ' + (item.level === 'critical' ? 'critical' : 'high') + '">'
+        var page = ALERT_SECTION_PAGE[item.section];
+        var openAttrs = page ? ' data-act="go" data-value="' + esc(page) + '" role="button" tabindex="0" style="cursor:pointer"' : '';
+        return '<div class="alert ' + (item.level === 'critical' ? 'critical' : 'high') + '"' + openAttrs + '>'
           + '<strong>' + esc(item.title) + '</strong>'
           + '<small>' + esc(item.message) + ' · ' + esc(item.section) + '</small></div>';
       }).join('');
@@ -2139,6 +2154,12 @@
 
     var CLICK_ACTIONS = {
       'go': function (el) { goTo(el.getAttribute('data-value')); },
+      'kpi-nav': function (el) {
+        var page = el.getAttribute('data-page');
+        var filter = el.getAttribute('data-filter') || '';
+        goTo(page);
+        if (filter) { state.filter = filter; render(); }
+      },
       'login-type': function (el) { state.loginType = el.getAttribute('data-value'); renderLogin(); },
       'show-apply': function () { loadReferenceDataOnce(); renderApplyForm(); },
       'back-to-login': renderLogin,
