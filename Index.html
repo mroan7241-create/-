@@ -1715,9 +1715,21 @@
         + (listTab ? renderDelegateList() : renderDelegateHistory()) + '</section></main>';
     }
 
-    function phoneIntl(value) {
+    /**
+     * يطبّع أي صيغة سعودية شائعة إلى المحلية 05XXXXXXXX، دفاعًا في
+     * العمق ضد بيانات قديمة قد تكون بلا صفر بادئ (كانت تُخزَّن كذلك
+     * قبل إصلاح normalizePhone_ في الخادم). لا يفشل بصمت — يعيد
+     * المدخل كما هو إن لم يتعرّف على شكله بدل إنتاج رابط فاسد صامت.
+     */
+    function phoneLocal(value) {
       var digits = String(value || '').replace(/\D/g, '');
-      return digits.charAt(0) === '0' ? '966' + digits.slice(1) : digits;
+      if (digits.indexOf('966') === 0) return '0' + digits.slice(3);
+      if (digits.charAt(0) === '5' && digits.length === 9) return '0' + digits;
+      return digits;
+    }
+    function phoneIntl(value) {
+      var local = phoneLocal(value);
+      return local.charAt(0) === '0' ? '966' + local.slice(1) : local;
     }
 
     function renderDelegateList() {
@@ -1744,7 +1756,8 @@
           + '<div class="tags">' + devices + '</div>'
           + '<div class="dg-acts">'
           + '<a class="a-wa" href="' + esc(whatsappUrl) + '" target="_blank" rel="noopener noreferrer">واتساب</a>'
-          + '<a class="a-call" href="tel:' + esc(item.phone) + '">اتصال</a>'
+          + '<a class="a-call" href="tel:' + esc(phoneLocal(item.phone)) + '" data-act="call-fallback" data-phone="'
+          + esc(phoneLocal(item.phone)) + '">اتصال</a>'
           + '<a class="a-map" href="' + esc(mapsUrl) + '" target="_blank" rel="noopener noreferrer">الموقع</a>'
           + '<button class="a-state" data-act="dg-status" data-id="' + esc(item.id) + '">تعذّر</button>'
           + '<button class="a-deliver" data-act="dg-deliver" data-id="' + esc(item.id) + '"'
@@ -2012,6 +2025,45 @@
       'dg-save-delivery': function (el) { saveDelivery(el.getAttribute('data-id')); }
     };
 
+    /**
+     * لا تمنع الرابط الأصلي tel: من العمل — لكن iframe الخاص بـ Apps
+     * Script قد يحجب فتح تطبيق الاتصال دون أي خطأ ظاهر. إن لم يغادر
+     * المتصفح الصفحة خلال مهلة قصيرة (بلا blur)، نفترض أن الفتح
+     * حُجب، وننسخ الرقم تلقائيًا كبديل واضح بدل فشل صامت.
+     */
+    function handleCallFallback(phone) {
+      var left = false;
+      var onBlur = function () { left = true; window.removeEventListener('blur', onBlur); };
+      window.addEventListener('blur', onBlur);
+      setTimeout(function () {
+        window.removeEventListener('blur', onBlur);
+        if (left) return;
+        copyToClipboard(phone).then(function (copied) {
+          toast(copied ? ('تعذّر فتح تطبيق الاتصال — نُسخ الرقم ' + phone + ' تلقائيًا.')
+            : ('تعذّر فتح تطبيق الاتصال. الرقم: ' + phone), copied ? 'success' : 'error');
+        });
+      }, 700);
+    }
+
+    function copyToClipboard(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text).then(function () { return true; }, function () { return false; });
+      }
+      try {
+        var area = document.createElement('textarea');
+        area.value = text;
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        var ok = document.execCommand('copy');
+        area.remove();
+        return Promise.resolve(ok);
+      } catch (error) {
+        return Promise.resolve(false);
+      }
+    }
+
     document.addEventListener('click', function (event) {
       var backdrop = event.target.classList && event.target.classList.contains('backdrop');
       if (backdrop) { closeModal(); return; }
@@ -2020,6 +2072,7 @@
       var action = el.getAttribute('data-act');
       if (action === 'backdrop' || action === 'set-search' || action === 'set-filter'
         || action === 'bulk-file' || action === 'proof-file') return;
+      if (action === 'call-fallback') { handleCallFallback(el.getAttribute('data-phone')); return; }
       var handler = CLICK_ACTIONS[action];
       if (!handler) return;
       event.preventDefault();

@@ -129,6 +129,10 @@ assert('يقبل 05XXXXXXXX', S.normalizePhone_('0501234567') === '0501234567');
 assert('يحوّل +9665 إلى 05', S.normalizePhone_('+966501234567') === '0501234567');
 assert('يحوّل 9665 إلى 05', S.normalizePhone_('966501234567') === '0501234567');
 assert('يتجاهل الفواصل والمسافات', S.normalizePhone_('050 123 45 67') === '0501234567');
+assert('يطبّع 9 أرقام بلا صفر بادئ (العطل المرصود حيًّا: 550791650)',
+  S.normalizePhone_('550791650') === '0550791650');
+assert('التخزين الموحّد: كل الصيغ الأربع تنتج نفس القيمة',
+  new Set(['0550791650', '550791650', '966550791650', '+966550791650'].map(S.normalizePhone_)).size === 1);
 throws('يرفض رقمًا قصيرًا', () => S.normalizePhone_('05012'), 'غير صحيح');
 throws('يرفض رقمًا لا يبدأ بـ 5', () => S.normalizePhone_('0401234567'), 'غير صحيح');
 throws('يرفض نصًا', () => S.normalizePhone_('ليس رقمًا'), 'غير صحيح');
@@ -264,6 +268,20 @@ assert('saveAssociation يستخدم التحقق الموحّد من المنط
   (source.match(/validateRegionCity_\(payload\.region, payload\.city\)/g) || []).length >= 2);
 assert('inspectBeneficiaryExcel يستخدم التحقق الموحّد من المنطقة/المدينة',
   /validateRegionCity_\(row\.region, row\.city\)/.test(source));
+
+/* -------- 13) تصحيح صيغة الجوال (معاينة آمنة، بلا كتابة عمياء) -------- */
+
+section('13) معاينة وترحيل أرقام الجوال');
+assert('previewPhoneNormalization معرّفة', /function previewPhoneNormalization\(/.test(source));
+assert('migratePhoneNumbers معرّفة ولم تُستدعَ تلقائيًا',
+  /function migratePhoneNumbers\(/.test(source) && !/^\s*migratePhoneNumbers\(\);/m.test(source));
+assert('الترحيل يعتمد على المعاينة نفسها (مصدر حقيقة واحد)', (() => {
+  const start = source.indexOf('function migratePhoneNumbers(');
+  const body = source.slice(start, start + 400);
+  return body.includes('previewPhoneNormalization()');
+})());
+throws('previewPhoneNormalization يفشل بأمان بلا شيت مرتبط (بيئة الاختبار) بدل قراءة بيانات فاسدة',
+  () => S.previewPhoneNormalization());
 
 /* -------- النتيجة -------- */
 

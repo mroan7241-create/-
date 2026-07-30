@@ -294,6 +294,15 @@ const listHtml = app.renderDelegateList();
 assert('رابط واتساب سليم', listHtml.includes('https://wa.me/966501234567'));
 assert('رابط الخرائط سليم وقابل للفتح', listHtml.includes('https://www.google.com/maps/search/?api=1&amp;query='));
 assert('لا توجد بقايا Markdown في رابط الخرائط', !listHtml.includes(']('));
+
+const brokenPhoneData = JSON.parse(JSON.stringify(DELEGATE_DATA));
+brokenPhoneData.beneficiaries[0].phone = '550791650';
+setRole(brokenPhoneData);
+const brokenPhoneHtml = app.renderDelegateList();
+assert('رابط واتساب سليم حتى مع رقم قديم بلا صفر بادئ', brokenPhoneHtml.includes('https://wa.me/966550791650'));
+assert('رابط الاتصال سليم حتى مع رقم قديم بلا صفر بادئ', brokenPhoneHtml.includes('tel:0550791650'));
+setRole(DELEGATE_DATA);
+assert('زر الاتصال يحمل بديل النسخ عند حجب المتصفح', brokenPhoneHtml.includes('data-act="call-fallback"'));
 assert('زر التسليم مفعّل عند وجود أجهزة', listHtml.includes('dg-deliver') && !listHtml.includes('dg-deliver" disabled'));
 
 const noDevices = JSON.parse(JSON.stringify(DELEGATE_DATA));
@@ -338,6 +347,11 @@ assert('statusClass يميّز التعذر', app.statusClass('تعذر التس
 assert('الحالة تُعرض نصًا لا لونًا فقط', app.statusChip('تم التسليم').includes('تم التسليم'));
 assert('phoneIntl يحوّل 05 إلى 9665', app.phoneIntl('0501234567') === '966501234567');
 assert('phoneIntl يترك الرقم الدولي كما هو', app.phoneIntl('966501234567') === '966501234567');
+assert('phoneIntl يعالج 9 أرقام بلا صفر (العطل المرصود حيًّا: 550791650)',
+  app.phoneIntl('550791650') === '966550791650');
+assert('phoneLocal يعيد صفرًا بادئًا لبيانات قديمة ناقصة', app.phoneLocal('550791650') === '0550791650');
+assert('phoneLocal يطبّع الصيغة الدولية إلى المحلية', app.phoneLocal('966550791650') === '0550791650');
+assert('phoneLocal يترك الصيغة المحلية الصحيحة كما هي', app.phoneLocal('0550791650') === '0550791650');
 
 /* ---------------- 9) قراءة CSV ---------------- */
 

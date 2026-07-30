@@ -1365,6 +1365,52 @@ function cleanId_(value) {
   return /^[A-Z]{3}-\d{6}$/.test(id) ? id : '';
 }
 
+/**
+ * معاينة آمنة (بلا كتابة) لأرقام الجوال غير المطابقة لصيغة التخزين
+ * الموحّدة 05XXXXXXXX في المستفيدين والجمعيات والمناديب. تُشغَّل من
+ * محرر Apps Script للمراجعة فقط — لا تغيّر أي بيانات.
+ */
+function previewPhoneNormalization() {
+  const targets = [
+    [APP.sheets.beneficiaries, 'رقم المستفيد', ['رقم الجوال', 'رقم جوال إضافي']],
+    [APP.sheets.associations, 'رقم الجمعية', ['أرقام التواصل']],
+    [APP.sheets.delegates, 'رقم المندوب', ['رقم الجوال']]
+  ];
+  const report = [];
+  targets.forEach(([sheetName, idHeader, phoneHeaders]) => {
+    readTable_(sheetName).rows.forEach(row => {
+      phoneHeaders.forEach(header => {
+        const raw = String(row[header] || '').trim();
+        if (!raw) return;
+        try {
+          const normalized = normalizePhone_(raw);
+          if (normalized !== raw) {
+            report.push({sheet: sheetName, idHeader: idHeader, id: row[idHeader], field: header, current: raw, suggested: normalized});
+          }
+        } catch (error) {
+          report.push({sheet: sheetName, idHeader: idHeader, id: row[idHeader], field: header, current: raw, suggested: null, invalid: true});
+        }
+      });
+    });
+  });
+  Logger.log('سجلات تحتاج تصحيح صيغة الجوال: ' + report.length);
+  report.forEach(item => Logger.log(JSON.stringify(item)));
+  return {ok: true, affected: report.length, report: report};
+}
+
+/**
+ * ⚠️ لم تُستدعَ تلقائيًا من أي مكان. ترحيل كتابة فعلي — راجع تقرير
+ * previewPhoneNormalization() أولًا. يصحّح فقط الصيغة القابلة للتطبيع
+ * تلقائيًا (5XXXXXXXX أو 9665XXXXXXXX أو +9665XXXXXXXX)، ولا يغيّر أي
+ * رقم غير صالح أصلًا — تلك تُترك للمراجعة اليدوية.
+ */
+function migratePhoneNumbers() {
+  const preview = previewPhoneNormalization();
+  const fixable = preview.report.filter(item => !item.invalid);
+  fixable.forEach(item => updateById_(item.sheet, item.idHeader, item.id, {[item.field]: item.suggested}));
+  return {ok: true, fixed: fixable.length, skippedInvalid: preview.report.length - fixable.length};
+}
+
 function requiredEmail_(value) {
   const email = String(value || '').trim().toLowerCase();
   if (!isEmail_(email)) throw new Error('البريد الإلكتروني غير صحيح');
@@ -1375,10 +1421,20 @@ function isEmail_(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '')) && String(value).length <= 180;
 }
 
+/**
+ * يطبّع أربع صيغ سعودية شائعة (05XXXXXXXX، 5XXXXXXXX، 9665XXXXXXXX،
+ * +9665XXXXXXXX) إلى صيغة تخزين موحّدة واحدة: 05XXXXXXXX دائمًا.
+ * قبل هذا الإصلاح كانت صيغة "5XXXXXXXX" (بلا صفر بادئ) تُخزَّن كما هي،
+ * فتُنتج روابط اتصال وواتساب فاسدة (مثال حقيقي: "550791650" بدل
+ * "0550791650" أو "966550791650").
+ */
 function normalizePhone_(value) {
   const phone = String(value || '').replace(/[^\d+]/g, '');
   if (!/^(?:\+?966|0)?5\d{8}$/.test(phone)) throw new Error('رقم الجوال غير صحيح');
-  return phone.indexOf('+966') === 0 ? '0' + phone.slice(4) : phone.indexOf('966') === 0 ? '0' + phone.slice(3) : phone;
+  if (phone.indexOf('+966') === 0) return '0' + phone.slice(4);
+  if (phone.indexOf('966') === 0) return '0' + phone.slice(3);
+  if (phone.charAt(0) === '5') return '0' + phone;
+  return phone;
 }
 
 function boundedNumber_(value, min, max, label) {

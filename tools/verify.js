@@ -96,8 +96,12 @@ else fail('أقواس CSS غير متوازنة', 'العمق النهائي: ' 
 
 section('3) أنماط خطرة على النشر داخل Apps Script');
 
-const inlineHandlerRe = /\son(?:click|change|input|submit|load|error|focus|blur|keydown|keyup|mouseover)\s*=/gi;
-const inlineHits = html.match(inlineHandlerRe) || [];
+// الفحص يقتصر على HTML خارج كتل <script> فقط، ويشترط قيمة سمة مقتبَسة
+// مباشرة بعد "=" — هذا يمنع مطابقة متغيرات JS المشروعة (مثل var onBlur
+// = function(){}) التي تحمل الاسم نفسه من داخل الكود دون أن تكون سمة HTML.
+const htmlOutsideScripts = html.replace(/<script(?:\s[^>]*)?>[\s\S]*?<\/script>/gi, '');
+const inlineHandlerRe = /\son(?:click|change|input|submit|load|error|focus|blur|keydown|keyup|mouseover)\s*=\s*["']/gi;
+const inlineHits = htmlOutsideScripts.match(inlineHandlerRe) || [];
 if (!inlineHits.length) ok('لا يوجد أي inline event handler', 'كل الأحداث عبر event delegation');
 else fail('inline event handlers موجودة', inlineHits.length + ' موضعًا: ' + inlineHits.join(' '));
 
