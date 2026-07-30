@@ -474,7 +474,8 @@
       loading: false,
       inflight: 0,
       proofData: '',
-      pendingRows: []
+      pendingRows: [],
+      referenceData: null
     };
 
     function api(method) {
@@ -730,6 +731,7 @@
         state.page = 'dashboard';
         render();
         toast('مرحبًا بك، ' + (result.user && result.user.name ? result.user.name : ''), 'success');
+        loadReferenceDataOnce();
       }, reportError).then(function () { busy(false); });
     }
 
@@ -1020,8 +1022,7 @@
         + textField('name', 'الاسم الكامل', item.name, {required: true, max: 120, span: true})
         + textField('phone', 'رقم الجوال', item.phone, {required: true, ltr: true, hint: 'مثال: 05XXXXXXXX'})
         + textField('phone2', 'رقم جوال إضافي', item.phone2, {ltr: true, hint: 'اختياري'})
-        + textField('region', 'المنطقة', item.region, {required: true, max: 80})
-        + textField('city', 'المدينة', item.city, {required: true, max: 80})
+        + regionCityFields(item.region, item.city, 'f')
         + textField('address', 'العنوان الدقيق', item.address, {required: true, max: 250, span: true,
             hint: 'الحي والشارع وأقرب معلم — يستخدمه المندوب للوصول.'})
         + '<div class="field"><label for="f_familyCount">عدد الأفراد</label>'
@@ -1029,7 +1030,7 @@
         + esc(item.familyCount || '') + '" required></div>'
         + '<div class="field"><label for="f_socialStatus">الحالة الاجتماعية</label>'
         + '<select class="control" id="f_socialStatus" name="socialStatus">'
-        + optionList(SOCIAL_STATUSES, item.socialStatus, '— اختر —') + '</select></div>'
+        + optionList(socialStatusOptions(), item.socialStatus, '— اختر —') + '</select></div>'
         + '<div class="field"><label for="f_income">الدخل الشهري (ر.س)</label>'
         + '<input class="control" id="f_income" name="income" type="number" min="0" max="1000000" value="'
         + esc(item.income || 0) + '"></div>'
@@ -1050,6 +1051,46 @@
         + (isEdit ? 'حفظ التعديلات' : 'اعتماد وإضافة المستفيد') + '</button>';
 
       openModal(isEdit ? 'تعديل بيانات المستفيد' : 'إضافة مستفيد', body, footer);
+    }
+
+    /**
+     * حقلا المنطقة والمدينة، مترابطان. إن كانت المصادر المرجعية جاهزة
+     * (بعد تشغيل الترحيل من الإدارة) يُعرضان كقائمتين متلاحقتين؛ وإلا
+     * يسقط النظام تلقائيًا إلى حقلَي نص حرَّين كما كانا — بلا أي كسر.
+     */
+    /** يستخدم القائمة المعتمدة من الخادم إن جهزت، وإلا الثابت المحلي كما كان. */
+    function socialStatusOptions() {
+      var ref = state.referenceData;
+      return (ref && ref.ready && ref.socialStatuses.length) ? ref.socialStatuses : SOCIAL_STATUSES;
+    }
+
+    /** قبل الترحيل: حقل نص حر كما كان. بعده: قائمة تصنيفات معتمدة. */
+    function associationCategoryField(value) {
+      var ref = state.referenceData;
+      if (!ref || !ref.ready || !ref.associationCategories.length) {
+        return textField('category', 'التصنيف', value, {max: 80, hint: 'مثال: جمعية أهلية'});
+      }
+      return '<div class="field"><label for="f_category">التصنيف</label>'
+        + '<select class="control" id="f_category" name="category">'
+        + optionList(ref.associationCategories, value, '— اختر —') + '</select></div>';
+    }
+
+    function regionCityFields(regionValue, cityValue, idPrefix) {
+      idPrefix = idPrefix || 'f';
+      var ref = state.referenceData;
+      if (!ref || !ref.ready || !ref.regions.length) {
+        return textField('region', 'المنطقة', regionValue, {required: true, max: 80})
+          + textField('city', 'المدينة', cityValue, {required: true, max: 80});
+      }
+      var cityId = idPrefix + '_city';
+      var cities = ref.citiesByRegion[regionValue] || [];
+      return '<div class="field"><label for="' + idPrefix + '_region">المنطقة</label>'
+        + '<select class="control" id="' + idPrefix + '_region" name="region" required '
+        + 'data-act="region-select" data-city-target="' + cityId + '">'
+        + optionList(ref.regions, regionValue, '— اختر المنطقة —') + '</select></div>'
+        + '<div class="field"><label for="' + cityId + '">المدينة</label>'
+        + '<select class="control" id="' + cityId + '" name="city" required' + (cities.length ? '' : ' disabled') + '>'
+        + optionList(cities, cityValue, cities.length ? '— اختر المدينة —' : '— اختر المنطقة أولًا —') + '</select></div>';
     }
 
     function textField(name, label, value, options) {
@@ -1301,14 +1342,13 @@
       var body = '<form id="associationForm" class="form-grid" novalidate>'
         + '<input type="hidden" name="id" value="' + esc(id || '') + '">'
         + textField('name', 'اسم الجمعية', a.name, {required: true, max: 150, span: true})
-        + textField('category', 'التصنيف', a.category, {max: 80, hint: 'مثال: جمعية أهلية'})
+        + associationCategoryField(a.category)
         + '<div class="field"><label for="f_status">الحالة</label>'
         + '<select class="control" id="f_status" name="status">'
         + '<option value="نشطة"' + (a.status === 'غير نشطة' ? '' : ' selected') + '>نشطة</option>'
         + '<option value="غير نشطة"' + (a.status === 'غير نشطة' ? ' selected' : '') + '>غير نشطة</option>'
         + '</select></div>'
-        + textField('region', 'المنطقة', a.region, {required: true, max: 80})
-        + textField('city', 'المدينة', a.city, {required: true, max: 80})
+        + regionCityFields(a.region, a.city, 'f')
         + textField('phone', 'رقم التواصل', a.phone, {required: true, ltr: true})
         + '<div class="field"><label for="f_email">البريد الإلكتروني</label>'
         + '<input class="control" id="f_email" name="email" type="email" dir="ltr" value="' + esc(a.email || '')
@@ -1868,11 +1908,24 @@
         state.data = data;
         state.user = data.user || {role: data.role, name: 'المستخدم'};
         render();
+        loadReferenceDataOnce();
       }, function () {
         safeSession('remove', 'zad_token');
         state.token = '';
         renderLogin();
       });
+    }
+
+    /**
+     * تُجلب مرة واحدة لكل جلسة وتُخزَّن في الذاكرة — لا تُعاد مع كل تنقّل.
+     * الفشل صامت ومقصود: قبل تشغيل الترحيل لا يوجد جدول مرجعي بعد،
+     * فتستمر النماذج بحقول النص الحرة كما كانت دون أي رسالة خطأ للمستخدم.
+     */
+    function loadReferenceDataOnce() {
+      if (state.referenceData) return;
+      api('getReferenceData', state.token).then(function (data) {
+        if (data && data.ready) state.referenceData = data;
+      }, function () { /* تجاهل متعمّد — سقوط آمن للنص الحر */ });
     }
 
     function doLogout(callServer) {
@@ -1883,6 +1936,7 @@
         state.data = null;
         state.proofData = '';
         state.pendingRows = [];
+        state.referenceData = null;
         closeModal();
         renderLogin();
       };
@@ -1994,8 +2048,19 @@
       var action = el.getAttribute ? el.getAttribute('data-act') : null;
       if (action === 'set-filter') { state.filter = el.value; render(); return; }
       if (action === 'bulk-file') { handleBulkFile(el); return; }
-      if (action === 'proof-file') { handleProofFile(el); }
+      if (action === 'proof-file') { handleProofFile(el); return; }
+      if (action === 'region-select') { onRegionChange(el); }
     });
+
+    /** يعيد تعبئة قائمة المدن فور اختيار المنطقة، ويقفلها إن لم تُختر منطقة بعد. */
+    function onRegionChange(regionSelect) {
+      var citySelect = document.getElementById(regionSelect.getAttribute('data-city-target'));
+      if (!citySelect) return;
+      var ref = state.referenceData;
+      var cities = (ref && ref.citiesByRegion[regionSelect.value]) || [];
+      citySelect.innerHTML = optionList(cities, '', cities.length ? '— اختر المدينة —' : '— اختر المنطقة أولًا —');
+      citySelect.disabled = !cities.length;
+    }
 
     document.addEventListener('submit', function (event) {
       var form = event.target;

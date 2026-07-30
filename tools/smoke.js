@@ -351,6 +351,47 @@ let csvError = null;
 try { app.parseCsv('الاسم\n'); } catch (e) { csvError = e; }
 assert('يرفض ملفًا بلا سجلات برسالة عربية', csvError && csvError.message.includes('لا يحتوي'));
 
+/* ---------------- 10) المنطقة والمدينة المترابطتان ---------------- */
+
+section('10) حقلا المنطقة والمدينة المترابطان');
+
+setRole(ASSOCIATION_DATA);
+app.state.referenceData = null;
+assert('قبل تشغيل الترحيل: حقلا نص حرّ كما كانا',
+  app.regionCityFields('الرياض', 'الرياض', 'f').includes('name="region"')
+  && app.regionCityFields('الرياض', 'الرياض', 'f').includes('<input'));
+
+const mockRef = {
+  ready: true,
+  regions: ['الرياض', 'مكة المكرمة'],
+  citiesByRegion: {'الرياض': ['الرياض', 'الخرج'], 'مكة المكرمة': ['جدة', 'الطائف']},
+  deviceTypes: ['ثلاجة', 'غسالة'],
+  socialStatuses: ['أرملة', 'يتيم'],
+  associationCategories: ['جمعية أهلية', 'جمعية خيرية']
+};
+app.state.referenceData = mockRef;
+
+const fields = app.regionCityFields('الرياض', 'الخرج', 'f');
+assert('بعد الترحيل: قائمتان منسدلتان متلاحقتان', fields.includes('<select') && fields.includes('name="region"') && fields.includes('name="city"'));
+assert('قائمة المدن تعرض مدن المنطقة المختارة فقط', fields.includes('الخرج') && !fields.includes('جدة'));
+assert('المنطقة المحفوظة محدَّدة مسبقًا', /<option value="الرياض" selected/.test(fields));
+assert('ربط القائمتين عبر data-city-target', fields.includes('data-act="region-select"') && fields.includes('data-city-target="f_city"'));
+
+const emptyRegionFields = app.regionCityFields('', '', 'f');
+assert('بلا منطقة مختارة: قائمة المدن مقفلة', /id="f_city"[^>]*disabled/.test(emptyRegionFields));
+
+assert('الحالة الاجتماعية تستخدم القائمة المعتمدة بعد الترحيل',
+  app.socialStatusOptions().join(',') === mockRef.socialStatuses.join(','));
+app.state.referenceData = null;
+assert('الحالة الاجتماعية تسقط للثابت المحلي قبل الترحيل',
+  app.socialStatusOptions().join(',') === app.SOCIAL_STATUSES.join(','));
+
+app.state.referenceData = mockRef;
+const categoryField = app.associationCategoryField('جمعية خيرية');
+assert('تصنيف الجمعية يصبح قائمة معتمدة بعد الترحيل', categoryField.includes('<select') && categoryField.includes('جمعية خيرية'));
+app.state.referenceData = null;
+assert('تصنيف الجمعية نص حرّ قبل الترحيل', app.associationCategoryField('').includes('<input'));
+
 /* ---------------- النتيجة ---------------- */
 
 console.log('\n' + '='.repeat(56));

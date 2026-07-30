@@ -223,6 +223,48 @@ assert('doGet ما زال يقرأ الملف Index', /createHtmlOutputFromFile\
 assert('setupSheets موجودة ولم تُستدعَ تلقائيًا',
   /function setupSheets\(/.test(source) && !/^\s*setupSheets\(\);/m.test(source));
 
+/* -------- 12) المصادر المرجعية (مناطق/مدن) -------- */
+
+section('12) المصادر المرجعية والتحقق اللين');
+
+assert('جدول البيانات المرجعية إضافي فقط ولم يمس أوراقًا قائمة',
+  expectedSheets.every(name => name in HEADERS) && 'البيانات المرجعية' in HEADERS);
+assert('أعمدة البيانات المرجعية كما صُممت', HEADERS['البيانات المرجعية'].join('|')
+  === ['المعرف', 'النوع', 'القيمة', 'يتبع', 'الترتيب', 'نشط'].join('|'));
+
+assert('migrateReferenceData لم تُستدعَ تلقائيًا من أي مكان',
+  /function migrateReferenceData\(/.test(source) && !/^\s*migrateReferenceData\(\);/m.test(source));
+
+assert('getReferenceData تتعامل بأمان مع غياب الجدول (بلا استثناء)', (() => {
+  try {
+    const result = S.getReferenceData();
+    return result && result.ready === false && Array.isArray(result.regions) && result.regions.length === 0;
+  } catch (error) { return false; }
+})());
+
+assert('validateRegionCity_ يتصرف كنص حر قبل تشغيل الترحيل (توافق خلفي)', (() => {
+  const result = S.validateRegionCity_('منطقة اختبارية', 'مدينة اختبارية');
+  return result.region === 'منطقة اختبارية' && result.city === 'مدينة اختبارية';
+})());
+
+throws('validateRegionCity_ يرفض منطقة فارغة قبل الترحيل أيضًا',
+  () => S.validateRegionCity_('', 'أي مدينة'), 'مطلوب');
+
+assert('بذرة المناطق تغطي المناطق الإدارية الثلاث عشرة', Object.keys(read('REFERENCE_SEED_REGIONS_CITIES')).length === 13);
+assert('كل منطقة في البذرة لها مدينة واحدة على الأقل', Object.values(read('REFERENCE_SEED_REGIONS_CITIES'))
+  .every(cities => Array.isArray(cities) && cities.length >= 3));
+assert('لا تكرار داخل قائمة مدن أي منطقة', Object.values(read('REFERENCE_SEED_REGIONS_CITIES'))
+  .every(cities => new Set(cities).size === cities.length));
+
+assert('saveBeneficiary يستخدم التحقق الموحّد من المنطقة/المدينة',
+  /validateRegionCity_\(payload\.region, payload\.city\)/.test(source));
+assert('importBeneficiaries يستخدم التحقق الموحّد من المنطقة/المدينة',
+  /validateRegionCity_\(row\.region, row\.city\)/.test(source));
+assert('saveAssociation يستخدم التحقق الموحّد من المنطقة/المدينة',
+  (source.match(/validateRegionCity_\(payload\.region, payload\.city\)/g) || []).length >= 2);
+assert('inspectBeneficiaryExcel يستخدم التحقق الموحّد من المنطقة/المدينة',
+  /validateRegionCity_\(row\.region, row\.city\)/.test(source));
+
 /* -------- النتيجة -------- */
 
 console.log('\n' + '='.repeat(56));
