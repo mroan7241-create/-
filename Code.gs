@@ -1055,8 +1055,15 @@ function listAssociationApplications(token) {
   return {ok: true, applications: getAssociationApplications_()};
 }
 
+/**
+ * يجب أن تضمن حرفًا لاتينيًا ورقمًا معًا دائمًا بالبناء لا بالاحتمال
+ * (شرط assertStrongPassword_ يفحص A-Za-z ورقمًا تحديدًا، ولا يكفيه
+ * الاعتماد على عشوائية UUID وحدها التي قد تُنتج مقطعًا بلا أي رقم).
+ */
 function generateTempPassword_() {
-  return 'زد' + Utilities.getUuid().replace(/-/g, '').slice(0, 10);
+  const randomPart = Utilities.getUuid().replace(/-/g, '').slice(0, 8);
+  const digitPart = String(new Date().getTime()).slice(-4);
+  return 'Zad-' + randomPart + '-' + digitPart;
 }
 
 function reviewAssociationApplication(token, id, decision, reason) {
