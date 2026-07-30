@@ -1,7 +1,7 @@
 # تقرير تسليم — نظام متابعة توزيع الأجهزة (جمعية الزاد)
 
 آخر تحديث: هذا الملف يعكس حالة الفرع `claude/code-index-review-kz5k4u` عند
-commit **`600b0af`** (أحدث commit عند كتابة هذا التقرير). مستودع GitHub هو
+commit **`bde208d`** (أحدث commit عند كتابة هذا التقرير). مستودع GitHub هو
 المصدر المعتمد الوحيد — تجاهل أي نسخة مطابقة من ملفات لصقت سابقًا في المحادثة.
 
 ## الحالة العامة
@@ -149,6 +149,6 @@ node tools/server-test.js  → 100/100
 ## روابط
 
 - الفرع: `claude/code-index-review-kz5k4u`
-- آخر commit عند كتابة هذا التقرير: `600b0af`
+- آخر commit عند كتابة هذا التقرير: `bde208d`
 - المستودع: `mroan7241-create/-`
 - Pull Request #1 (مفتوح، غير مدموج): https://github.com/mroan7241-create/-/pull/1
