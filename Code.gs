@@ -112,6 +112,7 @@ function migrateReferenceData() {
   });
 
   sheet.getRange(2, 1, rows.length, HEADERS[APP.sheets.referenceData].length).setValues(rows);
+  invalidateTableCache_(APP.sheets.referenceData);
   invalidateReferenceDataCache_();
   return {ok: true, skipped: false, inserted: rows.length,
     message: 'تم إنشاء ' + rows.length + ' سجلًا مرجعيًا (مناطق، مدن، أنواع أجهزة، حالات اجتماعية، تصنيفات جمعيات).'};
@@ -208,6 +209,7 @@ function setupSheets() {
   const firstAdmin = seedAdmin_();
   applyValidations_();
   PropertiesService.getScriptProperties().setProperty('SCHEMA_VERSION', String(APP.schemaVersion));
+  Object.keys(HEADERS).forEach(invalidateTableCache_);
   clearDashboardCache();
   const result = {ok: true, message: 'تم تجهيز قاعدة البيانات بنجاح'};
   if (firstAdmin) {
@@ -420,12 +422,45 @@ function sessionKey_(token) {
 
 // -------------------- بيانات الواجهة --------------------
 
-function getBootstrapData(token) {
+/**
+ * يُخزَّن ناتج البوابة الكامل مؤقتًا لكل دور/جمعية/مندوب لمدة قصيرة
+ * (APP.cacheSeconds)، فلا يعيد كل دخول أو تحديث أو تنقل بين المتصفحات
+ * قراءة كل الأوراق من جديد إن كان هناك طلب حديث بالفعل لنفس الفاعل أو
+ * نفس نطاقه. كل عملية تعديل (save*) تمرّر forceFresh=true فتتجاوز
+ * الذاكرة المؤقتة وتكتب نتيجة جديدة فورًا، فيرى منفّذ التعديل أثره
+ * فورًا دائمًا مهما كانت حالة الذاكرة المؤقتة.
+ */
+function bootstrapCacheKey_(user) {
+  if (user.role === 'ADMIN') return 'bootstrap:ADMIN';
+  if (user.role === 'ASSOCIATION') return 'bootstrap:ASSOCIATION:' + user.associationId;
+  return 'bootstrap:DELEGATE:' + user.id;
+}
+
+function getBootstrapData(token, forceFresh) {
   const user = requireSession_(token);
   assertActorEnabled_(user.role, user.associationId);
-  if (user.role === 'DELEGATE') return buildDelegatePortal_(user);
-  if (user.role === 'ASSOCIATION') return buildAssociationPortal_(user);
-  return buildAdminPortal_(user);
+  const cache = CacheService.getScriptCache();
+  const cacheKey = bootstrapCacheKey_(user);
+
+  if (!forceFresh) {
+    const cached = cache.get(cacheKey);
+    if (cached) {
+      try { return JSON.parse(cached); } catch (ignore) { /* تابع لإعادة الحساب */ }
+    }
+  }
+
+  const data = user.role === 'DELEGATE' ? buildDelegatePortal_(user)
+    : user.role === 'ASSOCIATION' ? buildAssociationPortal_(user)
+    : buildAdminPortal_(user);
+
+  try {
+    const serialized = JSON.stringify(data);
+    // حد CacheService 100 كيلوبايت لكل مفتاح — جمعية أو مندوب ضخم
+    // قد يتجاوزه؛ في هذه الحالة نتجاوز التخزين المؤقت بأمان بدل الفشل.
+    if (serialized.length < 95000) cache.put(cacheKey, serialized, APP.cacheSeconds);
+  } catch (ignore) { /* لا يوقف الطلب — التخزين المؤقت تحسين، ليس شرطًا */ }
+
+  return data;
 }
 
 function getDashboardData(token) {
@@ -566,7 +601,7 @@ function saveBeneficiary(token, payload) {
     audit_(user, 'إضافة مستفيد', 'المستفيدون', id, '');
   }
   clearDashboardCache();
-  return {ok: true, id: id, data: getBootstrapData(token)};
+  return {ok: true, id: id, data: getBootstrapData(token, true)};
 }
 
 function importBeneficiaries(token, rows, acceptedPledge) {
@@ -612,7 +647,7 @@ function importBeneficiaries(token, rows, acceptedPledge) {
   appendObjects_(APP.sheets.beneficiaries, valid);
   audit_(user, 'استيراد مستفيدين', 'المستفيدون', '', 'عدد السجلات: ' + valid.length);
   clearDashboardCache();
-  return {ok: true, imported: valid.length, data: getBootstrapData(token)};
+  return {ok: true, imported: valid.length, data: getBootstrapData(token, true)};
 }
 
 /**
@@ -696,7 +731,7 @@ function assignDelegate(token, beneficiaryId, delegateId) {
   });
   audit_(user, 'تعيين مندوب', 'المستفيدون', beneficiaryId, 'المندوب: ' + delegateId);
   clearDashboardCache();
-  return {ok: true, data: getBootstrapData(token)};
+  return {ok: true, data: getBootstrapData(token, true)};
 }
 
 // -------------------- المناديب والتسليم --------------------
@@ -731,7 +766,7 @@ function saveDelegate(token, payload) {
     }, base));
     audit_(user, 'إضافة مندوب', 'المناديب', id, '');
   }
-  return {ok: true, id: id, accessCode: accessCode, data: getBootstrapData(token)};
+  return {ok: true, id: id, accessCode: accessCode, data: getBootstrapData(token, true)};
 }
 
 function regenerateDelegateCode(token, delegateId) {
@@ -759,7 +794,7 @@ function setDelegateStatus(token, delegateId, status) {
   // التعطيل يقطع جلسات المندوب القائمة فورًا، لا عند انتهاء المهلة فقط.
   if (status !== 'نشط') revokeSessions_(cleanId_(delegateId));
   audit_(user, status === 'نشط' ? 'تفعيل مندوب' : 'تعطيل مندوب', 'المناديب', delegateId, '');
-  return {ok: true, data: getBootstrapData(token)};
+  return {ok: true, data: getBootstrapData(token, true)};
 }
 
 function updateDeliveryStatus(token, beneficiaryId, reason, notes) {
@@ -780,7 +815,7 @@ function updateDeliveryStatus(token, beneficiaryId, reason, notes) {
   });
   audit_(user, 'تعذر التسليم', 'التسليمات', beneficiaryId, reason);
   clearDashboardCache();
-  return {ok: true, data: getBootstrapData(token)};
+  return {ok: true, data: getBootstrapData(token, true)};
 }
 
 function confirmDelivery(token, payload) {
@@ -818,7 +853,7 @@ function confirmDelivery(token, payload) {
   }
   audit_(user, 'تأكيد تسليم', 'التسليمات', beneficiaryId, 'عدد الأجهزة: ' + devices.length);
   clearDashboardCache();
-  return {ok: true, data: getBootstrapData(token)};
+  return {ok: true, data: getBootstrapData(token, true)};
 }
 
 function saveProofImage_(dataUrl, beneficiaryId) {
@@ -864,7 +899,7 @@ function saveDevice(token, payload) {
   else appendObject_(APP.sheets.devices, Object.assign({'رقم الجهاز': id, 'تاريخ الإضافة': now_(), 'تاريخ التسليم': ''}, values));
   audit_(user, payload.id ? 'تعديل جهاز' : 'إضافة جهاز', 'الأجهزة', id, '');
   clearDashboardCache();
-  return {ok: true, id: id, data: getBootstrapData(token)};
+  return {ok: true, id: id, data: getBootstrapData(token, true)};
 }
 
 function saveAssociation(token, payload) {
@@ -898,7 +933,7 @@ function saveAssociation(token, payload) {
   }
   audit_(user, payload.id ? 'تعديل جمعية' : 'إضافة جمعية', 'الجمعيات', id, '');
   clearDashboardCache();
-  return {ok: true, id: id, data: getBootstrapData(token)};
+  return {ok: true, id: id, data: getBootstrapData(token, true)};
 }
 
 function assertStrongPassword_(password) {
@@ -1035,7 +1070,7 @@ function updateAssociationSettings(token, payload) {
   updateById_(APP.sheets.users, 'رقم المستخدم', user.id, {'البريد الإلكتروني': values['البريد الإلكتروني']});
   audit_(user, 'تحديث إعدادات الجمعية', 'الإعدادات', user.associationId, '');
   clearDashboardCache();
-  return {ok: true, data: getBootstrapData(token)};
+  return {ok: true, data: getBootstrapData(token, true)};
 }
 
 function changePassword(token, currentPassword, newPassword) {
@@ -1082,8 +1117,17 @@ function buildAlerts_(beneficiaries, associations, devices, activities, evidence
   return alerts.slice(0, 20);
 }
 
+/**
+ * تُستدعى بعد أي تعديل. الفاعل الذي نفّذ التعديل يرى أثره فورًا دائمًا
+ * (getBootstrapData(token, true) في كل دالة تعديل يتجاوز الذاكرة
+ * المؤقتة). هذه الدالة إضافيًا تُبطل عرض الإدارة الكلي كي لا يبقى
+ * المدير على صورة قديمة حتى انتهاء صلاحية الذاكرة المؤقتة (حتى 60
+ * ثانية) بعد تعديل تُجريه جمعية أو مندوب.
+ */
 function clearDashboardCache() {
-  CacheService.getScriptCache().remove('dashboard');
+  const cache = CacheService.getScriptCache();
+  cache.remove('dashboard');
+  cache.remove('bootstrap:ADMIN');
   return {ok: true};
 }
 
@@ -1221,17 +1265,41 @@ function sheet_(name) {
   return sheet;
 }
 
+/**
+ * ذاكرة تخزين مؤقت محدودة العمر (أقل من نطاق أي طلب واحد بأمان) تمنع
+ * قراءة الورقة نفسها أكثر من مرة ضمن الطلب الواحد. مثال حقيقي كان
+ * موجودًا قبل هذا التغيير: buildAssociationPortal_ تقرأ المستفيدين
+ * والأجهزة والمناديب، ثم getAuditRows_ المستدعاة بعدها مباشرة تعيد
+ * قراءة الأوراق الأربع نفسها بالكامل من جديد لغرض تصفية السجل فقط.
+ * أي عملية كتابة (appendObjects_/updateById_) تُبطل ورقتها فورًا، فلا
+ * يمكن لهذه الذاكرة أن تُعيد بيانات قديمة بعد أي تعديل.
+ */
+const _TABLE_CACHE_ = {};
+const _TABLE_CACHE_TTL_MS_ = 4000;
+
 function readTable_(name) {
+  const cached = _TABLE_CACHE_[name];
+  if (cached && (Date.now() - cached.at) < _TABLE_CACHE_TTL_MS_) return cached.value;
   const sheet = sheet_(name);
   const values = sheet.getDataRange().getValues();
-  if (!values.length) return {headers: [], rows: []};
-  const headers = values[0].map(String);
-  const rows = values.slice(1).filter(row => row.some(value => value !== '')).map(row => {
-    const object = {};
-    headers.forEach((header, index) => object[header] = row[index]);
-    return object;
-  });
-  return {headers: headers, rows: rows};
+  let result;
+  if (!values.length) {
+    result = {headers: [], rows: []};
+  } else {
+    const headers = values[0].map(String);
+    const rows = values.slice(1).filter(row => row.some(value => value !== '')).map(row => {
+      const object = {};
+      headers.forEach((header, index) => object[header] = row[index]);
+      return object;
+    });
+    result = {headers: headers, rows: rows};
+  }
+  _TABLE_CACHE_[name] = {value: result, at: Date.now()};
+  return result;
+}
+
+function invalidateTableCache_(name) {
+  delete _TABLE_CACHE_[name];
 }
 
 function headerMap_(sheet) {
@@ -1263,6 +1331,7 @@ function appendObjects_(sheetName, objects) {
     headers.map(header => safeCell_(object[header] === undefined ? '' : object[header]))
   );
   sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, headers.length).setValues(rows);
+  invalidateTableCache_(sheetName);
 }
 
 function findById_(sheetName, idHeader, id) {
@@ -1279,6 +1348,7 @@ function updateById_(sheetName, idHeader, id, changes) {
   Object.keys(changes).forEach(header => {
     if (map[header] !== undefined) sheet.getRange(rowIndex + 1, map[header] + 1).setValue(safeCell_(changes[header]));
   });
+  invalidateTableCache_(sheetName);
 }
 
 function nextId_(prefix) {
@@ -1316,6 +1386,7 @@ function updateSetting_(key, value) {
   const values = sheet.getDataRange().getValues();
   const rowIndex = values.findIndex((row, index) => index > 0 && String(row[0]) === key);
   if (rowIndex > 0) sheet.getRange(rowIndex + 1, 2).setValue(value);
+  invalidateTableCache_(APP.sheets.settings);
 }
 
 // -------------------- أدوات الأمان والتحقق --------------------
