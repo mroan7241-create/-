@@ -1188,6 +1188,52 @@ function getMainActivityEvidence_() {
   }));
 }
 
+const ACTIVITY_STATUSES = ['لم يبدأ', 'جارٍ', 'متأخر', 'مكتمل'];
+
+/**
+ * إضافة نشاط رئيسي/فرعي جديد أو تعديل نشاط قائم. لا يوجد عمود رقم
+ * تسلسلي مستقل في ورقة "إدارة الأنشطة" (تصميم قائم منذ البداية)، لذا
+ * تُطابَق الأنشطة القائمة بثلاثية (المرحلة، النشاط الرئيسي، النشاط
+ * الفرعي) الأصلية قبل التعديل — وهي نفس المفتاح المركّب الذي تستخدمه
+ * getMainActivities_ وgetStagesData_ للتجميع أصلًا.
+ */
+function saveActivity(token, payload) {
+  const user = requireSession_(token, ['ADMIN']);
+  payload = payload || {};
+  const status = cleanText_(payload.status, 50);
+  if (status && ACTIVITY_STATUSES.indexOf(status) === -1) throw new Error('حالة النشاط غير معروفة');
+  const values = {
+    'ترتيب المرحلة': boundedNumber_(payload.stageOrder, 0, 999, 'ترتيب المرحلة'),
+    'اسم المرحلة': requiredText_(payload.stage, 'اسم المرحلة', 150),
+    'ترتيب النشاط الرئيسي': boundedNumber_(payload.mainOrder, 0, 999, 'ترتيب النشاط الرئيسي'),
+    'اسم النشاط الرئيسي': requiredText_(payload.mainActivity, 'اسم النشاط الرئيسي', 180),
+    'اسم النشاط الفرعي': requiredText_(payload.subActivity, 'اسم النشاط الفرعي', 180),
+    'المسؤول': cleanText_(payload.owner, 120),
+    'تاريخ البداية': payload.startDate || '',
+    'تاريخ النهاية': payload.endDate || '',
+    'نسبة الإنجاز': boundedNumber_(payload.progress, 0, 100, 'نسبة الإنجاز'),
+    'الحالة': status,
+    'رابط الشاهد': safeUrl_(payload.evidenceUrl),
+    'ملاحظات': cleanText_(payload.notes, 1000)
+  };
+
+  const hasOriginal = payload.originalStage && payload.originalMainActivity && payload.originalSubActivity;
+  if (hasOriginal) {
+    const matched = updateRowByMatch_(APP.sheets.activities, {
+      'اسم المرحلة': cleanText_(payload.originalStage, 150),
+      'اسم النشاط الرئيسي': cleanText_(payload.originalMainActivity, 180),
+      'اسم النشاط الفرعي': cleanText_(payload.originalSubActivity, 180)
+    }, values);
+    if (!matched) throw new Error('النشاط الأصلي غير موجود — رُبما عُدِّل أو حُذف من مكان آخر');
+    audit_(user, 'تعديل نشاط', 'الأنشطة', values['اسم النشاط الفرعي'], values['اسم المرحلة'] + ' / ' + values['اسم النشاط الرئيسي']);
+  } else {
+    appendObject_(APP.sheets.activities, values);
+    audit_(user, 'إضافة نشاط', 'الأنشطة', values['اسم النشاط الفرعي'], values['اسم المرحلة'] + ' / ' + values['اسم النشاط الرئيسي']);
+  }
+  clearDashboardCache();
+  return {ok: true, data: getBootstrapData(token, true)};
+}
+
 function getAssociationsData_() {
   return readTable_(APP.sheets.associations).rows.map(row => normalizeAssociation_(row));
 }
@@ -1492,6 +1538,27 @@ function updateById_(sheetName, idHeader, id, changes) {
     if (map[header] !== undefined) sheet.getRange(rowIndex + 1, map[header] + 1).setValue(safeCell_(changes[header]));
   });
   invalidateTableCache_(sheetName);
+}
+
+/**
+ * تحديث صف بمطابقة أكثر من عمود معًا (بدل معرّف واحد)، للأوراق التي لا
+ * تملك عمود رقم تسلسلي مستقل — مثل "إدارة الأنشطة" التي يُعرَّف صفها
+ * بثلاثية (المرحلة، النشاط الرئيسي، النشاط الفرعي) لا برقم منفصل.
+ */
+function updateRowByMatch_(sheetName, matchHeaders, changes) {
+  const sheet = sheet_(sheetName);
+  const values = sheet.getDataRange().getValues();
+  const map = {};
+  values[0].forEach((header, index) => map[String(header)] = index);
+  const rowIndex = values.findIndex((row, index) => index > 0 &&
+    Object.keys(matchHeaders).every(header => String(row[map[header]]) === String(matchHeaders[header]))
+  );
+  if (rowIndex < 1) return false;
+  Object.keys(changes).forEach(header => {
+    if (map[header] !== undefined) sheet.getRange(rowIndex + 1, map[header] + 1).setValue(safeCell_(changes[header]));
+  });
+  invalidateTableCache_(sheetName);
+  return true;
 }
 
 function nextId_(prefix) {

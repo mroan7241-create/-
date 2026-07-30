@@ -404,6 +404,56 @@ throws('غير الإدارة لا يمكنه مراجعة الطلبات', () =
   S2.reviewAssociationApplication(assocSession.token, submitted2.id, 'accept', '');
 });
 
+/* -------- 15) إدارة الأنشطة والفرعية -------- */
+
+section('15) إدارة الأنشطة الرئيسية والفرعية');
+
+const toIsoDate = date => date.toISOString().slice(0, 10);
+const pastStart = toIsoDate(new Date(Date.now() - 30 * 86400000));
+const farFutureEnd = toIsoDate(new Date(Date.now() + 5 * 365 * 86400000));
+const addedActivity = S2.saveActivity(adminSession.token, {
+  stage: 'التجهيز', stageOrder: 1, mainActivity: 'التعاقد', mainOrder: 1,
+  subActivity: 'توقيع العقود', owner: 'إدارة المشروع',
+  startDate: pastStart, endDate: farFutureEnd,
+  progress: 40, status: '', evidenceUrl: '', notes: 'ملاحظة أولية'
+});
+assert('saveActivity ينجح لنشاط جديد', addedActivity.ok);
+const activitiesAfterAdd = S2.getActivitiesData_();
+const newRow = activitiesAfterAdd.find(x => x.subActivity === 'توقيع العقود');
+assert('النشاط الجديد يظهر بحالة محسوبة تلقائيًا («جارٍ» بلا حالة صريحة)', newRow && newRow.status === 'جارٍ');
+assert('نسبة الإنجاز محفوظة كما أُدخلت', newRow && newRow.progress === 40);
+
+const editedActivity = S2.saveActivity(adminSession.token, {
+  originalStage: 'التجهيز', originalMainActivity: 'التعاقد', originalSubActivity: 'توقيع العقود',
+  stage: 'التجهيز', stageOrder: 1, mainActivity: 'التعاقد', mainOrder: 1,
+  subActivity: 'توقيع العقود', owner: 'إدارة المشروع',
+  startDate: pastStart, endDate: farFutureEnd,
+  progress: 100, status: '', evidenceUrl: 'https://example.org/evidence.pdf', notes: 'اكتمل التوقيع'
+});
+assert('saveActivity ينجح لتعديل نشاط قائم', editedActivity.ok);
+const activitiesAfterEdit = S2.getActivitiesData_();
+const editedRow = activitiesAfterEdit.find(x => x.subActivity === 'توقيع العقود');
+assert('التعديل لا يكرّر الصف (لا يزال صفًا واحدًا فقط)',
+  activitiesAfterEdit.filter(x => x.subActivity === 'توقيع العقود').length === 1);
+assert('التعديل يحدّث نسبة الإنجاز والحالة المحسوبة («مكتمل» عند 100٪)',
+  editedRow.progress === 100 && editedRow.status === 'مكتمل');
+assert('التعديل يحفظ رابط الشاهد', editedRow.evidenceUrl === 'https://example.org/evidence.pdf');
+
+throws('تعديل نشاط أصلي غير موجود يفشل بوضوح', () => S2.saveActivity(adminSession.token, {
+  originalStage: 'مرحلة غير موجودة', originalMainActivity: 'نشاط غير موجود', originalSubActivity: 'فرعي غير موجود',
+  stage: 'مرحلة غير موجودة', stageOrder: 1, mainActivity: 'نشاط غير موجود', mainOrder: 1,
+  subActivity: 'فرعي غير موجود', progress: 0
+}), 'غير موجود');
+
+throws('حالة نشاط غير معروفة تُرفض', () => S2.saveActivity(adminSession.token, {
+  stage: 'التجهيز', mainActivity: 'التعاقد', subActivity: 'نشاط آخر', status: 'حالة وهمية'
+}), 'غير معروفة');
+
+throws('غير الإدارة لا يمكنه إدارة الأنشطة', () => {
+  const assocSession = S2.createSession_({id: 'USR-ASSOC-TEST-2', name: 'جمعية', role: 'ASSOCIATION', associationId: accepted.associationId});
+  S2.saveActivity(assocSession.token, {stage: 'التجهيز', mainActivity: 'التعاقد', subActivity: 'نشاط آخر'});
+});
+
 /* -------- النتيجة -------- */
 
 console.log('\n' + '='.repeat(56));

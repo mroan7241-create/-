@@ -480,7 +480,8 @@
       inflight: 0,
       proofData: '',
       pendingRows: [],
-      referenceData: null
+      referenceData: null,
+      activityTab: ''
     };
 
     function api(method) {
@@ -866,6 +867,7 @@
       state.page = page;
       state.search = '';
       state.filter = '';
+      state.activityTab = '';
       render();
       var sidebar = $('#sidebar');
       if (sidebar) sidebar.classList.remove('open');
@@ -1742,14 +1744,23 @@
        11) الأنشطة وسجل العمليات والإعدادات
        ============================================================ */
 
+    var ACTIVITY_STATUSES = ['لم يبدأ', 'جارٍ', 'متأخر', 'مكتمل'];
+    var ACTIVITY_TABS = [
+      {value: '', label: 'الكل'}, {value: 'جارٍ', label: 'جارية'},
+      {value: 'متأخر', label: 'متأخرة'}, {value: 'مكتمل', label: 'مكتملة'},
+      {value: 'لم يبدأ', label: 'قادمة'}
+    ];
+
     function renderActivities() {
+      var isAdmin = state.data.role === 'ADMIN';
       var stages = state.data.stages || [];
-      var activities = state.data.activities || [];
-      if (!activities.length) {
+      var all = state.data.activities || [];
+      if (!all.length) {
         return emptyState({glyph: ICONS.activities, title: 'لا توجد أنشطة مسجّلة',
-          body: 'تُقرأ الأنشطة من ورقة «إدارة الأنشطة» في الملف. أضف الصفوف هناك لتظهر هنا.'});
+          body: isAdmin ? 'أضف أول نشاط رئيسي أو فرعي لبدء متابعة مراحل المشروع.' : 'لم تُضَف أنشطة بعد.',
+          action: isAdmin ? 'new-activity' : '', actionLabel: '＋ نشاط'});
       }
-      var late = activities.filter(function (x) { return x.status === 'متأخر'; });
+      var late = all.filter(function (x) { return x.status === 'متأخر'; });
       var stagesHtml = stages.length ? stages.map(function (s) {
         return '<div style="padding:12px 0;border-bottom:1px solid var(--line)">'
           + '<div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:8px">'
@@ -1762,25 +1773,115 @@
           + '<small>' + esc(x.owner || 'بلا مسؤول') + ' · متأخر ' + fmt(x.delayDays) + ' يومًا</small></div>';
       }).join('') : emptyState({glyph: '✓', title: 'لا أنشطة متأخرة', body: 'الجدول الزمني منضبط حاليًا.'});
 
+      var activeTab = state.activityTab || '';
+      var tabsHtml = '<div class="segmented" role="tablist" aria-label="تصفية الأنشطة">'
+        + ACTIVITY_TABS.map(function (tab) {
+          return '<button type="button" role="tab" data-act="activity-tab" data-value="' + esc(tab.value) + '" '
+            + 'aria-selected="' + (activeTab === tab.value) + '">' + esc(tab.label) + '</button>';
+        }).join('') + '</div>';
+      var activities = activeTab ? all.filter(function (x) { return x.status === activeTab; }) : all;
+
+      var rows = activities.length ? activities.map(function (x) {
+        return '<tr><td>' + esc(x.stage) + '</td><td>' + esc(x.mainActivity) + '</td>'
+          + '<td>' + esc(x.subActivity) + '</td><td>' + esc(x.owner) + '</td>'
+          + '<td class="muted">' + esc(x.endDate || '—') + '</td><td>' + fmt(x.progress) + '٪</td>'
+          + '<td>' + statusChip(x.status) + '</td>'
+          + '<td>' + (x.evidenceUrl
+            ? '<a href="' + esc(x.evidenceUrl) + '" target="_blank" rel="noopener noreferrer">فتح ↗</a>'
+            : '<span class="muted">—</span>') + '</td>'
+          + (isAdmin ? '<td><button class="btn btn-link" data-act="edit-activity" '
+            + 'data-stage="' + esc(x.stage) + '" data-main="' + esc(x.mainActivity) + '" data-sub="' + esc(x.subActivity) + '">'
+            + 'تعديل</button></td>' : '') + '</tr>';
+      }).join('') : '<tr><td colspan="' + (isAdmin ? 9 : 8) + '"><div class="empty" style="padding:24px 0">'
+        + '<p>لا توجد أنشطة مطابقة لهذه التصفية.</p></div></td></tr>';
+
       return '<section class="cols">'
         + '<div class="panel"><div class="panel-head"><div><h3>مراحل المشروع</h3>'
         + '<p>المسار التنفيذي المجمّع</p></div></div>' + stagesHtml + '</div>'
         + '<div class="panel"><div class="panel-head"><div><h3>الأنشطة المتأخرة</h3>'
         + '<p>مرتّبة حسب الحاجة للتدخل</p></div></div>' + lateHtml + '</div></section>'
         + '<section class="panel"><div class="panel-head"><div><h3>جميع الأنشطة</h3>'
-        + '<p>تفاصيل التنفيذ والشواهد</p></div></div>'
+        + '<p>تفاصيل التنفيذ والشواهد</p></div>'
+        + (isAdmin ? '<button class="btn btn-primary btn-sm" data-act="new-activity">＋ نشاط</button>' : '') + '</div>'
+        + tabsHtml
         + '<div class="table-wrap"><table class="data"><thead><tr>'
         + '<th>المرحلة</th><th>النشاط الرئيسي</th><th>النشاط الفرعي</th><th>المسؤول</th>'
-        + '<th>النهاية</th><th>الإنجاز</th><th>الحالة</th><th>الشاهد</th></tr></thead><tbody>'
-        + activities.map(function (x) {
-          return '<tr><td>' + esc(x.stage) + '</td><td>' + esc(x.mainActivity) + '</td>'
-            + '<td>' + esc(x.subActivity) + '</td><td>' + esc(x.owner) + '</td>'
-            + '<td class="muted">' + esc(x.endDate || '—') + '</td><td>' + fmt(x.progress) + '٪</td>'
-            + '<td>' + statusChip(x.status) + '</td>'
-            + '<td>' + (x.evidenceUrl
-              ? '<a href="' + esc(x.evidenceUrl) + '" target="_blank" rel="noopener noreferrer">فتح ↗</a>'
-              : '<span class="muted">—</span>') + '</td></tr>';
-        }).join('') + '</tbody></table></div></section>';
+        + '<th>النهاية</th><th>الإنجاز</th><th>الحالة</th><th>الشاهد</th>'
+        + (isAdmin ? '<th></th>' : '') + '</tr></thead><tbody>'
+        + rows + '</tbody></table></div></section>';
+    }
+
+    function findActivity(stage, mainActivity, subActivity) {
+      var list = state.data.activities || [];
+      for (var i = 0; i < list.length; i++) {
+        var x = list[i];
+        if (x.stage === stage && x.mainActivity === mainActivity && x.subActivity === subActivity) return x;
+      }
+      return null;
+    }
+
+    function activityForm(stage, mainActivity, subActivity) {
+      var isEdit = Boolean(stage && mainActivity && subActivity);
+      var a = isEdit ? (findActivity(stage, mainActivity, subActivity) || {}) : {};
+      var body = '<form id="activityForm" class="form-grid" novalidate>'
+        + '<input type="hidden" name="originalStage" value="' + esc(stage || '') + '">'
+        + '<input type="hidden" name="originalMainActivity" value="' + esc(mainActivity || '') + '">'
+        + '<input type="hidden" name="originalSubActivity" value="' + esc(subActivity || '') + '">'
+        + textField('stage', 'اسم المرحلة', a.stage, {required: true, max: 150})
+        + '<div class="field"><label for="f_stageOrder">ترتيب المرحلة</label>'
+        + '<input class="control" id="f_stageOrder" name="stageOrder" type="number" min="0" max="999" value="'
+        + esc(a.stageOrder || 0) + '"></div>'
+        + textField('mainActivity', 'اسم النشاط الرئيسي', a.mainActivity, {required: true, max: 180, span: true})
+        + textField('subActivity', 'اسم النشاط الفرعي', a.subActivity, {required: true, max: 180, span: true})
+        + '<div class="field"><label for="f_mainOrder">ترتيب النشاط الرئيسي</label>'
+        + '<input class="control" id="f_mainOrder" name="mainOrder" type="number" min="0" max="999" value="'
+        + esc(a.mainOrder || 0) + '"></div>'
+        + textField('owner', 'المسؤول', a.owner, {max: 120})
+        + '<div class="field"><label for="f_startDate">تاريخ البداية</label>'
+        + '<input class="control" id="f_startDate" name="startDate" type="date" value="' + esc(toDateInput(a.startDate)) + '"></div>'
+        + '<div class="field"><label for="f_endDate">تاريخ النهاية</label>'
+        + '<input class="control" id="f_endDate" name="endDate" type="date" value="' + esc(toDateInput(a.endDate)) + '"></div>'
+        + '<div class="field"><label for="f_progress">نسبة الإنجاز (٪)</label>'
+        + '<input class="control" id="f_progress" name="progress" type="number" min="0" max="100" value="'
+        + esc(a.progress || 0) + '"></div>'
+        + '<div class="field"><label for="f_status">الحالة (اختياري — تُحسب تلقائيًا إن تُركت فارغة)</label>'
+        + '<select class="control" id="f_status" name="status">'
+        + optionList(ACTIVITY_STATUSES, a.status, '— حساب تلقائي —') + '</select></div>'
+        + '<div class="field span-2"><label for="f_evidenceUrl">رابط الشاهد</label>'
+        + '<input class="control" id="f_evidenceUrl" name="evidenceUrl" type="url" dir="ltr" value="' + esc(a.evidenceUrl || '') + '"></div>'
+        + '<div class="field span-2"><label for="f_notes">ملاحظات</label>'
+        + '<textarea class="control" id="f_notes" name="notes" maxlength="1000">' + esc(a.notes || '') + '</textarea></div></form>';
+      openModal(isEdit ? 'تعديل نشاط' : 'إضافة نشاط', body,
+        '<button class="btn btn-ghost" data-act="close-modal">إلغاء</button>'
+        + '<button class="btn btn-primary" data-act="save-activity">' + (isEdit ? 'حفظ التعديلات' : 'إضافة النشاط') + '</button>');
+    }
+
+    /** يحوّل تاريخًا معروضًا مثل "2026/08/01" إلى صيغة input[type=date] "2026-08-01". */
+    function toDateInput(displayDate) {
+      return String(displayDate || '').replace(/\//g, '-');
+    }
+
+    function saveActivity() {
+      var form = $('#activityForm');
+      if (!form || !form.reportValidity()) return;
+      var data = new FormData(form);
+      busy(true);
+      api('saveActivity', state.token, {
+        originalStage: data.get('originalStage') || '',
+        originalMainActivity: data.get('originalMainActivity') || '',
+        originalSubActivity: data.get('originalSubActivity') || '',
+        stage: data.get('stage'), stageOrder: data.get('stageOrder'),
+        mainActivity: data.get('mainActivity'), mainOrder: data.get('mainOrder'),
+        subActivity: data.get('subActivity'), owner: data.get('owner'),
+        startDate: data.get('startDate'), endDate: data.get('endDate'),
+        progress: data.get('progress'), status: data.get('status'),
+        evidenceUrl: data.get('evidenceUrl'), notes: data.get('notes')
+      }).then(function (result) {
+        state.data = result.data;
+        closeModal();
+        render();
+        toast('تم حفظ النشاط.', 'success');
+      }, reportError).then(function () { busy(false); });
     }
 
     function renderAudit() {
@@ -2167,6 +2268,12 @@
       'accept-application': function (el) { decideApplication(el.getAttribute('data-id'), 'accept'); },
       'reject-application': function (el) { rejectApplicationModal(el.getAttribute('data-id')); },
       'save-reject-application': function (el) { decideApplication(el.getAttribute('data-id'), 'reject'); },
+      'new-activity': function () { activityForm('', '', ''); },
+      'edit-activity': function (el) {
+        activityForm(el.getAttribute('data-stage'), el.getAttribute('data-main'), el.getAttribute('data-sub'));
+      },
+      'save-activity': saveActivity,
+      'activity-tab': function (el) { state.activityTab = el.getAttribute('data-value') || ''; render(); },
       'logout': function () { doLogout(true); },
       'refresh': refreshData,
       'toggle-menu': toggleMenu,

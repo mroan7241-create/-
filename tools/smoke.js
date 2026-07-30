@@ -248,6 +248,28 @@ const applicationBody = registry.modalRoot.innerHTML;
 assert('نافذة تفاصيل الطلب تعرض بيانات مقدّم الطلب', applicationBody.includes('سالم العتيبي') && applicationBody.includes('amal@example.org'));
 app.closeModal();
 
+app.state.page = 'activities';
+app.state.activityTab = '';
+app.render();
+assert('زر إضافة نشاط يظهر للإدارة', out().includes('new-activity'));
+assert('تبويبات تصفية الأنشطة تظهر', out().includes('activity-tab') && out().includes('متأخرة'));
+assert('زر تعديل نشاط يظهر لكل صف', out().includes('edit-activity'));
+app.state.activityTab = 'متأخر';
+app.render();
+assert('تصفية "متأخرة" تُبقي فقط الأنشطة المتأخرة', out().includes('توقيع العقود') && !out().includes('لا توجد أنشطة مطابقة'));
+app.state.activityTab = 'مكتمل';
+app.render();
+assert('تصفية "مكتملة" تُخفي نشاطًا متأخرًا وتعرض حالة فارغة مناسبة', out().includes('لا توجد أنشطة مطابقة'));
+app.state.activityTab = '';
+app.render();
+app.activityForm('', '', '');
+assert('نموذج إضافة نشاط جديد يظهر بحقوله الأساسية', registry.modalRoot.innerHTML.includes('name="stage"')
+  && registry.modalRoot.innerHTML.includes('name="mainActivity"') && registry.modalRoot.innerHTML.includes('name="subActivity"'));
+app.closeModal();
+app.activityForm('التجهيز', 'التعاقد', 'توقيع العقود');
+assert('نموذج تعديل نشاط قائم يُعبَّأ ببياناته الحالية', registry.modalRoot.innerHTML.includes('value="التجهيز"'));
+app.closeModal();
+
 /* ---------------- 3) لوحة الجمعية ---------------- */
 
 section('3) دور الجمعية (ASSOCIATION)');
