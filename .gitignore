@@ -1,3 +1,6 @@
 # ملفات مولّدة من أدوات المراجعة — لا تُنشر ولا تُتابع
 tools/.preview/
 node_modules/
+
+# مجلد التحضير المؤقت لحزمة التركيب (يُعاد توليده عبر tools/build-release-package.js)
+dist/alzad-rc-split-17-files/
