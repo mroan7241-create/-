@@ -154,14 +154,43 @@ FIXTURES.delegate = {
 
 const html = fs.readFileSync(path.join(ROOT, 'Index.html'), 'utf8');
 
-const shim = '<script>window.google={script:{run:(function(){'
+// عناصر القوائم (listBeneficiaries/listDevices/...) مطلوبة فقط لالتقاط
+// لقطات شاشة لصفحات مُحمَّلة كسولًا (lazy) أثناء المراجعة البصرية —
+// محاكاة تقريبية للترقيم على مصفوفة وهمية محليًا فقط، ليست الخادم الحقيقي.
+const listShimHelpers = `
+function fakePage(items, options){
+  options = options || {};
+  var page = options.page || 1, pageSize = options.pageSize || 25;
+  var start = (page - 1) * pageSize;
+  return {ok:true, items: items.slice(start, start + pageSize), total: items.length, page: page, pageSize: pageSize};
+}
+function findFixtureDevice(id){
+  return (window.__FIXTURE.devices || []).find(function(d){ return d.id === id; });
+}
+`;
+
+const shim = '<script>' + listShimHelpers + 'window.google={script:{run:(function(){'
   + 'var ok=null,fail=null;'
   + 'var handler={withSuccessHandler:function(f){ok=f;return handler},'
   + 'withFailureHandler:function(f){fail=f;return handler},'
   + 'getBootstrapData:function(){setTimeout(function(){ok(window.__FIXTURE)},60)},'
   + 'login:function(){setTimeout(function(){ok({token:"preview-token-0000000000000000000000000000000000",'
   + 'user:window.__FIXTURE.user,bootstrap:window.__FIXTURE})},60)},'
-  + 'logout:function(){setTimeout(function(){ok({ok:true})},10)}};'
+  + 'logout:function(){setTimeout(function(){ok({ok:true})},10)},'
+  + 'listBeneficiaries:function(token,options){setTimeout(function(){ok(fakePage(window.__FIXTURE.beneficiaries||[],options))},60)},'
+  + 'listDevices:function(token,options){setTimeout(function(){ok(fakePage(window.__FIXTURE.devices||[],options))},60)},'
+  + 'listDelegates:function(token,options){setTimeout(function(){ok(fakePage(window.__FIXTURE.delegates||[],options))},60)},'
+  + 'listAssociations:function(token,options){setTimeout(function(){ok(fakePage(window.__FIXTURE.associations||[],options))},60)},'
+  + 'listAuditLog:function(token,options){setTimeout(function(){ok(fakePage(window.__FIXTURE.audit||[],options))},60)},'
+  + 'listApplications:function(token,options){setTimeout(function(){ok(fakePage(window.__FIXTURE.applications||[],options))},60)},'
+  + 'listDelegateAuditLog:function(token,id,options){setTimeout(function(){ok(Object.assign(fakePage((window.__FIXTURE.audit||[]).filter(function(r){return r.recordId===id}),options),{delegateName:""}))},60)},'
+  + 'getDeviceDetail:function(token,id){setTimeout(function(){'
+  + 'var d=findFixtureDevice(id);'
+  + 'if(!d){fail(new Error("الجهاز غير موجود"));return}'
+  + 'var ben=(window.__FIXTURE.beneficiaries||[]).find(function(b){return b.id===d.beneficiaryId});'
+  + 'ok({ok:true,device:d,associationName:"جمعية البر بالرياض",beneficiaryName:ben?ben.name:"",delegateId:"",delegateName:ben&&ben.delegateId?"سعد ماجد القحطاني":"",assignedAt:d.createdAt,dispatchedAt:"",log:[]})'
+  + '},60)}'
+  + '};'
   + 'return handler}())}};</script>';
 
 const seeder = '<script>(function(){'

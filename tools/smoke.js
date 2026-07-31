@@ -761,6 +761,44 @@ assert('تصنيف الجمعية يصبح قائمة معتمدة بعد الت
 app.state.referenceData = null;
 assert('تصنيف الجمعية نص حرّ قبل الترحيل', app.associationCategoryField('').includes('<input'));
 
+/* ---------------- 11) الهوية البصرية والجوال والوصول (المرحلة السابعة) ---------------- */
+
+section('11) الهوية البصرية والجوال والوصول');
+
+// خلل مؤكَّد اكتُشف واختُبر فعليًا عبر متصفح Chromium حقيقي (Playwright،
+// محليًا في بيئة التطوير فقط — ليس جزءًا من أدوات المشروع المثبَّتة ولا
+// من هذه المجموعة): كانت قاعدة RTL تُزيح الشريط الجانبي نحو اليمين
+// لإخفائه، فيبقى نحو 89px منه ظاهرًا فوق المحتوى بدل الاختفاء الكامل.
+// هذا الفحص يمنع عودة تلك القاعدة الخاطئة تحديدًا.
+assert('لا تعود قاعدة RTL الخاطئة التي كانت تُبقي جزءًا من الشريط الجانبي ظاهرًا على الجوال',
+  !/html\[dir=rtl\]\s*\.sidebar\{transform:translateX\(110%\)/.test(html));
+assert('الشريط الجانبي يُخفى دائمًا بإزاحة سالبة واحدة (بصرف النظر عن الاتجاه) بعد الإصلاح',
+  /\.sidebar\{transform:translateX\(-110%\)/.test(html));
+
+assert('safe-area-inset مطبَّق على تذييل النافذة المنبثقة على الجوال', /modal-foot\{[^}]*env\(safe-area-inset-bottom\)/.test(html));
+assert('safe-area-inset مطبَّق على حاوية التنبيهات (toasts) على الجوال', /\.toasts\{[^}]*env\(safe-area-inset-bottom\)/.test(html));
+
+assert('حصر التركيز (focus trap) داخل النوافذ المنبثقة موجود ومفعَّل عبر Tab', /function trapModalFocus/.test(appCode) && /trapModalFocus\(event\)/.test(appCode));
+assert('تتبّع تغييرات النافذة (modalDirty) مفعَّل على أحداث input/change داخل .modal فقط', /modalDirty\s*=\s*true/.test(appCode) && /closest\(['"]\.modal['"]\)/.test(appCode));
+assert('التحذير قبل إغلاق نافذة فيها تغييرات غير محفوظة (dismissModalIfConfirmed) موجود ومربوط بـ Escape ونقر الخلفية فقط',
+  /function dismissModalIfConfirmed/.test(appCode)
+  && /Escape.*dismissModalIfConfirmed|dismissModalIfConfirmed.*Escape/s.test(appCode.replace(/\s+/g, ' '))
+  && /backdrop.*dismissModalIfConfirmed/.test(appCode.replace(/\s+/g, ' ')));
+assert('أزرار الإغلاق الصريحة (close-modal) تبقى فورية دون تحذير كما كانت — لا تغيير في سلوكها', /'close-modal':\s*closeModal/.test(appCode));
+
+assert('كل الروابط الخارجية (target=_blank) تحمل rel="noopener noreferrer"', (() => {
+  const links = [...html.matchAll(/<a\s[^>]*target="_blank"[^>]*>/g)];
+  return links.length > 0 && links.every(m => /rel="noopener noreferrer"/.test(m[0]));
+})());
+
+assert('حاوية التنبيهات الرئيسية تحمل aria-live', /id="toasts"[^>]*aria-live="polite"/.test(html));
+assert('دالة toast تضبط aria-live/role ديناميكيًا حسب نوع الرسالة (نجاح/تحذير/خطأ)', /setAttribute\(['"]aria-live['"]/.test(appCode) && /setAttribute\(['"]role['"]/.test(appCode));
+
+assert('prefers-reduced-motion محترم عبر تعطيل مدة الحركات والانتقالات', /prefers-reduced-motion:reduce\)\{\*\{animation-duration:\.01ms/.test(html));
+
+assert('النوافذ المنبثقة تحمل role="dialog" وaria-modal="true"', /role="dialog" aria-modal="true"/.test(appCode));
+assert('حقول الدخول تحمل autocomplete مناسب (username/current-password/one-time-code)', /autocomplete="username"/.test(appCode) && /autocomplete="current-password"/.test(appCode) && /autocomplete="one-time-code"/.test(appCode));
+
 /* ---------------- النتيجة ---------------- */
 
 console.log('\n' + '='.repeat(56));
