@@ -743,12 +743,68 @@
       api('login', payload).then(function (result) {
         state.token = result.token;
         state.user = result.user;
-        state.data = result.bootstrap;
         safeSession('set', 'zad_token', result.token);
+        // حساب مُلزَم بتغيير كلمة مرور مؤقتة: لا بيانات بوابة بعد — يجب
+        // تغييرها أولًا. الخادم نفسه يرفض أي دالة أخرى لهذه الجلسة.
+        if (result.mustChangePassword) {
+          state.data = null;
+          renderForcePasswordChange();
+          busy(false);
+          return;
+        }
+        state.data = result.bootstrap;
         state.page = 'dashboard';
         render();
         toast('مرحبًا بك، ' + (result.user && result.user.name ? result.user.name : ''), 'success');
         loadReferenceDataOnce();
+        busy(false);
+      }, function (error) { reportError(error); busy(false); });
+    }
+
+    /** شاشة إلزامية كاملة الصفحة: لا وصول لأي بيانات بوابة قبل تغيير كلمة المرور المؤقتة. */
+    function renderForcePasswordChange() {
+      $('#root').innerHTML = '<main class="login">'
+        + '<section class="login-panel">' + lockup({partner: true})
+        + '<div class="login-divider" aria-hidden="true"></div>'
+        + '<h2 style="margin:0 0 6px;color:var(--zad-800)">يجب تغيير كلمة المرور المؤقتة</h2>'
+        + '<p class="hint" style="margin:0 0 20px">هذا حساب جمعية بكلمة مرور مؤقتة (أُنشئت حديثًا أو أُعيد تعيينها). '
+        + 'لا يمكن المتابعة إلى النظام قبل اختيار كلمة مرور جديدة خاصة بك.</p>'
+        + '<form id="forcePasswordForm" data-act="submit-force-password" novalidate>'
+        + '<div class="field"><label for="fp_current">كلمة المرور المؤقتة الحالية</label>'
+        + '<input class="control" id="fp_current" name="current" type="password" dir="ltr" autocomplete="current-password" required></div>'
+        + '<div class="field"><label for="fp_next">كلمة المرور الجديدة</label>'
+        + '<input class="control" id="fp_next" name="next" type="password" dir="ltr" minlength="10" autocomplete="new-password" required></div>'
+        + '<div class="field"><label for="fp_confirm">تأكيد كلمة المرور الجديدة</label>'
+        + '<input class="control" id="fp_confirm" name="confirm" type="password" dir="ltr" minlength="10" autocomplete="new-password" required></div>'
+        + '<span class="hint">١٠ خانات على الأقل، وتضم حروفًا وأرقامًا، ومختلفة عن كلمة المرور الحالية والسابقة.</span>'
+        + '<button class="btn btn-primary btn-block" type="submit" style="margin-top:16px">تغيير كلمة المرور والمتابعة</button>'
+        + '</form>'
+        + '<button type="button" class="btn btn-ghost btn-block" data-act="logout" style="margin-top:10px">تسجيل الخروج بدل ذلك</button>'
+        + '</section>'
+        + '<aside class="login-art"><div class="art-card">'
+        + '<div class="art-seal" aria-hidden="true">' + ZAD_SEAL_SVG + '</div>'
+        + '<h2>خطوة أمان أخيرة</h2>'
+        + '<p>كلمة مرور مؤقتة لا تُستخدم إلا مرة واحدة — اختر كلمة خاصة بك الآن لتأمين حساب جمعيتك.</p>'
+        + '</div></aside></main>';
+      var first = $('#forcePasswordForm .control');
+      if (first) first.focus();
+    }
+
+    function submitForcePasswordChange(form) {
+      if (!form.reportValidity()) return;
+      var data = new FormData(form);
+      if (data.get('next') !== data.get('confirm')) {
+        toast('تأكيد كلمة المرور غير مطابق.', 'error');
+        return;
+      }
+      busy(true);
+      api('changePassword', state.token, data.get('current'), data.get('next')).then(function () {
+        safeSession('remove', 'zad_token');
+        state.token = '';
+        state.user = null;
+        state.data = null;
+        renderLogin();
+        toast('تم تغيير كلمة المرور بنجاح. سجّل الدخول بكلمة المرور الجديدة.', 'success');
       }, reportError).then(function () { busy(false); });
     }
 
@@ -1540,6 +1596,7 @@
     function viewAssociation(id) {
       var a = findAssociation(id);
       if (!a) { toast('تعذر العثور على الجمعية.', 'error'); return; }
+      var isAdmin = state.data.role === 'ADMIN';
       var body = '<div class="card-head"><div><h3>' + esc(a.name) + '</h3>'
         + '<p class="mono">' + esc(a.id) + '</p></div>' + statusChip(a.status) + '</div>'
         + '<div class="metas">'
@@ -1553,7 +1610,31 @@
         + fmt(a.receivedDevices) + '</strong></div>'
         + '<div class="meta"><small>المسلّمة</small><strong>' + fmt(a.deliveredDevices) + '</strong></div></div>'
         + '<h4 style="margin:18px 0 8px;color:var(--zad-800)">نسبة إنجاز التسليم</h4>' + bar(a.progress);
-      openModal('صفحة الجمعية', body, '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>');
+      openModal('صفحة الجمعية', body,
+        (isAdmin ? '<button class="btn btn-danger" data-act="reset-association-password" data-id="'
+          + esc(a.id) + '" data-name="' + esc(a.name) + '">إعادة تعيين كلمة المرور</button>' : '')
+        + '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>');
+    }
+
+    function resetAssociationPasswordModal(id, name) {
+      openModal('إعادة تعيين كلمة مرور: ' + name,
+        '<p>سيتم إنشاء كلمة مرور مؤقتة جديدة لحساب دخول هذه الجمعية، وستُقطع فورًا كل جلساتها المفتوحة حاليًا،'
+        + ' وستُجبر الجمعية على تغيير الكلمة المؤقتة عند أول دخول تالٍ.</p>'
+        + '<p class="hint">استخدم هذا الإجراء فقط عند ضياع كلمة المرور أو الاشتباه في اختراق الحساب — لا رجوع عن قطع الجلسات الحالية.</p>',
+        '<button class="btn btn-ghost" data-act="close-modal">إلغاء</button>'
+        + '<button class="btn btn-danger" data-act="confirm-reset-association-password" data-id="'
+        + esc(id) + '" data-name="' + esc(name) + '">تأكيد إعادة التعيين</button>');
+    }
+
+    function confirmResetAssociationPassword(id, name) {
+      busy(true);
+      api('resetAssociationPassword', state.token, id).then(function (result) {
+        closeModal();
+        showSecretReveal('تم إنشاء كلمة مرور مؤقتة: ' + name, 'كلمة المرور المؤقتة', result.temporaryPassword,
+          'سلّمها لمسؤول الجمعية عبر قناة آمنة الآن — لن تُعرض مرة أخرى. إن ضاعت، أعد تعيين كلمة مرور جديدة بدل محاولة استرجاع هذه.'
+          + ' الجمعية ستُطالَب بتغييرها فور تسجيل الدخول بها.');
+        toast('تم إعادة تعيين كلمة مرور الجمعية.', 'success');
+      }, reportError).then(function () { busy(false); });
     }
 
     function associationForm(id) {
@@ -1721,14 +1802,15 @@
           action: canManage ? 'new-delegate' : '', actionLabel: '＋ إضافة مندوب'});
       }
       var body = items.length ? '<div class="cards">' + items.map(function (d) {
-        var actions = canManage
-          ? '<div class="card-actions">'
-            + '<button class="btn btn-ghost btn-sm" data-act="regen-code" data-id="' + esc(d.id) + '">رمز جديد</button>'
-            + '<button class="btn ' + (d.status === 'نشط' ? 'btn-danger' : 'btn-soft') + ' btn-sm" '
-            + 'data-act="toggle-delegate" data-id="' + esc(d.id) + '" data-value="'
-            + (d.status === 'نشط' ? 'غير نشط' : 'نشط') + '">'
-            + (d.status === 'نشط' ? 'تعطيل' : 'تفعيل') + '</button></div>'
-          : '';
+        var actions = '<div class="card-actions">'
+          + '<button class="btn btn-ghost btn-sm" data-act="view-delegate" data-id="' + esc(d.id) + '">التفاصيل</button>'
+          + (canManage
+            ? '<button class="btn btn-ghost btn-sm" data-act="regen-code" data-id="' + esc(d.id) + '">رمز جديد</button>'
+              + '<button class="btn ' + (d.status === 'نشط' ? 'btn-danger' : 'btn-soft') + ' btn-sm" '
+              + 'data-act="toggle-delegate" data-id="' + esc(d.id) + '" data-value="'
+              + (d.status === 'نشط' ? 'غير نشط' : 'نشط') + '">'
+              + (d.status === 'نشط' ? 'تعطيل' : 'تفعيل') + '</button>'
+            : '') + '</div>';
         return '<article class="card"><div class="card-head"><div><h3>' + esc(d.name) + '</h3>'
           + '<p class="mono">' + esc(d.id) + '</p></div>' + statusChip(d.status) + '</div>'
           + '<div class="metas">'
@@ -1744,6 +1826,38 @@
         count: fmt(items.length) + ' من ' + fmt(all.length)}) + body;
     }
 
+    function findDelegate(id) {
+      var list = state.data.delegates || [];
+      for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+      return null;
+    }
+
+    /** صفحة تفاصيل المندوب: بياناته الكاملة والمستفيدون المكلَّف بهم حاليًا. */
+    function viewDelegate(id) {
+      var d = findDelegate(id);
+      if (!d) { toast('تعذر العثور على المندوب.', 'error'); return; }
+      var assigned = (state.data.beneficiaries || []).filter(function (b) {
+        return b.delegateId === id && b.deliveryStatus !== 'تم التسليم';
+      });
+      var table = assigned.length
+        ? '<div class="table-wrap"><table class="data"><thead><tr><th>المستفيد</th><th>الرقم</th>'
+          + '<th>حالة التسليم</th></tr></thead><tbody>' + assigned.map(function (b) {
+            return '<tr><td>' + esc(b.name) + '</td><td class="mono">' + esc(b.id) + '</td>'
+              + '<td>' + statusChip(b.deliveryStatus) + '</td></tr>';
+          }).join('') + '</tbody></table></div>'
+        : '<p class="muted">لا يوجد مستفيدون مكلَّف بهم هذا المندوب حاليًا.</p>';
+      var body = '<div class="card-head"><div><h3>' + esc(d.name) + '</h3>'
+        + '<p class="mono">' + esc(d.id) + '</p></div>' + statusChip(d.status) + '</div>'
+        + '<div class="metas">'
+        + '<div class="meta"><small>رقم الجوال</small><strong dir="ltr" class="mono">' + esc(d.phone) + '</strong></div>'
+        + '<div class="meta"><small>الجمعية</small><strong>' + esc(associationName(d.associationId)) + '</strong></div>'
+        + '<div class="meta"><small>آخر دخول</small><strong>' + esc(d.lastLogin || 'لم يدخل') + '</strong></div>'
+        + '<div class="meta"><small>مهام حالية</small><strong>' + fmt(d.assigned) + '</strong></div>'
+        + '<div class="meta"><small>مستفيدون تم خدمتهم</small><strong>' + fmt(d.served) + '</strong></div></div>'
+        + '<h4 style="margin:18px 0 8px;color:var(--zad-800)">المستفيدون المكلَّف بهم حاليًا</h4>' + table;
+      openModal('صفحة المندوب', body, '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>');
+    }
+
     function delegateForm() {
       var body = '<form id="delegateForm" class="form-grid" novalidate>'
         + textField('name', 'اسم المندوب', '', {required: true, max: 120, span: true})
@@ -1756,10 +1870,17 @@
     }
 
     function showAccessCode(title, code, note) {
+      showSecretReveal(title, 'رمز دخول المندوب', code, note);
+    }
+
+    /** كتلة عرض سرّ لمرة واحدة (رمز مندوب أو كلمة مرور مؤقتة) بزر نسخ. */
+    function showSecretReveal(title, label, value, note) {
       openModal(title,
-        '<div class="code-reveal"><p class="muted">رمز دخول المندوب</p>'
-        + '<div class="code">' + esc(code) + '</div>'
-        + '<p class="muted">' + esc(note) + '</p></div>',
+        '<div class="code-reveal"><p class="muted">' + esc(label) + '</p>'
+        + '<div class="code">' + esc(value) + '</div>'
+        + '<button type="button" class="btn btn-soft btn-sm" data-act="copy-secret" data-value="'
+        + esc(value) + '">⧉ نسخ</button>'
+        + '<p class="hint" style="margin-top:12px">' + esc(note) + '</p></div>',
         '<button class="btn btn-primary" data-act="close-and-refresh">تم، أغلق</button>');
     }
 
@@ -2351,7 +2472,14 @@
         state.user = data.user || {role: data.role, name: 'المستخدم'};
         render();
         loadReferenceDataOnce();
-      }, function () {
+      }, function (error) {
+        // الجلسة صالحة لكن الخادم يرفضها لأنها مُلزَمة بتغيير كلمة مرور
+        // مؤقتة أولًا — لا تُسقِط التوكن، اعرض شاشة التغيير الإلزامي.
+        var message = (error && error.message) || '';
+        if (message.indexOf('يجب تغيير كلمة المرور') >= 0) {
+          renderForcePasswordChange();
+          return;
+        }
         safeSession('remove', 'zad_token');
         state.token = '';
         renderLogin();
@@ -2458,11 +2586,23 @@
       'edit-association': function (el) { associationForm(el.getAttribute('data-id')); },
       'view-association': function (el) { viewAssociation(el.getAttribute('data-id')); },
       'save-association': saveAssociation,
+      'reset-association-password': function (el) {
+        resetAssociationPasswordModal(el.getAttribute('data-id'), el.getAttribute('data-name'));
+      },
+      'confirm-reset-association-password': function (el) {
+        confirmResetAssociationPassword(el.getAttribute('data-id'), el.getAttribute('data-name'));
+      },
+      'copy-secret': function (el) {
+        copyToClipboard(el.getAttribute('data-value')).then(function (ok) {
+          toast(ok ? 'تم نسخ القيمة إلى الحافظة.' : 'تعذّر النسخ التلقائي — انسخها يدويًا.', ok ? 'success' : 'error');
+        });
+      },
       'new-device': function () { deviceForm(''); },
       'edit-device': function (el) { deviceForm(el.getAttribute('data-id')); },
       'save-device': saveDevice,
       'new-delegate': delegateForm,
       'save-delegate': saveDelegate,
+      'view-delegate': function (el) { viewDelegate(el.getAttribute('data-id')); },
       'regen-code': function (el) { regenerateCode(el.getAttribute('data-id')); },
       'toggle-delegate': function (el) { toggleDelegate(el.getAttribute('data-id'), el.getAttribute('data-value')); },
       'save-settings': saveAssociationSettings,
@@ -2570,6 +2710,7 @@
       var action = form.getAttribute && form.getAttribute('data-act');
       if (action === 'submit-login') { event.preventDefault(); submitLogin(form); return; }
       if (action === 'submit-application') { event.preventDefault(); submitApplication(form); return; }
+      if (action === 'submit-force-password') { event.preventDefault(); submitForcePasswordChange(form); return; }
     });
 
     document.addEventListener('keydown', function (event) {

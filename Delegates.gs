@@ -33,17 +33,33 @@ function saveDelegate(token, payload) {
   return {ok: true, id: id, accessCode: accessCode, data: getBootstrapData(token, true)};
 }
 
+/**
+ * تُبطل الرمز السابق فورًا (الاستبدال الكامل للتجزئة والملح يجعل أي
+ * تحقق بالرمز القديم يفشل من اللحظة نفسها) وتُبطل أي جلسة مندوب قائمة
+ * بالرمز القديم. قفل + تحديد معدل يمنعان أن يبقى أكثر من رمز صالح واحد
+ * حتى مع طلبات متكررة أو متزامنة على نفس المندوب.
+ */
 function regenerateDelegateCode(token, delegateId) {
   const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
-  const delegate = findById_(APP.sheets.delegates, 'رقم المندوب', cleanId_(delegateId));
+  delegateId = cleanId_(delegateId);
+  const delegate = findById_(APP.sheets.delegates, 'رقم المندوب', delegateId);
   if (!delegate) throw new Error('المندوب غير موجود');
   if (user.role === 'ASSOCIATION' && String(delegate['رقم الجمعية']) !== user.associationId) throw new Error('ليس لديك صلاحية');
-  const code = createAccessCode_('MND', 6);
-  const salt = Utilities.getUuid();
-  updateById_(APP.sheets.delegates, 'رقم المندوب', delegateId, {
-    'رمز الدخول المشفر': hashSecret_(code, salt), 'الملح': salt
-  });
-  revokeSessions_(cleanId_(delegateId));
+  throttle_('regen-delegate-code:' + delegateId, 8, 900);
+
+  let code;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    code = createAccessCode_('MND', 6);
+    const salt = Utilities.getUuid();
+    updateById_(APP.sheets.delegates, 'رقم المندوب', delegateId, {
+      'رمز الدخول المشفر': hashSecret_(code, salt), 'الملح': salt
+    });
+    revokeSessions_(delegateId);
+  } finally {
+    lock.releaseLock();
+  }
   audit_(user, 'إعادة إنشاء رمز الدخول', 'المناديب', delegateId, '');
   return {ok: true, accessCode: code};
 }

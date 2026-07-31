@@ -107,6 +107,70 @@ function assertStrongPassword_(password) {
   return password;
 }
 
+/**
+ * يولّد كلمة مرور مؤقتة عشوائية تجتاز assertStrongPassword_ دائمًا
+ * (طول كافٍ + حرف ورقم معًا) — يُعاد المحاولة نظريًا فقط في الاحتمال
+ * الضئيل جدًا ألا تحقق العينة الأولى الشرط؛ احتياط أخير غير عشوائي
+ * بالكامل لن يُستخدم عمليًا لضمان عدم فشل الدالة أبدًا.
+ */
+function generateStrongTempPassword_() {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const candidate = createAccessCode_('T', 12).replace(/^T-/, '');
+    if (candidate.length >= 10 && /[A-Za-z]/.test(candidate) && /\d/.test(candidate)) return candidate;
+  }
+  return 'Az9' + createAccessCode_('T', 9).replace(/^T-/, '');
+}
+
+function findAssociationUser_(associationId) {
+  return readTable_(APP.sheets.users).rows.find(row =>
+    String(row['رقم الجمعية']) === String(associationId) && String(row['الدور']) === 'ASSOCIATION'
+  ) || null;
+}
+
+/**
+ * إعادة تعيين كلمة مرور حساب جمعية — للإدارة فقط. تُنشئ كلمة مرور
+ * مؤقتة قوية جديدة، تُبطل كل جلسات الجمعية القائمة فورًا، وتُجبر
+ * الجمعية على تغييرها عند أول دخول تالٍ. لا تكشف هذه الدالة أي تجزئة
+ * أو ملح أو كلمة مرور قديمة — فقط كلمة المرور المؤقتة الجديدة، مرة
+ * واحدة، في استجابة هذا الاستدعاء فقط (لا تُسجَّل ولا تُخزَّن نصًا صريحًا
+ * في أي مكان آخر).
+ */
+function resetAssociationPassword(token, associationId) {
+  const user = requireSession_(token, ['ADMIN']);
+  associationId = cleanId_(associationId);
+  if (!associationId) throw new Error('رقم الجمعية غير صحيح');
+  const association = findById_(APP.sheets.associations, 'رقم الجمعية', associationId);
+  if (!association) throw new Error('الجمعية غير موجودة');
+  // تحديد معدل: يمنع سلسلة إعادة تعيينات متتالية غير مقصودة (نقر مزدوج،
+  // تكرار طلب) من إبقاء أكثر من كلمة مرور صالحة فعليًا في وقت قصير.
+  throttle_('reset-assoc-pwd:' + associationId, 5, 900);
+
+  let newPassword;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const record = findAssociationUser_(associationId);
+    if (!record) throw new Error('تعذر العثور على حساب دخول لهذه الجمعية');
+    newPassword = generateStrongTempPassword_();
+    const salt = Utilities.getUuid();
+    updateById_(APP.sheets.users, 'رقم المستخدم', record['رقم المستخدم'], {
+      'كلمة مرور سابقة مشفرة': record['كلمة المرور المشفرة'],
+      'ملح سابق': record['الملح'],
+      'كلمة المرور المشفرة': hashSecret_(newPassword, salt),
+      'الملح': salt,
+      'يجب تغيير كلمة المرور': 'نعم'
+    });
+    // يُبطل جلسة حساب الجمعية نفسه فقط — لا يمسّ جلسات مناديبها، فكلمة
+    // مرور الجمعية لا علاقة لها برموز دخول المناديب المستقلة عنها.
+    revokeSessions_(record['رقم المستخدم']);
+  } finally {
+    lock.releaseLock();
+  }
+
+  audit_(user, 'إعادة تعيين كلمة مرور جمعية', 'الجمعيات', associationId, 'الحساب: ' + association['اسم الجمعية']);
+  return {ok: true, temporaryPassword: newPassword};
+}
+
 function findUserByEmail_(email) {
   const target = String(email || '').trim().toLowerCase();
   return readTable_(APP.sheets.users).rows.find(row =>

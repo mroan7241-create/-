@@ -34,14 +34,21 @@ function loginUser_(email, password) {
     throw new Error('بيانات الدخول غير صحيحة');
   }
   assertActorEnabled_(String(user['الدور']), String(user['رقم الجمعية'] || ''));
+  const mustChangePassword = String(user['يجب تغيير كلمة المرور'] || '') === 'نعم';
   const session = createSession_({
     id: String(user['رقم المستخدم']),
     name: String(user['الاسم']),
     role: String(user['الدور']),
-    associationId: String(user['رقم الجمعية'] || '')
+    associationId: String(user['رقم الجمعية'] || ''),
+    mustChangePassword: mustChangePassword
   });
   updateById_(APP.sheets.users, 'رقم المستخدم', user['رقم المستخدم'], {'آخر دخول': now_()});
   audit_(session.user, 'تسجيل دخول', 'المصادقة', user['رقم المستخدم'], '');
+  // حساب مُلزَم بتغيير كلمة مرور مؤقتة لا يحصل على بيانات البوابة إطلاقًا
+  // حتى يُغيّرها — لا مجرد إخفاء في الواجهة، بل امتناع فعلي من الخادم.
+  if (mustChangePassword) {
+    return {ok: true, token: session.token, user: session.user, mustChangePassword: true};
+  }
   return {ok: true, token: session.token, user: session.user, bootstrap: getBootstrapData(session.token)};
 }
 
@@ -71,7 +78,7 @@ function loginDelegate_(code) {
 }
 
 function logout(token) {
-  const user = requireSession_(token);
+  const user = requireSession_(token, null, {allowMustChangePassword: true});
   CacheService.getScriptCache().remove(sessionKey_(token));
   audit_(user, 'تسجيل خروج', 'المصادقة', user.id, '');
   return {ok: true};
@@ -104,13 +111,23 @@ function createSession_(user) {
   const token = Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, raw)).replace(/=+$/g, '');
   const record = {
     id: user.id, name: user.name, role: user.role, associationId: user.associationId,
+    mustChangePassword: !!user.mustChangePassword,
     epoch: actorEpoch_(user.id), issuedAt: new Date().getTime()
   };
   CacheService.getScriptCache().put(sessionKey_(token), JSON.stringify(record), APP.sessionSeconds);
-  return {token: token, user: {id: user.id, name: user.name, role: user.role, associationId: user.associationId}};
+  return {token: token, user: {
+    id: user.id, name: user.name, role: user.role, associationId: user.associationId,
+    mustChangePassword: !!user.mustChangePassword
+  }};
 }
 
-function requireSession_(token, roles) {
+/**
+ * opts.allowMustChangePassword: يستثني فقط changePassword وlogout من
+ * قفل "يجب تغيير كلمة المرور المؤقتة أولًا" — كل دالة أخرى تُرفض من
+ * الخادم مباشرة (لا تعتمد على إخفاء الواجهة) طالما الجلسة تحمل هذا
+ * الوسم، حتى لو استُدعيت الدالة مباشرة بتجاوز الواجهة.
+ */
+function requireSession_(token, roles, opts) {
   token = String(token || '');
   if (!/^[A-Za-z0-9_-]{32,}$/.test(token)) throw new Error('انتهت الجلسة. يرجى تسجيل الدخول مجددًا');
   const cache = CacheService.getScriptCache();
@@ -127,6 +144,9 @@ function requireSession_(token, roles) {
     throw new Error('انتهت الجلسة. يرجى تسجيل الدخول مجددًا');
   }
   cache.put(sessionKey_(token), raw, APP.sessionSeconds);
+  if (user.mustChangePassword && user.role === 'ASSOCIATION' && !(opts && opts.allowMustChangePassword)) {
+    throw new Error('يجب تغيير كلمة المرور المؤقتة أولًا قبل المتابعة');
+  }
   if (roles && roles.indexOf(user.role) === -1) throw new Error('ليس لديك صلاحية لتنفيذ هذه العملية');
   return user;
 }

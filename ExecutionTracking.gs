@@ -147,8 +147,13 @@ function updateAssociationSettings(token, payload) {
   return {ok: true, data: getBootstrapData(token, true)};
 }
 
+/**
+ * متاحة أيضًا لحساب "يجب تغيير كلمة المرور" (allowMustChangePassword)
+ * كي يتمكن من كسر القفل بتغييرها فعليًا — بقية دوال الخادم تبقى مرفوضة
+ * له طالما لم يُنجز هذا التغيير.
+ */
 function changePassword(token, currentPassword, newPassword) {
-  const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
+  const user = requireSession_(token, ['ADMIN', 'ASSOCIATION'], {allowMustChangePassword: true});
   const record = findById_(APP.sheets.users, 'رقم المستخدم', user.id);
   if (!record || !constantTimeEquals_(String(record['كلمة المرور المشفرة']), hashSecret_(String(currentPassword || ''), String(record['الملح'])))) {
     throw new Error('كلمة المرور الحالية غير صحيحة');
@@ -157,13 +162,28 @@ function changePassword(token, currentPassword, newPassword) {
   if (newPassword.length < 10 || !/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
     throw new Error('كلمة المرور الجديدة يجب أن تكون 10 خانات على الأقل وتضم حروفًا وأرقامًا');
   }
+  if (constantTimeEquals_(hashSecret_(newPassword, String(record['الملح'])), String(record['كلمة المرور المشفرة']))) {
+    throw new Error('كلمة المرور الجديدة يجب أن تختلف عن الحالية');
+  }
+  // منع إعادة استخدام كلمة المرور السابقة مباشرة (طبقة حماية واحدة ضمن
+  // البنية الحالية — لا يُحفظ سجل كامل لكل كلمات المرور القديمة، فقط
+  // آخر واحدة سبقت الحالية).
+  const previousSalt = String(record['ملح سابق'] || '');
+  const previousHash = String(record['كلمة مرور سابقة مشفرة'] || '');
+  if (previousSalt && previousHash && constantTimeEquals_(hashSecret_(newPassword, previousSalt), previousHash)) {
+    throw new Error('لا يمكن استخدام كلمة المرور السابقة نفسها. اختر كلمة مرور مختلفة');
+  }
   const salt = Utilities.getUuid();
   updateById_(APP.sheets.users, 'رقم المستخدم', user.id, {
+    'كلمة مرور سابقة مشفرة': record['كلمة المرور المشفرة'],
+    'ملح سابق': record['الملح'],
     'كلمة المرور المشفرة': hashSecret_(newPassword, salt),
-    'الملح': salt
+    'الملح': salt,
+    'يجب تغيير كلمة المرور': 'لا'
   });
   audit_(user, 'تغيير كلمة المرور', 'الإعدادات', user.id, '');
-  // تغيير كلمة المرور يُبطل بقية الجلسات على الأجهزة الأخرى.
+  // تغيير كلمة المرور يُبطل بقية الجلسات على الأجهزة الأخرى (وهذه الجلسة
+  // نفسها أيضًا — يجب تسجيل الدخول من جديد بكلمة المرور الجديدة).
   revokeSessions_(user.id);
   return {ok: true};
 }
