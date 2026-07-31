@@ -169,18 +169,37 @@ function inspectBeneficiaryExcel(token, payload) {
 
 function assignDelegate(token, beneficiaryId, delegateId) {
   const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
-  const beneficiary = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', cleanId_(beneficiaryId));
-  const delegate = findById_(APP.sheets.delegates, 'رقم المندوب', cleanId_(delegateId));
+  beneficiaryId = cleanId_(beneficiaryId);
+  delegateId = cleanId_(delegateId);
+  const beneficiary = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId);
+  const delegate = findById_(APP.sheets.delegates, 'رقم المندوب', delegateId);
   if (!beneficiary || !delegate || String(delegate['الحالة']) !== 'نشط') throw new Error('المستفيد أو المندوب غير صالح');
   if (String(beneficiary['رقم الجمعية']) !== String(delegate['رقم الجمعية'])) throw new Error('يجب أن يتبع المندوب والمستفيد الجمعية نفسها');
   if (user.role === 'ASSOCIATION' && String(beneficiary['رقم الجمعية']) !== user.associationId) throw new Error('ليس لديك صلاحية');
-  updateById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId, {
-    'رقم المندوب': delegateId,
-    'حالة المستفيد': 'جاري التسليم',
-    'حالة التسليم': 'جاري التجهيز',
-    'آخر تحديث': now_()
-  });
-  audit_(user, 'تعيين مندوب', 'المستفيدون', beneficiaryId, 'المندوب: ' + delegateId);
+
+  // يجب أن يتحقق كل شيء قبل أي كتابة: لا كتابة جزئية عند رفض العملية.
+  const currentDeliveryStatus = String(beneficiary['حالة التسليم'] || 'لم يبدأ');
+  assertDeliveryTransition_(currentDeliveryStatus, 'خرج مع المندوب');
+  const activeDevices = devicesForBeneficiary_(beneficiaryId).filter(d => ['مخصص', 'مع المندوب'].indexOf(d.status) >= 0);
+  if (!activeDevices.length) throw new Error('لا توجد أجهزة مخصَّصة لهذا المستفيد بعد؛ خصِّص جهازًا أولًا قبل تعيين مندوب');
+  activeDevices.forEach(device => assertDeviceTransition_(device.status, 'مع المندوب'));
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    activeDevices.filter(device => device.status === 'مخصص').forEach(device => {
+      updateById_(APP.sheets.devices, 'رقم الجهاز', device.id, {'حالة الجهاز': 'مع المندوب'});
+    });
+    updateById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId, {
+      'رقم المندوب': delegateId,
+      'حالة المستفيد': 'جاري التسليم',
+      'حالة التسليم': 'خرج مع المندوب',
+      'آخر تحديث': now_()
+    });
+  } finally {
+    lock.releaseLock();
+  }
+  audit_(user, 'تعيين مندوب', 'المستفيدون', beneficiaryId, 'المندوب: ' + delegateId + ' — عدد الأجهزة: ' + activeDevices.length);
   clearDashboardCache();
   return {ok: true, data: getBootstrapData(token, true)};
 }

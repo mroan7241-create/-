@@ -63,9 +63,14 @@ function setDelegateStatus(token, delegateId, status) {
 
 function updateDeliveryStatus(token, beneficiaryId, reason, notes) {
   const user = requireSession_(token, ['DELEGATE']);
-  const beneficiary = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', cleanId_(beneficiaryId));
+  beneficiaryId = cleanId_(beneficiaryId);
+  const beneficiary = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId);
   if (!beneficiary || String(beneficiary['رقم المندوب']) !== user.id) throw new Error('المستفيد غير متاح لك');
   if (FAILED_REASONS.indexOf(String(reason)) === -1) throw new Error('اختر حالة صحيحة');
+  // "تعذر التسليم" لا يُقبل إلا من "خرج مع المندوب" (أو تكرار محاولة
+  // سابقة فاشلة) — لا يمكن تسجيل تعذّر لمستفيد لم تخرج أجهزته أصلًا.
+  // الأجهزة نفسها لا تُلمَس هنا إطلاقًا: تبقى "مع المندوب" كما هي.
+  assertDeliveryTransition_(String(beneficiary['حالة التسليم'] || 'لم يبدأ'), 'تعذر التسليم');
   updateById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId, {
     'حالة التسليم': 'تعذر التسليم',
     'الملاحظات': mergeNote_(beneficiary['الملاحظات'], reason + (notes ? ': ' + cleanText_(notes, 500) : '')),
@@ -89,26 +94,34 @@ function confirmDelivery(token, payload) {
   const beneficiaryId = cleanId_(payload.beneficiaryId);
   const beneficiary = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId);
   if (!beneficiary || String(beneficiary['رقم المندوب']) !== user.id) throw new Error('المستفيد غير متاح لك');
-  const devices = devicesForBeneficiary_(beneficiaryId);
-  if (!devices.length) throw new Error('لا توجد أجهزة مخصصة لهذا المستفيد');
+  // تأكيد التسليم يشمل فقط الأجهزة التي خرجت فعليًا مع المندوب — لا
+  // يقبل جهازًا لا يزال "بالمستودع" أو "مخصص" ولم يخرج بعد.
+  const devices = dispatchedDevicesForBeneficiary_(beneficiaryId);
+  if (!devices.length) throw new Error('لا توجد أجهزة "خرجت مع المندوب" لهذا المستفيد بعد؛ تحقق من تعيين المندوب أولًا');
   const proofUrl = saveProofImage_(payload.proofDataUrl, beneficiaryId);
   const deliveredAt = now_();
   const deliveryId = nextId_('DLV');
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
+    // إعادة القراءة والتحقق من الانتقال داخل القفل يمنع أي سباق تزامني
+    // (مثل نقرتين متتاليتين سريعتين) من كتابة حالة غير متّسقة جزئيًا.
     const latest = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId);
-    if (String(latest['حالة التسليم']) === 'تم التسليم') throw new Error('تم تسجيل التسليم مسبقًا');
+    assertDeliveryTransition_(String(latest['حالة التسليم'] || ''), 'تم التسليم');
+    const latestDevices = dispatchedDevicesForBeneficiary_(beneficiaryId);
+    if (!latestDevices.length) throw new Error('لا توجد أجهزة "خرجت مع المندوب" لهذا المستفيد الآن');
+    latestDevices.forEach(device => assertDeviceTransition_(device.status, 'تم التسليم'));
+
     updateById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId, {
       'حالة المستفيد': 'تم التسليم', 'حالة التسليم': 'تم التسليم',
       'تاريخ التسليم': deliveredAt, 'آخر تحديث': deliveredAt
     });
-    devices.forEach(device => updateById_(APP.sheets.devices, 'رقم الجهاز', device.id, {
+    latestDevices.forEach(device => updateById_(APP.sheets.devices, 'رقم الجهاز', device.id, {
       'حالة الجهاز': 'تم التسليم', 'تاريخ التسليم': deliveredAt
     }));
     appendObject_(APP.sheets.deliveries, {
       'رقم التسليم': deliveryId, 'رقم المستفيد': beneficiaryId, 'رقم المندوب': user.id,
-      'أرقام الأجهزة': devices.map(x => x.id).join(', '), 'الحالة': 'تم التسليم',
+      'أرقام الأجهزة': latestDevices.map(x => x.id).join(', '), 'الحالة': 'تم التسليم',
       'سبب التعذر': '', 'الملاحظات': cleanText_(payload.notes, 500),
       'رابط الإثبات': proofUrl, 'تاريخ ووقت التسليم': deliveredAt, 'تاريخ الإنشاء': deliveredAt
     });

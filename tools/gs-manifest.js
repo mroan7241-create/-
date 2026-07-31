@@ -30,6 +30,7 @@ const GS_FILES_ORDER = [
   'Applications.gs',
   'ExecutionTracking.gs',
   'Normalize.gs',
+  'StateRules.gs',
   'DataUtils.gs',
   'Validation.gs'
 ];

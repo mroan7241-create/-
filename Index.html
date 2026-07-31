@@ -1276,7 +1276,7 @@
       var body = (beneficiary ? '<p class="muted">المستفيد: <strong>' + esc(beneficiary.name) + '</strong></p>' : '')
         + '<div class="field"><label for="delegateSelect">اختر المندوب</label>'
         + '<select class="control" id="delegateSelect">' + options + '</select>'
-        + '<span class="hint">سينتقل المستفيد إلى حالة «جاري التجهيز» وتظهر بطاقته في تطبيق المندوب.</span></div>';
+        + '<span class="hint">ستخرج أجهزة المستفيد المخصَّصة مع هذا المندوب فورًا («خرج مع المندوب») وتظهر بطاقته في تطبيقه.</span></div>';
       openModal('تعيين مندوب', body,
         '<button class="btn btn-ghost" data-act="close-modal">إلغاء</button>'
         + '<button class="btn btn-primary" data-act="save-assign" data-id="' + esc(id) + '">حفظ وإحالة</button>');
