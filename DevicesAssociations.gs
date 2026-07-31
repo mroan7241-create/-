@@ -101,6 +101,46 @@ function saveDevice(token, payload) {
 }
 
 /**
+ * تفاصيل جهاز واحد كاملة: بيانات الجهاز، الجمعية/المستفيد/المندوب
+ * المرتبطون به حاليًا، وتواريخه (الإضافة والتسليم مخزَّنان مباشرة في
+ * جدول الأجهزة؛ التخصيص والخروج مع المندوب يُستنتَجان من سجل العمليات
+ * الخاص بهذا الجهاز تحديدًا — لا حاجة لأي عمود جديد أو ترحيل مخطط بيانات).
+ */
+function getDeviceDetail(token, deviceId) {
+  return perfTime_('getDeviceDetail', () => {
+    const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
+    deviceId = cleanId_(deviceId);
+    const row = findById_(APP.sheets.devices, 'رقم الجهاز', deviceId);
+    if (!row) throw new Error('الجهاز غير موجود');
+    if (user.role === 'ASSOCIATION' && String(row['رقم الجمعية']) !== user.associationId) {
+      throw new Error('ليس لديك صلاحية لعرض هذا الجهاز');
+    }
+    const device = normalizeDevice_(row);
+    const association = findById_(APP.sheets.associations, 'رقم الجمعية', device.associationId);
+    const beneficiary = device.beneficiaryId ? findById_(APP.sheets.beneficiaries, 'رقم المستفيد', device.beneficiaryId) : null;
+    const delegateId = beneficiary ? String(beneficiary['رقم المندوب'] || '') : '';
+    const delegate = delegateId ? findById_(APP.sheets.delegates, 'رقم المندوب', delegateId) : null;
+    const log = auditRowsFiltered_(user.role === 'ASSOCIATION' ? user.associationId : null)
+      .filter(item => item.section === 'الأجهزة' && item.recordId === deviceId);
+    // log مرتَّب من الأحدث للأقدم أصلًا (auditRowsFiltered_) — أول تطابق
+    // هو آخر مرة حدث فيها هذا الانتقال تحديدًا.
+    const assignedAt = (log.find(item => /← مخصص|الابتدائية: مخصص/.test(item.notes)) || {}).at || '';
+    const dispatchedAt = (log.find(item => /← مع المندوب/.test(item.notes)) || {}).at || '';
+    return {
+      ok: true,
+      device: device,
+      associationName: association ? String(association['اسم الجمعية']) : '',
+      beneficiaryName: beneficiary ? String(beneficiary['الاسم']) : '',
+      delegateId: delegateId,
+      delegateName: delegate ? String(delegate['اسم المندوب']) : '',
+      assignedAt: assignedAt,
+      dispatchedAt: dispatchedAt,
+      log: log
+    };
+  });
+}
+
+/**
  * إنشاء جمعية جديدة يُنشئ أيضًا حساب دخولها بكلمة مرور — إعادة محاولة
  * بعد مهلة واجهة يجب ألّا تُنشئ جمعيتين وحسابين مكرَّرين؛ لذلك تُلفّ
  * عملية الإنشاء فقط بـ withIdempotency_ عند توفّر payload.opId.

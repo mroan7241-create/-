@@ -867,6 +867,55 @@ except zipfile.BadZipFile as e:
   try { fs.unlinkSync(tmpFile); } catch (ignore) {}
 })();
 
+/* -------- 20) تفاصيل الجهاز وسجل عمليات المندوب -------- */
+
+section('20) تفاصيل الجهاز وسجل عمليات المندوب');
+
+const detailBeneficiary = S2.saveBeneficiary(adminSession.token, {
+  associationId: accepted.associationId, name: 'مستفيد تفاصيل الجهاز', region: 'الرياض', city: 'الرياض',
+  address: 'حي', phone: '0509990030', familyCount: 2, socialStatus: 'أرملة', needs: []
+});
+const detailDevice = S2.saveDevice(adminSession.token, {
+  name: 'ثلاجة اختبار التفاصيل', type: 'ثلاجة', associationId: accepted.associationId,
+  beneficiaryId: detailBeneficiary.id, status: 'مخصص'
+});
+const detailDelegate = S2.saveDelegate(adminSession.token, {name: 'مندوب اختبار التفاصيل', phone: '0509990031', associationId: accepted.associationId});
+const detailAssign = S2.assignDelegate(adminSession.token, detailBeneficiary.id, detailDelegate.id);
+assert('assignDelegate ينجح ويحوّل الجهاز إلى "مع المندوب"', detailAssign.ok === true);
+
+const deviceDetail = S2.getDeviceDetail(adminSession.token, detailDevice.id);
+assert('getDeviceDetail يعيد بيانات الجهاز الأساسية', deviceDetail.ok === true && deviceDetail.device.id === detailDevice.id);
+assert('getDeviceDetail يعيد اسم الجمعية والمستفيد والمندوب الحاليين', deviceDetail.associationName === accepted.associationName || deviceDetail.associationName.length > 0);
+assert('getDeviceDetail يعيد اسم المستفيد الحالي المرتبط بالجهاز', deviceDetail.beneficiaryName === 'مستفيد تفاصيل الجهاز');
+assert('getDeviceDetail يعيد اسم المندوب المرتبط بعد التعيين', deviceDetail.delegateName === 'مندوب اختبار التفاصيل');
+assert('getDeviceDetail يشتق "تاريخ الخروج مع المندوب" من سجل العمليات الخاص بالجهاز (بلا عمود جديد)', deviceDetail.dispatchedAt !== '');
+assert('سجل عمليات الجهاز (log) يتضمن حدث تحويله إلى "مع المندوب"', deviceDetail.log.some(function (row) { return /مع المندوب/.test(row.notes); }));
+
+const otherAssocSession2 = S2.createSession_({id: 'USR-OTHER-ASSOC-DEV', name: 'جمعية أخرى', role: 'ASSOCIATION', associationId: 'ASC-NONEXISTENT-XYZ'});
+throws('جمعية أخرى لا تستطيع الاطلاع على تفاصيل جهاز جمعية غير جمعيتها (IDOR)', () => S2.getDeviceDetail(otherAssocSession2.token, detailDevice.id), 'صلاحية');
+
+throws('جهاز غير موجود يُرفَض برسالة واضحة', () => S2.getDeviceDetail(adminSession.token, 'DEV-NOT-EXIST'), 'غير موجود');
+
+// سجل عمليات المندوب: الإدارة ترى الكل، الجمعية ترى مندوبيها، المندوب يرى نفسه فقط ضمن الأحداث المسموحة.
+const ownDelegateLog = S2.listDelegateAuditLog(adminSession.token, detailDelegate.id, {});
+assert('listDelegateAuditLog (إدارة): يتضمن حدث الإضافة وحدث التعيين لهذا المندوب', ownDelegateLog.ok === true
+  && ownDelegateLog.items.some(function (r) { return r.action === 'إضافة مندوب'; })
+  && ownDelegateLog.items.some(function (r) { return r.action === 'تعيين مندوب'; }));
+
+const delegateSelfSession = S2.createSession_({id: detailDelegate.id, name: 'مندوب اختبار التفاصيل', role: 'DELEGATE', associationId: accepted.associationId});
+const delegateSelfLog = S2.listDelegateAuditLog(delegateSelfSession.token, detailDelegate.id, {});
+assert('listDelegateAuditLog (المندوب نفسه): يرى حدث تعيينه', delegateSelfLog.items.some(function (r) { return r.action === 'تعيين مندوب'; }));
+assert('listDelegateAuditLog (المندوب نفسه): لا يرى حدث "إضافة مندوب" الإداري (بيانات إدارية حساسة مستبعدة)',
+  !delegateSelfLog.items.some(function (r) { return r.action === 'إضافة مندوب'; }));
+
+const otherDelegate = S2.saveDelegate(adminSession.token, {name: 'مندوب آخر لاختبار العزل', phone: '0509990032', associationId: accepted.associationId});
+const otherDelegateSession = S2.createSession_({id: otherDelegate.id, name: 'مندوب آخر لاختبار العزل', role: 'DELEGATE', associationId: accepted.associationId});
+throws('مندوب لا يستطيع الاطلاع على سجل عمليات مندوب آخر (IDOR بين مندوبين)',
+  () => S2.listDelegateAuditLog(otherDelegateSession.token, detailDelegate.id, {}), 'صلاحية');
+
+const otherAssocDelegateSession = S2.createSession_({id: 'USR-OTHER-ASSOC-DELEGATE', name: 'جمعية أخرى', role: 'ASSOCIATION', associationId: 'ASC-NONEXISTENT-XYZ'});
+throws('جمعية أخرى لا تستطيع الاطلاع على سجل مندوب لا يتبعها', () => S2.listDelegateAuditLog(otherAssocDelegateSession.token, detailDelegate.id, {}), 'صلاحية');
+
 /* -------- النتيجة -------- */
 
 console.log('\n' + '='.repeat(56));

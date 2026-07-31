@@ -362,10 +362,11 @@ function assignDelegate(token, beneficiaryId, delegateId) {
   if (!activeDevices.length) throw new Error('لا توجد أجهزة مخصَّصة لهذا المستفيد بعد؛ خصِّص جهازًا أولًا قبل تعيين مندوب');
   activeDevices.forEach(device => assertDeviceTransition_(device.status, 'مع المندوب'));
 
+  const dispatchedNow = activeDevices.filter(device => device.status === 'مخصص');
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
-    activeDevices.filter(device => device.status === 'مخصص').forEach(device => {
+    dispatchedNow.forEach(device => {
       updateById_(APP.sheets.devices, 'رقم الجهاز', device.id, {'حالة الجهاز': 'مع المندوب'});
     });
     updateById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId, {
@@ -378,6 +379,12 @@ function assignDelegate(token, beneficiaryId, delegateId) {
     lock.releaseLock();
   }
   audit_(user, 'تعيين مندوب', 'المستفيدون', beneficiaryId, 'المندوب: ' + delegateId + ' — عدد الأجهزة: ' + activeDevices.length);
+  // سجل مستقل لكل جهاز خرج فعليًا مع المندوب الآن — هذا هو مصدر "تاريخ
+  // الخروج مع المندوب" في صفحة تفاصيل الجهاز (سجل عمليات، لا عمود جديد
+  // في الجدول، فلا حاجة لأي ترحيل مخطط بيانات).
+  dispatchedNow.forEach(device => {
+    audit_(user, 'تعديل جهاز', 'الأجهزة', device.id, 'الحالة: مخصص ← مع المندوب (تعيين مندوب: ' + delegateId + ')');
+  });
   clearDashboardCache();
   const record = normalizeBeneficiary_(findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId));
   const updatedDevices = devicesForBeneficiary_(beneficiaryId);

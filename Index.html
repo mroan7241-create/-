@@ -1333,10 +1333,11 @@
       var devices = (state.data.devices || []).filter(function (device) { return device.beneficiaryId === id; });
       var deviceTable = devices.length
         ? '<div class="table-wrap" style="margin-top:12px"><table class="data" style="min-width:0">'
-          + '<thead><tr><th>الجهاز</th><th>الرقم</th><th>الحالة</th></tr></thead><tbody>'
+          + '<thead><tr><th>الجهاز</th><th>الرقم</th><th>الحالة</th><th></th></tr></thead><tbody>'
           + devices.map(function (device) {
             return '<tr><td>' + needGlyph(device.name) + ' ' + esc(device.name) + '</td>'
-              + '<td class="mono">' + esc(device.id) + '</td><td>' + statusChip(device.status) + '</td></tr>';
+              + '<td class="mono">' + esc(device.id) + '</td><td>' + statusChip(device.status) + '</td>'
+              + '<td><button class="btn btn-link btn-sm" data-act="view-device" data-id="' + esc(device.id) + '">تفاصيل</button></td></tr>';
           }).join('') + '</tbody></table></div>'
         : '<p class="muted" style="margin-top:10px">لم تُخصَّص أجهزة لهذا المستفيد بعد.</p>';
 
@@ -2344,14 +2345,15 @@
           + '<td>' + esc(beneficiary ? beneficiary.name : '—') + '</td>'
           + '<td>' + statusChip(device.status) + '</td>'
           + '<td class="muted">' + esc(device.createdAt || '—') + '</td>'
-          + (isAdmin ? '<td><button class="btn btn-link" data-act="edit-device" data-id="'
-            + esc(device.id) + '">تعديل</button></td>' : '') + '</tr>';
+          + '<td><button class="btn btn-link" data-act="view-device" data-id="' + esc(device.id) + '">تفاصيل</button>'
+          + (isAdmin ? ' <button class="btn btn-link" data-act="edit-device" data-id="'
+            + esc(device.id) + '">تعديل</button>' : '') + '</td></tr>';
       }).join('');
 
       var table = '<div class="table-wrap"><table class="data"><thead><tr>'
         + sortableTh('name', 'الجهاز') + sortableTh('id', 'رقم الجهاز') + sortableTh('type', 'النوع')
         + '<th>الجمعية</th><th>المستفيد</th>' + sortableTh('status', 'الحالة') + sortableTh('createdAt', 'تاريخ الإضافة')
-        + (isAdmin ? '<th>إجراء</th>' : '')
+        + '<th>إجراء</th>'
         + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 
       return toolbar({
@@ -2421,6 +2423,48 @@
         closeModal();
         render();
         toast('تم حفظ بيانات الجهاز.', 'success');
+      }, reportError).finally(function () { busy(false); });
+    }
+
+    /**
+     * صفحة تفاصيل جهاز كاملة (getDeviceDetail على الخادم): يجلب الحالة
+     * الحالية والأطراف المرتبطة والتواريخ وسجل عملياته الخاص، ويعرض سبب
+     * منع أي تعديل يتعارض مع StateRules بلغة واضحة بدل السماح به صامتًا.
+     */
+    function viewDeviceDetail(id) {
+      busy(true);
+      api('getDeviceDetail', state.token, id).then(function (result) {
+        var device = result.device;
+        var log = result.log || [];
+        var logTable = log.length
+          ? '<div class="table-wrap" style="margin-top:8px"><table class="data" style="min-width:0">'
+            + '<thead><tr><th>العملية</th><th>الملاحظات</th><th>التاريخ والوقت</th></tr></thead><tbody>'
+            + log.map(function (row) {
+              return '<tr><td>' + esc(row.action) + '</td><td>' + esc(row.notes || '—') + '</td>'
+                + '<td class="muted">' + esc(row.at) + '</td></tr>';
+            }).join('') + '</tbody></table></div>'
+          : '<p class="muted" style="margin-top:8px">لا توجد عمليات مسجَّلة لهذا الجهاز بعد.</p>';
+
+        var body = '<div class="card-head"><div><h3>' + needGlyph(device.name) + ' ' + esc(device.name) + '</h3>'
+          + '<p class="mono">' + esc(device.id) + '</p></div>' + statusChip(device.status) + '</div>'
+          + '<div class="metas">'
+          + '<div class="meta"><small>النوع</small><strong>' + esc(device.type) + '</strong></div>'
+          + '<div class="meta"><small>الجمعية الحالية</small><strong>' + esc(result.associationName || '—') + '</strong></div>'
+          + '<div class="meta"><small>المستفيد الحالي</small><strong>' + esc(result.beneficiaryName || '—') + '</strong></div>'
+          + '<div class="meta"><small>المندوب المرتبط</small><strong>' + esc(result.delegateName || '—') + '</strong></div>'
+          + '<div class="meta"><small>تاريخ الإضافة</small><strong>' + esc(device.createdAt || '—') + '</strong></div>'
+          + '<div class="meta"><small>تاريخ التخصيص</small><strong>' + esc(result.assignedAt || 'غير مسجَّل') + '</strong></div>'
+          + '<div class="meta"><small>تاريخ الخروج مع المندوب</small><strong>' + esc(result.dispatchedAt || 'غير مسجَّل') + '</strong></div>'
+          + '<div class="meta"><small>تاريخ التسليم</small><strong>' + esc(device.deliveredAt || 'لم يتم بعد') + '</strong></div>'
+          + '</div>'
+          + '<h4 style="margin:18px 0 8px;color:var(--zad-800)">سجل عمليات الجهاز</h4>' + logTable
+          + (device.notes ? '<h4 style="margin:18px 0 8px;color:var(--zad-800)">ملاحظات</h4><p style="white-space:pre-wrap">' + esc(device.notes) + '</p>' : '');
+
+        var footer = '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>';
+        if (state.data.role === 'ADMIN') {
+          footer += '<button class="btn btn-soft" data-act="edit-device" data-id="' + esc(device.id) + '">تعديل</button>';
+        }
+        openModal('تفاصيل الجهاز', body, footer);
       }, reportError).finally(function () { busy(false); });
     }
 
@@ -2507,7 +2551,8 @@
         + '<div class="meta"><small>مستفيدون تم خدمتهم</small><strong>' + fmt(d.served) + '</strong></div></div>'
         + '<h4 style="margin:18px 0 8px;color:var(--zad-800)">المستفيدون المكلَّف بهم حاليًا</h4>' + table;
       var canManage = state.data.role === 'ASSOCIATION' || state.data.role === 'ADMIN';
-      var footer = '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>';
+      var footer = '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>'
+        + '<button class="btn btn-soft" data-act="view-delegate-log" data-id="' + esc(d.id) + '" data-name="' + esc(d.name) + '">سجل العمليات</button>';
       if (canManage) {
         footer += '<button class="btn btn-soft" data-act="regen-code" data-id="' + esc(d.id) + '">رمز دخول جديد</button>'
           + '<button class="btn ' + (d.status === 'نشط' ? 'btn-danger' : 'btn-primary') + '" data-act="toggle-delegate" data-id="'
@@ -2515,6 +2560,23 @@
           + (d.status === 'نشط' ? 'تعطيل المندوب' : 'تفعيل المندوب') + '</button>';
       }
       openModal('صفحة المندوب', body, footer);
+    }
+
+    /** سجل عمليات مفلتر لمندوب واحد — الخادم (listDelegateAuditLog) يفرض العزل بين الجمعيات والمناديب فعليًا، هذا مجرد عرض. */
+    function viewDelegateLog(id, name) {
+      busy(true);
+      api('listDelegateAuditLog', state.token, id, {pageSize: 100}).then(function (result) {
+        var items = result.items || [];
+        var body = !items.length
+          ? '<p class="muted">لا توجد عمليات مسجَّلة لهذا المندوب بعد.</p>'
+          : '<div class="table-wrap"><table class="data"><thead><tr><th>العملية</th><th>القسم</th>'
+            + '<th>الملاحظات</th><th>التاريخ والوقت</th></tr></thead><tbody>'
+            + items.map(function (row) {
+              return '<tr><td>' + esc(row.action) + '</td><td>' + esc(row.section) + '</td>'
+                + '<td>' + esc(row.notes || '—') + '</td><td class="muted">' + esc(row.at) + '</td></tr>';
+            }).join('') + '</tbody></table></div>';
+        openModal('سجل عمليات المندوب: ' + name, body, '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>');
+      }, reportError).finally(function () { busy(false); });
     }
 
     function delegateForm() {
@@ -3107,11 +3169,14 @@
 
     function renderDelegateHistory() {
       var list = state.data.history || [];
+      var d = state.data.delegate || {};
+      var logButton = '<div style="margin-bottom:10px"><button type="button" class="btn btn-ghost btn-sm" '
+        + 'data-act="view-delegate-log" data-id="' + esc(d.id) + '" data-name="' + esc(d.name) + '">سجل عملياتي الكامل</button></div>';
       if (!list.length) {
-        return '<div class="dg-card">' + emptyState({glyph: '≡', title: 'لا توجد تسليمات سابقة',
+        return logButton + '<div class="dg-card">' + emptyState({glyph: '≡', title: 'لا توجد تسليمات سابقة',
           body: 'سيظهر هنا كل تسليم وثّقته بالصورة.'}) + '</div>';
       }
-      return '<div class="dg-card"><div class="rows">' + list.map(function (x) {
+      return logButton + '<div class="dg-card"><div class="rows">' + list.map(function (x) {
         return '<div class="row-item"><div><strong>' + esc(x.beneficiaryName) + '</strong>'
           + '<small>' + esc((x.devices || []).join('، ') || '—') + '</small></div>'
           + '<div class="muted">' + esc(x.deliveredAt) + '</div>'
@@ -3413,10 +3478,12 @@
       },
       'new-device': function () { deviceForm(''); },
       'edit-device': function (el) { deviceForm(el.getAttribute('data-id')); },
+      'view-device': function (el) { viewDeviceDetail(el.getAttribute('data-id')); },
       'save-device': saveDevice,
       'new-delegate': delegateForm,
       'save-delegate': saveDelegate,
       'view-delegate': function (el) { viewDelegate(el.getAttribute('data-id')); },
+      'view-delegate-log': function (el) { viewDelegateLog(el.getAttribute('data-id'), el.getAttribute('data-name')); },
       'regen-code': function (el) { regenerateCode(el.getAttribute('data-id')); },
       'toggle-delegate': function (el) { toggleDelegate(el.getAttribute('data-id'), el.getAttribute('data-value')); },
       'save-settings': saveAssociationSettings,

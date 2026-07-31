@@ -124,7 +124,8 @@ function auditRowsFiltered_(associationId) {
     const record = String(row['رقم السجل'] || '');
     return actorIds.has(String(row['رقم المستخدم'])) || recordIds.has(record);
   }).reverse().map(row => ({
-    user: String(row['اسم المستخدم'] || ''), action: String(row['العملية'] || ''),
+    user: String(row['اسم المستخدم'] || ''), actorId: String(row['رقم المستخدم'] || ''),
+    action: String(row['العملية'] || ''),
     section: String(row['القسم'] || ''), recordId: String(row['رقم السجل'] || ''),
     notes: String(row['ملاحظات'] || ''), at: formatDateTime_(parseDate_(row['التاريخ والوقت']))
   }));
@@ -148,7 +149,49 @@ function listAuditLog(token, options) {
     let items = auditRowsFiltered_(associationId);
     items = applySearch_(items, options.search, ['user', 'action', 'section', 'recordId', 'notes']);
     if (options.filter) items = items.filter(item => item.section === options.filter);
+    // options.recordId: يُستخدم لسجل عمليات سجل مرتبط بسجل واحد بعينه (مثل
+    // جهاز محدَّد) — نفس عزل الجمعية أعلاه يبقى ساريًا قبل هذا الفلتر.
+    if (options.recordId) items = items.filter(item => item.recordId === cleanId_(options.recordId));
     return Object.assign({ok: true}, paginate_(items, options));
+  });
+}
+
+// الأحداث التشغيلية المسموح أن يراها المندوب نفسه في سجله — تستثني عمدًا
+// أي حدث إداري حسّاس (مثل تعديل بياناته من الإدارة) لا علاقة له بعمله
+// اليومي، ولا تُدرَج فيها رموز الدخول أو كلمات المرور أو الموقع الحي إطلاقًا
+// لأن audit_ أصلًا لا يسجّل أيًّا من هذه القيم في أي مكان بالنظام.
+const DELEGATE_VISIBLE_AUDIT_ACTIONS_ = Object.freeze([
+  'تسجيل دخول', 'تعيين مندوب', 'تعذر التسليم', 'تأكيد تسليم', 'تفعيل مندوب', 'تعطيل مندوب', 'إعادة إنشاء رمز الدخول'
+]);
+
+/**
+ * سجل عمليات مفلتر لمندوب واحد بعينه:
+ * - ADMIN: أي مندوب، السجل الكامل المرتبط به (أفعاله + الأحداث الإدارية عن حسابه).
+ * - ASSOCIATION: مندوبوها فقط، بنفس السجل الكامل المرتبط بهم.
+ * - DELEGATE: نفسه فقط، ومقتصر على الأحداث التشغيلية المسموحة أعلاه دون أي بيانات إدارية حساسة.
+ */
+function listDelegateAuditLog(token, delegateId, options) {
+  return perfTime_('listDelegateAuditLog', () => {
+    const user = requireSession_(token, ['ADMIN', 'ASSOCIATION', 'DELEGATE']);
+    options = options || {};
+    delegateId = cleanId_(delegateId || (user.role === 'DELEGATE' ? user.id : ''));
+    if (!delegateId) throw new Error('رقم المندوب مطلوب');
+    const delegate = findById_(APP.sheets.delegates, 'رقم المندوب', delegateId);
+    if (!delegate) throw new Error('المندوب غير موجود');
+    if (user.role === 'DELEGATE' && delegateId !== user.id) throw new Error('ليس لديك صلاحية لعرض سجل مندوب آخر');
+    if (user.role === 'ASSOCIATION' && String(delegate['رقم الجمعية']) !== user.associationId) throw new Error('ليس لديك صلاحية');
+    const associationScope = user.role === 'ADMIN' ? null : String(delegate['رقم الجمعية']);
+    const assignmentPrefix = 'المندوب: ' + delegateId;
+    let items = auditRowsFiltered_(associationScope).filter(row =>
+      row.actorId === delegateId ||
+      (row.section === 'المناديب' && row.recordId === delegateId) ||
+      (row.action === 'تعيين مندوب' && row.notes.indexOf(assignmentPrefix) === 0)
+    );
+    if (user.role === 'DELEGATE') {
+      items = items.filter(row => DELEGATE_VISIBLE_AUDIT_ACTIONS_.indexOf(row.action) >= 0);
+    }
+    items = applySearch_(items, options.search, ['user', 'action', 'section', 'recordId', 'notes']);
+    return Object.assign({ok: true, delegateName: String(delegate['اسم المندوب'] || '')}, paginate_(items, options));
   });
 }
 
