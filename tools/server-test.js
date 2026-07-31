@@ -629,6 +629,100 @@ assert('inspectBeneficiaryExcel يتحقق من صحة الإحداثيات لك
   return /optionalCoordinate_\(row\.lat, row\.lng\)/.test(body);
 })());
 
+/* -------- 18) منع التكرار في المستفيدين والاستيراد -------- */
+
+section('18) منع التكرار في المستفيدين والاستيراد');
+
+const dupBase = {
+  associationId: accepted.associationId, region: 'الرياض', city: 'الرياض', address: 'حي التعاون',
+  familyCount: 3, socialStatus: 'أرملة', needs: []
+};
+
+const dupFirst = S2.saveBeneficiary(adminSession.token, Object.assign({}, dupBase, {
+  name: 'فاطمة الدوسري', phone: '0509990001'
+}));
+assert('إضافة مستفيد أول تنجح كسجل جديد بلا تكرار', dupFirst.ok === true && !dupFirst.possibleDuplicateWarning);
+
+let dupPhoneError = null;
+try {
+  S2.saveBeneficiary(adminSession.token, Object.assign({}, dupBase, {
+    name: 'اسم مختلف تمامًا', phone: '0509990001'
+  }));
+} catch (error) { dupPhoneError = error; }
+assert('إضافة مستفيد بنفس رقم الجوال (مطابق مؤكَّد) تُرفض ولا تُقبل رغم اختلاف الاسم',
+  dupPhoneError && /نفس رقم الجوال/.test(dupPhoneError.message));
+
+let dupPhoneFormatError = null;
+try {
+  S2.saveBeneficiary(adminSession.token, Object.assign({}, dupBase, {
+    name: 'اسم آخر', phone: '966509990001'
+  }));
+} catch (error) { dupPhoneFormatError = error; }
+assert('التكرار المؤكَّد يُكتشف حتى مع اختلاف صيغة كتابة رقم الجوال (966 بدل 0)',
+  dupPhoneFormatError && /نفس رقم الجوال/.test(dupPhoneFormatError.message));
+
+const dupEditSelf = S2.saveBeneficiary(adminSession.token, Object.assign({}, dupBase, {
+  id: dupFirst.id, name: 'فاطمة الدوسري المحدَّثة', phone: '0509990001'
+}));
+assert('تعديل السجل نفسه بنفس رقم جواله لا يُرفض كتكرار (استثناء الذات)', dupEditSelf.ok === true);
+
+const dupPossible = S2.saveBeneficiary(adminSession.token, Object.assign({}, dupBase, {
+  name: 'فاطمة الدوسري المحدَّثة', phone: '0509990002'
+}));
+assert('مستفيد بنفس الاسم والمدينة لكن جوال مختلف: يُقبل مع تحذير "مطابق محتمل" غير مانع',
+  dupPossible.ok === true && dupPossible.possibleDuplicateWarning && dupPossible.possibleDuplicateId === dupFirst.id);
+
+const dupImportWithinFile = S2.importBeneficiaries(adminSession.token, [
+  Object.assign({}, dupBase, {name: 'صف أول', phone: '0509990010'}),
+  Object.assign({}, dupBase, {name: 'صف ثانٍ بنفس الجوال', phone: '0509990010'})
+], true);
+assert('الاستيراد يرفض تكرارًا بين صفوف الملف نفسه (لا يستورد أي سجل من الدفعة)',
+  dupImportWithinFile.ok === false && dupImportWithinFile.errorCount === 1 && /داخل الملف نفسه/.test(dupImportWithinFile.errors[0].message));
+
+const dupImportAgainstDb = S2.importBeneficiaries(adminSession.token, [
+  Object.assign({}, dupBase, {name: 'صف يطابق سجلًا موجودًا', phone: '0509990001'})
+], true);
+assert('الاستيراد يرفض صفًا يطابق رقم جوال موجود مسبقًا في قاعدة البيانات',
+  dupImportAgainstDb.ok === false && /لدى هذه الجمعية بالفعل/.test(dupImportAgainstDb.errors[0].message));
+
+const dupImportClean = S2.importBeneficiaries(adminSession.token, [
+  Object.assign({}, dupBase, {name: 'صف جديد سليم', phone: '0509990020'})
+], true);
+assert('الاستيراد ينجح لصف جديد لا يطابق أي تكرار مؤكَّد', dupImportClean.ok === true && dupImportClean.imported === 1);
+
+let dupImportNoLeak = null;
+try {
+  const otherApp = S2.submitAssociationApplication({
+    name: 'جمعية أخرى للاختبار', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
+    contactName: 'مسؤول آخر', phone: '0511112222', email: 'other-dup-test@example.org'
+  });
+  const otherAccepted = S2.reviewAssociationApplication(adminSession.token, otherApp.id, 'accept', '');
+  const otherAssocSession = S2.createSession_({id: 'USR-OTHER-ASSOC', name: 'جمعية أخرى', role: 'ASSOCIATION', associationId: otherAccepted.associationId});
+  // نفس رقم الجوال (0509990001) يخص جمعية "accepted" الأولى — يجب ألا تكتشف
+  // جمعية أخرى هذا التكرار إطلاقًا (لا كشف بيانات جمعية أخرى)، فتنجح الإضافة.
+  const otherSave = S2.saveBeneficiary(otherAssocSession.token, {
+    name: 'مستفيد لدى جمعية أخرى', phone: '0509990001', region: 'الرياض', city: 'الرياض',
+    address: 'حي', familyCount: 2, socialStatus: 'أرملة', needs: []
+  });
+  dupImportNoLeak = otherSave;
+} catch (error) { dupImportNoLeak = {ok: false, error: error.message}; }
+assert('فحص التكرار لا يكشف عن بيانات جمعية أخرى: نفس رقم الجوال مقبول لدى جمعية مختلفة',
+  dupImportNoLeak && dupImportNoLeak.ok === true);
+
+assert('saveBeneficiary يعيد فحص التكرار المؤكَّد داخل قفل قبل الإضافة الفعلية لمنع سباق التزامن', (() => {
+  const start = source.indexOf('function saveBeneficiary(');
+  const end = source.indexOf('\nfunction ', start + 10);
+  const body = source.slice(start, end === -1 ? start + 4000 : end);
+  return /LockService\.getScriptLock\(\)/.test(body) && /findConfirmedDuplicateBeneficiary_/.test(body);
+})());
+
+assert('importBeneficiaries يعيد فحص التكرار المؤكَّد داخل قفل قبل الكتابة الفعلية لمنع سباق التزامن بين استيرادين متزامنين', (() => {
+  const start = source.indexOf('function importBeneficiaries(');
+  const end = source.indexOf('\nfunction ', start + 10);
+  const body = source.slice(start, end === -1 ? start + 4000 : end);
+  return /LockService\.getScriptLock\(\)/.test(body) && /raceDuplicate/.test(body);
+})());
+
 /* -------- النتيجة -------- */
 
 console.log('\n' + '='.repeat(56));

@@ -307,6 +307,7 @@
     @keyframes slide{from{transform:translateY(12px);opacity:0}}
     .toast.error{background:var(--bad)}
     .toast.success{background:var(--ok)}
+    .toast.warn{background:var(--warn)}
     .toast .glyph{flex:none;font-weight:800}
 
     /* ---------- Delegate mobile ---------- */
@@ -594,13 +595,15 @@
       el.className = 'toast ' + (kind || '');
       var glyph = document.createElement('span');
       glyph.className = 'glyph';
-      glyph.textContent = kind === 'error' ? '!' : '✓';
+      glyph.textContent = kind === 'error' ? '!' : (kind === 'warn' ? '⚠' : '✓');
       var text = document.createElement('span');
       text.textContent = message;
+      el.setAttribute('role', kind === 'error' || kind === 'warn' ? 'alert' : 'status');
+      el.setAttribute('aria-live', kind === 'error' || kind === 'warn' ? 'assertive' : 'polite');
       el.appendChild(glyph);
       el.appendChild(text);
       stack.appendChild(el);
-      setTimeout(function () { el.remove(); }, kind === 'error' ? 6000 : 3800);
+      setTimeout(function () { el.remove(); }, kind === 'error' || kind === 'warn' ? 6000 : 3800);
     }
 
     /**
@@ -1565,7 +1568,11 @@
         mergeSummary(result);
         closeModal();
         render();
-        toast('تم حفظ بيانات المستفيد.', 'success');
+        if (result.possibleDuplicateWarning) {
+          toast(result.possibleDuplicateWarning, 'warn');
+        } else {
+          toast('تم حفظ بيانات المستفيد.', 'success');
+        }
       }, reportError).finally(function () { busy(false); });
     }
 
@@ -1835,15 +1842,24 @@
     }
 
     /** جدول معاينة الصفوف الصحيحة/الخاطئة (مسار Excel فقط — يحمل row/valid/error/lat/lng من الخادم). CSV يبقى بالملخّص المختصر فقط، بلا تحقّق مسبق للصف. */
+    /** يصنّف كل صف: مطابق مؤكَّد (مرفوض دائمًا) / مطابق محتمل (يُقبل مع تنبيه) / سجل جديد. */
+    function bulkMatchTierBadge(row) {
+      if (row.matchTier === 'confirmed') return '<span class="status bad">⛔ مطابق مؤكَّد — لن يُستورَد</span>';
+      if (row.matchTier === 'possible') return '<span class="status warn">⚠ مطابق محتمل — راجع قبل الاعتماد</span>';
+      return '';
+    }
+
     function renderBulkPreviewTable(rows) {
       if (!rows || !rows.length) return '';
       var items = rows.slice(0, 200).map(function (row) {
         var hasCoords = row.lat !== undefined && row.lat !== '' && row.lng !== undefined && row.lng !== '';
         var coordsLabel = hasCoords ? (row.lat + '، ' + row.lng) : '—';
         var ok = row.valid !== false;
+        var statusText = ok ? (row.matchTier === 'possible' ? 'جاهز للاستيراد — يحتاج مراجعة تكرار محتمل' : 'جاهز للاستيراد') : (row.error || 'خطأ غير محدَّد');
         return '<div class="row-item"><div><strong>صف ' + esc(String(row.row || '')) + ' — ' + esc(row.name || '') + '</strong>'
           + '<small>الإحداثيات المقروءة: ' + esc(coordsLabel) + '</small></div>'
-          + '<div class="muted">' + (ok ? 'جاهز للاستيراد' : esc(row.error || 'خطأ غير محدَّد')) + '</div>'
+          + '<div class="muted">' + esc(statusText) + (row.possibleDuplicateId ? ' (السجل المشابه: ' + esc(row.possibleDuplicateId) + ')' : '') + '</div>'
+          + bulkMatchTierBadge(row)
           + '<span class="status ' + (ok ? 'good' : 'bad') + '">' + (ok ? '✓ صحيح' : '✗ خاطئ') + '</span></div>';
       }).join('');
       var moreNote = rows.length > 200 ? '<p class="muted">وعرض أول 200 صف فقط من ' + fmt(rows.length) + '.</p>' : '';

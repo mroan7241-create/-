@@ -24,6 +24,45 @@ function listBeneficiaries(token, options) {
   });
 }
 
+/** يطبّع اسمًا للمقارنة التقريبية فقط (مسافات/حالة أحرف) — إشارة "مطابق محتمل"، لا دليل قاطع أبدًا وحده. */
+function normalizeNameForMatch_(name) {
+  return String(name || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/**
+ * مطابق مؤكَّد: نفس رقم الجوال (الأساسي أو الإضافي، بعد التطبيع عبر
+ * normalizePhone_) لمستفيد آخر ضمن **نفس الجمعية فقط** — لا يفحص جمعيات
+ * أخرى إطلاقًا فلا يكشف عن بياناتها. الجوال وحده يكفي دليلًا قاطعًا هنا
+ * (لا الاسم — قد يتكرر الاسم بين أفراد مختلفين تمامًا)، مع مراعاة صيغ
+ * الجوال المختلفة لأنه يمر أصلًا بـ normalizePhone_ الموحِّدة قبل المقارنة.
+ */
+function findConfirmedDuplicateBeneficiary_(associationId, phone, excludeId) {
+  if (!phone) return null;
+  const rows = readTable_(APP.sheets.beneficiaries).rows;
+  return rows.find(row =>
+    String(row['رقم الجمعية']) === associationId &&
+    String(row['رقم المستفيد']) !== String(excludeId || '') &&
+    (String(row['رقم الجوال']) === phone || (row['رقم جوال إضافي'] && String(row['رقم جوال إضافي']) === phone))
+  ) || null;
+}
+
+/**
+ * مطابق محتمل فقط (لا مؤكَّد): نفس الاسم (بعد تطبيع المسافات/الحالة) ونفس
+ * المدينة ضمن نفس الجمعية، لكن رقم جوال مختلف — لا يُرفض تلقائيًا، فقط
+ * إشارة للمراجعة اليدوية (قد يكونان فردَين مختلفين تمامًا بالمصادفة).
+ */
+function findPossibleDuplicateBeneficiary_(associationId, name, city, excludeId) {
+  const normalizedName = normalizeNameForMatch_(name);
+  if (!normalizedName) return null;
+  const rows = readTable_(APP.sheets.beneficiaries).rows;
+  return rows.find(row =>
+    String(row['رقم الجمعية']) === associationId &&
+    String(row['رقم المستفيد']) !== String(excludeId || '') &&
+    normalizeNameForMatch_(row['الاسم']) === normalizedName &&
+    String(row['المدينة'] || '') === String(city || '')
+  ) || null;
+}
+
 function saveBeneficiary(token, payload) {
   return perfTime_('saveBeneficiary', () => {
   const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
@@ -35,6 +74,14 @@ function saveBeneficiary(token, payload) {
     if (String(existing['رقم الجمعية']) !== user.associationId) throw new Error('ليس لديك صلاحية لتعديل هذا المستفيد');
     if (String(existing['حالة التسليم']) === 'تم التسليم') throw new Error('لا يمكن تعديل بيانات مستفيد تم تسليمه');
   }
+  const phone = normalizePhone_(payload.phone);
+  const existingId = existing ? String(existing['رقم المستفيد']) : null;
+  // مطابق مؤكَّد (نفس الجوال ضمن الجمعية نفسها) يُرفض دائمًا — عند التعديل
+  // يُستثنى السجل نفسه من الفحص حتى لا يرفض حفظ بياناته الخاصة.
+  if (findConfirmedDuplicateBeneficiary_(associationId, phone, existingId)) {
+    throw new Error('يوجد مستفيد آخر بنفس رقم الجوال لدى هذه الجمعية بالفعل — تحقق من عدم تكرار الإضافة');
+  }
+  const possibleDuplicate = findPossibleDuplicateBeneficiary_(associationId, payload.name, payload.city, existingId);
   const place = validateRegionCity_(payload.region, payload.city);
   const coordinates = optionalCoordinate_(payload.lat, payload.lng);
   const hasCoordinates = coordinates.lat !== '';
@@ -61,7 +108,7 @@ function saveBeneficiary(token, payload) {
     'المنطقة': place.region,
     'المدينة': place.city,
     'العنوان': requiredText_(payload.address, 'العنوان', 250),
-    'رقم الجوال': normalizePhone_(payload.phone),
+    'رقم الجوال': phone,
     'رقم جوال إضافي': payload.phone2 ? normalizePhone_(payload.phone2) : '',
     'عدد الأفراد': boundedNumber_(payload.familyCount, 1, 99, 'عدد الأفراد'),
     'ضمان اجتماعي': payload.socialSecurity === true || payload.socialSecurity === 'نعم' ? 'نعم' : 'لا',
@@ -85,14 +132,32 @@ function saveBeneficiary(token, payload) {
     updateById_(APP.sheets.beneficiaries, 'رقم المستفيد', id, values);
     audit_(user, 'تعديل مستفيد', 'المستفيدون', id, '');
   } else {
+    // ترتيب مقصود لمنع سباق التزامن: يُولَّد المعرّف أولًا (nextId_ له قفله
+    // الداخلي الخاص)، ثم يُعاد فحص التكرار المؤكَّد والإضافة معًا داخل قفل
+    // واحد — بذلك لا يمكن لطلبين متزامنين إضافة نفس رقم الجوال مرتين حتى
+    // لو مرّا كلاهما من الفحص الأول قبل القفل بفارق أجزاء من الثانية.
     id = nextId_('BEN');
-    appendObject_(APP.sheets.beneficiaries, Object.assign({'رقم المستفيد': id, 'تاريخ الإنشاء': now_()}, values));
+    const lock = LockService.getScriptLock();
+    lock.waitLock(15000);
+    try {
+      if (findConfirmedDuplicateBeneficiary_(associationId, phone, null)) {
+        throw new Error('يوجد مستفيد آخر بنفس رقم الجوال لدى هذه الجمعية بالفعل — تحقق من عدم تكرار الإضافة');
+      }
+      appendObject_(APP.sheets.beneficiaries, Object.assign({'رقم المستفيد': id, 'تاريخ الإنشاء': now_()}, values));
+    } finally {
+      lock.releaseLock();
+    }
     audit_(user, 'إضافة مستفيد', 'المستفيدون', id, '');
   }
   clearDashboardCache();
   const record = normalizeBeneficiary_(findById_(APP.sheets.beneficiaries, 'رقم المستفيد', id));
   const summary = computeCoreSummary_(user.role === 'ASSOCIATION' ? user.associationId : null);
-  return {ok: true, id: id, record: record, summary: summary};
+  const result = {ok: true, id: id, record: record, summary: summary};
+  if (possibleDuplicate) {
+    result.possibleDuplicateId = String(possibleDuplicate['رقم المستفيد']);
+    result.possibleDuplicateWarning = 'تنبيه: يوجد مستفيد آخر بنفس الاسم والمدينة (رقم ' + result.possibleDuplicateId + ') — تأكد أنه ليس تكرارًا قبل المتابعة';
+  }
+  return result;
   });
 }
 
@@ -102,6 +167,9 @@ function importBeneficiaries(token, rows, acceptedPledge) {
   if (!Array.isArray(rows) || rows.length === 0 || rows.length > 1000) throw new Error('الملف فارغ أو يتجاوز 1000 سجل');
   const valid = [];
   const errors = [];
+  // يتتبّع أرقام الجوال ضمن الملف نفسه (لكل جمعية على حدة) لاكتشاف تكرار
+  // بين صفوف الملف الواحد، بالإضافة إلى فحص السجلات الموجودة مسبقًا في الجدول.
+  const seenPhones = Object.create(null);
   rows.forEach((row, index) => {
     try {
       const associationId = user.role === 'ASSOCIATION' ? user.associationId : cleanId_(row.associationId);
@@ -109,6 +177,15 @@ function importBeneficiaries(token, rows, acceptedPledge) {
       const place = validateRegionCity_(row.region, row.city);
       const coordinates = optionalCoordinate_(row.lat, row.lng);
       const hasCoordinates = coordinates.lat !== '';
+      const phone = normalizePhone_(row.phone);
+      const phoneKey = associationId + '|' + phone;
+      if (seenPhones[phoneKey]) {
+        throw new Error('رقم الجوال مكرر مع الصف رقم ' + seenPhones[phoneKey] + ' داخل الملف نفسه');
+      }
+      if (findConfirmedDuplicateBeneficiary_(associationId, phone, null)) {
+        throw new Error('يوجد مستفيد بنفس رقم الجوال لدى هذه الجمعية بالفعل — لن يتم استيراد هذا الصف');
+      }
+      seenPhones[phoneKey] = index + 2;
       valid.push({
         'رقم المستفيد': '',
         'رقم الجمعية': associationId,
@@ -116,7 +193,7 @@ function importBeneficiaries(token, rows, acceptedPledge) {
         'المنطقة': place.region,
         'المدينة': place.city,
         'العنوان': requiredText_(row.address, 'العنوان', 250),
-        'رقم الجوال': normalizePhone_(row.phone),
+        'رقم الجوال': phone,
         'رقم جوال إضافي': row.phone2 ? normalizePhone_(row.phone2) : '',
         'عدد الأفراد': boundedNumber_(row.familyCount, 1, 99, 'عدد الأفراد'),
         'ضمان اجتماعي': row.socialSecurity === true || row.socialSecurity === 'نعم' ? 'نعم' : 'لا',
@@ -143,7 +220,18 @@ function importBeneficiaries(token, rows, acceptedPledge) {
   if (errors.length) return {ok: false, validCount: valid.length, errorCount: errors.length, errors: errors.slice(0, 50)};
   const beneficiaryIds = nextIds_('BEN', valid.length);
   valid.forEach((record, index) => record['رقم المستفيد'] = beneficiaryIds[index]);
-  appendObjects_(APP.sheets.beneficiaries, valid);
+  // إعادة فحص التكرار المؤكَّد داخل قفل واحد قبل الكتابة الفعلية مباشرة —
+  // يمنع استيرادَين متزامنَين (أو استيرادًا وإضافة فردية متزامنة) من إدخال
+  // نفس رقم الجوال مرتين رغم اجتياز الفحص الأول قبل القفل.
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const raceDuplicate = valid.find(record => findConfirmedDuplicateBeneficiary_(String(record['رقم الجمعية']), String(record['رقم الجوال']), null));
+    if (raceDuplicate) throw new Error('تم اكتشاف تكرار في رقم الجوال أثناء الاستيراد؛ أعد المحاولة');
+    appendObjects_(APP.sheets.beneficiaries, valid);
+  } finally {
+    lock.releaseLock();
+  }
   audit_(user, 'استيراد مستفيدين', 'المستفيدون', '', 'عدد السجلات: ' + valid.length);
   clearDashboardCache();
   // لا تُعاد السجلات المستوردة كاملة (قد تصل لألف سجل) — الواجهة تُعيد
@@ -208,16 +296,41 @@ function inspectBeneficiaryExcel(token, payload) {
       return object;
     });
     const errors = [];
+    // يتتبّع أرقام الجوال داخل الملف نفسه لاكتشاف التكرار بين صفوفه، إضافة
+    // إلى فحص التكرار المؤكَّد مقابل السجلات الموجودة فعلًا في الجدول.
+    const seenPhones = Object.create(null);
     rows.forEach(row => {
+      row.matchTier = 'new';
       try {
         requiredText_(row.name, 'الاسم', 120);
         validateRegionCity_(row.region, row.city);
         requiredText_(row.address, 'العنوان', 250);
-        normalizePhone_(row.phone);
+        const phone = normalizePhone_(row.phone);
         boundedNumber_(row.familyCount, 1, 99, 'عدد الأفراد');
         boundedNumber_(row.income || 0, 0, 1000000, 'مبلغ الدخل');
         optionalCoordinate_(row.lat, row.lng);
         validateSocialStatus_(row.socialStatus);
+        const associationId = row.associationId || (user.role === 'ADMIN' ? null : user.associationId);
+        const phoneKey = (associationId || '') + '|' + phone;
+        // مطابق مؤكَّد (تكرار داخل الملف نفسه أو مع سجل موجود): يُرفض الصف
+        // ولا يُستورد أبدًا؛ مطابق محتمل (اسم+مدينة فقط): يُعرض للمراجعة
+        // دون منع الاستيراد — لا يُعتمد على الاسم وحده دليلًا قاطعًا أبدًا.
+        if (seenPhones[phoneKey]) {
+          row.matchTier = 'confirmed';
+          throw new Error('رقم الجوال مكرر مع الصف رقم ' + seenPhones[phoneKey] + ' داخل الملف نفسه');
+        }
+        if (associationId && findConfirmedDuplicateBeneficiary_(associationId, phone, null)) {
+          row.matchTier = 'confirmed';
+          throw new Error('يوجد مستفيد بنفس رقم الجوال لدى هذه الجمعية بالفعل');
+        }
+        seenPhones[phoneKey] = row.row;
+        if (associationId) {
+          const possible = findPossibleDuplicateBeneficiary_(associationId, row.name, row.city, null);
+          if (possible) {
+            row.matchTier = 'possible';
+            row.possibleDuplicateId = String(possible['رقم المستفيد']);
+          }
+        }
         row.valid = true;
       } catch (error) {
         row.valid = false;
