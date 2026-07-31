@@ -17,10 +17,27 @@
  * راجع RELEASE.md قسم "الأداء" للتفصيل الكامل ولماذا لا يزال حساب
  * summary/alerts يتطلّب قراءة كاملة لبعض الجداول رغم ذلك.
  */
+/**
+ * جيل واحد مشترك لكل مفاتيح Bootstrap المخزَّنة مؤقتًا — نفس مبدأ
+ * actorEpoch_ المُستخدَم لإبطال الجلسات (Auth.gs)، مطبَّق هنا على ذاكرة
+ * Bootstrap المؤقتة تحديدًا. clearDashboardCache() كانت تحذف مفتاح
+ * 'bootstrap:ADMIN' فقط فعليًا رغم أن كل مسارات الحفظ (بما فيها حفظ
+ * مستفيد/جهاز/استيراد جماعي من جمعية) تستدعيها معتقدة أنها تُبطل ذاكرتها
+ * الخاصة أيضًا — فتبقى لوحة بيانات الجمعية أو المندوب تعرض أرقامًا قديمة
+ * حتى انتهاء APP.cacheSeconds رغم قوائم (listBeneficiaries وغيرها) تعرض
+ * البيانات الصحيحة فورًا من نفس اللحظة. رفع الجيل يُبطل كل المفاتيح دفعة
+ * واحدة بصرف النظر عن الفاعل أو الجمعية، فتبقى الأرقام المحسوبة في لوحة
+ * البيانات مطابقة دائمًا لما تعرضه القوائم الفعلية من المصدر نفسه.
+ */
+function dashboardCacheGeneration_() {
+  return Number(PropertiesService.getScriptProperties().getProperty('DASHBOARD_CACHE_GEN') || 0);
+}
+
 function bootstrapCacheKey_(user) {
-  if (user.role === 'ADMIN') return 'bootstrap:ADMIN';
-  if (user.role === 'ASSOCIATION') return 'bootstrap:ASSOCIATION:' + user.associationId;
-  return 'bootstrap:DELEGATE:' + user.id;
+  const suffix = ':g' + dashboardCacheGeneration_();
+  if (user.role === 'ADMIN') return 'bootstrap:ADMIN' + suffix;
+  if (user.role === 'ASSOCIATION') return 'bootstrap:ASSOCIATION:' + user.associationId + suffix;
+  return 'bootstrap:DELEGATE:' + user.id + suffix;
 }
 
 function getBootstrapData(token, forceFresh) {

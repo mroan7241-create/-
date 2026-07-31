@@ -1,0 +1,335 @@
+#!/usr/bin/env node
+/**
+ * اختبار تكامل للدورة الكاملة (المرحلة السادسة): يحاكي رحلة حقيقية واحدة
+ * متصلة عبر البوابات الثلاث — تقديم جمعية ← قبولها ← تغيير كلمة مرورها
+ * المؤقتة ← إضافة مندوب ← إضافة مستفيد فرديًا ← استيراد بالجملة ← تخصيص
+ * جهاز ← تعيين مندوب ← دخول المندوب ← تعذّر تسليم ثم إعادة محاولة ← إثبات
+ * تسليم ← تحقّق من تحديث كل الحالات والمؤشرات والسجل ← عزل جمعيتين عن
+ * بعضهما ← إبطال الجلسات والرموز القديمة بعد إعادة التعيين/التوليد.
+ *
+ * لا علاقة لهذا الملف بأي بيانات أو بيئة Apps Script حقيقية — محاكاة
+ * Node.js vm بالكامل، كبقية أدوات tools/*.js. لا كلمات مرور أو رموز
+ * حقيقية هنا؛ كل القيم اختبارية بحتة.
+ *
+ *   تشغيل:  node tools/integration-test.js
+ */
+'use strict';
+
+const path = require('path');
+const vm = require('vm');
+const { readMergedServerSource } = require('./gs-manifest');
+
+const source = readMergedServerSource(path.join(__dirname, '..'));
+
+let failures = 0;
+let checks = 0;
+const assert = (name, condition, detail) => {
+  checks++;
+  if (condition) console.log('  ✓ ' + name);
+  else { failures++; console.log('  ✗ ' + name + (detail ? ' — ' + detail : '')); }
+};
+const throws = (name, fn, fragment) => {
+  checks++;
+  try {
+    fn();
+    failures++;
+    console.log('  ✗ ' + name + ' — لم تُرمَ أي استثناء');
+  } catch (error) {
+    if (!fragment || error.message.includes(fragment)) console.log('  ✓ ' + name);
+    else { failures++; console.log('  ✗ ' + name + ' — رسالة غير متوقعة: ' + error.message); }
+  }
+};
+const section = t => console.log('\n' + t);
+
+/* -------- بيئة محاكاة (مطابقة لتلك المستخدَمة في بقية tools/*.js) -------- */
+
+function stripForceText_(value) {
+  return (typeof value === 'string' && value.charAt(0) === "'") ? value.slice(1) : value;
+}
+
+function buildMockSpreadsheet() {
+  const data = {};
+  function makeSheet(name) {
+    if (!data[name]) data[name] = [];
+    const rows = data[name];
+    return {
+      getLastRow: () => rows.length,
+      getLastColumn: () => (rows[0] || []).length,
+      getDataRange: () => ({
+        getValues: () => rows.map(r => r.slice()),
+        getDisplayValues: () => rows.map(r => r.map(String))
+      }),
+      getRange: (r1, c1, numRows) => ({
+        getValues: () => {
+          if (r1 === 1 && numRows === undefined) return [rows[0] || []];
+          return rows.slice(r1 - 1, r1 - 1 + (numRows || rows.length - r1 + 1)).map(r => r.slice());
+        },
+        getDisplayValues: () => [(rows[0] || []).map(String)],
+        setValues: values => { values.forEach((row, i) => { rows[r1 - 1 + i] = row.slice().map(stripForceText_); }); },
+        setValue: value => { rows[r1 - 1] = rows[r1 - 1] || []; rows[r1 - 1][c1 - 1] = stripForceText_(value); },
+        setBackground() { return this; }, setFontColor() { return this; }, setFontWeight() { return this; },
+        setHorizontalAlignment() { return this; }, setWrap() { return this; }, setDataValidation() { return this; }
+      }),
+      setFrozenRows: () => {}, autoResizeColumns: () => {}, getMaxRows: () => rows.length,
+      appendRow: row => { rows.push(row.slice().map(stripForceText_)); }
+    };
+  }
+  return {
+    getSheetByName: name => (data[name] ? makeSheet(name) : null),
+    insertSheet: name => makeSheet(name),
+    getSheets: () => Object.keys(data).map(makeSheet)
+  };
+}
+
+function buildSandbox() {
+  const props = {};
+  const cache = {};
+  const mockSs = buildMockSpreadsheet();
+  const sandbox = {
+    console, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp, Error,
+    isNaN, isFinite, parseInt, parseFloat, Set,
+    Utilities: {
+      getUuid: () => 'uuid-' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2),
+      computeDigest: (_alg, text) => {
+        const crypto = require('crypto');
+        return Array.from(crypto.createHash('sha256').update(String(text)).digest());
+      },
+      base64EncodeWebSafe: bytes => Buffer.from(bytes).toString('base64url'),
+      base64Decode: b64 => Array.from(Buffer.from(b64, 'base64')),
+      formatString: (pattern, value) => String(value).padStart(6, '0'),
+      formatDate: (date, _tz, pattern) => {
+        const p = n => String(n).padStart(2, '0');
+        const base = date.getFullYear() + '/' + p(date.getMonth() + 1) + '/' + p(date.getDate());
+        return pattern.indexOf('HH') >= 0 ? base + ' ' + p(date.getHours()) + ':' + p(date.getMinutes()) : base;
+      },
+      newBlob: () => ({ getBytes: () => [] }),
+      DigestAlgorithm: { SHA_256: 'SHA_256' }, Charset: { UTF_8: 'UTF_8' }, sleep: () => {}
+    },
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: k => (k in props ? props[k] : null),
+        setProperty: (k, v) => { props[k] = String(v); },
+        deleteProperty: k => { delete props[k]; }
+      })
+    },
+    CacheService: {
+      getScriptCache: () => ({
+        get: k => (k in cache ? cache[k] : null),
+        put: (k, v) => { cache[k] = v; },
+        remove: k => { delete cache[k]; }
+      })
+    },
+    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    ScriptApp: { getScriptId: () => 'integration-test', getOAuthToken: () => 'token' },
+    SpreadsheetApp: { getActiveSpreadsheet: () => mockSs },
+    HtmlService: { createHtmlOutputFromFile: () => ({ setTitle() { return this; }, addMetaTag() { return this; } }) },
+    DriveApp: {
+      createFolder: () => ({
+        getId: () => 'folder-id', getUrl: () => 'https://drive.example/folder',
+        createFile: () => ({ getUrl: () => 'https://drive.example/file' })
+      }),
+      getFolderById: () => ({ createFile: () => ({ getUrl: () => 'https://drive.example/file' }) })
+    },
+    UrlFetchApp: {}
+  };
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(source, sandbox, { filename: 'gs-merged(integration)' });
+  return sandbox;
+}
+
+const ALL_HEADERS = {
+  'إعدادات المشروع': ['المفتاح', 'القيمة', 'الوصف'],
+  'المستخدمون': ['رقم المستخدم', 'الاسم', 'البريد الإلكتروني', 'كلمة المرور المشفرة', 'الملح', 'الدور', 'رقم الجمعية', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول', 'يجب تغيير كلمة المرور', 'كلمة مرور سابقة مشفرة', 'ملح سابق'],
+  'الجمعيات': ['رقم الجمعية', 'اسم الجمعية', 'التصنيف', 'المنطقة', 'المدينة', 'أرقام التواصل', 'البريد الإلكتروني', 'الحالة', 'تاريخ الإنشاء'],
+  'المستفيدون': ['رقم المستفيد', 'رقم الجمعية', 'الاسم', 'المنطقة', 'المدينة', 'العنوان', 'رقم الجوال', 'رقم جوال إضافي', 'عدد الأفراد', 'ضمان اجتماعي', 'الحالة الاجتماعية', 'مبلغ الدخل', 'الاحتياج', 'حالة المستفيد', 'حالة التسليم', 'رقم المندوب', 'الملاحظات', 'تاريخ الإنشاء', 'تاريخ التسليم', 'آخر تحديث', 'خط العرض', 'خط الطول', 'علامة مميزة', 'مصدر الموقع', 'تاريخ تحديث الموقع'],
+  'الأجهزة': ['رقم الجهاز', 'اسم الجهاز', 'النوع', 'رقم الجمعية', 'رقم المستفيد', 'حالة الجهاز', 'تاريخ الإضافة', 'تاريخ التسليم', 'ملاحظات'],
+  'المناديب': ['رقم المندوب', 'رقم الجمعية', 'اسم المندوب', 'رقم الجوال', 'رمز الدخول المشفر', 'الملح', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول'],
+  'التسليمات': ['رقم التسليم', 'رقم المستفيد', 'رقم المندوب', 'أرقام الأجهزة', 'الحالة', 'سبب التعذر', 'الملاحظات', 'رابط الإثبات', 'تاريخ ووقت التسليم', 'تاريخ الإنشاء'],
+  'إدارة الأنشطة': ['ترتيب المرحلة', 'اسم المرحلة', 'ترتيب النشاط الرئيسي', 'اسم النشاط الرئيسي', 'اسم النشاط الفرعي', 'المسؤول', 'تاريخ البداية', 'تاريخ النهاية', 'نسبة الإنجاز', 'الحالة', 'رابط الشاهد', 'ملاحظات'],
+  'شواهد الأنشطة الرئيسية': ['اسم المرحلة', 'اسم النشاط الرئيسي', 'رابط الشاهد', 'حالة الاعتماد', 'ملاحظات', 'تاريخ الرفع'],
+  'سجل العمليات': ['رقم العملية', 'رقم المستخدم', 'اسم المستخدم', 'الدور', 'العملية', 'القسم', 'رقم السجل', 'ملاحظات', 'التاريخ والوقت'],
+  'طلبات انضمام الجمعيات': ['رقم الطلب', 'اسم الجمعية', 'التصنيف', 'المنطقة', 'المدينة', 'أرقام التواصل', 'البريد الإلكتروني', 'اسم المسؤول', 'ملاحظات مقدّم الطلب', 'الحالة', 'سبب الرفض', 'رقم الجمعية الناتجة', 'تاريخ التقديم', 'تاريخ المراجعة', 'المراجع'],
+  'البيانات المرجعية': ['المعرف', 'النوع', 'القيمة', 'يتبع', 'الترتيب', 'نشط']
+};
+
+function seedSheets(S) {
+  Object.keys(ALL_HEADERS).forEach(name => S.ensureSheet_(S.SpreadsheetApp.getActiveSpreadsheet(), name, ALL_HEADERS[name]));
+}
+function adminSession(S) {
+  return S.createSession_({ id: 'USR-ADMIN-IT', name: 'مدير الاختبار', role: 'ADMIN', associationId: '' });
+}
+
+/* ================================================================
+   الرحلة الكاملة: من تقديم طلب انضمام إلى تسليم فعلي موثَّق
+   ================================================================ */
+
+const S = buildSandbox();
+seedSheets(S);
+const admin = adminSession(S);
+
+section('1) تقديم طلب انضمام جمعية (بوابة عامة، بلا جلسة)');
+const application = S.submitAssociationApplication({
+  name: 'جمعية الرحلة الكاملة', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
+  phone: '0501110001', email: 'full-journey@example.org', contactName: 'أحمد المطيري'
+});
+assert('التقديم ينجح ويعيد رقم طلب', application.ok && /^APP-/.test(application.id));
+
+section('2) قبول الطلب من الإدارة');
+const accepted = S.reviewAssociationApplication(admin.token, application.id, 'accept', '');
+assert('القبول ينشئ جمعية برقم صحيح', accepted.ok && /^ASC-/.test(accepted.associationId));
+assert('القبول يصدر كلمة مرور مؤقتة قوية مرة واحدة', (() => {
+  try { S.assertStrongPassword_(accepted.temporaryPassword); return true; } catch (e) { return false; }
+})());
+throws('إعادة قبول نفس الطلب تُرفض (لا تكرار عند إعادة المحاولة)',
+  () => S.reviewAssociationApplication(admin.token, application.id, 'accept', ''), 'سبق البتّ');
+assert('عملية القبول لا تُسجِّل كلمة المرور المؤقتة في سجل العمليات', (() => {
+  const rows = S.readTable_('سجل العمليات').rows;
+  return !rows.some(r => String(r['ملاحظات'] || '').includes(accepted.temporaryPassword));
+})());
+
+section('3) دخول الجمعية بكلمة المرور المؤقتة وإجبار تغييرها');
+const firstLogin = S.loginUser_('full-journey@example.org', accepted.temporaryPassword);
+assert('الدخول الأول ينجح لكن يُلزَم بتغيير كلمة المرور فورًا (لا بيانات بوابة)',
+  firstLogin.ok && firstLogin.mustChangePassword === true && firstLogin.bootstrap === undefined);
+throws('لا يمكن استدعاء أي دالة أخرى قبل تغيير كلمة المرور المؤقتة',
+  () => S.saveBeneficiary(firstLogin.token, { name: 'محاولة قبل التغيير' }), 'يجب تغيير كلمة المرور');
+const newPassword = 'JourneyPass456';
+const changeResult = S.changePassword(firstLogin.token, accepted.temporaryPassword, newPassword);
+assert('تغيير كلمة المرور ينجح', changeResult.ok);
+const secondLogin = S.loginUser_('full-journey@example.org', newPassword);
+assert('الدخول بكلمة المرور الجديدة ينجح ويعيد بوابة كاملة فورًا',
+  secondLogin.ok && !secondLogin.mustChangePassword && !!secondLogin.bootstrap);
+throws('كلمة المرور المؤقتة القديمة لم تعد صالحة بعد التغيير',
+  () => S.loginUser_('full-journey@example.org', accepted.temporaryPassword), 'بيانات الدخول غير صحيحة');
+const assocToken = secondLogin.token;
+const associationId = accepted.associationId;
+
+section('4) إضافة مندوب');
+const delegateResult = S.saveDelegate(assocToken, { name: 'مندوب الرحلة', phone: '0501110002' });
+assert('إضافة المندوب تنجح وتُصدر رمز دخول', delegateResult.ok && /^MND-/.test(delegateResult.accessCode));
+
+section('5) إضافة مستفيد فرديًا');
+const beneficiary = S.saveBeneficiary(assocToken, {
+  name: 'مستفيد الرحلة الكاملة', region: 'الرياض', city: 'الرياض', address: 'حي الملقا',
+  phone: '0501110003', familyCount: 3, socialStatus: 'أرملة', needs: ['ثلاجة'],
+  landmark: 'بجانب المسجد', lat: '24.75', lng: '46.65', locationSource: 'خريطة'
+});
+assert('إضافة المستفيد الفردي تنجح مع بيانات الموقع كاملة', beneficiary.ok
+  && beneficiary.record.landmark === 'بجانب المسجد' && beneficiary.record.locationSource === 'خريطة');
+
+section('6) استيراد مستفيدين بالجملة');
+const importResult = S.importBeneficiaries(assocToken, [
+  { name: 'مستفيد مستورَد أول', region: 'الرياض', city: 'الرياض', address: 'حي الروضة', phone: '0501110004', familyCount: 2, socialStatus: 'يتيم', needs: ['غسالة'] },
+  { name: 'مستفيد مستورَد ثانٍ', region: 'الرياض', city: 'الرياض', address: 'حي النخيل', phone: '0501110005', familyCount: 1, socialStatus: 'أخرى', needs: [] }
+], true);
+assert('الاستيراد الجماعي ينجح لصفَّين صحيحين', importResult.ok && importResult.imported === 2);
+throws('الاستيراد الجماعي بلا تعهّد صريح يُرفض', () => S.importBeneficiaries(assocToken, [
+  { name: 'صف بلا تعهّد', region: 'الرياض', city: 'الرياض', address: 'حي', phone: '0501110006', familyCount: 1, socialStatus: 'أخرى', needs: [] }
+], false), 'التعهد');
+
+section('7) تخصيص جهاز للمستفيد');
+const device = S.saveDevice(admin.token, { name: 'ثلاجة الرحلة', type: 'ثلاجة', associationId: associationId, beneficiaryId: beneficiary.id });
+assert('إضافة الجهاز وتخصيصه للمستفيد ينجح', device.ok);
+assert('الجهاز المخصَّص لمستفيد يتحول تلقائيًا لحالة "مخصص"',
+  String(S.findById_('الأجهزة', 'رقم الجهاز', device.id)['حالة الجهاز']) === 'مخصص');
+
+section('8) تعيين المندوب للمستفيد');
+const assign = S.assignDelegate(assocToken, beneficiary.id, delegateResult.id);
+assert('تعيين المندوب ينجح', assign.ok);
+assert('حالة التسليم تصبح "خرج مع المندوب" وحالة الجهاز "مع المندوب"',
+  String(S.findById_('المستفيدون', 'رقم المستفيد', beneficiary.id)['حالة التسليم']) === 'خرج مع المندوب'
+  && String(S.findById_('الأجهزة', 'رقم الجهاز', device.id)['حالة الجهاز']) === 'مع المندوب');
+
+section('9) دخول المندوب برمزه');
+const delegateLogin = S.loginDelegate_(delegateResult.accessCode);
+assert('دخول المندوب بالرمز الصحيح ينجح ويعيد بوابته', delegateLogin.ok && delegateLogin.user.role === 'DELEGATE');
+assert('بوابة المندوب تعرض المستفيد المُسنَد إليه فقط', delegateLogin.bootstrap.beneficiaries.some(b => b.id === beneficiary.id));
+const delegateToken = delegateLogin.token;
+
+section('10) تعذّر التسليم ثم إعادة المحاولة');
+const failResult = S.updateDeliveryStatus(delegateToken, beneficiary.id, 'لم يتم التواصل', 'لا يرد على الاتصال');
+assert('تسجيل تعذّر التسليم ينجح', failResult.ok);
+assert('حالة التسليم تصبح "تعذر التسليم" دون المساس بحالة الجهاز', failResult.record.deliveryStatus === 'تعذر التسليم'
+  && String(S.findById_('الأجهزة', 'رقم الجهاز', device.id)['حالة الجهاز']) === 'مع المندوب');
+const retry = S.assignDelegate(assocToken, beneficiary.id, delegateResult.id);
+assert('إعادة تعيين المندوب بعد التعذّر (إعادة محاولة) تنجح وتعيد الحالة لـ"خرج مع المندوب"',
+  retry.ok && retry.record.deliveryStatus === 'خرج مع المندوب');
+
+section('11) إثبات التسليم');
+throws('confirmDelivery يرفض بلا صورة إثبات', () => S.confirmDelivery(delegateToken, { beneficiaryId: beneficiary.id, confirmed: true }), 'صورة إثبات');
+const proofDataUrl = 'data:image/png;base64,aGVsbG8=';
+const delivered = S.confirmDelivery(delegateToken, { beneficiaryId: beneficiary.id, confirmed: true, proofDataUrl: proofDataUrl });
+assert('تأكيد التسليم ينجح ويحدّث المستفيد والجهاز معًا', delivered.ok
+  && delivered.record.deliveryStatus === 'تم التسليم' && delivered.record.status === 'تم التسليم');
+assert('وقت التسليم مُسجَّل', !!S.findById_('المستفيدون', 'رقم المستفيد', beneficiary.id)['تاريخ التسليم']);
+assert('الجهاز المرتبط ينتقل لحالة "تم التسليم" أيضًا',
+  String(S.findById_('الأجهزة', 'رقم الجهاز', device.id)['حالة الجهاز']) === 'تم التسليم');
+assert('التسليم يُضاف فورًا لسجل تسليمات المندوب (لا يحتاج تحديثًا يدويًا)', (() => {
+  const history = S.getDeliveryHistory_(delegateResult.id);
+  return history.some(h => h.beneficiaryName === beneficiary.record.name);
+})());
+
+section('12) تحقّق من تطابق الحالات والمؤشرات والسجل بعد الرحلة كاملة');
+const finalBundle = S.getBootstrapData(assocToken);
+assert('ملخّص getBootstrapData يعكس فعليًا نفس عدد المستفيدين المُنشَأين (فردي + استيراد)',
+  finalBundle.summary.beneficiaries === 3);
+assert('ملخّص التسليم في Bootstrap يطابق ما تعرضه listBeneficiaries فعليًا (مصدر واحد لا مصدرين مختلفين)', (() => {
+  const listed = S.listBeneficiaries(assocToken, {}).items;
+  const deliveredInList = listed.filter(b => b.deliveryStatus === 'تم التسليم').length;
+  return deliveredInList === 1 && finalBundle.summary.devicesDelivered === 1;
+})());
+assert('سجل العمليات يوثّق كل خطوات الرحلة (إضافة/استيراد/تخصيص/تعيين/تعذر/تسليم) دون فقد أي عملية', (() => {
+  const actions = S.listAuditLog(admin.token, { associationId: associationId, pageSize: 50 }).items.map(r => r.action);
+  return ['إضافة مستفيد', 'استيراد مستفيدين', 'إضافة جهاز', 'تعيين مندوب', 'تعذر التسليم', 'تأكيد تسليم'].every(a => actions.includes(a));
+})());
+assert('حالة الجهاز وحالة التسليم متّسقتان (لا تعارض جهاز "تم التسليم" مع مستفيد لم يُسلَّم)', (() => {
+  const report = S.diagnoseStateIntegrity();
+  return report.issueCount === 0;
+})());
+
+section('13) عزل جمعيتين عن بعضهما داخل نفس الرحلة');
+const otherApplication = S.submitAssociationApplication({
+  name: 'جمعية أخرى للعزل', category: 'جمعية أهلية', region: 'مكة المكرمة', city: 'جدة',
+  phone: '0501110099', email: 'isolated@example.org', contactName: 'مسؤول آخر'
+});
+const otherAccepted = S.reviewAssociationApplication(admin.token, otherApplication.id, 'accept', '');
+const otherLogin = S.loginUser_('isolated@example.org', otherAccepted.temporaryPassword);
+S.changePassword(otherLogin.token, otherAccepted.temporaryPassword, 'OtherPass789');
+const otherToken = S.loginUser_('isolated@example.org', 'OtherPass789').token;
+
+assert('الجمعية الأخرى لا ترى مستفيد الرحلة الأولى في قائمتها', !S.listBeneficiaries(otherToken, {}).items.some(b => b.id === beneficiary.id));
+throws('الجمعية الأخرى لا تستطيع تعديل مستفيد الجمعية الأولى مباشرة عبر API',
+  () => S.saveBeneficiary(otherToken, { id: beneficiary.id, name: 'تعديل متطفل', region: 'الرياض', city: 'الرياض', address: 'حي', phone: '0501110003', familyCount: 1, socialStatus: 'أرملة', needs: [] }),
+  'ليس لديك صلاحية');
+throws('الجمعية الأخرى لا تستطيع تعيين مندوبها لمستفيد الجمعية الأولى',
+  () => S.assignDelegate(otherToken, beneficiary.id, delegateResult.id), 'ليس لديك صلاحية');
+assert('سجل عمليات الجمعية الأخرى لا يحتوي أي عملية من الجمعية الأولى', (() => {
+  const otherActions = S.listAuditLog(otherToken, {}).items;
+  return !otherActions.some(r => r.recordId === beneficiary.id);
+})());
+
+section('14) إبطال الجلسات والرموز القديمة');
+const oldDelegateToken = delegateToken;
+const regen = S.regenerateDelegateCode(assocToken, delegateResult.id);
+assert('إعادة إنشاء رمز المندوب تنجح وتصدر رمزًا جديدًا مختلفًا', regen.ok && regen.accessCode !== delegateResult.accessCode);
+throws('الرمز القديم للمندوب لم يعد يعمل بعد إعادة الإنشاء', () => S.loginDelegate_(delegateResult.accessCode), 'رمز الدخول غير صحيح');
+throws('جلسة المندوب المفتوحة بالرمز القديم تُقطع فورًا (لا تبقى صالحة)',
+  () => S.requireSession_(oldDelegateToken, ['DELEGATE']), 'انتهت الجلسة');
+
+const oldAssocToken = assocToken;
+const resetResult = S.resetAssociationPassword(admin.token, associationId);
+assert('إعادة تعيين كلمة مرور الجمعية من الإدارة تنجح وتصدر كلمة مرور مؤقتة جديدة',
+  resetResult.ok && resetResult.temporaryPassword !== newPassword);
+throws('جلسة الجمعية المفتوحة قبل إعادة التعيين تُقطع فورًا', () => S.requireSession_(oldAssocToken, ['ASSOCIATION']), 'انتهت الجلسة');
+throws('كلمة المرور القديمة للجمعية لم تعد تعمل بعد إعادة التعيين',
+  () => S.loginUser_('full-journey@example.org', newPassword), 'بيانات الدخول غير صحيحة');
+const afterReset = S.loginUser_('full-journey@example.org', resetResult.temporaryPassword);
+assert('كلمة المرور المؤقتة الجديدة تعمل، وتُفرَض إعادة تغييرها من جديد', afterReset.ok && afterReset.mustChangePassword === true);
+
+/* -------- النتيجة -------- */
+
+console.log('\n' + '='.repeat(56));
+console.log(failures === 0 ? `نجحت جميع الاختبارات: ${checks}/${checks}` : `فشل ${failures} من ${checks} اختبارًا`);
+console.log('='.repeat(56));
+process.exit(failures === 0 ? 0 : 1);

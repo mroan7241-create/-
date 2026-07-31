@@ -187,13 +187,17 @@ const DELEGATE_DATA = {
 // تُحاكى هنا القيم نفسها ضمن state.lazy لمطابقة العقد الجديد بين الخادم
 // والواجهة (fetchLazyPage/fetchActivitiesBundle في Index.html) دون تغيير
 // بيانات الاختبار الأصلية نفسها.
+/** يحاكي نتيجة list*() المُرقَّمة من الخادم لقسم — نفس الشكل الذي تعيده paginate_ فعليًا. */
+const lazyPage = list => ({loading: false, items: list || [], total: (list || []).length, page: 1, totalPages: 1, pageSize: 25});
 const setRole = data => {
   app.state.data = data;
   app.state.user = data.user;
   app.state.lazy = {
     audit: {loading: false, items: data.audit || [], total: (data.audit || []).length, page: 1, totalPages: 1, pageSize: 25},
     activities: {loading: false, activities: data.activities || [], stages: data.stages || [], evidence: data.evidence || []},
-    applications: {loading: false, items: data.applications || [], total: (data.applications || []).length, page: 1, totalPages: 1, pageSize: 25}
+    applications: {loading: false, items: data.applications || [], total: (data.applications || []).length, page: 1, totalPages: 1, pageSize: 25},
+    beneficiaries: lazyPage(data.beneficiaries), associations: lazyPage(data.associations),
+    devices: lazyPage(data.devices), delegates: lazyPage(data.delegates)
   };
 };
 const out = () => registry.root.innerHTML;
@@ -258,7 +262,62 @@ const fakeKpiEl = { getAttribute: k => ({ 'data-page': 'devices', 'data-filter':
 app.CLICK_ACTIONS['kpi-nav'](fakeKpiEl);
 assert('النقر على مؤشر "تم تسليمها" ينقل لصفحة الأجهزة', app.state.page === 'devices');
 assert('النقر على المؤشر يطبّق فلتر الحالة المرتبط به', app.state.filter === 'تم التسليم');
+assert('النقر على مؤشر مرتبط بصفحة مُرقَّمة خادميًا يطلب صفحتها من الخادم فعليًا (لا فلترة محلية فقط)',
+  serverCalls.some(c => c.method === 'listDevices'));
 app.state.page = 'dashboard'; app.state.filter = ''; app.render();
+
+/* ---------------- 2ب) أقسام الأنشطة الثلاثة في لوحة بيانات الإدارة ---------------- */
+
+const activitiesFixture = [
+  {stage: 'التجهيز', mainActivity: 'التعاقد', subActivity: 'توقيع العقود', owner: 'إدارة المشروع',
+    endDate: '2026/01/01', progress: 100, status: 'مكتمل', evidenceUrl: 'https://drive.example/e1'},
+  {stage: 'التنفيذ', mainActivity: 'التوزيع', subActivity: 'توزيع الدفعة الأولى', owner: 'فريق الميدان',
+    endDate: '2026/09/01', progress: 40, status: 'جارٍ', evidenceUrl: ''},
+  {stage: 'التنفيذ', mainActivity: 'التوزيع', subActivity: 'توزيع الدفعة الثانية', owner: 'فريق الميدان',
+    endDate: '2026/12/01', progress: 0, status: 'لم يبدأ', evidenceUrl: ''}
+];
+app.state.lazy.activities = {loading: false, activities: activitiesFixture, stages: [], evidence: []};
+app.state.page = 'dashboard';
+app.render();
+assert('لوحة بيانات الإدارة تعرض قسم "مكتمل" مع رابط الشاهد', out().includes('توقيع العقود') && out().includes('الشاهد ↗'));
+assert('لوحة بيانات الإدارة تعرض قسم "جارٍ حاليًا" بنسبة التقدّم', out().includes('توزيع الدفعة الأولى') && out().includes(app.fmt(40) + '٪'));
+assert('لوحة بيانات الإدارة تعرض قسم "المهمة القادمة" مع موعدها', out().includes('توزيع الدفعة الثانية') && out().includes('2026/12/01'));
+assert('عناصر الأنشطة الثلاثة قابلة للنقر لفتح تفاصيلها', out().includes('data-act="edit-activity"'));
+app.state.lazy.activities = {loading: false, activities: [], stages: [], evidence: []};
+app.render();
+assert('لوحة بيانات بلا أنشطة إطلاقًا لا تعرض أقسامًا فارغة مضلِّلة', !out().includes('لا توجد أنشطة مكتملة'));
+
+setRole(ASSOCIATION_DATA);
+app.state.page = 'dashboard';
+app.render();
+assert('أقسام الأنشطة الثلاثة إدارية فقط، لا تظهر لبوابة الجمعية', !out().includes('المهمة القادمة'));
+setRole(ADMIN_DATA);
+app.state.page = 'dashboard'; app.state.filter = ''; app.render();
+
+/* ---------------- 2ج) حالات التحميل والفراغ والترقيم للقوائم المُرقَّمة خادميًا ---------------- */
+
+['beneficiaries', 'associations', 'devices', 'delegates'].forEach(key => {
+  app.state.page = key;
+  app.state.lazy[key] = {loading: true};
+  let err = null;
+  try { app.render(); } catch (e) { err = e; }
+  assert('صفحة ' + key + ' تعرض حالة تحميل هيكلية أثناء الجلب (لا محتوى مسبق مضلِّل)',
+    !err && out().includes('sk-card'), err && err.message);
+
+  app.state.lazy[key] = {loading: false, items: [], total: 0, page: 1, totalPages: 1};
+  app.render();
+  assert('صفحة ' + key + ' تعرض حالة فراغة مفسَّرة لا جدولًا فارغًا بلا تفسير',
+    out().includes('empty') || out().includes('لا توجد') || out().includes('لا نتائج') || out().includes('لم يُضف'));
+});
+
+app.state.lazy.devices = {loading: false, items: ADMIN_DATA.devices, total: 40, page: 1, totalPages: 2, pageSize: 25};
+app.state.page = 'devices';
+app.render();
+assert('صفحة بها أكثر من صفحة واحدة تعرض أزرار تنقّل صفحات فعليّة', out().includes('devices-next-page'));
+app.CLICK_ACTIONS['devices-next-page']();
+assert('زر "التالي" يطلب الصفحة التالية من الخادم فعليًا', serverCalls.filter(c => c.method === 'listDevices').length >= 2);
+
+setRole(ADMIN_DATA);
 
 app.state.page = 'applications';
 app.render();
@@ -381,30 +440,50 @@ delete registry.locationCoordsHint; delete registry.locationMapStatus; delete re
 
 /* ---------------- 4) البحث والفلاتر ---------------- */
 
-section('4) البحث والفلترة');
+// المستفيدون لم يعودوا يُصفَّون محليًا (listBeneficiaries على الخادم يُصفّي
+// ويُرقّم قبل الإرسال، مثل سجل العمليات وطلبات الانضمام تمامًا) — smoke.js
+// يختبر هنا فقط أن صفحة المستفيدين ترسم ما وصلها في state.lazy.beneficiaries
+// بشكل صحيح لكل حالة (نتائج/بحث فارغ/تحميل)، لا منطق البحث الخادمي نفسه
+// (ذاك مختبَر في server-test.js/reference-test.js عبر applySearch_ فعليًا).
 app.state.page = 'beneficiaries';
 app.state.search = 'فاطمة';
 app.state.filter = '';
+app.state.lazy.beneficiaries = lazyPage([ADMIN_DATA.beneficiaries[0]]);
 app.render();
 assert('البحث بالاسم يُرجع نتيجة', out().includes('فاطمة العتيبي'));
 
 app.state.search = 'لا-يوجد-هذا-الاسم';
+app.state.lazy.beneficiaries = lazyPage([]);
 app.render();
 assert('بحث بلا نتائج يعرض حالة فارغة مفيدة', out().includes('لا نتائج مطابقة'));
 
 app.state.search = '';
 app.state.filter = '';
+app.state.lazy.beneficiaries = lazyPage([ADMIN_DATA.beneficiaries[0]]);
 app.render();
 assert('الفلتر الافتراضي "كل الحالات" لا يُخفي السجلات', out().includes('فاطمة العتيبي'));
 
 app.state.filter = 'جاري التجهيز';
 app.render();
-assert('الفلتر بحالة موجودة يُبقي السجل', out().includes('فاطمة العتيبي'));
+assert('الفلتر بحالة موجودة يُبقي السجل (بيانات الصفحة كما وصلت من الخادم)', out().includes('فاطمة العتيبي'));
 
 app.state.filter = 'ملغي';
+app.state.lazy.beneficiaries = lazyPage([]);
 app.render();
-assert('الفلتر بحالة غير مطابقة يُخفي السجل', !out().includes('فاطمة العتيبي'));
+assert('الفلتر بحالة غير مطابقة يُخفي السجل (الخادم يُعيد صفحة فارغة)', !out().includes('فاطمة العتيبي'));
 app.state.filter = '';
+setRole(ADMIN_DATA);
+app.state.page = 'beneficiaries';
+app.state.lazy.beneficiaries = lazyPage(ADMIN_DATA.beneficiaries);
+app.render();
+assert('حقلا فلتر الجمعية والترتيب يظهران للإدارة في صفحة المستفيدين',
+  out().includes('data-act="set-assoc-filter"') && out().includes('data-act="set-sort"'));
+setRole(ASSOCIATION_DATA);
+app.state.page = 'beneficiaries';
+app.state.lazy.beneficiaries = lazyPage(ASSOCIATION_DATA.beneficiaries);
+app.render();
+assert('حقل فلتر الجمعية لا يظهر للجمعية (مقيَّدة بجمعيتها من الخادم أصلًا، لا حاجة لاختيار)',
+  !out().includes('data-act="set-assoc-filter"'));
 
 // سجل العمليات لم يعد يُصفَّى محليًا (listAuditLog على الخادم يُصفّي
 // ويُرقّم قبل الإرسال) — smoke.js يختبر هنا فقط أن الصفحة ترسم ما وصلها
@@ -621,7 +700,25 @@ assert('نافذة الاستيراد الجماعي تذكر مرادفات إ�
 assert('نافذة الاستيراد الجماعي تذكر عمود العلامة المميزة الاختياري', registry.modalRoot.innerHTML.includes('العلامة المميزة'));
 assert('نافذة الاستيراد الجماعي توضّح اشتراط وجود الإحداثيتين معًا أو غيابهما معًا',
   registry.modalRoot.innerHTML.includes('معًا'));
+assert('نافذة الاستيراد الجماعي تعرض زر تنزيل قالب CSV', registry.modalRoot.innerHTML.includes('data-act="download-import-template"'));
 app.closeModal();
+
+/* ---------------- 9ب) قالب الاستيراد القابل للتنزيل ---------------- */
+
+const templateCsv = app.buildImportTemplateCsv();
+const templateRows = app.parseCsv(templateCsv);
+assert('قالب الاستيراد يبدأ بعلامة BOM لفتح Excel للعربية بترميز صحيح', templateCsv.charCodeAt(0) === 0xFEFF);
+assert('عناوين قالب الاستيراد تطابق ترتيب أعمدة parseCsv بالضبط',
+  app.IMPORT_TEMPLATE_HEADERS.join(',') === ['الاسم', 'المنطقة', 'المدينة', 'العنوان', 'الجوال', 'عدد الأفراد',
+    'الضمان الاجتماعي', 'الحالة الاجتماعية', 'الدخل', 'الاحتياج', 'الملاحظات', 'خط العرض', 'خط الطول', 'علامة مميزة'].join(','));
+assert('صف المثال في القالب يُقرأ صحيحًا عبر parseCsv نفسه (بلا تباين بنية)',
+  templateRows.length === 1 && templateRows[0].name === 'سارة العتيبي' && templateRows[0].landmark === 'بجانب المسجد'
+  && templateRows[0].lat === '24.7136' && templateRows[0].lng === '46.6753');
+assert('downloadImportTemplate لا يفشل حتى بلا Blob/URL في بيئة الاختبار (سقوط آمن بتنبيه بدل استثناء)', (() => {
+  let error = null;
+  try { app.downloadImportTemplate(); } catch (e) { error = e; }
+  return !error;
+})());
 
 /* ---------------- 10) المنطقة والمدينة المترابطتان ---------------- */
 

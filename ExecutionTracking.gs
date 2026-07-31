@@ -253,9 +253,9 @@ function buildAlerts_(beneficiaries, associations, devices, activities, evidence
  * ثانية) بعد تعديل تُجريه جمعية أو مندوب.
  */
 function clearDashboardCache() {
-  const cache = CacheService.getScriptCache();
-  cache.remove('dashboard');
-  cache.remove('bootstrap:ADMIN');
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty('DASHBOARD_CACHE_GEN', String(dashboardCacheGeneration_() + 1));
+  CacheService.getScriptCache().remove('dashboard');
   return {ok: true};
 }
 

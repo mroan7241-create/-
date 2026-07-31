@@ -257,6 +257,8 @@
     table.data th{background:var(--surface);color:var(--ink-soft);padding:12px 14px;text-align:start;font-size:12px;font-weight:700;white-space:nowrap;border-bottom:1px solid var(--line)}
     table.data td{padding:13px 14px;border-top:1px solid var(--line);font-size:13.5px;vertical-align:middle}
     table.data tbody tr:hover td{background:var(--surface)}
+    .th-sort{all:unset;cursor:pointer;font:inherit;color:inherit;white-space:nowrap}
+    .th-sort:hover,.th-sort.active{color:var(--zad-700)}
     .mono{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--muted);direction:ltr;display:inline-block;unicode-bidi:isolate}
     .muted{color:var(--muted)}
 
@@ -505,9 +507,14 @@
       activityTab: '',
       delegateRoute: null,
       activeTrigger: null,
+      // تصفية إضافية بالجمعية (للإدارة فقط) وترتيب بالعمود — عامّان
+      // لأي صفحة مُرقَّمة خادميًا حاليًا، يُصفَّران عند تبديل الصفحة.
+      assocFilter: '',
+      sortBy: '',
+      sortDir: 'asc',
       // أقسام "ثقيلة" لم تعد ضمن Bootstrap — تُجلب فقط عند فتح صفحتها.
       // null = لم تُجلَب بعد؛ كائن {loading,...} بعد أول طلب.
-      lazy: {audit: null, activities: null, applications: null}
+      lazy: {audit: null, activities: null, applications: null, beneficiaries: null, associations: null, devices: null, delegates: null}
     };
 
     /**
@@ -695,11 +702,36 @@
       return out;
     }
 
+    /** قائمة "تصفية حسب الجمعية" — للإدارة فقط، تُبنى من state.data.associations الكاملة (متاحة دائمًا لدور الإدارة). */
+    function assocFilterSelect() {
+      if (state.data.role !== 'ADMIN') return '';
+      var options = (state.data.associations || []).map(function (a) {
+        return '<option value="' + esc(a.id) + '"' + (state.assocFilter === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>';
+      }).join('');
+      return '<label class="sr-only" for="assocFilterSelect">تصفية حسب الجمعية</label>'
+        + '<select class="control" id="assocFilterSelect" data-act="set-assoc-filter">'
+        + '<option value="">كل الجمعيات</option>' + options + '</select>';
+    }
+
+    /** قائمة "ترتيب حسب" لصفحات البطاقات (لا جدول بعناوين أعمدة قابلة للنقر) — sortFields = [[field, label], ...]. */
+    function sortSelect(sortFields) {
+      if (!sortFields || !sortFields.length) return '';
+      var options = sortFields.map(function (pair) {
+        return '<option value="' + esc(pair[0]) + '"' + (state.sortBy === pair[0] ? ' selected' : '') + '>' + esc(pair[1]) + '</option>';
+      }).join('');
+      return '<label class="sr-only" for="sortSelect">ترتيب حسب</label>'
+        + '<select class="control" id="sortSelect" data-act="set-sort">'
+        + '<option value="">الترتيب الافتراضي</option>' + options + '</select>';
+    }
+
     function toolbar(options) {
       var filters = options.filters
         ? '<label class="sr-only" for="filterSelect">تصفية حسب الحالة</label>'
           + '<select class="control" id="filterSelect" data-act="set-filter">' + options.filters + '</select>'
         : '';
+      var assocFilter = options.showAssocFilter ? assocFilterSelect() : '';
+      var sort = options.sortFields ? sortSelect(options.sortFields) : '';
+      filters = filters + assocFilter + sort;
       return '<div class="toolbar"><div class="search">'
         + '<span class="glyph" aria-hidden="true">⌕</span>'
         + '<label class="sr-only" for="searchBox">بحث</label>'
@@ -758,6 +790,18 @@
       }
       list.unshift(record);
       return list;
+    }
+
+    /**
+     * تحديث سجل واحد في مصدرَي الحقيقة معًا: المصفوفة الكاملة في
+     * state.data (تستخدمها النماذج والقوائم المنسدلة وviewX/findX) وصفحة
+     * القائمة المُرقَّمة خادميًا الحالية في state.lazy إن كانت مُحمَّلة —
+     * بدونها تبقى القائمة المعروضة تُظهر حالة قديمة بعد أي حفظ/تفعيل/تعطيل
+     * حتى لو أُعيد الرسم، لأن upsertRecord يستبدل مرجع الكائن لا يُعدِّله.
+     */
+    function upsertEntity(key, record) {
+      upsertRecord(state.data[key], record);
+      if (state.lazy[key] && state.lazy[key].items) upsertRecord(state.lazy[key].items, record);
     }
 
     /** يدمج ملخّصًا جزئيًا (من استجابة حفظ) فوق state.data.summary الحالي بدل استبداله بالكامل. */
@@ -869,6 +913,7 @@
         state.data = result.bootstrap;
         state.page = 'dashboard';
         render();
+        if (state.data.role === 'ADMIN') fetchActivitiesBundle();
         toast('مرحبًا بك، ' + (result.user && result.user.name ? result.user.name : ''), 'success');
         loadReferenceDataOnce();
       }, reportError).finally(function () { busy(false); });
@@ -1041,12 +1086,21 @@
     }
 
     /** الصفحات التي تُحمَّل عند فتحها فقط (لا ضمن Bootstrap) — مفتاحها في state.lazy وطريقة جلبها. */
-    var LAZY_PAGES = {audit: 'listAuditLog', applications: 'listApplications'};
+    var LAZY_PAGES = {
+      audit: 'listAuditLog', applications: 'listApplications',
+      beneficiaries: 'listBeneficiaries', associations: 'listAssociations',
+      devices: 'listDevices', delegates: 'listDelegates'
+    };
+    /** الصفحات التي تدعم فلتر "الجمعية" الإضافي، وللإدارة فقط (الجمعية نفسها مقيَّدة من الخادم بلا حاجة لاختيار). */
+    var ASSOC_FILTER_PAGES = {beneficiaries: true, devices: true, delegates: true, audit: true};
 
-    function goTo(page) {
+    function goTo(page, presetFilter, presetAssocFilter) {
       state.page = page;
       state.search = '';
-      state.filter = '';
+      state.filter = presetFilter || '';
+      state.assocFilter = presetAssocFilter || '';
+      state.sortBy = '';
+      state.sortDir = 'asc';
       state.activityTab = '';
       if (LAZY_PAGES[page]) fetchLazyPage(page, LAZY_PAGES[page], 1);
       else if (page === 'activities' && state.data.role === 'ADMIN') fetchActivitiesBundle();
@@ -1058,11 +1112,19 @@
       window.scrollTo(0, 0);
     }
 
-    /** يجلب صفحة واحدة من قسم مُرقَّم (سجل العمليات/طلبات الانضمام) — يُعاد استخدامها للبحث والفلترة وأزرار التنقّل بين الصفحات. */
+    /** خيارات الطلب المشتركة لأي قسم مُرقَّم خادميًا — بحث/فلترة/فلتر جمعية (للإدارة)/ترتيب. */
+    function lazyFetchOptions(key, page) {
+      var options = {page: page || 1, pageSize: 25, search: state.search, filter: state.filter};
+      if (state.data.role === 'ADMIN' && ASSOC_FILTER_PAGES[key] && state.assocFilter) options.associationId = state.assocFilter;
+      if (state.sortBy) { options.sortBy = state.sortBy; options.sortDir = state.sortDir || 'asc'; }
+      return options;
+    }
+
+    /** يجلب صفحة واحدة من قسم مُرقَّم (سجل العمليات/طلبات الانضمام/المستفيدون/الجمعيات/الأجهزة/المناديب) — يُعاد استخدامها للبحث والفلترة والترتيب وأزرار التنقّل بين الصفحات. */
     function fetchLazyPage(key, method, page) {
       state.lazy[key] = Object.assign({}, state.lazy[key], {loading: true});
       render();
-      api(method, state.token, {page: page || 1, pageSize: 25, search: state.search, filter: state.filter})
+      api(method, state.token, lazyFetchOptions(key, page))
         .then(function (result) {
           state.lazy[key] = Object.assign({loading: false}, result);
           render();
@@ -1142,6 +1204,7 @@
           + fmt(s.completedActivities) + ' من ' + fmt(s.totalActivities) + ' نشاطًا مكتملًا</p></div></div>'
           + bar(s.activityRate, true) + '</div>';
       }
+      var activitySections = isAdmin ? renderDashboardActivitySections() : '';
 
       var sideTitle = isAdmin ? 'التنبيهات الإدارية' : 'آخر العمليات';
       var sideHint = isAdmin ? 'عناصر تستلزم متابعة أو تدخّلًا' : 'أحدث التغييرات على سجلات جمعيتك';
@@ -1162,6 +1225,7 @@
         + ring(s.deliveryRate) + '</div>' + bar(s.deliveryRate) + activitiesBlock + '</div>'
         + '<div class="panel"><div class="panel-head"><div><h3>' + esc(sideTitle) + '</h3>'
         + '<p>' + esc(sideHint) + '</p></div></div>' + sideBody + '</div></section>'
+        + activitySections
         + '<section class="panel"><div class="panel-head"><div><h3>آخر العمليات</h3>'
         + '<p>سجل حيّ ومؤرّخ لأحدث الإجراءات</p></div>'
         + '<button class="btn btn-link" data-act="go" data-value="audit">عرض الكل ←</button></div>'
@@ -1207,37 +1271,42 @@
        7) المستفيدون
        ============================================================ */
 
+    /** مُرقَّمة خادميًا (listBeneficiaries) — بحث/فلترة حالة/فلتر جمعية (إدارة)/ترتيب كلها من الخادم، لا محليًا. */
     function renderBeneficiaries() {
-      var all = state.data.beneficiaries || [];
-      var items = applyFilters(all, ['name', 'id', 'city', 'region', 'phone']);
-      var canManage = state.data.role === 'ASSOCIATION';
-      var extra = canManage
+      var bundle = state.lazy.beneficiaries || {};
+      var canManage = state.data.role === 'ASSOCIATION' || state.data.role === 'ADMIN';
+      var extra = state.data.role === 'ASSOCIATION'
         ? '<button class="btn btn-soft" data-act="bulk-import">⇧ إضافة بالجملة</button>' : '';
 
-      if (!all.length) {
+      if (bundle.loading) return skeletonCards(4);
+
+      var hasQuery = !!(state.search || state.filter || state.assocFilter);
+      if (!bundle.total) {
         return emptyState({
-          glyph: ICONS.beneficiaries,
-          title: 'لم يُضف أي مستفيد بعد',
-          body: 'ابدأ بإضافة مستفيد واحد، أو ارفع النموذج المعتمد لإضافة دفعة كاملة.',
-          action: canManage ? 'new-beneficiary' : '',
+          glyph: hasQuery ? '⌕' : ICONS.beneficiaries,
+          title: hasQuery ? 'لا نتائج مطابقة' : 'لم يُضف أي مستفيد بعد',
+          body: hasQuery ? 'جرّب تعديل كلمة البحث أو إعادة الفلتر إلى «كل الحالات».'
+            : 'ابدأ بإضافة مستفيد واحد، أو ارفع النموذج المعتمد لإضافة دفعة كاملة.',
+          action: !hasQuery && canManage ? 'new-beneficiary' : '',
           actionLabel: '＋ إضافة أول مستفيد'
         });
       }
 
-      var body = items.length
-        ? '<div class="cards">' + items.map(beneficiaryCard).join('') + '</div>'
-        : emptyState({glyph: '⌕', title: 'لا نتائج مطابقة', body: 'جرّب تعديل كلمة البحث أو إعادة الفلتر إلى «كل الحالات».'});
+      var items = bundle.items || [];
+      var body = '<div class="cards">' + items.map(beneficiaryCard).join('') + '</div>';
 
       return toolbar({
-        placeholder: 'ابحث بالاسم أو الرقم أو المدينة…',
+        placeholder: 'ابحث بالاسم أو الرقم أو الجوال أو المنطقة/المدينة…',
         filters: optionList(BENEFICIARY_FILTERS, state.filter, 'كل الحالات'),
+        showAssocFilter: true,
+        sortFields: [['name', 'الاسم'], ['city', 'المدينة'], ['createdAt', 'تاريخ الإضافة']],
         extra: extra,
-        count: fmt(items.length) + ' من ' + fmt(all.length)
-      }) + body;
+        count: fmt(bundle.total || 0) + ' سجلًا'
+      }) + body + pagerControls('beneficiaries', bundle);
     }
 
     function beneficiaryCard(item) {
-      var canAssign = state.data.role === 'ASSOCIATION' && item.deliveryStatus !== 'تم التسليم';
+      var canAssign = (state.data.role === 'ASSOCIATION' || state.data.role === 'ADMIN') && item.deliveryStatus !== 'تم التسليم';
       var assignBtn = canAssign
         ? '<button class="btn btn-soft btn-sm" data-act="assign-delegate" data-id="' + esc(item.id) + '">'
           + (item.delegateId ? 'تغيير المندوب' : 'تعيين مندوب') + '</button>' : '';
@@ -1291,13 +1360,30 @@
         + ' · التسليم: ' + esc(item.deliveredAt || 'لم يتم') + '</p>'
         + '<p style="white-space:pre-wrap">' + esc(item.notes || 'لا توجد ملاحظات مسجّلة.') + '</p>';
 
-      var footer = '';
-      if (state.data.role === 'ASSOCIATION' && item.deliveryStatus !== 'تم التسليم') {
-        footer = '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>'
-          + '<button class="btn btn-soft" data-act="edit-beneficiary" data-id="' + esc(item.id) + '">تعديل البيانات</button>'
+      var footer = '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>';
+      if ((state.data.role === 'ASSOCIATION' || state.data.role === 'ADMIN') && item.deliveryStatus !== 'تم التسليم') {
+        footer += '<button class="btn btn-soft" data-act="edit-beneficiary" data-id="' + esc(item.id) + '">تعديل البيانات</button>'
           + '<button class="btn btn-primary" data-act="assign-delegate" data-id="' + esc(item.id) + '">تعيين المندوب</button>';
       }
       openModal('ملف المستفيد', body, footer);
+    }
+
+    /**
+     * الإدارة (ADMIN) تُدير مستفيدين لأي جمعية — بخلاف الجمعية التي
+     * تُقيَّد بجمعيتها ضمنيًا من الخادم دون حاجة لاختيار — لذا يجب أن
+     * تختار جمعية صراحةً هنا؛ الخادم يرفض أي حفظ إداري بلا رقم جمعية
+     * صالح (`saveBeneficiary` في `Beneficiaries.gs`) — هذا الحقل يمنع
+     * وصول ذلك الرفض للمستخدم أصلًا بدل ترك الحقل غائبًا كما كان سابقًا.
+     */
+    function beneficiaryAssociationField(item) {
+      if (state.data.role !== 'ADMIN') return '';
+      var options = (state.data.associations || []).map(function (a) {
+        return '<option value="' + esc(a.id) + '"' + (item.associationId === a.id ? ' selected' : '')
+          + '>' + esc(a.name) + '</option>';
+      }).join('');
+      return '<div class="field span-2"><label for="f_associationId">الجمعية</label>'
+        + '<select class="control" id="f_associationId" name="associationId" required>'
+        + '<option value="">— اختر الجمعية —</option>' + options + '</select></div>';
     }
 
     function beneficiaryForm(id) {
@@ -1313,6 +1399,7 @@
 
       var body = '<form id="beneficiaryForm" class="form-grid" novalidate>'
         + '<input type="hidden" name="id" value="' + esc(id || '') + '">'
+        + beneficiaryAssociationField(item)
         + textField('name', 'الاسم الكامل', item.name, {required: true, max: 120, span: true})
         + textField('phone', 'رقم الجوال', item.phone, {required: true, ltr: true, hint: 'مثال: 05XXXXXXXX'})
         + textField('phone2', 'رقم جوال إضافي', item.phone2, {ltr: true, hint: 'اختياري'})
@@ -1467,14 +1554,14 @@
         socialSecurity: data.get('socialSecurity'),
         needs: data.getAll('needs'),
         notes: data.get('notes'),
-        associationId: association.id || '',
+        associationId: state.data.role === 'ADMIN' ? data.get('associationId') : (association.id || ''),
         lat: data.get('lat'), lng: data.get('lng'),
         landmark: data.get('landmark'),
         locationSource: data.get('locationSource')
       };
       busy(true);
       api('saveBeneficiary', state.token, payload).then(function (result) {
-        upsertRecord(state.data.beneficiaries, result.record);
+        upsertEntity('beneficiaries', result.record);
         mergeSummary(result);
         closeModal();
         render();
@@ -1713,8 +1800,8 @@
       if (!select) { toast('اختر المندوب أولًا.', 'error'); return; }
       busy(true);
       api('assignDelegate', state.token, id, select.value).then(function (result) {
-        upsertRecord(state.data.beneficiaries, result.record);
-        (result.devices || []).forEach(function (d) { upsertRecord(state.data.devices, d); });
+        upsertEntity('beneficiaries', result.record);
+        (result.devices || []).forEach(function (d) { upsertEntity('devices', d); });
         mergeSummary(result);
         closeModal();
         render();
@@ -1732,6 +1819,8 @@
         + 'ومسار المندوب اليومي — Excel يقبل أيضًا "Latitude"/"Longitude" بالإنجليزية)، والعلامة المميزة '
         + '(وصف موقع حر مثل "بجانب المسجد"). خط العرض وخط الطول لا بد أن يظهرا معًا أو يُتركا معًا؛ عمود واحد منهما '
         + 'فقط يُرفض. الملفات القديمة بلا هذه الأعمدة الاختيارية تُقبَل كاملة كما كانت دائمًا.</p>'
+        + '<button type="button" class="btn btn-ghost btn-sm" data-act="download-import-template" style="margin-bottom:10px">'
+        + '⬇ تنزيل نموذج القالب (CSV)</button>'
         + '<div class="drop"><label class="btn btn-primary" for="bulkFile">اختيار ملف</label>'
         + '<input id="bulkFile" type="file" data-act="bulk-file" '
         + 'accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv">'
@@ -1813,6 +1902,39 @@
       reader.readAsDataURL(file);
     }
 
+    /** ترتيب الأعمدة هنا يطابق columns في parseCsv بالضبط — أي تعديل هناك يجب أن يُعكَس هنا أيضًا. */
+    var IMPORT_TEMPLATE_HEADERS = ['الاسم', 'المنطقة', 'المدينة', 'العنوان', 'الجوال', 'عدد الأفراد',
+      'الضمان الاجتماعي', 'الحالة الاجتماعية', 'الدخل', 'الاحتياج', 'الملاحظات', 'خط العرض', 'خط الطول', 'علامة مميزة'];
+    var IMPORT_TEMPLATE_EXAMPLE = ['سارة العتيبي', 'الرياض', 'الرياض', 'حي النرجس، شارع الأمير', '0501234567', '4',
+      'نعم', 'أرملة', '2500', 'ثلاجة، غسالة', 'يفضّل التسليم صباحًا', '24.7136', '46.6753', 'بجانب المسجد'];
+
+    function csvCell(value) {
+      var text = String(value == null ? '' : value);
+      return /[",\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+    }
+
+    /** نص CSV القالب — بادئة BOM لضمان فتح Excel للعربية بترميز صحيح دون خطوات يدوية إضافية. */
+    function buildImportTemplateCsv() {
+      return '﻿' + [IMPORT_TEMPLATE_HEADERS, IMPORT_TEMPLATE_EXAMPLE]
+        .map(function (row) { return row.map(csvCell).join(','); }).join('\r\n');
+    }
+
+    function downloadImportTemplate() {
+      if (typeof Blob === 'undefined' || typeof URL === 'undefined' || !URL.createObjectURL) {
+        toast('تنزيل القالب غير مدعوم في هذا المتصفح — انسخ أسماء الأعمدة من التعليمات أعلاه يدويًا.', 'error');
+        return;
+      }
+      var blob = new Blob([buildImportTemplateCsv()], {type: 'text/csv;charset=utf-8;'});
+      var url = URL.createObjectURL(blob);
+      var link = document.createElement('a');
+      link.href = url;
+      link.download = 'قالب-استيراد-المستفيدين.csv';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    }
+
     function parseCsv(text) {
       var lines = String(text).replace(/^﻿/, '').split(/\r?\n/).filter(function (line) {
         return String(line).trim() !== '';
@@ -1863,15 +1985,23 @@
        8) الجمعيات
        ============================================================ */
 
+    var ASSOCIATION_STATUS_FILTERS = ['نشطة', 'غير نشطة'];
+
+    /** مُرقَّمة خادميًا (listAssociations، للإدارة فقط) — بحث/فلترة حالة/ترتيب من الخادم. */
     function renderAssociations() {
-      var all = state.data.associations || [];
-      var items = applyFilters(all, ['name', 'id', 'city', 'region', 'category']);
-      if (!all.length) {
-        return emptyState({glyph: ICONS.associations, title: 'لا توجد جمعيات مسجّلة',
-          body: 'أضف الجمعية المشاركة الأولى وأنشئ حسابها لتبدأ بإدخال مستفيديها.',
-          action: 'new-association', actionLabel: '＋ إضافة جمعية'});
+      var bundle = state.lazy.associations || {};
+      if (bundle.loading) return skeletonCards(4);
+      var hasQuery = !!(state.search || state.filter);
+      if (!bundle.total) {
+        return emptyState({
+          glyph: hasQuery ? '⌕' : ICONS.associations,
+          title: hasQuery ? 'لا نتائج مطابقة' : 'لا توجد جمعيات مسجّلة',
+          body: hasQuery ? 'جرّب كلمة بحث أو فلترة أخرى.' : 'أضف الجمعية المشاركة الأولى وأنشئ حسابها لتبدأ بإدخال مستفيديها.',
+          action: hasQuery ? '' : 'new-association', actionLabel: '＋ إضافة جمعية'
+        });
       }
-      var body = items.length ? '<div class="cards">' + items.map(function (a) {
+      var items = bundle.items || [];
+      var body = '<div class="cards">' + items.map(function (a) {
         return '<article class="card"><div class="card-head"><div><h3>' + esc(a.name) + '</h3>'
           + '<p>' + esc(a.category || 'جمعية أهلية') + ' · ' + esc(a.city) + '</p></div>' + ring(a.progress) + '</div>'
           + '<div class="metas">'
@@ -1883,11 +2013,14 @@
           + '<button class="btn btn-ghost btn-sm" data-act="view-association" data-id="' + esc(a.id) + '">صفحة الجمعية</button>'
           + '<button class="btn btn-soft btn-sm" data-act="edit-association" data-id="' + esc(a.id) + '">تعديل</button>'
           + '</div></article>';
-      }).join('') + '</div>'
-        : emptyState({glyph: '⌕', title: 'لا نتائج مطابقة', body: 'جرّب كلمة بحث أخرى.'});
+      }).join('') + '</div>';
 
-      return toolbar({placeholder: 'ابحث باسم الجمعية أو المدينة…', filters: '',
-        count: fmt(items.length) + ' من ' + fmt(all.length)}) + body;
+      return toolbar({
+        placeholder: 'ابحث باسم الجمعية أو المدينة أو المنطقة…',
+        filters: optionList(ASSOCIATION_STATUS_FILTERS, state.filter, 'كل الحالات'),
+        sortFields: [['name', 'الاسم'], ['city', 'المدينة'], ['progress', 'نسبة الإنجاز']],
+        count: fmt(bundle.total || 0) + ' جمعية'
+      }) + body + pagerControls('associations', bundle);
     }
 
     function findApplication(id) {
@@ -1980,7 +2113,7 @@
         closeModal();
         render();
         if (decision === 'accept') {
-          if (state.data.associations) upsertRecord(state.data.associations, {
+          upsertEntity('associations', {
             id: result.associationId, name: result.record.name, category: result.record.category,
             region: result.record.region, city: result.record.city, phone: result.record.phone,
             email: result.record.email, status: 'نشطة', beneficiaries: 0, delegates: 0,
@@ -2004,10 +2137,33 @@
       return null;
     }
 
+    /** يفتح قائمة مُقيَّدة بجمعية معيَّنة (الإدارة فقط) عبر فلتر الجمعية العام، ويغلق أي نافذة مفتوحة أولًا. */
+    function goToAssociationScope(page, associationId) {
+      closeModal();
+      goTo(page, '', associationId);
+    }
+
+    /** صفحة تفاصيل الجمعية: البيانات الأساسية، عيّنة من المستفيدين والمناديب، وروابط للقوائم الكاملة مفلترة بهذه الجمعية. */
     function viewAssociation(id) {
       var a = findAssociation(id);
       if (!a) { toast('تعذر العثور على الجمعية.', 'error'); return; }
       var isAdmin = state.data.role === 'ADMIN';
+      var ownBeneficiaries = (state.data.beneficiaries || []).filter(function (b) { return b.associationId === id; });
+      var ownDelegates = (state.data.delegates || []).filter(function (d) { return d.associationId === id; });
+
+      var beneficiariesList = ownBeneficiaries.length
+        ? '<div class="rows">' + ownBeneficiaries.slice(0, 5).map(function (b) {
+            return '<div class="row-item"><div><strong>' + esc(b.name) + '</strong><small>' + esc(b.city) + '</small></div>'
+              + statusChip(b.deliveryStatus) + '</div>';
+          }).join('') + '</div>'
+        : '<p class="muted" style="font-size:13px">لا يوجد مستفيدون مسجَّلون لهذه الجمعية بعد.</p>';
+      var delegatesList = ownDelegates.length
+        ? '<div class="rows">' + ownDelegates.slice(0, 5).map(function (d) {
+            return '<div class="row-item"><div><strong>' + esc(d.name) + '</strong><small dir="ltr">' + esc(d.phone) + '</small></div>'
+              + statusChip(d.status) + '</div>';
+          }).join('') + '</div>'
+        : '<p class="muted" style="font-size:13px">لا يوجد مناديب مسجَّلون لهذه الجمعية بعد.</p>';
+
       var body = '<div class="card-head"><div><h3>' + esc(a.name) + '</h3>'
         + '<p class="mono">' + esc(a.id) + '</p></div>' + statusChip(a.status) + '</div>'
         + '<div class="metas">'
@@ -2020,11 +2176,23 @@
         + '<div class="meta"><small>المعتمدة / المستلمة</small><strong>' + fmt(a.approvedDevices) + ' / '
         + fmt(a.receivedDevices) + '</strong></div>'
         + '<div class="meta"><small>المسلّمة</small><strong>' + fmt(a.deliveredDevices) + '</strong></div></div>'
-        + '<h4 style="margin:18px 0 8px;color:var(--zad-800)">نسبة إنجاز التسليم</h4>' + bar(a.progress);
-      openModal('صفحة الجمعية', body,
-        (isAdmin ? '<button class="btn btn-danger" data-act="reset-association-password" data-id="'
-          + esc(a.id) + '" data-name="' + esc(a.name) + '">إعادة تعيين كلمة المرور</button>' : '')
-        + '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>');
+        + '<h4 style="margin:18px 0 8px;color:var(--zad-800)">نسبة إنجاز التسليم</h4>' + bar(a.progress)
+        + '<div class="panel-head" style="margin-top:18px"><div><h4 style="color:var(--zad-800)">المستفيدون</h4></div>'
+        + (isAdmin ? '<button type="button" class="btn btn-link" data-act="assoc-scope" data-page="beneficiaries" data-id="' + esc(a.id) + '">عرض الكل ←</button>' : '') + '</div>'
+        + beneficiariesList
+        + '<div class="panel-head" style="margin-top:18px"><div><h4 style="color:var(--zad-800)">المناديب</h4></div>'
+        + (isAdmin ? '<button type="button" class="btn btn-link" data-act="assoc-scope" data-page="delegates" data-id="' + esc(a.id) + '">عرض الكل ←</button>' : '') + '</div>'
+        + delegatesList;
+
+      var footer = '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>';
+      if (isAdmin) {
+        footer += '<button class="btn btn-link" data-act="assoc-scope" data-page="devices" data-id="' + esc(a.id) + '">الأجهزة ←</button>'
+          + '<button class="btn btn-link" data-act="assoc-scope" data-page="audit" data-id="' + esc(a.id) + '">سجل العمليات ←</button>'
+          + '<button class="btn btn-soft" data-act="edit-association" data-id="' + esc(a.id) + '">تعديل البيانات</button>'
+          + '<button class="btn btn-danger" data-act="reset-association-password" data-id="'
+          + esc(a.id) + '" data-name="' + esc(a.name) + '">إعادة تعيين كلمة المرور</button>';
+      }
+      openModal('صفحة الجمعية', body, footer);
     }
 
     function resetAssociationPasswordModal(id, name) {
@@ -2095,7 +2263,7 @@
       busy(true);
       api('saveAssociation', state.token, payload).then(function (result) {
         clearOpId(opKey);
-        upsertRecord(state.data.associations, result.record);
+        upsertEntity('associations', result.record);
         mergeSummary(result);
         closeModal();
         render();
@@ -2107,16 +2275,30 @@
        9) الأجهزة
        ============================================================ */
 
+    /** عنوان عمود قابل للنقر للترتيب (لجداول <table> فقط — البطاقات تستخدم قائمة "ترتيب حسب" بدلًا منه). */
+    function sortableTh(field, label) {
+      var active = state.sortBy === field;
+      var arrow = active ? (state.sortDir === 'desc' ? ' ↓' : ' ↑') : '';
+      return '<th><button type="button" class="th-sort' + (active ? ' active' : '') + '" data-act="th-sort" data-field="'
+        + esc(field) + '">' + esc(label) + arrow + '</button></th>';
+    }
+
+    /** مُرقَّمة خادميًا (listDevices) — بحث/فلترة حالة/فلتر جمعية (إدارة)/ترتيب بعناوين الأعمدة، كلها من الخادم. */
     function renderDevices() {
-      var all = state.data.devices || [];
-      var items = applyFilters(all, ['name', 'id', 'type', 'beneficiaryId']);
+      var bundle = state.lazy.devices || {};
       var isAdmin = state.data.role === 'ADMIN';
-      if (!all.length) {
-        return emptyState({glyph: ICONS.devices, title: 'لا توجد أجهزة مسجّلة',
-          body: isAdmin ? 'أضف الأجهزة إلى المستودع ثم خصّصها للجمعيات والمستفيدين.'
-            : 'لم تُعتمد أجهزة لجمعيتك بعد.',
-          action: isAdmin ? 'new-device' : '', actionLabel: '＋ إضافة جهاز'});
+      if (bundle.loading) return skeletonCards(4);
+      var hasQuery = !!(state.search || state.filter || state.assocFilter);
+      if (!bundle.total) {
+        return emptyState({
+          glyph: hasQuery ? '⌕' : ICONS.devices,
+          title: hasQuery ? 'لا نتائج مطابقة' : 'لا توجد أجهزة مسجّلة',
+          body: hasQuery ? 'جرّب تعديل البحث أو الفلتر.'
+            : (isAdmin ? 'أضف الأجهزة إلى المستودع ثم خصّصها للجمعيات والمستفيدين.' : 'لم تُعتمد أجهزة لجمعيتك بعد.'),
+          action: !hasQuery && isAdmin ? 'new-device' : '', actionLabel: '＋ إضافة جهاز'
+        });
       }
+      var items = bundle.items || [];
       var rows = items.map(function (device) {
         var beneficiary = findBeneficiary(device.beneficiaryId);
         return '<tr><td><strong>' + needGlyph(device.name) + ' ' + esc(device.name) + '</strong></td>'
@@ -2130,16 +2312,18 @@
             + esc(device.id) + '">تعديل</button></td>' : '') + '</tr>';
       }).join('');
 
-      var table = items.length
-        ? '<div class="table-wrap"><table class="data"><thead><tr>'
-          + '<th>الجهاز</th><th>رقم الجهاز</th><th>النوع</th><th>الجمعية</th><th>المستفيد</th>'
-          + '<th>الحالة</th><th>تاريخ الإضافة</th>' + (isAdmin ? '<th>إجراء</th>' : '')
-          + '</tr></thead><tbody>' + rows + '</tbody></table></div>'
-        : emptyState({glyph: '⌕', title: 'لا نتائج مطابقة', body: 'جرّب تعديل البحث أو الفلتر.'});
+      var table = '<div class="table-wrap"><table class="data"><thead><tr>'
+        + sortableTh('name', 'الجهاز') + sortableTh('id', 'رقم الجهاز') + sortableTh('type', 'النوع')
+        + '<th>الجمعية</th><th>المستفيد</th>' + sortableTh('status', 'الحالة') + sortableTh('createdAt', 'تاريخ الإضافة')
+        + (isAdmin ? '<th>إجراء</th>' : '')
+        + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 
-      return toolbar({placeholder: 'ابحث باسم الجهاز أو رقمه…',
+      return toolbar({
+        placeholder: 'ابحث باسم الجهاز أو رقمه أو نوعه…',
         filters: optionList(DEVICE_FILTERS, state.filter, 'كل الحالات'),
-        count: fmt(items.length) + ' من ' + fmt(all.length)}) + table;
+        showAssocFilter: true,
+        count: fmt(bundle.total || 0) + ' جهازًا'
+      }) + table + pagerControls('devices', bundle);
     }
 
     function findDevice(id) {
@@ -2196,7 +2380,7 @@
         status: data.get('status'),
         notes: data.get('notes')
       }).then(function (result) {
-        upsertRecord(state.data.devices, result.record);
+        upsertEntity('devices', result.record);
         mergeSummary(result);
         closeModal();
         render();
@@ -2208,16 +2392,27 @@
        10) المناديب
        ============================================================ */
 
+    var DELEGATE_STATUS_FILTERS = ['نشط', 'غير نشط'];
+
+    /** مُرقَّمة خادميًا (listDelegates) — بحث/فلترة حالة/فلتر جمعية (إدارة)/ترتيب من الخادم. */
     function renderDelegates() {
-      var all = state.data.delegates || [];
-      var items = applyFilters(all, ['name', 'id', 'phone']);
-      var canManage = state.data.role === 'ASSOCIATION';
-      if (!all.length) {
-        return emptyState({glyph: ICONS.delegates, title: 'لا يوجد مناديب',
-          body: 'أضف مندوبًا ليستلم مهام التسليم الميداني ويوثّقها بالصورة.',
-          action: canManage ? 'new-delegate' : '', actionLabel: '＋ إضافة مندوب'});
+      var bundle = state.lazy.delegates || {};
+      // الإدارة تملك نفس صلاحيات الجمعية على مناديبها في الخادم
+      // (regenerateDelegateCode/setDelegateStatus كلاهما يقبلان ADMIN أيضًا) —
+      // الأزرار هنا كانت مقصورة على الجمعية فقط رغم ذلك؛ صُحِّح.
+      var canManage = state.data.role === 'ASSOCIATION' || state.data.role === 'ADMIN';
+      if (bundle.loading) return skeletonCards(4);
+      var hasQuery = !!(state.search || state.filter || state.assocFilter);
+      if (!bundle.total) {
+        return emptyState({
+          glyph: hasQuery ? '⌕' : ICONS.delegates,
+          title: hasQuery ? 'لا نتائج مطابقة' : 'لا يوجد مناديب',
+          body: hasQuery ? 'جرّب كلمة بحث أو فلترة أخرى.' : 'أضف مندوبًا ليستلم مهام التسليم الميداني ويوثّقها بالصورة.',
+          action: !hasQuery && state.data.role === 'ASSOCIATION' ? 'new-delegate' : '', actionLabel: '＋ إضافة مندوب'
+        });
       }
-      var body = items.length ? '<div class="cards">' + items.map(function (d) {
+      var items = bundle.items || [];
+      var body = '<div class="cards">' + items.map(function (d) {
         var actions = '<div class="card-actions">'
           + '<button class="btn btn-ghost btn-sm" data-act="view-delegate" data-id="' + esc(d.id) + '">التفاصيل</button>'
           + (canManage
@@ -2235,11 +2430,15 @@
           + '<div class="meta"><small>تم خدمتهم</small><strong>' + fmt(d.served) + '</strong></div>'
           + '<div class="meta"><small>آخر دخول</small><strong>' + esc(d.lastLogin || 'لم يدخل') + '</strong></div>'
           + '</div>' + actions + '</article>';
-      }).join('') + '</div>'
-        : emptyState({glyph: '⌕', title: 'لا نتائج مطابقة', body: 'جرّب كلمة بحث أخرى.'});
+      }).join('') + '</div>';
 
-      return toolbar({placeholder: 'ابحث باسم المندوب أو رقمه…', filters: '',
-        count: fmt(items.length) + ' من ' + fmt(all.length)}) + body;
+      return toolbar({
+        placeholder: 'ابحث باسم المندوب أو رقمه أو جواله…',
+        filters: optionList(DELEGATE_STATUS_FILTERS, state.filter, 'كل الحالات'),
+        showAssocFilter: true,
+        sortFields: [['name', 'الاسم'], ['lastLogin', 'آخر دخول']],
+        count: fmt(bundle.total || 0) + ' مندوبًا'
+      }) + body + pagerControls('delegates', bundle);
     }
 
     function findDelegate(id) {
@@ -2271,7 +2470,15 @@
         + '<div class="meta"><small>مهام حالية</small><strong>' + fmt(d.assigned) + '</strong></div>'
         + '<div class="meta"><small>مستفيدون تم خدمتهم</small><strong>' + fmt(d.served) + '</strong></div></div>'
         + '<h4 style="margin:18px 0 8px;color:var(--zad-800)">المستفيدون المكلَّف بهم حاليًا</h4>' + table;
-      openModal('صفحة المندوب', body, '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>');
+      var canManage = state.data.role === 'ASSOCIATION' || state.data.role === 'ADMIN';
+      var footer = '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>';
+      if (canManage) {
+        footer += '<button class="btn btn-soft" data-act="regen-code" data-id="' + esc(d.id) + '">رمز دخول جديد</button>'
+          + '<button class="btn ' + (d.status === 'نشط' ? 'btn-danger' : 'btn-primary') + '" data-act="toggle-delegate" data-id="'
+          + esc(d.id) + '" data-value="' + (d.status === 'نشط' ? 'غير نشط' : 'نشط') + '">'
+          + (d.status === 'نشط' ? 'تعطيل المندوب' : 'تفعيل المندوب') + '</button>';
+      }
+      openModal('صفحة المندوب', body, footer);
     }
 
     function delegateForm() {
@@ -2311,7 +2518,7 @@
         name: data.get('name'), phone: data.get('phone'), associationId: association.id || '', opId: opIdFor(opKey)
       }).then(function (result) {
         clearOpId(opKey);
-        upsertRecord(state.data.delegates, result.record);
+        upsertEntity('delegates', result.record);
         mergeSummary(result);
         showAccessCode('تم إنشاء المندوب', result.accessCode,
           'اعرض الرمز للمندوب الآن — لن يظهر مرة أخرى. يمكنك إنشاء بديل في أي وقت.');
@@ -2331,7 +2538,7 @@
       if (!window.confirm('هل تريد ' + verb + ' هذا المندوب؟')) return;
       busy(true);
       api('setDelegateStatus', state.token, id, next).then(function (result) {
-        upsertRecord(state.data.delegates, result.record);
+        upsertEntity('delegates', result.record);
         mergeSummary(result);
         render();
         toast('تم ' + verb + ' المندوب.', 'success');
@@ -2350,6 +2557,86 @@
     ];
 
     /** الأنشطة/المراحل/الشواهد تُجلب عند فتح الصفحة فقط (getActivitiesBundle) — لا ضمن Bootstrap. */
+    /** أيام حتى تاريخ "yyyy/MM/dd" (سالب = تجاوَز الموعد) — تقريب بتوقيت المتصفح المحلي، لعرض إرشادي فقط لا حسابًا رسميًا. */
+    function daysFromToday(dateStr) {
+      if (!dateStr) return null;
+      var parts = String(dateStr).trim().split(/[\/\s:]/).map(Number);
+      if (parts.length < 3 || !parts[0] || isNaN(parts[0])) return null;
+      var target = new Date(parts[0], parts[1] - 1, parts[2]);
+      var today = new Date();
+      today.setHours(0, 0, 0, 0);
+      return Math.round((target - today) / 86400000);
+    }
+
+    /**
+     * ثلاثة أقسام تشغيلية للوحة بيانات الإدارة: مكتمل مع الشاهد، جارٍ
+     * حاليًا بنسبة التقدّم، والمهمة القادمة (أقرب نشاط لم يبدأ بعد حسب
+     * موعد النهاية) مع المدة المتبقية. تُبنى من نفس حزمة getActivitiesBundle
+     * المُستخدَمة في صفحة "متابعة المشروع" — تُجلب هنا كسوليًا أيضًا إن لم
+     * تكن محمَّلة بعد (نفس عملية شبكة واحدة تُعاد استخدامها في الصفحتين).
+     */
+    function renderDashboardActivitySections() {
+      var bundle = state.lazy.activities;
+      // لا يُطلَق الجلب من هنا: استدعاء fetchActivitiesBundle (وهي تستدعي
+      // render() فورًا) أثناء تنفيذ render() نفسه يُعيد الدخول إليها قبل
+      // اكتمالها — الجلب يبدأ عند الدخول/استعادة الجلسة بدلًا (انظر
+      // restoreSession/submitLogin)، وهذه الدالة تكتفي بعرض حالة التحميل.
+      if (!bundle || bundle.loading) return '<section class="panel" style="margin-top:18px">' + skeletonCards(2) + '</section>';
+      var all = bundle.activities || [];
+      if (!all.length) return '';
+
+      var completed = all.filter(function (x) { return x.status === 'مكتمل'; }).slice(0, 3);
+      var inProgress = all.filter(function (x) { return x.status === 'جارٍ'; }).slice(0, 3);
+      var notStarted = all.filter(function (x) { return x.status === 'لم يبدأ'; }).slice().sort(function (a, b) {
+        var da = daysFromToday(a.endDate); var db = daysFromToday(b.endDate);
+        if (da == null) return 1; if (db == null) return -1; return da - db;
+      });
+      var upcoming = notStarted[0];
+
+      function editAttrs(x) {
+        return ' role="button" tabindex="0" style="cursor:pointer" data-act="edit-activity" '
+          + 'data-stage="' + esc(x.stage) + '" data-main="' + esc(x.mainActivity) + '" data-sub="' + esc(x.subActivity) + '"';
+      }
+
+      var completedHtml = completed.length
+        ? '<div class="rows">' + completed.map(function (x) {
+            return '<div class="row-item"' + editAttrs(x) + '><div><strong>' + esc(x.subActivity || x.mainActivity) + '</strong>'
+              + '<small>' + esc(x.owner || 'بلا مسؤول') + '</small></div>'
+              + (x.evidenceUrl ? '<a href="' + esc(x.evidenceUrl) + '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">الشاهد ↗</a>' : '<span class="muted">بلا شاهد</span>') + '</div>';
+          }).join('') + '</div>'
+        : '<p class="muted" style="font-size:13px;padding:4px 0">لا توجد أنشطة مكتملة بعد.</p>';
+
+      var inProgressHtml = inProgress.length
+        ? '<div class="rows">' + inProgress.map(function (x) {
+            return '<div class="row-item"' + editAttrs(x) + '><div><strong>' + esc(x.subActivity || x.mainActivity) + '</strong>'
+              + '<small>' + esc(x.owner || 'بلا مسؤول') + '</small></div>'
+              + '<span class="muted">' + fmt(x.progress) + '٪</span></div>';
+          }).join('') + '</div>'
+        : '<p class="muted" style="font-size:13px;padding:4px 0">لا توجد أنشطة جارية حاليًا.</p>';
+
+      var upcomingHtml;
+      if (upcoming) {
+        var days = daysFromToday(upcoming.endDate);
+        var daysLabel = days == null ? 'بلا موعد محدَّد'
+          : days < 0 ? 'تجاوز الموعد بـ ' + fmt(Math.abs(days)) + ' يومًا'
+          : days === 0 ? 'موعده اليوم'
+          : 'بعد ' + fmt(days) + ' يومًا';
+        upcomingHtml = '<div class="row-item"' + editAttrs(upcoming) + '><div><strong>' + esc(upcoming.subActivity || upcoming.mainActivity) + '</strong>'
+          + '<small>' + esc(upcoming.owner || 'بلا مسؤول') + ' · ' + esc(upcoming.endDate || 'بلا موعد نهاية محدَّد') + '</small></div>'
+          + '<span class="muted">' + esc(daysLabel) + '</span></div>';
+      } else {
+        upcomingHtml = '<p class="muted" style="font-size:13px;padding:4px 0">لا توجد مهمة قادمة لم تبدأ بعد.</p>';
+      }
+
+      return '<section class="cols" style="margin-top:18px">'
+        + '<div class="panel"><div class="panel-head"><div><h3>مكتمل</h3><p>مع رابط الشاهد إن وُجد</p></div></div>' + completedHtml + '</div>'
+        + '<div class="panel"><div class="panel-head"><div><h3>جارٍ حاليًا</h3><p>بنسبة التقدّم الحالية</p></div></div>' + inProgressHtml + '</div>'
+        + '</section>'
+        + '<section class="panel" style="margin-top:14px"><div class="panel-head"><div><h3>المهمة القادمة</h3>'
+        + '<p>أقرب نشاط لم يبدأ بعد حسب موعد النهاية، والمدة المتبقية</p></div>'
+        + '<button class="btn btn-link" data-act="go" data-value="activities">كل الأنشطة ←</button></div>' + upcomingHtml + '</section>';
+    }
+
     function renderActivities() {
       var isAdmin = state.data.role === 'ADMIN';
       var bundle = state.lazy.activities;
@@ -2498,6 +2785,7 @@
       var items = bundle.items || [];
       var toolbarHtml = toolbar({placeholder: 'ابحث بالمستخدم أو الإجراء أو رقم السجل…',
         filters: optionList(AUDIT_SECTIONS, state.filter, 'كل الأقسام'),
+        showAssocFilter: true,
         count: bundle.loading ? 'جارٍ التحميل…' : (fmt(bundle.total || 0) + ' سجلًا')});
       var body = bundle.loading ? skeletonCards(4) : auditRowsHtml(items);
       return '<section class="panel"><div class="panel-head"><div><h3>سجل العمليات</h3>'
@@ -2814,7 +3102,7 @@
       busy(true);
       api('updateDeliveryStatus', state.token, id, reason.value, notes ? notes.value : '')
         .then(function (result) {
-          upsertRecord(state.data.beneficiaries, result.record);
+          upsertEntity('beneficiaries', result.record);
           closeModal();
           renderDelegate();
           toast('تم تحديث حالة المستفيد.', 'success');
@@ -2948,6 +3236,7 @@
         state.data = data;
         state.user = data.user || {role: data.role, name: 'المستخدم'};
         render();
+        if (state.data.role === 'ADMIN') fetchActivitiesBundle();
         loadReferenceDataOnce();
       }, function (error) {
         // الجلسة صالحة لكن الخادم يرفضها لأنها مُلزَمة بتغيير كلمة مرور
@@ -3025,11 +3314,18 @@
 
     var CLICK_ACTIONS = {
       'go': function (el) { goTo(el.getAttribute('data-value')); },
+      'assoc-scope': function (el) { goToAssociationScope(el.getAttribute('data-page'), el.getAttribute('data-id')); },
+      'download-import-template': downloadImportTemplate,
+      'th-sort': function (el) {
+        var field = el.getAttribute('data-field');
+        if (state.sortBy === field) state.sortDir = state.sortDir === 'desc' ? 'asc' : 'desc';
+        else { state.sortBy = field; state.sortDir = 'asc'; }
+        if (LAZY_PAGES[state.page]) fetchLazyPage(state.page, LAZY_PAGES[state.page], 1);
+      },
       'kpi-nav': function (el) {
         var page = el.getAttribute('data-page');
         var filter = el.getAttribute('data-filter') || '';
-        goTo(page);
-        if (filter) { state.filter = filter; render(); }
+        goTo(page, filter);
       },
       'login-type': function (el) { state.loginType = el.getAttribute('data-value'); renderLogin(); },
       'show-apply': function () { loadReferenceDataOnce(); renderApplyForm(); },
@@ -3097,7 +3393,15 @@
       'audit-prev-page': function () { fetchLazyPage('audit', 'listAuditLog', (state.lazy.audit.page || 1) - 1); },
       'audit-next-page': function () { fetchLazyPage('audit', 'listAuditLog', (state.lazy.audit.page || 1) + 1); },
       'applications-prev-page': function () { fetchLazyPage('applications', 'listApplications', (state.lazy.applications.page || 1) - 1); },
-      'applications-next-page': function () { fetchLazyPage('applications', 'listApplications', (state.lazy.applications.page || 1) + 1); }
+      'applications-next-page': function () { fetchLazyPage('applications', 'listApplications', (state.lazy.applications.page || 1) + 1); },
+      'beneficiaries-prev-page': function () { fetchLazyPage('beneficiaries', 'listBeneficiaries', (state.lazy.beneficiaries.page || 1) - 1); },
+      'beneficiaries-next-page': function () { fetchLazyPage('beneficiaries', 'listBeneficiaries', (state.lazy.beneficiaries.page || 1) + 1); },
+      'associations-prev-page': function () { fetchLazyPage('associations', 'listAssociations', (state.lazy.associations.page || 1) - 1); },
+      'associations-next-page': function () { fetchLazyPage('associations', 'listAssociations', (state.lazy.associations.page || 1) + 1); },
+      'devices-prev-page': function () { fetchLazyPage('devices', 'listDevices', (state.lazy.devices.page || 1) - 1); },
+      'devices-next-page': function () { fetchLazyPage('devices', 'listDevices', (state.lazy.devices.page || 1) + 1); },
+      'delegates-prev-page': function () { fetchLazyPage('delegates', 'listDelegates', (state.lazy.delegates.page || 1) - 1); },
+      'delegates-next-page': function () { fetchLazyPage('delegates', 'listDelegates', (state.lazy.delegates.page || 1) + 1); }
     };
 
     /**
@@ -3191,6 +3495,19 @@
       var action = el.getAttribute ? el.getAttribute('data-act') : null;
       if (action === 'set-filter') {
         state.filter = el.value;
+        if (LAZY_PAGES[state.page]) { fetchLazyPage(state.page, LAZY_PAGES[state.page], 1); return; }
+        render();
+        return;
+      }
+      if (action === 'set-assoc-filter') {
+        state.assocFilter = el.value;
+        if (LAZY_PAGES[state.page]) { fetchLazyPage(state.page, LAZY_PAGES[state.page], 1); return; }
+        render();
+        return;
+      }
+      if (action === 'set-sort') {
+        state.sortBy = el.value;
+        state.sortDir = 'asc';
         if (LAZY_PAGES[state.page]) { fetchLazyPage(state.page, LAZY_PAGES[state.page], 1); return; }
         render();
         return;

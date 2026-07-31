@@ -241,13 +241,20 @@ function revokeAssociationSessions_(associationId) {
     .forEach(row => revokeSessions_(String(row['رقم المندوب'])));
 }
 
+/**
+ * "يجب تغيير كلمة المرور": 'نعم' دائمًا — سواء كانت مؤقتة مُولَّدة تلقائيًا
+ * (قبول طلب انضمام) أو اختارها المدير يدويًا (إضافة جمعية مباشرة)، فكلتاهما
+ * كلمة مرور تصل الجمعية من خارجها لا من اختيارها هي، فتُفرض إعادة تعيينها
+ * عند أول دخول بنفس آلية resetAssociationPassword المُطبَّقة مسبقًا —
+ * requireSession_ يرفض أي دالة أخرى لهذا الحساب حتى يُغيّرها فعليًا.
+ */
 function createAssociationUser_(associationId, name, email, password) {
   const salt = Utilities.getUuid();
   appendObject_(APP.sheets.users, {
     'رقم المستخدم': nextId_('USR'), 'الاسم': name, 'البريد الإلكتروني': email,
     'كلمة المرور المشفرة': hashSecret_(String(password), salt), 'الملح': salt,
     'الدور': 'ASSOCIATION', 'رقم الجمعية': associationId, 'الحالة': 'نشط',
-    'تاريخ الإنشاء': now_(), 'آخر دخول': ''
+    'تاريخ الإنشاء': now_(), 'آخر دخول': '', 'يجب تغيير كلمة المرور': 'نعم'
   });
 }
 

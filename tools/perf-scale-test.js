@@ -194,7 +194,14 @@ function runScenario(count) {
   };
 
   resetPerCallCache();
-  const login = timeIt(() => S.login({ type: 'user', email: 'scale-' + count + '@example.org', password: 'ScalePass123' }));
+  // حساب جمعية جديد (مؤقت أو باختيار المدير) يُفرَض عليه تغيير كلمة المرور
+  // عند أول دخول — هذا لا علاقة له بما يقيسه هذا الملف (زمن التنفيذ بأحجام
+  // بيانات مختلفة)، فتُغيَّر مرة واحدة هنا خارج القياس الفعلي، ثم يُعاد
+  // الدخول بالكلمة الجديدة (تغيير كلمة المرور يُبطل الجلسة الحالية أيضًا).
+  const firstLoginToken = S.login({ type: 'user', email: 'scale-' + count + '@example.org', password: 'ScalePass123' }).token;
+  S.changePassword(firstLoginToken, 'ScalePass123', 'ScalePass123New');
+
+  const login = timeIt(() => S.login({ type: 'user', email: 'scale-' + count + '@example.org', password: 'ScalePass123New' }));
   metrics.login = login.ms;
   const token = login.result.token;
 

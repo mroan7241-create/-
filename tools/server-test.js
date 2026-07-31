@@ -426,6 +426,10 @@ assert('قبول الطلب يعيد كلمة مرور مؤقتة قوية', (()
 
 const loginResult = S2.loginUser_('amal@example.org', accepted.temporaryPassword);
 assert('الحساب المُنشأ تلقائيًا يعمل فورًا بكلمة المرور المؤقتة', loginResult.ok && loginResult.user.role === 'ASSOCIATION');
+assert('حساب الجمعية المُنشأ من قبول طلب انضمام يُفرَض عليه تغيير كلمة المرور المؤقتة عند أول دخول (لا bootstrap فورًا)',
+  loginResult.mustChangePassword === true && loginResult.bootstrap === undefined);
+throws('الحساب المُلزَم بتغيير كلمة المرور لا يستطيع استدعاء دالة أخرى (كـgetBootstrapData) قبل تغييرها',
+  () => S2.getBootstrapData(loginResult.token), 'يجب تغيير كلمة المرور');
 
 throws('لا يمكن البتّ في طلب سبق قبوله', () => S2.reviewAssociationApplication(adminSession.token, submitted.id, 'accept', ''), 'سبق البتّ');
 
@@ -494,6 +498,22 @@ throws('غير الإدارة لا يمكنه إدارة الأنشطة', () => 
   const assocSession = S2.createSession_({id: 'USR-ASSOC-TEST-2', name: 'جمعية', role: 'ASSOCIATION', associationId: accepted.associationId});
   S2.saveActivity(assocSession.token, {stage: 'التجهيز', mainActivity: 'التعاقد', subActivity: 'نشاط آخر'});
 });
+
+/* -------- 15ب) ذاكرة Bootstrap المؤقتة تُبطَل فعليًا لكل الأدوار، لا للإدارة فقط -------- */
+
+section('15ب) إبطال ذاكرة Bootstrap المؤقتة (جيل مشترك) بعد أي حفظ');
+{
+  const assocSession = S2.createSession_({id: 'USR-ASSOC-CACHE', name: 'جمعية اختبار الذاكرة المؤقتة', role: 'ASSOCIATION', associationId: accepted.associationId});
+  const before = S2.getBootstrapData(assocSession.token);
+  const beforeCount = before.summary.beneficiaries;
+  S2.saveBeneficiary(assocSession.token, {
+    name: 'مستفيد لاختبار إبطال الذاكرة المؤقتة', region: 'الرياض', city: 'الرياض', address: 'حي',
+    phone: '0501119999', familyCount: 1, socialStatus: 'أرملة', needs: []
+  });
+  const after = S2.getBootstrapData(assocSession.token);
+  assert('ملخّص Bootstrap لحساب الجمعية يعكس فورًا مستفيدًا أُضيف للتو (بلا forceFresh) — لم يعد محصورًا بإبطال ذاكرة الإدارة فقط',
+    after.summary.beneficiaries === beforeCount + 1);
+}
 
 /* -------- 16) حفظ إحداثيات المستفيد فعليًا عبر saveBeneficiary -------- */
 
