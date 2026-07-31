@@ -69,15 +69,14 @@
     .lockup-fallback svg{width:100%;height:100%;display:block}
     .lockup-text strong{display:block;font-family:var(--font-display);font-weight:800;font-size:17px;color:var(--zad-800);line-height:1.25}
     .lockup-text span{display:block;font-size:12px;color:var(--muted)}
-    .lockup-partner{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
-      padding-top:11px;border-top:1px solid var(--line-strong);width:100%}
-    .lockup-partner .partner-label{font-size:10.5px;color:var(--muted);letter-spacing:.02em;white-space:nowrap}
-    .lockup-partner .partner-name{font-weight:700;font-size:13.5px;color:var(--zad-800);line-height:1.3}
-    .lockup-partner-logo{height:40px;width:auto;object-fit:contain;display:block;background:none}
-    .lockup.on-dark .lockup-text strong,.lockup.on-dark .partner-name{color:#fff}
-    .lockup.on-dark .lockup-text span,.lockup.on-dark .partner-label{color:rgba(255,255,255,.72)}
-    .lockup.on-dark .lockup-partner{border-top-color:rgba(255,255,255,.22)}
+    .lockup.on-dark .lockup-text strong{color:#fff}
+    .lockup.on-dark .lockup-text span{color:rgba(255,255,255,.72)}
     .lockup.on-dark .lockup-fallback{color:var(--gold-400)}
+    /* عرض ثنائي أفقي: شعار الزاد ثم خط فاصل رفيع ثم شعار الشريك، بلا أي نص */
+    .lockup-duo{flex-direction:row;align-items:center;gap:14px}
+    .lockup-duo-divider{width:1px;align-self:stretch;min-height:34px;background:var(--line-strong);flex:none}
+    .lockup-duo .lockup-partner-logo{height:40px;width:auto;object-fit:contain;display:block;background:none}
+    .lockup-duo.on-dark .lockup-duo-divider{background:rgba(255,255,255,.28)}
 
     /* ---------- Buttons ---------- */
     .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:11px 18px;border-radius:var(--r-md);font-weight:700;font-size:14px;transition:background .18s,color .18s,box-shadow .18s,transform .18s;white-space:nowrap}
@@ -552,17 +551,18 @@
       var mark = BRAND.zadLogo
         ? '<img class="lockup-logo" src="' + esc(BRAND.zadLogo) + '" alt="جمعية الزاد">'
         : '<span class="lockup-fallback" aria-hidden="true">' + ZAD_SEAL_SVG + '</span>';
-      var identity = '<div class="lockup-mark">' + mark
-        + '<span class="lockup-text"><strong>جمعية الزاد</strong><span>مشروع توزيع الأجهزة</span></span></div>';
       if (options.compact || !options.partner) {
+        var identity = '<div class="lockup-mark">' + mark
+          + '<span class="lockup-text"><strong>جمعية الزاد</strong><span>مشروع توزيع الأجهزة</span></span></div>';
         return '<div class="lockup' + onDark + '">' + identity + '</div>';
       }
+      // شعار الزاد وشعار الشريك جنبًا إلى جنب بخط فاصل رفيع، بلا أي نص —
+      // اسم الجهتين موجود فقط كنص بديل (alt) لقارئ الشاشة، لا ظاهر بصريًا.
       var partner = BRAND.partnerLogo
         ? '<img class="lockup-partner-logo" src="' + esc(BRAND.partnerLogo) + '" alt="' + esc(BRAND.partnerName) + '">'
         : '<span class="partner-name">' + esc(BRAND.partnerName) + '</span>';
-      return '<div class="lockup' + onDark + '">' + identity
-        + '<div class="lockup-partner"><span class="partner-label">' + esc(BRAND.partnerLabel) + '</span>'
-        + partner + '</div></div>';
+      return '<div class="lockup lockup-duo' + onDark + '">' + mark
+        + '<span class="lockup-duo-divider" aria-hidden="true"></span>' + partner + '</div>';
     }
 
     function statusClass(value) {

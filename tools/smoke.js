@@ -191,7 +191,7 @@ const out = () => registry.root.innerHTML;
 section('1) شاشة الدخول');
 app.renderLogin();
 assert('ترسم شاشة الدخول', out().includes('تسجيل الدخول'));
-assert('تعرض Brand Lockup للشريك', out().includes('بالشراكة مع'));
+assert('تعرض Brand Lockup الثنائي (شعارين جنبًا لجنب بلا نص)', out().includes('lockup-duo') && out().includes('lockup-duo-divider'));
 assert('لا تعرض مربعًا خلف الشعار', !out().includes('background:#000'));
 assert('شعار الزاد الفعلي مضمَّن (data URI حقيقي لا بديل نصي)',
   app.BRAND.zadLogo.indexOf('data:image/png;base64,') === 0 && app.BRAND.zadLogo.length > 1000);
