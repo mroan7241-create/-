@@ -37,6 +37,24 @@ function saveBeneficiary(token, payload) {
   }
   const place = validateRegionCity_(payload.region, payload.city);
   const coordinates = optionalCoordinate_(payload.lat, payload.lng);
+  const hasCoordinates = coordinates.lat !== '';
+  // لا يُحدَّث "مصدر الموقع"/"تاريخ تحديث الموقع" إلا إذا تغيّرت الإحداثيات
+  // فعليًا بهذا الحفظ (أو سُجّلت لأول مرة) — تعديل حقل آخر لا علاقة له
+  // بالموقع (كالملاحظات مثلًا) لا يُعيد ضبط "آخر تحديث للموقع" زورًا.
+  const existingLat = existing ? existing['خط العرض'] : '';
+  const existingLng = existing ? existing['خط الطول'] : '';
+  const coordinatesChanged = !existing || String(coordinates.lat) !== String(existingLat || '') || String(coordinates.lng) !== String(existingLng || '');
+  let locationSource, locationUpdatedAt;
+  if (!hasCoordinates) {
+    locationSource = '';
+    locationUpdatedAt = '';
+  } else if (coordinatesChanged) {
+    locationSource = validateLocationSource_(payload.locationSource, true);
+    locationUpdatedAt = now_();
+  } else {
+    locationSource = String(existing['مصدر الموقع'] || '');
+    locationUpdatedAt = String(existing['تاريخ تحديث الموقع'] || '');
+  }
   const values = {
     'رقم الجمعية': associationId,
     'الاسم': requiredText_(payload.name, 'اسم المستفيد', 120),
@@ -56,7 +74,10 @@ function saveBeneficiary(token, payload) {
     'الملاحظات': cleanText_(payload.notes, 1000),
     'آخر تحديث': now_(),
     'خط العرض': coordinates.lat,
-    'خط الطول': coordinates.lng
+    'خط الطول': coordinates.lng,
+    'علامة مميزة': cleanText_(payload.landmark, 200),
+    'مصدر الموقع': locationSource,
+    'تاريخ تحديث الموقع': locationUpdatedAt
   };
   let id;
   if (existing) {
@@ -87,6 +108,7 @@ function importBeneficiaries(token, rows, acceptedPledge) {
       if (!associationId) throw new Error('رقم الجمعية مطلوب');
       const place = validateRegionCity_(row.region, row.city);
       const coordinates = optionalCoordinate_(row.lat, row.lng);
+      const hasCoordinates = coordinates.lat !== '';
       valid.push({
         'رقم المستفيد': '',
         'رقم الجمعية': associationId,
@@ -109,7 +131,10 @@ function importBeneficiaries(token, rows, acceptedPledge) {
         'تاريخ التسليم': '',
         'آخر تحديث': now_(),
         'خط العرض': coordinates.lat,
-        'خط الطول': coordinates.lng
+        'خط الطول': coordinates.lng,
+        'علامة مميزة': cleanText_(row.landmark, 200),
+        'مصدر الموقع': hasCoordinates ? 'استيراد' : '',
+        'تاريخ تحديث الموقع': hasCoordinates ? now_() : ''
       });
     } catch (error) {
       errors.push({row: index + 2, message: error.message});
@@ -164,22 +189,26 @@ function inspectBeneficiaryExcel(token, payload) {
     const headers = values[0].map(value => String(value).trim());
     const missing = expected.filter(header => headers.indexOf(header) < 0);
     if (missing.length) throw new Error('أعمدة مفقودة: ' + missing.join('، '));
+    // "خط العرض"/"خط الطول" تقبل أيضًا مرادفات إنجليزية شائعة (تُصدرها
+    // بعض تطبيقات GPS/الخرائط) — عمودان اختياريان بالكامل في الحالتين.
+    // "العلامة المميزة" اختيارية أيضًا (وصف موقع حر، كـ"بجانب المسجد").
     const keyMap = {
       'الاسم': 'name', 'المنطقة': 'region', 'المدينة': 'city', 'العنوان': 'address',
       'الجوال': 'phone', 'عدد الأفراد': 'familyCount', 'الضمان الاجتماعي': 'socialSecurity',
       'الحالة الاجتماعية': 'socialStatus', 'الدخل': 'income', 'الاحتياج': 'needs', 'الملاحظات': 'notes',
-      'خط العرض': 'lat', 'خط الطول': 'lng'
+      'خط العرض': 'lat', 'خط الطول': 'lng', 'Latitude': 'lat', 'Longitude': 'lng', 'Lat': 'lat', 'Lng': 'lng',
+      'العلامة المميزة': 'landmark', 'Landmark': 'landmark'
     };
-    const rows = values.slice(1).filter(row => row.some(Boolean)).map(row => {
-      const object = {};
-      headers.forEach((header, index) => {
-        if (keyMap[header]) object[keyMap[header]] = row[index];
+    const rows = values.slice(1).filter(row => row.some(Boolean)).map((row, index) => {
+      const object = {row: index + 2};
+      headers.forEach((header, colIndex) => {
+        if (keyMap[header]) object[keyMap[header]] = row[colIndex];
       });
       if (user.role === 'ASSOCIATION') object.associationId = user.associationId;
       return object;
     });
     const errors = [];
-    rows.forEach((row, index) => {
+    rows.forEach(row => {
       try {
         requiredText_(row.name, 'الاسم', 120);
         validateRegionCity_(row.region, row.city);
@@ -189,8 +218,11 @@ function inspectBeneficiaryExcel(token, payload) {
         boundedNumber_(row.income || 0, 0, 1000000, 'مبلغ الدخل');
         optionalCoordinate_(row.lat, row.lng);
         validateSocialStatus_(row.socialStatus);
+        row.valid = true;
       } catch (error) {
-        errors.push({row: index + 2, message: error.message});
+        row.valid = false;
+        row.error = error.message;
+        errors.push({row: row.row, message: error.message});
       }
     });
     return {ok: errors.length === 0, rows: rows, validCount: rows.length - errors.length, errorCount: errors.length, errors: errors.slice(0, 50)};

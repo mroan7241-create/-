@@ -135,7 +135,7 @@ const ALL_HEADERS = {
   'إعدادات المشروع': ['المفتاح', 'القيمة', 'الوصف'],
   'المستخدمون': ['رقم المستخدم', 'الاسم', 'البريد الإلكتروني', 'كلمة المرور المشفرة', 'الملح', 'الدور', 'رقم الجمعية', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول', 'يجب تغيير كلمة المرور', 'كلمة مرور سابقة مشفرة', 'ملح سابق'],
   'الجمعيات': ['رقم الجمعية', 'اسم الجمعية', 'التصنيف', 'المنطقة', 'المدينة', 'أرقام التواصل', 'البريد الإلكتروني', 'الحالة', 'تاريخ الإنشاء'],
-  'المستفيدون': ['رقم المستفيد', 'رقم الجمعية', 'الاسم', 'المنطقة', 'المدينة', 'العنوان', 'رقم الجوال', 'رقم جوال إضافي', 'عدد الأفراد', 'ضمان اجتماعي', 'الحالة الاجتماعية', 'مبلغ الدخل', 'الاحتياج', 'حالة المستفيد', 'حالة التسليم', 'رقم المندوب', 'الملاحظات', 'تاريخ الإنشاء', 'تاريخ التسليم', 'آخر تحديث', 'خط العرض', 'خط الطول'],
+  'المستفيدون': ['رقم المستفيد', 'رقم الجمعية', 'الاسم', 'المنطقة', 'المدينة', 'العنوان', 'رقم الجوال', 'رقم جوال إضافي', 'عدد الأفراد', 'ضمان اجتماعي', 'الحالة الاجتماعية', 'مبلغ الدخل', 'الاحتياج', 'حالة المستفيد', 'حالة التسليم', 'رقم المندوب', 'الملاحظات', 'تاريخ الإنشاء', 'تاريخ التسليم', 'آخر تحديث', 'خط العرض', 'خط الطول', 'علامة مميزة', 'مصدر الموقع', 'تاريخ تحديث الموقع'],
   'الأجهزة': ['رقم الجهاز', 'اسم الجهاز', 'النوع', 'رقم الجمعية', 'رقم المستفيد', 'حالة الجهاز', 'تاريخ الإضافة', 'تاريخ التسليم', 'ملاحظات'],
   'المناديب': ['رقم المندوب', 'رقم الجمعية', 'اسم المندوب', 'رقم الجوال', 'رمز الدخول المشفر', 'الملح', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول'],
   'التسليمات': ['رقم التسليم', 'رقم المستفيد', 'رقم المندوب', 'أرقام الأجهزة', 'الحالة', 'سبب التعذر', 'الملاحظات', 'رابط الإثبات', 'تاريخ ووقت التسليم', 'تاريخ الإنشاء'],
@@ -336,6 +336,15 @@ section('4) XSS وحقن الصيغ (Formula Injection) — اختبار كتا�
   const rawScriptRow = S.findById_('المستفيدون', 'رقم المستفيد', savedScript.id);
   assert('وسم <script> يُخزَّن كنص خام دون تنفيذ (الهروب يحدث في الواجهة عبر esc() لا في الخادم)',
     String(rawScriptRow['الاسم']) === scriptName);
+
+  const landmarkXss = '<img src=x onerror=alert(1)>';
+  const savedLandmark = S.saveBeneficiary(userA.token, {
+    name: 'مستفيد بعلامة مميزة خبيثة', region: 'الرياض', city: 'الرياض', address: 'حي',
+    phone: '0501234572', familyCount: 1, socialStatus: 'أرملة', needs: [], landmark: landmarkXss
+  });
+  const rawLandmarkRow = S.findById_('المستفيدون', 'رقم المستفيد', savedLandmark.id);
+  assert('حقل "علامة مميزة" الجديد (المرحلة الخامسة) يُخزَّن كنص خام محدود الطول دون تنفيذ HTML (الهروب في الواجهة فقط)',
+    String(rawLandmarkRow['علامة مميزة']) === landmarkXss);
   // ملاحظة: الحماية الفعلية من XSS تقع في Index.html عبر esc() عند العرض؛
   // tools/verify.js وtools/smoke.js يتحقّقان من ذلك في كل شاشة عرض بيانات.
 }
@@ -528,6 +537,36 @@ function extractFunctionBody_(source, fnName) {
     if (helperBody) body += helperBody;
   }
   return body;
+}
+
+section('10) خصوصية الموقع الجغرافي (المرحلة الخامسة)');
+{
+  const htmlSource = fs.readFileSync(path.join(__dirname, '..', 'Index.html'), 'utf8');
+  const appScript = htmlSource.slice(htmlSource.lastIndexOf('<script'));
+
+  assert('renderLogin/restoreSession لا يستدعيان navigator.geolocation عند فتح النظام (الإذن يُطلَب فقط بضغط المستخدم)', (() => {
+    const loginBody = extractFunctionBody_(appScript, 'renderLogin') || '';
+    const restoreBody = extractFunctionBody_(appScript, 'restoreSession') || '';
+    return !/geolocation/.test(loginBody) && !/geolocation/.test(restoreBody);
+  })());
+
+  const geoCalls = (appScript.match(/navigator\.geolocation\.getCurrentPosition/g) || []).length;
+  assert('استدعاءات navigator.geolocation.getCurrentPosition محصورة في معالجات أزرار صريحة (fillCurrentLocation/startDelegateRoute) لا أكثر',
+    geoCalls === 2);
+
+  assert('confirmDelivery لا يكتب أي إحداثيات أو موقع حي للمندوب في سجل التسليمات أو سجل العمليات', (() => {
+    const body = extractFunctionBody_(source, 'confirmDelivery') || '';
+    return !/'خط العرض'|'خط الطول'|position\.coords/.test(body);
+  })());
+  assert('updateDeliveryStatus لا يكتب أي إحداثيات أو موقع حي للمندوب', (() => {
+    const body = extractFunctionBody_(source, 'updateDeliveryStatus') || '';
+    return !/'خط العرض'|'خط الطول'|position\.coords/.test(body);
+  })());
+  assert('audit_ لا تُستدعى أبدًا بوسيطة تحمل إحداثيات موقع المندوب الحي (لا نمط lat/lng ضمن نص العملية المُسجَّل)',
+    !/audit_\([^)]*(position\.coords|\.lat \+|\.lng \+)/.test(source));
+
+  assert('optionalCoordinate_ تُستخدَم دائمًا للتحقق من الإحداثيات في الخادم (لا اعتماد على تحقق الواجهة فقط)',
+    (source.match(/optionalCoordinate_\(/g) || []).length >= 3);
 }
 
 /* -------- النتيجة -------- */

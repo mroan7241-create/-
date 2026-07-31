@@ -319,7 +319,65 @@ assert('الجمعية لا ترى زر إضافة جهاز', !out().includes('n
 app.beneficiaryForm('');
 assert('نموذج المستفيد يعرض حقلي الإحداثيات وزر تحديد الموقع', registry.modalRoot.innerHTML.includes('name="lat"')
   && registry.modalRoot.innerHTML.includes('name="lng"') && registry.modalRoot.innerHTML.includes('use-my-location'));
+assert('نموذج المستفيد يعرض حقل العلامة المميزة الاختياري', registry.modalRoot.innerHTML.includes('name="landmark"'));
+assert('نموذج المستفيد يعرض حاوية الخريطة وأزرار المسح وفتح الخرائط', registry.modalRoot.innerHTML.includes('id="locationMap"')
+  && registry.modalRoot.innerHTML.includes('clear-location') && registry.modalRoot.innerHTML.includes('open-location-maps'));
+assert('نموذج المستفيد يعرض حقل مصدر الموقع المخفي', registry.modalRoot.innerHTML.includes('id="f_locationSource"'));
+assert('حقلا الإحداثيات اليدويان بنطاق عالمي (-90..90 / -180..180) لا نطاق السعودية فقط',
+  registry.modalRoot.innerHTML.includes('min="-90" max="90"') && registry.modalRoot.innerHTML.includes('min="-180" max="180"'));
 app.closeModal();
+
+/* ---------------- 3ب) اختيار الموقع بصريًا: منطق الخريطة والبدائل الآمنة ---------------- */
+
+section('3ب) اختيار الموقع بصريًا وبدائل الفشل');
+
+assert('locationCoordsLabel تعرض رسالة واضحة بلا موقع', app.locationCoordsLabel(null, null) === 'لم يُحدَّد موقع بعد.');
+assert('locationCoordsLabel تعرض الإحداثيات المنسَّقة عند وجودها',
+  app.locationCoordsLabel(24.7136, 46.6753).includes('24.713600') && app.locationCoordsLabel(24.7136, 46.6753).includes('46.675300'));
+
+app.beneficiaryForm('');
+registry.f_lat = new El('input'); registry.f_lat.id = 'f_lat';
+registry.f_lng = new El('input'); registry.f_lng.id = 'f_lng';
+registry.f_locationSource = new El('input'); registry.f_locationSource.id = 'f_locationSource';
+registry.locationCoordsHint = new El('span'); registry.locationCoordsHint.id = 'locationCoordsHint';
+registry.locationMapStatus = new El('span'); registry.locationMapStatus.id = 'locationMapStatus';
+registry.locationMap = new El('div'); registry.locationMap.id = 'locationMap';
+registry.f_address = new El('input'); registry.f_address.id = 'f_address';
+
+assert('initLocationPicker لا يفشل حتى بلا مكتبة خريطة محمَّلة فعليًا (بيئة الاختبار بلا شبكة)', (() => {
+  let error = null;
+  try { app.initLocationPicker({}); } catch (e) { error = e; }
+  return !error;
+})());
+
+app.setLocationFromLatLng(24.7136, 46.6753, 'خريطة');
+assert('setLocationFromLatLng يعبّئ حقلي الإحداثيات', registry.f_lat.value === '24.713600' && registry.f_lng.value === '46.675300');
+assert('setLocationFromLatLng يضبط مصدر الموقع إلى القيمة الممرَّرة', registry.f_locationSource.value === 'خريطة');
+assert('setLocationFromLatLng يحدّث نص الإحداثيات المعروض', registry.locationCoordsHint.innerHTML.includes('24.713600'));
+
+app.clearLocationFields();
+assert('clearLocationFields يفرّغ الحقلين ومصدر الموقع', registry.f_lat.value === '' && registry.f_lng.value === '' && registry.f_locationSource.value === '');
+
+let lastOpenUrl = null;
+app.window.open = (url) => { lastOpenUrl = url; return { opener: null }; };
+registry.f_lat.value = '24.7136'; registry.f_lng.value = '46.6753';
+app.openLocationInMaps();
+assert('فتح الموقع في خرائط جوجل يستخدم الإحداثيات عند توفّرها', lastOpenUrl && lastOpenUrl.includes('query=24.7136,46.6753'));
+
+registry.f_lat.value = ''; registry.f_lng.value = ''; registry.f_address.value = 'حي النرجس';
+lastOpenUrl = null;
+app.openLocationInMaps();
+assert('بلا إحداثيات: فتح الموقع يسقط تلقائيًا للعنوان النصي', lastOpenUrl && lastOpenUrl.includes('query=') && !lastOpenUrl.includes('undefined'));
+
+registry.f_lat.value = ''; registry.f_lng.value = ''; registry.f_address.value = '';
+lastOpenUrl = null;
+const toastCountBefore = registry.toasts.children.length;
+app.openLocationInMaps();
+assert('بلا إحداثيات وبلا عنوان: لا يُفتح رابط فارغ، بل تنبيه واضح فقط', !lastOpenUrl && registry.toasts.children.length > toastCountBefore);
+
+app.closeModal();
+delete registry.f_lat; delete registry.f_lng; delete registry.f_locationSource;
+delete registry.locationCoordsHint; delete registry.locationMapStatus; delete registry.locationMap; delete registry.f_address;
 
 /* ---------------- 4) البحث والفلاتر ---------------- */
 
@@ -408,6 +466,24 @@ assert('رابط واتساب سليم حتى مع رقم قديم بلا صفر
 assert('رابط الاتصال سليم حتى مع رقم قديم بلا صفر بادئ', brokenPhoneHtml.includes('tel:0550791650'));
 setRole(DELEGATE_DATA);
 assert('زر الاتصال يحمل بديل النسخ عند حجب المتصفح', brokenPhoneHtml.includes('data-act="call-fallback"'));
+assert('زر نسخ الرقم يظهر دائمًا كبديل صريح (لا ينتظر فشل الاتصال أولًا)', listHtml.includes('data-act="copy-phone"'));
+assert('زر التسليم مفعّل عند وجود أجهزة', listHtml.includes('dg-deliver') && !listHtml.includes('dg-deliver" disabled'));
+
+const withLandmark = JSON.parse(JSON.stringify(DELEGATE_DATA));
+withLandmark.beneficiaries[0].landmark = 'بجانب المسجد';
+setRole(withLandmark);
+assert('العلامة المميزة تظهر في عنوان بطاقة المستفيد لدى المندوب', app.renderDelegateList().includes('بجانب المسجد'));
+
+const noLocationAtAll = JSON.parse(JSON.stringify(DELEGATE_DATA));
+noLocationAtAll.beneficiaries[0].address = '';
+noLocationAtAll.beneficiaries[0].city = '';
+noLocationAtAll.beneficiaries[0].lat = null;
+noLocationAtAll.beneficiaries[0].lng = null;
+setRole(noLocationAtAll);
+const noLocationHtml = app.renderDelegateList();
+assert('بلا عنوان ولا إحداثيات: زر الموقع يعرض تنبيهًا بدل رابط خرائط فارغ',
+  noLocationHtml.includes('data-act="no-location-alert"') && !noLocationHtml.includes('www.google.com/maps/search/?api=1&query= '));
+setRole(DELEGATE_DATA);
 assert('زر التسليم مفعّل عند وجود أجهزة', listHtml.includes('dg-deliver') && !listHtml.includes('dg-deliver" disabled'));
 
 const noDevices = JSON.parse(JSON.stringify(DELEGATE_DATA));
@@ -436,8 +512,26 @@ app.state.delegateRoute = {
   ordered: [{item: Object.assign({}, DELEGATE_DATA.beneficiaries[0], {lat: 24.71, lng: 46.61}), distanceKm: 1.4}]
 };
 app.renderDelegate();
-assert('مسار محسوب يعرض ترتيب المستفيد والمسافة التقريبية', out().includes('1.4 كم تقريبًا'));
+assert('مسار محسوب يعرض ترتيب المستفيد والمسافة التقريبية', out().includes('بعد تقريبي بخط مستقيم: 1.4 كم'));
+assert('مسار محسوب يوضّح صراحة أن المسافة تقريبية بخط مستقيم لا توجيهًا فعليًا',
+  out().includes('مسافة تقريبية بخط مستقيم'));
 assert('مسار محسوب يستخدم رابط خرائط بالإحداثيات الدقيقة', out().includes('query=24.71,46.61'));
+assert('كل محطة في المسار تعرض أزرار التواصل الكاملة (واتساب/اتصال/نسخ/موقع)',
+  out().includes('a-wa') && out().includes('a-call') && out().includes('data-act="copy-phone"'));
+assert('كل محطة في المسار تعرض الأجهزة المخصَّصة', out().includes('ثلاجة'));
+
+// محاكاة "تحديث المسار دون إعادة تحميل النظام كاملًا": بعد أن يُستبدَل
+// مرجع كائن المستفيد في state.data.beneficiaries (كما تفعل upsertRecord
+// فعليًا بعد تأكيد تسليم أو تسجيل تعذّر)، يجب أن تعكس بطاقة المحطة في
+// المسار نفسه الحالة الجديدة فورًا دون إعادة بناء المسار بالكامل.
+app.state.data.beneficiaries[0] = Object.assign({}, app.state.data.beneficiaries[0], {
+  deliveryStatus: 'تم التسليم', status: 'تم التسليم'
+});
+app.renderDelegate();
+assert('تحديث حالة التسليم عبر استبدال المرجع (upsertRecord) ينعكس فورًا في بطاقة المسار دون إعادة حسابه',
+  out().includes('dg-card-done'));
+assert('محطة مُسلَّمة: زر تأكيد التسليم يصبح معطَّلًا (لا تكرار تأكيد)',
+  /a-deliver" data-act="dg-deliver" data-id="BEN-000001" disabled/.test(out()));
 app.state.delegateRoute = null;
 app.state.delegatePage = 'list';
 
@@ -502,9 +596,31 @@ const parsedWithCoords = app.parseCsv(csvWithCoords);
 assert('ملف CSV بعمودي الإحداثيات في النهاية يقرأهما بشكل صحيح',
   parsedWithCoords[0].lat === '24.75' && parsedWithCoords[0].lng === '46.65');
 
+const csvWithLandmark = 'الاسم,المنطقة,المدينة,العنوان,الجوال,عدد الأفراد,الضمان,الحالة,الدخل,الاحتياج,ملاحظات,خط العرض,خط الطول,علامة مميزة\n'
+  + 'ريم,الرياض,الرياض,حي الملقا,0501234570,2,نعم,أرملة,2000,ثلاجة,,24.75,46.65,بجانب الحديقة\n';
+assert('ملف CSV بعمود العلامة المميزة الاختياري في النهاية يقرأه بشكل صحيح',
+  app.parseCsv(csvWithLandmark)[0].landmark === 'بجانب الحديقة');
+assert('ملف CSV قديم بلا عمود العلامة المميزة يبقى يعمل (فارغ لا يفشل)',
+  app.parseCsv(csvWithCoords)[0].landmark === '');
+
+const previewRows = [
+  {row: 2, name: 'صحيح', valid: true, lat: 24.7, lng: 46.6},
+  {row: 3, name: 'خاطئ', valid: false, error: 'المدينة "جدة" لا تتبع منطقة "الرياض"'}
+];
+const previewHtml = app.renderBulkPreviewTable(previewRows);
+assert('معاينة استيراد Excel تعرض رقم الصف لكل سجل', previewHtml.includes('صف 2') && previewHtml.includes('صف 3'));
+assert('معاينة استيراد Excel تعرض الإحداثيات المقروءة للصف الصحيح', previewHtml.includes('24.7، 46.6'));
+assert('معاينة استيراد Excel تعرض سبب الخطأ للصف الخاطئ', previewHtml.includes('لا تتبع منطقة'));
+assert('معاينة استيراد Excel تميّز الصحيح عن الخاطئ بوضوح', previewHtml.includes('✓ صحيح') && previewHtml.includes('✗ خاطئ'));
+
 app.bulkImportModal();
 assert('نافذة الاستيراد الجماعي توضّح أن عمودي الإحداثيات اختياريان وتوافق الملفات القديمة',
-  registry.modalRoot.innerHTML.includes('خط العرض وخط الطول') && registry.modalRoot.innerHTML.includes('اختياريين'));
+  registry.modalRoot.innerHTML.includes('خط العرض وخط الطول') && registry.modalRoot.innerHTML.includes('اختيارية'));
+assert('نافذة الاستيراد الجماعي تذكر مرادفات إنجليزية لخط العرض/الطول ("Latitude"/"Longitude")',
+  registry.modalRoot.innerHTML.includes('Latitude') && registry.modalRoot.innerHTML.includes('Longitude'));
+assert('نافذة الاستيراد الجماعي تذكر عمود العلامة المميزة الاختياري', registry.modalRoot.innerHTML.includes('العلامة المميزة'));
+assert('نافذة الاستيراد الجماعي توضّح اشتراط وجود الإحداثيتين معًا أو غيابهما معًا',
+  registry.modalRoot.innerHTML.includes('معًا'));
 app.closeModal();
 
 /* ---------------- 10) المنطقة والمدينة المترابطتان ---------------- */

@@ -119,6 +119,13 @@
     .choice input{accent-color:var(--zad-700);width:16px;height:16px}
     .choice:has(input:checked){background:var(--zad-100);border-color:var(--zad-600);color:var(--zad-800);font-weight:700}
 
+    .location-picker{border:1px solid var(--line);border-radius:var(--r-md);padding:12px;background:var(--canvas)}
+    .location-map{height:240px;border-radius:var(--r-md);margin-top:8px;background:var(--surface);border:1px solid var(--line-strong)}
+    .location-acts{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+    .location-manual{margin-top:8px;font-size:13px}
+    .location-manual summary{cursor:pointer;color:var(--zad-700);font-weight:600}
+    .location-manual .field-row{display:grid;grid-template-columns:1fr 1fr;gap:0 12px;margin-top:8px}
+
     /* ---------- Login ---------- */
     .login{min-height:100vh;display:grid;grid-template-columns:minmax(380px,540px) 1fr;background:var(--surface)}
     .login-panel{padding:clamp(26px,5vw,68px);display:flex;flex-direction:column;justify-content:center;background:var(--paper);position:relative;z-index:1}
@@ -255,6 +262,7 @@
 
     /* ---------- Rows ---------- */
     .rows{display:flex;flex-direction:column}
+    .bulk-preview{max-height:280px;overflow-y:auto;border:1px solid var(--line);border-radius:var(--r-md);margin-top:10px}
     .row-item{display:grid;grid-template-columns:1.4fr 1fr auto;gap:14px;align-items:center;padding:13px 2px;border-bottom:1px solid var(--line)}
     .row-item:last-child{border-bottom:0}
     .row-item strong{font-size:13.5px;color:var(--ink)}
@@ -319,11 +327,15 @@
     .dg-addr{color:var(--ink-soft);font-size:13px;margin:8px 0 12px;display:flex;gap:7px;align-items:flex-start}
     .dg-acts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
     .dg-acts>*{display:flex;align-items:center;justify-content:center;min-height:46px;border-radius:var(--r-md);text-decoration:none;font-size:12.5px;font-weight:700;text-align:center;padding:8px 4px}
+    .dg-acts button{border:none;font:inherit;cursor:pointer;width:100%}
     .a-call{background:var(--info-bg);color:var(--info)}
     .a-wa{background:var(--ok-bg);color:var(--ok)}
     .a-map{background:var(--gold-100);color:var(--gold-700)}
+    .a-copy{background:var(--neutral-bg);color:var(--neutral)}
     .a-state{background:var(--neutral-bg);color:var(--neutral);grid-column:span 1}
+    .a-state[disabled],.a-deliver[disabled]{opacity:.5;cursor:not-allowed}
     .a-deliver{background:var(--zad-700);color:#fff;grid-column:span 2;box-shadow:0 6px 16px rgba(142,27,69,.22)}
+    .dg-card-done{opacity:.75}
 
     /* ---------- Proof upload ---------- */
     .drop{border:2px dashed var(--line-strong);border-radius:var(--r-lg);padding:22px;text-align:center;background:var(--surface)}
@@ -1307,16 +1319,9 @@
         + regionCityFields(item.region, item.city, 'f')
         + textField('address', 'العنوان الدقيق', item.address, {required: true, max: 250, span: true,
             hint: 'الحي والشارع وأقرب معلم — يستخدمه المندوب للوصول.'})
-        + '<div class="field"><label for="f_lat">خط العرض (اختياري)</label>'
-        + '<input class="control" id="f_lat" name="lat" type="number" step="any" dir="ltr" min="15" max="33" value="'
-        + esc(item.lat != null ? item.lat : '') + '"></div>'
-        + '<div class="field"><label for="f_lng">خط الطول (اختياري)</label>'
-        + '<input class="control" id="f_lng" name="lng" type="number" step="any" dir="ltr" min="33" max="56" value="'
-        + esc(item.lng != null ? item.lng : '') + '"></div>'
-        + '<div class="field span-2"><button type="button" class="btn btn-ghost btn-sm" data-act="use-my-location">'
-        + '📍 استخدم الموقع الحالي لتعبئة الإحداثيات</button>'
-        + '<span class="hint">اختياري — يحسّن دقة موقع المستفيد على الخريطة ويرتّب مسار المندوب اليومي تلقائيًا.'
-        + ' اتركه فارغًا إن لم تكن متأكدًا؛ العنوان النصي يبقى يعمل بدونه.</span></div>'
+        + textField('landmark', 'علامة مميزة (اختياري)', item.landmark, {max: 200, span: true,
+            hint: 'مثال: بجانب المسجد، أمام الصيدلية — تفصيل إضافي يساعد المندوب، لا يُستنتَج تلقائيًا.'})
+        + locationPickerFields(item)
         + '<div class="field"><label for="f_familyCount">عدد الأفراد</label>'
         + '<input class="control" id="f_familyCount" name="familyCount" type="number" min="1" max="99" value="'
         + esc(item.familyCount || '') + '" required></div>'
@@ -1342,7 +1347,7 @@
         + '<button class="btn btn-primary" data-act="save-beneficiary">'
         + (isEdit ? 'حفظ التعديلات' : 'اعتماد وإضافة المستفيد') + '</button>';
 
-      openModal(isEdit ? 'تعديل بيانات المستفيد' : 'إضافة مستفيد', body, footer);
+      openModal(isEdit ? 'تعديل بيانات المستفيد' : 'إضافة مستفيد', body, footer, function () { initLocationPicker(item); });
     }
 
     /**
@@ -1406,6 +1411,43 @@
         + (options.hint ? '<span class="hint">' + esc(options.hint) + '</span>' : '') + '</div>';
     }
 
+    /**
+     * موقع المستفيد الموحَّد: خريطة بصرية اختيارية (Leaflet + OpenStreetMap،
+     * مجانيان بالكامل بلا مفتاح API) فوق الإدخال اليدوي الذي يبقى يعمل
+     * دائمًا كخيار بديل — راجع initLocationPicker/loadLeaflet_ للتحميل
+     * الكسول والسقوط الآمن عند تعذّر الخريطة (شبكة أو CSP).
+     */
+    function locationPickerFields(item) {
+      var hasCoords = item.lat != null && item.lng != null;
+      return '<div class="field span-2 location-picker">'
+        + '<label id="locationPickerLabel">موقع المستفيد على الخريطة (اختياري)</label>'
+        + '<div id="locationMap" class="location-map" role="img" aria-labelledby="locationPickerLabel"></div>'
+        + '<p class="hint" id="locationMapStatus">جارٍ تحميل الخريطة…</p>'
+        + '<div class="location-acts">'
+        + '<button type="button" class="btn btn-ghost btn-sm" data-act="use-my-location">📍 استخدم موقعي الحالي</button>'
+        + '<button type="button" class="btn btn-ghost btn-sm" data-act="clear-location">✕ مسح الموقع</button>'
+        + '<button type="button" class="btn btn-ghost btn-sm" data-act="open-location-maps">↗ فتح في خرائط جوجل</button>'
+        + '</div>'
+        + '<p class="hint" id="locationCoordsHint">' + esc(locationCoordsLabel(item.lat, item.lng)) + '</p>'
+        + '<details class="location-manual"><summary>إدخال يدوي للإحداثيات</summary>'
+        + '<div class="field-row">'
+        + '<div class="field"><label for="f_lat">خط العرض</label>'
+        + '<input class="control" id="f_lat" name="lat" type="number" step="any" dir="ltr" min="-90" max="90" value="'
+        + esc(item.lat != null ? item.lat : '') + '"></div>'
+        + '<div class="field"><label for="f_lng">خط الطول</label>'
+        + '<input class="control" id="f_lng" name="lng" type="number" step="any" dir="ltr" min="-180" max="180" value="'
+        + esc(item.lng != null ? item.lng : '') + '"></div>'
+        + '</div></details>'
+        + '<input type="hidden" id="f_locationSource" name="locationSource" value="' + esc(item.locationSource || '') + '">'
+        + '<span class="hint">اختياري بالكامل — اترك الموقع فارغًا إن لم تكن متأكدًا؛ العنوان النصي أعلاه يبقى يعمل بدونه دائمًا.</span>'
+        + '</div>';
+    }
+
+    function locationCoordsLabel(lat, lng) {
+      if (lat == null || lng == null) return 'لم يُحدَّد موقع بعد.';
+      return 'الموقع المحدَّد حاليًا: ' + Number(lat).toFixed(6) + '، ' + Number(lng).toFixed(6);
+    }
+
     function saveBeneficiary() {
       var form = $('#beneficiaryForm');
       if (!form || !form.reportValidity()) return;
@@ -1426,7 +1468,9 @@
         needs: data.getAll('needs'),
         notes: data.get('notes'),
         associationId: association.id || '',
-        lat: data.get('lat'), lng: data.get('lng')
+        lat: data.get('lat'), lng: data.get('lng'),
+        landmark: data.get('landmark'),
+        locationSource: data.get('locationSource')
       };
       busy(true);
       api('saveBeneficiary', state.token, payload).then(function (result) {
@@ -1440,21 +1484,202 @@
 
     /**
      * موقع جغرافي مجاني بالكامل عبر navigator.geolocation المدمج في
-     * المتصفح — بلا أي مفتاح API أو خدمة مدفوعة. يعمل فقط عند منح
-     * المستخدم إذن الموقع صراحة؛ يفشل بصمت مع رسالة عربية واضحة
-     * وإلا يبقى الحقلان فارغين اختياريَّين كما كانا.
+     * المتصفح — بلا أي مفتاح API أو خدمة مدفوعة. يُطلَب الإذن فقط عند
+     * ضغط المستخدم صراحة على هذا الزر (لا عند فتح النموذج أو الدخول
+     * للنظام تلقائيًا). يفشل بصمت مع رسالة عربية واضحة وإلا يبقى
+     * الحقلان فارغين اختياريَّين كما كانا.
      */
     function fillCurrentLocation() {
       if (!navigator.geolocation) { toast('المتصفح لا يدعم تحديد الموقع.', 'error'); return; }
       toast('يُطلَب إذن الموقع من المتصفح…', 'success');
       navigator.geolocation.getCurrentPosition(function (position) {
-        var latField = $('#f_lat'); var lngField = $('#f_lng');
-        if (latField) latField.value = position.coords.latitude.toFixed(6);
-        if (lngField) lngField.value = position.coords.longitude.toFixed(6);
+        setLocationFromLatLng(position.coords.latitude, position.coords.longitude, 'الموقع الحالي');
         toast('تم تعبئة الإحداثيات من موقعك الحالي.', 'success');
       }, function () {
         toast('تعذّر الحصول على الموقع — تحقق من إذن الموقع في المتصفح.', 'error');
       }, {enableHighAccuracy: true, timeout: 10000});
+    }
+
+    /* ============================================================
+       اختيار الموقع بصريًا: Leaflet + OpenStreetMap — مجانيان بالكامل،
+       بلا مفتاح API ولا اشتراك. يُحمَّلان فقط عند فتح نموذج موقع
+       المستفيد (لا في شاشة الدخول ولا لوحة الإدارة)، مع سقوط آمن كامل
+       إلى الإدخال اليدوي/الموقع الحالي/رابط الخرائط الخارجي إن تعذّر
+       تحميل الخريطة (شبكة بطيئة أو حجب CSP) — فشل الخريطة لا يمنع حفظ
+       بقية بيانات المستفيد إطلاقًا لأن كل الحقول الأخرى مستقلة عنها.
+       ============================================================ */
+
+    var LEAFLET_CSS_URL = HTTPS + 'unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    var LEAFLET_JS_URL = HTTPS + 'unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    var LEAFLET_LOAD_TIMEOUT_MS = 6000;
+    var RIYADH_CENTER = {lat: 24.7136, lng: 46.6753};
+    var locationMapState = {map: null, marker: null, loaded: false};
+
+    function loadScriptOnce_(url) {
+      return new Promise(function (resolve, reject) {
+        var head = document.head || document.body;
+        if (!head) { reject(new Error('لا يوجد DOM لإضافة السكربت إليه')); return; }
+        var existing = document.querySelector('script[data-src="' + url + '"]');
+        if (existing) { resolve(); return; }
+        var script = document.createElement('script');
+        script.src = url;
+        script.setAttribute('data-src', url);
+        script.onload = function () { resolve(); };
+        script.onerror = function () { reject(new Error('تعذّر تحميل السكربت')); };
+        head.appendChild(script);
+      });
+    }
+
+    function loadStyleOnce_(url) {
+      var head = document.head || document.body;
+      if (!head) return;
+      if (document.querySelector('link[data-href="' + url + '"]')) return;
+      var link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = url;
+      link.setAttribute('data-href', url);
+      head.appendChild(link);
+    }
+
+    /** يُحمِّل Leaflet مرة واحدة فقط لكل جلسة، بمهلة صريحة — لا يعلّق النموذج إلى الأبد إن تعذّر الوصول للشبكة. لا يرمي أي استثناء متزامن مهما حدث؛ كل خلل يتحوّل لرفض Promise يلتقطه initLocationPicker ويعرض السقوط الآمن. */
+    function loadLeaflet_() {
+      return new Promise(function (resolve, reject) {
+        try {
+          if (window.L) { resolve(window.L); return; }
+          loadStyleOnce_(LEAFLET_CSS_URL);
+        } catch (error) { reject(error); return; }
+        var settled = false;
+        var timer = setTimeout(function () {
+          if (settled) return;
+          settled = true;
+          reject(new Error('انتهت مهلة تحميل الخريطة'));
+        }, LEAFLET_LOAD_TIMEOUT_MS);
+        loadScriptOnce_(LEAFLET_JS_URL).then(function () {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (window.L) resolve(window.L); else reject(new Error('تعذّر تحميل مكتبة الخريطة'));
+        }, function (error) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(error);
+        });
+      });
+    }
+
+    function showMapFallback_(message) {
+      var mapEl = $('#locationMap');
+      var statusEl = $('#locationMapStatus');
+      if (mapEl) mapEl.style.display = 'none';
+      if (statusEl) statusEl.textContent = message
+        || 'تعذّر تحميل الخريطة (الشبكة أو إعدادات الحماية) — استخدم "موقعي الحالي" أو الإدخال اليدوي أدناه؛ يبقى النموذج صالحًا للحفظ بلا أي خريطة.';
+    }
+
+    /** يُستدعى مرة واحدة عند فتح نموذج المستفيد فقط — لا في أي صفحة أخرى. */
+    function initLocationPicker(item) {
+      var mapEl = $('#locationMap');
+      if (!mapEl) return;
+      updateLocationCoordsHint();
+      if (typeof window === 'undefined' || !window.document || typeof Promise === 'undefined') return;
+      try {
+        loadLeaflet_().then(function (L) {
+          setupLeafletMap_(L, item);
+        }, function (error) {
+          showMapFallback_();
+        });
+      } catch (error) {
+        showMapFallback_();
+      }
+    }
+
+    function setupLeafletMap_(L, item) {
+      var mapEl = $('#locationMap');
+      if (!mapEl) return;
+      try {
+        if (locationMapState.map) { locationMapState.map.remove(); locationMapState.map = null; locationMapState.marker = null; }
+        var hasCoords = item.lat != null && item.lng != null;
+        var center = hasCoords ? {lat: item.lat, lng: item.lng} : RIYADH_CENTER;
+        var map = L.map(mapEl).setView([center.lat, center.lng], hasCoords ? 14 : 6);
+        L.tileLayer(HTTPS + '{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          attribution: '&copy; OpenStreetMap'
+        }).addTo(map);
+        locationMapState.map = map;
+        locationMapState.marker = null;
+        if (hasCoords) placeMarker_(L, center.lat, center.lng);
+        map.on('click', function (e) {
+          setLocationFromLatLng(e.latlng.lat, e.latlng.lng, 'خريطة');
+        });
+        locationMapState.loaded = true;
+        var statusEl = $('#locationMapStatus');
+        if (statusEl) statusEl.textContent = 'انقر على الخريطة لتحديد الموقع، أو اسحب العلامة لتعديلها.';
+      } catch (error) {
+        showMapFallback_();
+      }
+    }
+
+    function placeMarker_(L, lat, lng) {
+      if (!locationMapState.map) return;
+      if (locationMapState.marker) {
+        locationMapState.marker.setLatLng([lat, lng]);
+        return;
+      }
+      var marker = L.marker([lat, lng], {draggable: true}).addTo(locationMapState.map);
+      marker.on('dragend', function () {
+        var pos = marker.getLatLng();
+        setLocationFromLatLng(pos.lat, pos.lng, 'خريطة');
+      });
+      locationMapState.marker = marker;
+    }
+
+    function updateLocationCoordsHint() {
+      var hint = $('#locationCoordsHint');
+      if (!hint) return;
+      var latField = $('#f_lat'); var lngField = $('#f_lng');
+      var lat = latField && latField.value !== '' ? Number(latField.value) : null;
+      var lng = lngField && lngField.value !== '' ? Number(lngField.value) : null;
+      hint.textContent = locationCoordsLabel(lat, lng);
+    }
+
+    /** نقطة مركزية واحدة لتحديث الإحداثيات من أي مصدر (خريطة/موقع حالي/يدوي) — تُبقي الحقول والخريطة والمصدر متزامنين دائمًا. */
+    function setLocationFromLatLng(lat, lng, source) {
+      var latField = $('#f_lat'); var lngField = $('#f_lng'); var sourceField = $('#f_locationSource');
+      if (latField) latField.value = Number(lat).toFixed(6);
+      if (lngField) lngField.value = Number(lng).toFixed(6);
+      if (sourceField) sourceField.value = source || 'يدوي';
+      updateLocationCoordsHint();
+      if (locationMapState.map && window.L) {
+        placeMarker_(window.L, lat, lng);
+        locationMapState.map.setView([lat, lng], Math.max(locationMapState.map.getZoom(), 13));
+      }
+    }
+
+    function clearLocationFields() {
+      var latField = $('#f_lat'); var lngField = $('#f_lng'); var sourceField = $('#f_locationSource');
+      if (latField) latField.value = '';
+      if (lngField) lngField.value = '';
+      if (sourceField) sourceField.value = '';
+      updateLocationCoordsHint();
+      if (locationMapState.marker && locationMapState.map) {
+        locationMapState.map.removeLayer(locationMapState.marker);
+        locationMapState.marker = null;
+      }
+      toast('تم مسح الموقع.', 'success');
+    }
+
+    /** يفتح خرائط جوجل بالإحداثيات إن وُجدت، وإلا بالعنوان النصي، وإلا تنبيه واضح بدل رابط فارغ. */
+    function openLocationInMaps() {
+      var latField = $('#f_lat'); var lngField = $('#f_lng');
+      var addressField = $('#f_address'); var cityField = $('#f_city') || $('#f_region');
+      var lat = latField && latField.value !== '' ? latField.value : '';
+      var lng = lngField && lngField.value !== '' ? lngField.value : '';
+      var query = '';
+      if (lat && lng) query = lat + ',' + lng;
+      else if (addressField && addressField.value) query = encodeURIComponent(addressField.value + ' ' + ((cityField && cityField.value) || ''));
+      if (!query) { toast('لا يوجد موقع أو عنوان لعرضه بعد.', 'error'); return; }
+      var win = window.open(HTTPS + 'www.google.com/maps/search/?api=1&query=' + query, '_blank', 'noopener,noreferrer');
+      if (win) win.opener = null;
     }
 
     /* ---------- تعيين المندوب ---------- */
@@ -1503,19 +1728,37 @@
       state.pendingRows = [];
       var body = '<p class="muted">ارفع النموذج المعتمد بصيغة Excel أو CSV. الأعمدة المطلوبة: '
         + 'الاسم، المنطقة، المدينة، العنوان، الجوال، عدد الأفراد، الضمان الاجتماعي، الحالة الاجتماعية، '
-        + 'الدخل، الاحتياج، الملاحظات. يمكن إضافة عمودين اختياريين في النهاية: خط العرض وخط الطول '
-        + '(لتحديد موقع المستفيد على الخريطة ومسار المندوب اليومي) — الملفات القديمة بلا هذين العمودين '
-        + 'تُقبَل كاملة كما كانت دائمًا.</p>'
+        + 'الدخل، الاحتياج، الملاحظات. أعمدة اختيارية إضافية: خط العرض وخط الطول (لموقع المستفيد على الخريطة '
+        + 'ومسار المندوب اليومي — Excel يقبل أيضًا "Latitude"/"Longitude" بالإنجليزية)، والعلامة المميزة '
+        + '(وصف موقع حر مثل "بجانب المسجد"). خط العرض وخط الطول لا بد أن يظهرا معًا أو يُتركا معًا؛ عمود واحد منهما '
+        + 'فقط يُرفض. الملفات القديمة بلا هذه الأعمدة الاختيارية تُقبَل كاملة كما كانت دائمًا.</p>'
         + '<div class="drop"><label class="btn btn-primary" for="bulkFile">اختيار ملف</label>'
         + '<input id="bulkFile" type="file" data-act="bulk-file" '
         + 'accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv">'
         + '<p class="muted" id="bulkSummary" style="margin:10px 0 0">لم يتم اختيار ملف بعد.</p></div>'
+        + '<div id="bulkPreview"></div>'
         + '<label class="pledge"><input id="bulkPledge" type="checkbox">'
         + '<span>أتعهّد بأن جميع بيانات المستفيدين المضافة صحيحة وتم التحقق منها، وأن الجمعية تتحمّل مسؤولية '
         + 'صحة البيانات واستحقاق المستفيدين للدعم.</span></label>';
       openModal('إضافة المستفيدين بالجملة', body,
         '<button class="btn btn-ghost" data-act="close-modal">إلغاء</button>'
         + '<button class="btn btn-primary" data-act="run-import">استيراد المستفيدين</button>');
+    }
+
+    /** جدول معاينة الصفوف الصحيحة/الخاطئة (مسار Excel فقط — يحمل row/valid/error/lat/lng من الخادم). CSV يبقى بالملخّص المختصر فقط، بلا تحقّق مسبق للصف. */
+    function renderBulkPreviewTable(rows) {
+      if (!rows || !rows.length) return '';
+      var items = rows.slice(0, 200).map(function (row) {
+        var hasCoords = row.lat !== undefined && row.lat !== '' && row.lng !== undefined && row.lng !== '';
+        var coordsLabel = hasCoords ? (row.lat + '، ' + row.lng) : '—';
+        var ok = row.valid !== false;
+        return '<div class="row-item"><div><strong>صف ' + esc(String(row.row || '')) + ' — ' + esc(row.name || '') + '</strong>'
+          + '<small>الإحداثيات المقروءة: ' + esc(coordsLabel) + '</small></div>'
+          + '<div class="muted">' + (ok ? 'جاهز للاستيراد' : esc(row.error || 'خطأ غير محدَّد')) + '</div>'
+          + '<span class="status ' + (ok ? 'good' : 'bad') + '">' + (ok ? '✓ صحيح' : '✗ خاطئ') + '</span></div>';
+      }).join('');
+      var moreNote = rows.length > 200 ? '<p class="muted">وعرض أول 200 صف فقط من ' + fmt(rows.length) + '.</p>' : '';
+      return '<div class="bulk-preview"><div class="rows">' + items + '</div></div>' + moreNote;
     }
 
     function setBulkSummary(message) {
@@ -1534,7 +1777,8 @@
         reader.onload = function () {
           try {
             state.pendingRows = parseCsv(reader.result);
-            setBulkSummary('السجلات الجاهزة: ' + fmt(state.pendingRows.length) + ' · السجلات الخاطئة: 0');
+            setBulkSummary('السجلات الجاهزة: ' + fmt(state.pendingRows.length) + ' · السجلات الخاطئة: 0'
+              + ' — سيتحقق الخادم من كل صف عند الاستيراد (ملف CSV بلا معاينة مسبقة للأخطاء).');
           } catch (error) {
             state.pendingRows = [];
             setBulkSummary(error.message || 'تعذر قراءة ملف CSV.');
@@ -1550,12 +1794,15 @@
         busy(true);
         api('inspectBeneficiaryExcel', state.token, {dataUrl: reader.result, name: file.name})
           .then(function (result) {
-            state.pendingRows = result.ok ? (result.rows || []) : [];
-            var details = (result.errors || []).map(function (item) {
-              return 'صف ' + item.row + ': ' + item.message;
-            }).join(' | ');
+            var rows = result.rows || [];
+            // لا تُستورَد الصفوف الخاطئة إطلاقًا: فقط الصفوف الصحيحة تُرسَل
+            // فعليًا لـ importBeneficiaries — الخاطئة تبقى معروضة في
+            // المعاينة برقم صفها وسبب رفضها دون إدخالها.
+            state.pendingRows = rows.filter(function (row) { return row.valid !== false; });
+            var preview = $('#bulkPreview');
+            if (preview) preview.innerHTML = renderBulkPreviewTable(rows);
             setBulkSummary('الصحيحة: ' + fmt(result.validCount) + ' · الخاطئة: ' + fmt(result.errorCount)
-              + (details ? ' — ' + details : ''));
+              + (result.errorCount ? ' — الصفوف الخاطئة موضَّحة أدناه ولن تُستورَد؛ يمكنك المتابعة باستيراد الصحيحة فقط.' : ''));
           }, function (error) {
             state.pendingRows = [];
             reportError(error);
@@ -1571,10 +1818,11 @@
         return String(line).trim() !== '';
       });
       if (lines.length < 2) throw new Error('الملف لا يحتوي على سجلات تحت صف العناوين.');
-      // lat/lng عمودان اختياريان بالكامل في نهاية الترتيب — ملف CSV قديم
-      // بلا هذين العمودين يبقى يعمل تمامًا كما كان (cells[11]/[12] فارغتان).
+      // lat/lng والعلامة المميزة أعمدة اختيارية بالكامل في نهاية الترتيب —
+      // ملف CSV قديم بلا هذه الأعمدة يبقى يعمل تمامًا كما كان (الخلايا
+      // الزائدة تبقى فارغة).
       var columns = ['name', 'region', 'city', 'address', 'phone', 'familyCount',
-        'socialSecurity', 'socialStatus', 'income', 'needs', 'notes', 'lat', 'lng'];
+        'socialSecurity', 'socialStatus', 'income', 'needs', 'notes', 'lat', 'lng', 'landmark'];
       return lines.slice(1).map(function (line) {
         var cells = line.split(',').map(function (cell) {
           return cell.trim().replace(/^"|"$/g, '');
@@ -1587,7 +1835,7 @@
 
     function runImport() {
       var pledge = $('#bulkPledge');
-      if (!state.pendingRows.length) { toast('اختر ملفًا صحيحًا أولًا.', 'error'); return; }
+      if (!state.pendingRows.length) { toast('لا توجد سجلات صحيحة جاهزة للاستيراد بعد.', 'error'); return; }
       if (!pledge || !pledge.checked) { toast('يجب الموافقة على التعهّد قبل الاستيراد.', 'error'); return; }
       busy(true);
       api('importBeneficiaries', state.token, state.pendingRows, true).then(function (result) {
@@ -2404,8 +2652,9 @@
           body: 'لا يوجد مستفيدون متبقّون في قائمتك حاليًا.'}) + '</div>';
       }
       var withoutCoords = all.filter(function (b) { return b.lat == null || b.lng == null; });
-      var intro = '<div class="dg-card"><p>يرتّب هذا المسار المستفيدين الأقرب لموقعك الحالي أولًا، اعتمادًا على '
-        + 'إحداثيات مسجَّلة في ملفاتهم فقط — تقريبي، بلا توجيه فعلي عبر الطرق.</p>'
+      var intro = '<div class="dg-card"><p>يرتّب هذا المسار المستفيدين الأقرب لموقعك الحالي أولًا فأولًا، اعتمادًا '
+        + 'على إحداثيات مسجَّلة في ملفاتهم فقط. <strong>مسافة تقريبية بخط مستقيم فقط</strong> — ليست مسارًا مروريًا '
+        + 'فعليًا ولا توجيهًا عبر الطرق، فقط ترتيب أقرب-فأقرب مبني على الإحداثيات.</p>'
         + '<button class="btn btn-primary btn-sm" data-act="delegate-locate">📍 ترتيب المسار من موقعي الحالي</button></div>';
 
       if (!state.delegateRoute) {
@@ -2416,26 +2665,40 @@
         return intro + noCoordsNote;
       }
 
+      // موقع/عنوان/اسم كل محطة يبقيان كما حُسب بهما المسار (entry.item) —
+      // لكن حالة التسليم والأجهزة تُعاد قراءتها من state.data.beneficiaries
+      // الحالية دائمًا، لأن upsertRecord يستبدل مرجع الكائن بالكامل عند كل
+      // حفظ فيصبح entry.item القديم غير محدَّث الحالة. هذا ما يجعل تأكيد
+      // التسليم أو تسجيل تعذّره ينعكس فورًا على بطاقة المحطة في المسار
+      // نفسه دون إعادة حساب الترتيب أو تحميل الصفحة بالكامل.
       var orderedHtml = state.delegateRoute.ordered.map(function (entry, index) {
-        var item = entry.item;
+        var live = findBeneficiary(entry.item.id);
+        var item = live ? Object.assign({}, entry.item, {
+          deliveryStatus: live.deliveryStatus, status: live.status, devices: live.devices
+        }) : entry.item;
         var mapsUrl = HTTPS + 'www.google.com/maps/search/?api=1&query=' + item.lat + ',' + item.lng;
-        return '<article class="dg-card"><div class="card-head"><div>'
+        var delivered = item.deliveryStatus === 'تم التسليم';
+        return '<article class="dg-card' + (delivered ? ' dg-card-done' : '') + '"><div class="card-head"><div>'
           + '<h3>' + (index + 1) + '. ' + esc(item.name) + '</h3>'
-          + '<p class="muted">' + esc(item.city) + ' · على بُعد ' + entry.distanceKm.toFixed(1) + ' كم تقريبًا</p></div>'
+          + '<p class="muted">' + esc(item.city) + ' · بعد تقريبي بخط مستقيم: ' + entry.distanceKm.toFixed(1) + ' كم</p></div>'
           + statusChip(item.deliveryStatus) + '</div>'
-          + '<p class="dg-addr"><span aria-hidden="true">◉</span><span>' + esc(item.address) + '</span></p>'
+          + '<p class="dg-addr"><span aria-hidden="true">◉</span><span>' + beneficiaryAddressLine(item) + '</span></p>'
+          + '<div class="tags">' + deviceTagsFor(item) + '</div>'
           + '<div class="dg-acts">'
-          + '<a class="a-map" href="' + esc(mapsUrl) + '" target="_blank" rel="noopener noreferrer">الموقع الدقيق</a>'
+          + beneficiaryContactActions(item)
+          + '<button class="a-state" data-act="dg-status" data-id="' + esc(item.id) + '"' + (delivered ? ' disabled' : '') + '>تعذّر</button>'
           + '<button class="a-deliver" data-act="dg-deliver" data-id="' + esc(item.id) + '"'
-          + ((item.devices || []).length ? '' : ' disabled title="لا توجد أجهزة مخصصة"') + '>تأكيد التسليم</button>'
+          + ((item.devices || []).length && !delivered ? '' : ' disabled title="' + (delivered ? 'تم تسليمه بالفعل' : 'لا توجد أجهزة مخصصة') + '"')
+          + '>تأكيد التسليم</button>'
           + '</div></article>';
       }).join('');
 
       var withoutCoordsHtml = withoutCoords.length
         ? '<div class="panel-head" style="margin-top:16px"><div><h3>بلا إحداثيات (' + fmt(withoutCoords.length) + ')</h3>'
-          + '<p>اعتمد على العنوان النصي من قائمة المهام</p></div></div>'
+          + '<p>لا يُستبعَدون من قائمة المهام إطلاقًا — يظهرون هنا فقط لأنهم خارج الترتيب التلقائي بالمسافة؛ اعتمد على العنوان النصي للوصول إليهم.</p></div></div>'
           + withoutCoords.map(function (b) {
-            return '<div class="dg-card"><strong>' + esc(b.name) + '</strong> — <span class="muted">' + esc(b.address) + '</span></div>';
+            return '<div class="dg-card"><strong>' + esc(b.name) + '</strong> — <span class="muted">' + beneficiaryAddressLine(b) + '</span>'
+              + '<div class="dg-acts">' + beneficiaryContactActions(b) + '</div></div>';
           }).join('')
         : '';
 
@@ -2459,6 +2722,41 @@
       return local.charAt(0) === '0' ? '966' + local.slice(1) : local;
     }
 
+    /**
+     * صف أزرار تواصل/موقع موحَّد لبطاقة المستفيد (قائمة المهام ومسار
+     * اليوم كلاهما). زر الموقع لا يفتح رابطًا فارغًا أبدًا: يُفعَّل فقط
+     * إن وُجدت إحداثيات أو عنوان/مدينة نصية، وإلا يعرض تنبيهًا واضحًا
+     * بدل رابط خرائط بلا محتوى. زر "نسخ الرقم" بديل صريح دائم الظهور،
+     * لا يعتمد فقط على اكتشاف حجب tel:/واتساب تلقائيًا.
+     */
+    function beneficiaryContactActions(item) {
+      var localPhone = phoneLocal(item.phone);
+      var whatsappUrl = HTTPS + 'wa.me/' + phoneIntl(item.phone);
+      var hasLocation = (item.lat != null && item.lng != null) || item.address || item.city;
+      var mapsQuery = (item.lat != null && item.lng != null)
+        ? item.lat + ',' + item.lng
+        : encodeURIComponent(String(item.address || '') + ' ' + String(item.city || ''));
+      var mapsUrl = HTTPS + 'www.google.com/maps/search/?api=1&query=' + mapsQuery;
+      var mapsBtn = hasLocation
+        ? '<a class="a-map" href="' + esc(mapsUrl) + '" target="_blank" rel="noopener noreferrer">الموقع</a>'
+        : '<button type="button" class="a-map" data-act="no-location-alert">الموقع</button>';
+      return '<a class="a-wa" href="' + esc(whatsappUrl) + '" target="_blank" rel="noopener noreferrer">واتساب</a>'
+        + '<a class="a-call" href="tel:' + esc(localPhone) + '" data-act="call-fallback" data-phone="' + esc(localPhone) + '">اتصال</a>'
+        + '<button type="button" class="a-copy" data-act="copy-phone" data-phone="' + esc(localPhone) + '">نسخ الرقم</button>'
+        + mapsBtn;
+    }
+
+    function beneficiaryAddressLine(item) {
+      return esc(item.address) + (item.landmark ? ' — ' + esc(item.landmark) : '');
+    }
+
+    function deviceTagsFor(item) {
+      return (item.devices || []).map(function (device) {
+        return '<span class="tag">' + needGlyph(device.name) + ' ' + esc(device.name)
+          + ' <span class="mono">' + esc(device.id) + '</span></span>';
+      }).join('') || '<span class="tag plain">لا توجد أجهزة مخصصة</span>';
+    }
+
     function renderDelegateList() {
       var list = state.data.beneficiaries || [];
       if (!list.length) {
@@ -2466,28 +2764,16 @@
           body: 'لا يوجد مستفيدون متبقّون في قائمتك حاليًا.'}) + '</div>';
       }
       return list.map(function (item) {
-        var devices = (item.devices || []).map(function (device) {
-          return '<span class="tag">' + needGlyph(device.name) + ' ' + esc(device.name)
-            + ' <span class="mono">' + esc(device.id) + '</span></span>';
-        }).join('') || '<span class="tag plain">لا توجد أجهزة مخصصة</span>';
-
-        var whatsappUrl = HTTPS + 'wa.me/' + phoneIntl(item.phone);
-        var mapsQuery = (item.lat != null && item.lng != null)
-          ? item.lat + ',' + item.lng
-          : encodeURIComponent(String(item.address || '') + ' ' + String(item.city || ''));
-        var mapsUrl = HTTPS + 'www.google.com/maps/search/?api=1&query=' + mapsQuery;
+        var devices = deviceTagsFor(item);
         var canDeliver = (item.devices || []).length > 0;
 
         return '<article class="dg-card"><div class="card-head"><div>'
           + '<h3>' + esc(item.name) + '</h3><p class="muted">' + esc(item.city) + '</p></div>'
           + statusChip(item.deliveryStatus) + '</div>'
-          + '<p class="dg-addr"><span aria-hidden="true">◉</span><span>' + esc(item.address) + '</span></p>'
+          + '<p class="dg-addr"><span aria-hidden="true">◉</span><span>' + beneficiaryAddressLine(item) + '</span></p>'
           + '<div class="tags">' + devices + '</div>'
           + '<div class="dg-acts">'
-          + '<a class="a-wa" href="' + esc(whatsappUrl) + '" target="_blank" rel="noopener noreferrer">واتساب</a>'
-          + '<a class="a-call" href="tel:' + esc(phoneLocal(item.phone)) + '" data-act="call-fallback" data-phone="'
-          + esc(phoneLocal(item.phone)) + '">اتصال</a>'
-          + '<a class="a-map" href="' + esc(mapsUrl) + '" target="_blank" rel="noopener noreferrer">الموقع</a>'
+          + beneficiaryContactActions(item)
           + '<button class="a-state" data-act="dg-status" data-id="' + esc(item.id) + '">تعذّر</button>'
           + '<button class="a-deliver" data-act="dg-deliver" data-id="' + esc(item.id) + '"'
           + (canDeliver ? '' : ' disabled title="لا توجد أجهزة مخصصة"') + '>تأكيد التسليم</button>'
@@ -2630,7 +2916,7 @@
 
     var lastFocused = null;
 
-    function openModal(title, body, footer) {
+    function openModal(title, body, footer, onMount) {
       lastFocused = document.activeElement;
       $('#modalRoot').innerHTML = '<div class="backdrop" data-act="backdrop">'
         + '<section class="modal" role="dialog" aria-modal="true" aria-label="' + esc(title) + '">'
@@ -2641,6 +2927,7 @@
         + '</section></div>';
       var focusable = $('.modal .control, .modal button:not(.x-btn)');
       if (focusable) focusable.focus();
+      if (typeof onMount === 'function') onMount();
     }
 
     function closeModal() {
@@ -2758,6 +3045,10 @@
       'save-activity': saveActivity,
       'activity-tab': function (el) { state.activityTab = el.getAttribute('data-value') || ''; render(); },
       'use-my-location': fillCurrentLocation,
+      'clear-location': clearLocationFields,
+      'open-location-maps': openLocationInMaps,
+      'no-location-alert': function () { toast('لا يوجد موقع أو عنوان مسجَّل لهذا المستفيد بعد.', 'error'); },
+      'copy-phone': function (el) { handleCopyPhone(el.getAttribute('data-phone')); },
       'delegate-locate': startDelegateRoute,
       'logout': function () { doLogout(true); },
       'refresh': refreshData,
@@ -2829,6 +3120,13 @@
       }, 700);
     }
 
+    /** بديل صريح دائم الظهور لنسخ الرقم — لا ينتظر فشل tel:/واتساب أولًا كما في handleCallFallback. */
+    function handleCopyPhone(phone) {
+      copyToClipboard(phone).then(function (copied) {
+        toast(copied ? ('تم نسخ الرقم ' + phone) : ('تعذّر نسخ الرقم. الرقم: ' + phone), copied ? 'success' : 'error');
+      });
+    }
+
     function copyToClipboard(text) {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         return navigator.clipboard.writeText(text).then(function () { return true; }, function () { return false; });
@@ -2867,6 +3165,12 @@
     var searchTimer = null;
     document.addEventListener('input', function (event) {
       var el = event.target;
+      if (el && (el.id === 'f_lat' || el.id === 'f_lng')) {
+        var sourceField = $('#f_locationSource');
+        if (sourceField) sourceField.value = 'يدوي';
+        updateLocationCoordsHint();
+        return;
+      }
       if (!el.getAttribute || el.getAttribute('data-act') !== 'set-search') return;
       var value = el.value;
       window.clearTimeout(searchTimer);

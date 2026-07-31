@@ -23,7 +23,10 @@ function normalizeBeneficiary_(row) {
     deliveredAt: formatDateTime_(parseDate_(row['تاريخ التسليم'])),
     updatedAt: formatDateTime_(parseDate_(row['آخر تحديث'])),
     lat: row['خط العرض'] !== undefined && row['خط العرض'] !== '' ? safeNumber_(row['خط العرض']) : null,
-    lng: row['خط الطول'] !== undefined && row['خط الطول'] !== '' ? safeNumber_(row['خط الطول']) : null
+    lng: row['خط الطول'] !== undefined && row['خط الطول'] !== '' ? safeNumber_(row['خط الطول']) : null,
+    landmark: String(row['علامة مميزة'] || ''),
+    locationSource: String(row['مصدر الموقع'] || ''),
+    locationUpdatedAt: formatDateTime_(parseDate_(row['تاريخ تحديث الموقع']))
   };
 }
 

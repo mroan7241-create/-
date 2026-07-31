@@ -150,9 +150,25 @@ assert('تقبل إحداثيات صحيحة داخل حدود المملكة (�
   const c = S.optionalCoordinate_('24.7136', '46.6753');
   return c.lat === 24.7136 && c.lng === 46.6753;
 })());
-throws('ترفض خط عرض خارج نطاق المملكة', () => S.optionalCoordinate_('60', '46.6'), 'خارج نطاق');
-throws('ترفض خط طول خارج نطاق المملكة', () => S.optionalCoordinate_('24.7', '10'), 'خارج نطاق');
-throws('ترفض قيمة غير رقمية', () => S.optionalCoordinate_('ليس رقمًا', '46.6'), 'خارج نطاق');
+assert('تقبل قيم الحد الأقصى العالمي بالضبط (لات=90، لنغ=180)', (() => {
+  const c = S.optionalCoordinate_('90', '180');
+  return c.lat === 90 && c.lng === 180;
+})());
+assert('تقبل قيم الحد الأدنى العالمي بالضبط (لات=-90، لنغ=-180)', (() => {
+  const c = S.optionalCoordinate_('-90', '-180');
+  return c.lat === -90 && c.lng === -180;
+})());
+throws('ترفض خط عرض خارج النطاق العالمي (>90)', () => S.optionalCoordinate_('95', '46.6'), 'بين -90 و90');
+throws('ترفض خط عرض خارج النطاق العالمي (<-90)', () => S.optionalCoordinate_('-95', '46.6'), 'بين -90 و90');
+throws('ترفض خط طول خارج النطاق العالمي (>180)', () => S.optionalCoordinate_('24.7', '200'), 'بين -180 و180');
+throws('ترفض خط طول خارج النطاق العالمي (<-180)', () => S.optionalCoordinate_('24.7', '-200'), 'بين -180 و180');
+throws('ترفض قيمة غير رقمية (NaN)', () => S.optionalCoordinate_('ليس رقمًا', '46.6'), 'أرقامًا صحيحة');
+throws('ترفض Infinity صراحة', () => S.optionalCoordinate_('Infinity', '46.6'), 'أرقامًا صحيحة');
+throws('ترفض خط العرض وحده دون خط الطول (قيمة جزئية)', () => S.optionalCoordinate_('24.7', ''), 'معًا');
+throws('ترفض خط الطول وحده دون خط العرض (قيمة جزئية)', () => S.optionalCoordinate_('', '46.6'), 'معًا');
+assert('validateLocationSource_ تعيد فارغًا دائمًا بلا إحداثيات', S.validateLocationSource_('خريطة', false) === '');
+assert('validateLocationSource_ تقبل قيمة معتمدة مع إحداثيات', S.validateLocationSource_('خريطة', true) === 'خريطة');
+assert('validateLocationSource_ تصحّح قيمة غير معروفة إلى "يدوي" بدل الرفض', S.validateLocationSource_('مصدر غريب', true) === 'يدوي');
 
 /* -------- 5) الأرقام والحدود -------- */
 
@@ -362,7 +378,7 @@ const ALL_HEADERS = {
   'إعدادات المشروع': ['المفتاح', 'القيمة', 'الوصف'],
   'المستخدمون': ['رقم المستخدم', 'الاسم', 'البريد الإلكتروني', 'كلمة المرور المشفرة', 'الملح', 'الدور', 'رقم الجمعية', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول', 'يجب تغيير كلمة المرور', 'كلمة مرور سابقة مشفرة', 'ملح سابق'],
   'الجمعيات': ['رقم الجمعية', 'اسم الجمعية', 'التصنيف', 'المنطقة', 'المدينة', 'أرقام التواصل', 'البريد الإلكتروني', 'الحالة', 'تاريخ الإنشاء'],
-  'المستفيدون': ['رقم المستفيد', 'رقم الجمعية', 'الاسم', 'المنطقة', 'المدينة', 'العنوان', 'رقم الجوال', 'رقم جوال إضافي', 'عدد الأفراد', 'ضمان اجتماعي', 'الحالة الاجتماعية', 'مبلغ الدخل', 'الاحتياج', 'حالة المستفيد', 'حالة التسليم', 'رقم المندوب', 'الملاحظات', 'تاريخ الإنشاء', 'تاريخ التسليم', 'آخر تحديث', 'خط العرض', 'خط الطول'],
+  'المستفيدون': ['رقم المستفيد', 'رقم الجمعية', 'الاسم', 'المنطقة', 'المدينة', 'العنوان', 'رقم الجوال', 'رقم جوال إضافي', 'عدد الأفراد', 'ضمان اجتماعي', 'الحالة الاجتماعية', 'مبلغ الدخل', 'الاحتياج', 'حالة المستفيد', 'حالة التسليم', 'رقم المندوب', 'الملاحظات', 'تاريخ الإنشاء', 'تاريخ التسليم', 'آخر تحديث', 'خط العرض', 'خط الطول', 'علامة مميزة', 'مصدر الموقع', 'تاريخ تحديث الموقع'],
   'الأجهزة': ['رقم الجهاز', 'اسم الجهاز', 'النوع', 'رقم الجمعية', 'رقم المستفيد', 'حالة الجهاز', 'تاريخ الإضافة', 'تاريخ التسليم', 'ملاحظات'],
   'المناديب': ['رقم المندوب', 'رقم الجمعية', 'اسم المندوب', 'رقم الجوال', 'رمز الدخول المشفر', 'الملح', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول'],
   'التسليمات': ['رقم التسليم', 'رقم المستفيد', 'رقم المندوب', 'أرقام الأجهزة', 'الحالة', 'سبب التعذر', 'الملاحظات', 'رابط الإثبات', 'تاريخ ووقت التسليم', 'تاريخ الإنشاء'],
@@ -502,12 +518,31 @@ const savedWithoutCoords = S2.saveBeneficiary(adminSession.token, {
 const savedRowNoCoords = S2.findById_('المستفيدون', 'رقم المستفيد', savedWithoutCoords.id);
 const normalizedNoCoords = S2.normalizeBeneficiary_(savedRowNoCoords);
 assert('مستفيد قديم/بلا إحداثيات يبقى بحقلين فارغين (null) دون كسر', normalizedNoCoords.lat === null && normalizedNoCoords.lng === null);
+assert('مصدر الموقع وتاريخ تحديثه فارغان أيضًا لمستفيد بلا إحداثيات',
+  normalizedNoCoords.locationSource === '' && normalizedNoCoords.locationUpdatedAt === '');
+assert('saveBeneficiary يضبط مصدر الموقع الافتراضي "يدوي" وتاريخ التحديث عند وجود إحداثيات',
+  normalized.locationSource === 'يدوي' && !!normalized.locationUpdatedAt);
 
-throws('saveBeneficiary يرفض إحداثيات خارج نطاق المملكة', () => S2.saveBeneficiary(adminSession.token, {
+throws('saveBeneficiary يرفض إحداثيات خارج النطاق العالمي المسموح', () => S2.saveBeneficiary(adminSession.token, {
   associationId: accepted.associationId, name: 'مستفيد بإحداثيات فاسدة',
   region: 'الرياض', city: 'الرياض', address: 'حي', phone: '0501112255',
-  familyCount: 1, socialStatus: 'أرملة', needs: [], lat: '90', lng: '46.6'
-}), 'خارج نطاق');
+  familyCount: 1, socialStatus: 'أرملة', needs: [], lat: '95', lng: '46.6'
+}), 'بين -90 و90');
+
+const savedWithSource = S2.saveBeneficiary(adminSession.token, {
+  associationId: accepted.associationId, name: 'مستفيد بمصدر موقع محدد',
+  region: 'الرياض', city: 'الرياض', address: 'حي', phone: '0501112266',
+  familyCount: 1, socialStatus: 'أرملة', needs: [], lat: '24.7', lng: '46.6', locationSource: 'خريطة'
+});
+assert('saveBeneficiary يحفظ مصدر الموقع المُرسَل صراحة إن كان معتمدًا', savedWithSource.record.locationSource === 'خريطة');
+
+const reSavedSameCoords = S2.saveBeneficiary(adminSession.token, {
+  id: savedWithSource.id, associationId: accepted.associationId, name: 'مستفيد بمصدر موقع محدد',
+  region: 'الرياض', city: 'الرياض', address: 'حي مختلف', phone: '0501112266',
+  familyCount: 1, socialStatus: 'أرملة', needs: [], lat: '24.7', lng: '46.6', locationSource: 'يدوي'
+});
+assert('إعادة حفظ بنفس الإحداثيات (تعديل حقل آخر فقط) لا يُعيد ضبط مصدر/تاريخ الموقع',
+  reSavedSameCoords.record.locationSource === 'خريطة' && reSavedSameCoords.record.locationUpdatedAt === savedWithSource.record.locationUpdatedAt);
 
 /* -------- 17) دعم الإحداثيات في الاستيراد الجماعي (importBeneficiaries) -------- */
 
@@ -533,6 +568,11 @@ assert('الصف المستورَد بإحداثيات يحفظها كأرقام
 assert('الصف المستورَد بلا إحداثيات (توافق مع ملفات قديمة) يبقى بحقلين فارغين دون فشل الاستيراد',
   withoutCoordsRow && withoutCoordsRow['خط العرض'] === '' && withoutCoordsRow['خط الطول'] === '');
 
+assert('الصف المستورَد بإحداثيات: مصدر الموقع "استيراد" وتاريخ التحديث مضبوط',
+  withCoordsRow && withCoordsRow['مصدر الموقع'] === 'استيراد' && !!withCoordsRow['تاريخ تحديث الموقع']);
+assert('الصف المستورَد بلا إحداثيات: مصدر الموقع وتاريخ تحديثه فارغان',
+  withoutCoordsRow && withoutCoordsRow['مصدر الموقع'] === '' && withoutCoordsRow['تاريخ تحديث الموقع'] === '');
+
 const importRejected = S2.importBeneficiaries(adminSession.token, [
   {
     associationId: accepted.associationId, name: 'مستفيد بإحداثيات فاسدة في الاستيراد', region: 'الرياض', city: 'الرياض',
@@ -541,7 +581,16 @@ const importRejected = S2.importBeneficiaries(adminSession.token, [
   }
 ], true);
 assert('صف بإحداثيات خارج النطاق يُرفض برسالة واضحة بدل قبوله صامتًا (لا يُستورَد الاستيراد كله بلا توضيح)',
-  importRejected.ok === false && importRejected.errorCount === 1 && /خارج نطاق/.test(importRejected.errors[0].message));
+  importRejected.ok === false && importRejected.errorCount === 1 && /بين -90 و90/.test(importRejected.errors[0].message));
+
+const importPartialCoords = S2.importBeneficiaries(adminSession.token, [
+  {
+    associationId: accepted.associationId, name: 'مستفيد بإحداثية واحدة فقط', region: 'الرياض', city: 'الرياض',
+    address: 'حي', phone: '0501113004', familyCount: 1, socialStatus: 'أرملة', needs: [], lat: '24.7'
+  }
+], true);
+assert('صف بإحداثية واحدة فقط (دون الأخرى) يُرفض صراحة بدل إسقاطها بصمت',
+  importPartialCoords.ok === false && importPartialCoords.errorCount === 1 && /معًا/.test(importPartialCoords.errors[0].message));
 
 // inspectBeneficiaryExcel: تحقّق ثابت من الكود لأن محاكاة رفع Excel الفعلي
 // (عبر UrlFetchApp/Drive الحقيقيين) تتجاوز نطاق بيئة الاختبار المحلية —

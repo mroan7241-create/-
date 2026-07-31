@@ -141,19 +141,42 @@ function boundedNumber_(value, min, max, label) {
 
 /**
  * إحداثيات اختيارية بالكامل (تُترك فارغة كما كانت دائمًا إن لم تُدخَل).
- * عند إدخالها تُحصر ضمن مربع إحداثيات المملكة تقريبًا لرفض أخطاء
- * إدخال واضحة (مثل عكس خط العرض والطول) دون فرض دقة كاملة.
+ * تُعامَل كأرقام حقيقية دائمًا في الخادم، لا كنص غير متحقَّق:
+ * - يجب وجود القيمتين معًا أو غيابهما معًا — قيمة واحدة فقط تُرفض صراحة
+ *   بدل إسقاطها بصمت (كان السلوك السابق يُسقط أي طرف ناقص دون تنبيه).
+ * - يُرفض NaN وInfinity وأي قيمة غير رقمية عبر isFinite (يرفض كليهما معًا).
+ * - نطاق عالمي قياسي: خط العرض بين -90 و90، خط الطول بين -180 و180 —
+ *   لا يُحصر بمربع السعودية تحديدًا (تعديل مقصود في هذه المرحلة يوسّع
+ *   النطاق المقبول بدل النطاق الأضيق الخاص بالمملكة فقط الذي كان مطبَّقًا
+ *   سابقًا؛ التحقق الجغرافي الأدق يبقى مسؤولية المستخدم عبر الخريطة).
  */
 function optionalCoordinate_(lat, lng) {
-  if (lat === '' || lat === null || lat === undefined || lng === '' || lng === null || lng === undefined) {
-    return {lat: '', lng: ''};
+  const latEmpty = lat === '' || lat === null || lat === undefined;
+  const lngEmpty = lng === '' || lng === null || lng === undefined;
+  if (latEmpty && lngEmpty) return {lat: '', lng: ''};
+  if (latEmpty !== lngEmpty) {
+    throw new Error('أدخل خط العرض وخط الطول معًا، أو اترك الحقلين فارغين معًا');
   }
   const latNum = Number(lat);
   const lngNum = Number(lng);
-  if (!isFinite(latNum) || !isFinite(lngNum) || latNum < 15 || latNum > 33 || lngNum < 33 || lngNum > 56) {
-    throw new Error('الإحداثيات خارج نطاق المملكة المتوقع — تحقق من خط العرض والطول');
+  if (!isFinite(latNum) || !isFinite(lngNum)) {
+    throw new Error('الإحداثيات يجب أن تكون أرقامًا صحيحة');
   }
+  if (latNum < -90 || latNum > 90) throw new Error('خط العرض يجب أن يكون بين -90 و90');
+  if (lngNum < -180 || lngNum > 180) throw new Error('خط الطول يجب أن يكون بين -180 و180');
   return {lat: latNum, lng: lngNum};
+}
+
+/**
+ * مصدر الموقع (خريطة/الموقع الحالي/استيراد/يدوي) — وصفي بحت، لا يؤثر في
+ * صحة الإحداثيات. فارغ دائمًا إن لم تُوجد إحداثيات (لا معنى لمصدر بلا
+ * موقع). قيمة غير معروفة تُصحَّح إلى "يدوي" بدل الرفض — حقل تشخيصي مساعد
+ * لا حرج أمني أو منطقي في تساهله، بخلاف حقول التحقق الإلزامية الأخرى.
+ */
+function validateLocationSource_(value, hasCoordinates) {
+  if (!hasCoordinates) return '';
+  const cleaned = cleanText_(value, 30);
+  return LOCATION_SOURCES.indexOf(cleaned) >= 0 ? cleaned : 'يدوي';
 }
 
 function normalizeNeeds_(needs) {
