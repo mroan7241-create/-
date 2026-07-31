@@ -121,7 +121,12 @@
     /* ---------- Login ---------- */
     .login{min-height:100vh;display:grid;grid-template-columns:minmax(380px,540px) 1fr;background:var(--surface)}
     .login-panel{padding:clamp(26px,5vw,68px);display:flex;flex-direction:column;justify-content:center;background:var(--paper);position:relative;z-index:1}
-    .login-panel .lockup{margin-bottom:clamp(26px,5vh,52px)}
+    .login-panel .lockup{margin-bottom:clamp(30px,5vh,44px)}
+    .login-panel .lockup-logo{height:clamp(58px,7vw,84px)}
+    .login-panel .lockup-partner-logo{height:clamp(50px,6vw,72px)}
+    .login-panel .lockup-duo-divider{min-height:56px}
+    .login-divider{width:64px;height:3px;border-radius:2px;margin:0 0 clamp(28px,5vh,44px);
+      background:linear-gradient(90deg,var(--gold-600),var(--gold-400))}
     .login-panel h1{font-size:clamp(28px,3.4vw,42px);color:var(--zad-800);margin-bottom:12px;letter-spacing:-.01em}
     .login-lede{color:var(--ink-soft);font-size:15.5px;margin:0 0 28px;max-width:44ch}
     .segmented{display:flex;background:var(--canvas);padding:5px;border-radius:var(--r-md);margin-bottom:22px;gap:4px}
@@ -367,6 +372,9 @@
       .modal-foot .btn{flex:1}
       .toasts{inset-inline:12px;bottom:12px;max-width:none}
       .lockup-logo,.lockup-partner-logo{height:38px}
+      .login-panel .lockup-logo{height:52px}
+      .login-panel .lockup-partner-logo{height:46px}
+      .login-panel .lockup-duo-divider{min-height:40px}
     }
   </style>
 </head>
@@ -699,8 +707,7 @@
 
       $('#root').innerHTML = '<main class="login">'
         + '<section class="login-panel">' + lockup({partner: true})
-        + '<h1>منظومة واحدة،<br>من الاعتماد حتى التسليم.</h1>'
-        + '<p class="login-lede">متابعة دقيقة للأجهزة والمستفيدين والجمعيات، مع توثيق كامل ومؤرّخ لكل عملية تسليم.</p>'
+        + '<div class="login-divider" aria-hidden="true"></div>'
         + '<div class="segmented" role="tablist" aria-label="نوع الدخول">'
         + '<button type="button" role="tab" data-act="login-type" data-value="association" aria-selected="'
         + (!isDelegate) + '">دخول الإدارة والجمعيات</button>'
