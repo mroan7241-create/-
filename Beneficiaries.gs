@@ -58,6 +58,7 @@ function importBeneficiaries(token, rows, acceptedPledge) {
       const associationId = user.role === 'ASSOCIATION' ? user.associationId : cleanId_(row.associationId);
       if (!associationId) throw new Error('رقم الجمعية مطلوب');
       const place = validateRegionCity_(row.region, row.city);
+      const coordinates = optionalCoordinate_(row.lat, row.lng);
       valid.push({
         'رقم المستفيد': '',
         'رقم الجمعية': associationId,
@@ -78,7 +79,9 @@ function importBeneficiaries(token, rows, acceptedPledge) {
         'الملاحظات': cleanText_(row.notes, 1000),
         'تاريخ الإنشاء': now_(),
         'تاريخ التسليم': '',
-        'آخر تحديث': now_()
+        'آخر تحديث': now_(),
+        'خط العرض': coordinates.lat,
+        'خط الطول': coordinates.lng
       });
     } catch (error) {
       errors.push({row: index + 2, message: error.message});
@@ -123,6 +126,9 @@ function inspectBeneficiaryExcel(token, payload) {
   try {
     const values = SpreadsheetApp.openById(fileId).getSheets()[0].getDataRange().getDisplayValues();
     if (values.length < 2) throw new Error('ملف Excel لا يحتوي على سجلات');
+    // "خط العرض" و"خط الطول" عمودان اختياريان بالكامل — ملفات قديمة لا
+    // تحتويهما تبقى مقبولة تمامًا كما كانت دائمًا؛ لذا هما خارج قائمة
+    // "expected" الإلزامية، ويُتعامل معهما فقط إن وُجدا في صف العناوين.
     const expected = ['الاسم', 'المنطقة', 'المدينة', 'العنوان', 'الجوال', 'عدد الأفراد', 'الضمان الاجتماعي', 'الحالة الاجتماعية', 'الدخل', 'الاحتياج', 'الملاحظات'];
     const headers = values[0].map(value => String(value).trim());
     const missing = expected.filter(header => headers.indexOf(header) < 0);
@@ -130,7 +136,8 @@ function inspectBeneficiaryExcel(token, payload) {
     const keyMap = {
       'الاسم': 'name', 'المنطقة': 'region', 'المدينة': 'city', 'العنوان': 'address',
       'الجوال': 'phone', 'عدد الأفراد': 'familyCount', 'الضمان الاجتماعي': 'socialSecurity',
-      'الحالة الاجتماعية': 'socialStatus', 'الدخل': 'income', 'الاحتياج': 'needs', 'الملاحظات': 'notes'
+      'الحالة الاجتماعية': 'socialStatus', 'الدخل': 'income', 'الاحتياج': 'needs', 'الملاحظات': 'notes',
+      'خط العرض': 'lat', 'خط الطول': 'lng'
     };
     const rows = values.slice(1).filter(row => row.some(Boolean)).map(row => {
       const object = {};
@@ -149,6 +156,7 @@ function inspectBeneficiaryExcel(token, payload) {
         normalizePhone_(row.phone);
         boundedNumber_(row.familyCount, 1, 99, 'عدد الأفراد');
         boundedNumber_(row.income || 0, 0, 1000000, 'مبلغ الدخل');
+        optionalCoordinate_(row.lat, row.lng);
       } catch (error) {
         errors.push({row: index + 2, message: error.message});
       }

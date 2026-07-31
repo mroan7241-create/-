@@ -1293,7 +1293,9 @@
       state.pendingRows = [];
       var body = '<p class="muted">ارفع النموذج المعتمد بصيغة Excel أو CSV. الأعمدة المطلوبة: '
         + 'الاسم، المنطقة، المدينة، العنوان، الجوال، عدد الأفراد، الضمان الاجتماعي، الحالة الاجتماعية، '
-        + 'الدخل، الاحتياج، الملاحظات.</p>'
+        + 'الدخل، الاحتياج، الملاحظات. يمكن إضافة عمودين اختياريين في النهاية: خط العرض وخط الطول '
+        + '(لتحديد موقع المستفيد على الخريطة ومسار المندوب اليومي) — الملفات القديمة بلا هذين العمودين '
+        + 'تُقبَل كاملة كما كانت دائمًا.</p>'
         + '<div class="drop"><label class="btn btn-primary" for="bulkFile">اختيار ملف</label>'
         + '<input id="bulkFile" type="file" data-act="bulk-file" '
         + 'accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv">'
@@ -1359,8 +1361,10 @@
         return String(line).trim() !== '';
       });
       if (lines.length < 2) throw new Error('الملف لا يحتوي على سجلات تحت صف العناوين.');
+      // lat/lng عمودان اختياريان بالكامل في نهاية الترتيب — ملف CSV قديم
+      // بلا هذين العمودين يبقى يعمل تمامًا كما كان (cells[11]/[12] فارغتان).
       var columns = ['name', 'region', 'city', 'address', 'phone', 'familyCount',
-        'socialSecurity', 'socialStatus', 'income', 'needs', 'notes'];
+        'socialSecurity', 'socialStatus', 'income', 'needs', 'notes', 'lat', 'lng'];
       return lines.slice(1).map(function (line) {
         var cells = line.split(',').map(function (cell) {
           return cell.trim().replace(/^"|"$/g, '');

@@ -474,6 +474,23 @@ let csvError = null;
 try { app.parseCsv('الاسم\n'); } catch (e) { csvError = e; }
 assert('يرفض ملفًا بلا سجلات برسالة عربية', csvError && csvError.message.includes('لا يحتوي'));
 
+const csvNoCoords = 'الاسم,المنطقة,المدينة,العنوان,الجوال,عدد الأفراد,الضمان,الحالة,الدخل,الاحتياج,ملاحظات\n'
+  + 'نورة,الرياض,الرياض,حي النخيل,0501234568,3,نعم,أرملة,2500,غسالة,\n';
+const parsedNoCoords = app.parseCsv(csvNoCoords);
+assert('ملف CSV قديم بلا عمودي الإحداثيات يُقرأ بأمان (lat/lng فارغتان لا يفشل التحليل)',
+  parsedNoCoords.length === 1 && parsedNoCoords[0].lat === '' && parsedNoCoords[0].lng === '');
+
+const csvWithCoords = 'الاسم,المنطقة,المدينة,العنوان,الجوال,عدد الأفراد,الضمان,الحالة,الدخل,الاحتياج,ملاحظات,خط العرض,خط الطول\n'
+  + 'هند,الرياض,الرياض,حي الملقا,0501234569,2,نعم,أرملة,2000,ثلاجة,,24.75,46.65\n';
+const parsedWithCoords = app.parseCsv(csvWithCoords);
+assert('ملف CSV بعمودي الإحداثيات في النهاية يقرأهما بشكل صحيح',
+  parsedWithCoords[0].lat === '24.75' && parsedWithCoords[0].lng === '46.65');
+
+app.bulkImportModal();
+assert('نافذة الاستيراد الجماعي توضّح أن عمودي الإحداثيات اختياريان وتوافق الملفات القديمة',
+  registry.modalRoot.innerHTML.includes('خط العرض وخط الطول') && registry.modalRoot.innerHTML.includes('اختياريين'));
+app.closeModal();
+
 /* ---------------- 10) المنطقة والمدينة المترابطتان ---------------- */
 
 section('10) حقلا المنطقة والمدينة المترابطان');

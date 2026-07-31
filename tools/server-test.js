@@ -502,6 +502,57 @@ throws('saveBeneficiary يرفض إحداثيات خارج نطاق المملك
   familyCount: 1, socialStatus: 'أرملة', needs: [], lat: '90', lng: '46.6'
 }), 'خارج نطاق');
 
+/* -------- 17) دعم الإحداثيات في الاستيراد الجماعي (importBeneficiaries) -------- */
+
+section('17) دعم الإحداثيات في الاستيراد الجماعي');
+
+const importWithCoords = S2.importBeneficiaries(adminSession.token, [
+  {
+    associationId: accepted.associationId, name: 'مستفيد استيراد بإحداثيات', region: 'الرياض', city: 'الرياض',
+    address: 'حي الملقا', phone: '0501113001', familyCount: 2, socialStatus: 'أرملة', needs: ['ثلاجة'],
+    lat: '24.75', lng: '46.65'
+  },
+  {
+    associationId: accepted.associationId, name: 'مستفيد استيراد بلا إحداثيات (ملف قديم)', region: 'الرياض', city: 'الرياض',
+    address: 'حي الروضة', phone: '0501113002', familyCount: 1, socialStatus: 'أرملة', needs: ['غسالة']
+  }
+], true);
+assert('importBeneficiaries ينجح لصفّين، أحدهما بإحداثيات والآخر بلا إحداثيات', importWithCoords.ok && importWithCoords.imported === 2);
+
+const importedRows = S2.readTable_('المستفيدون').rows.filter(row => String(row['رقم الجمعية']) === accepted.associationId);
+const withCoordsRow = importedRows.find(row => row['الاسم'] === 'مستفيد استيراد بإحداثيات');
+const withoutCoordsRow = importedRows.find(row => row['الاسم'] === 'مستفيد استيراد بلا إحداثيات (ملف قديم)');
+assert('الصف المستورَد بإحداثيات يحفظها كأرقام صحيحة', withCoordsRow && Number(withCoordsRow['خط العرض']) === 24.75 && Number(withCoordsRow['خط الطول']) === 46.65);
+assert('الصف المستورَد بلا إحداثيات (توافق مع ملفات قديمة) يبقى بحقلين فارغين دون فشل الاستيراد',
+  withoutCoordsRow && withoutCoordsRow['خط العرض'] === '' && withoutCoordsRow['خط الطول'] === '');
+
+const importRejected = S2.importBeneficiaries(adminSession.token, [
+  {
+    associationId: accepted.associationId, name: 'مستفيد بإحداثيات فاسدة في الاستيراد', region: 'الرياض', city: 'الرياض',
+    address: 'حي', phone: '0501113003', familyCount: 1, socialStatus: 'أرملة', needs: [],
+    lat: '999', lng: '46.6'
+  }
+], true);
+assert('صف بإحداثيات خارج النطاق يُرفض برسالة واضحة بدل قبوله صامتًا (لا يُستورَد الاستيراد كله بلا توضيح)',
+  importRejected.ok === false && importRejected.errorCount === 1 && /خارج نطاق/.test(importRejected.errors[0].message));
+
+// inspectBeneficiaryExcel: تحقّق ثابت من الكود لأن محاكاة رفع Excel الفعلي
+// (عبر UrlFetchApp/Drive الحقيقيين) تتجاوز نطاق بيئة الاختبار المحلية —
+// موثَّق صراحةً هنا بدل الادّعاء باختبار حي لم يحدث.
+assert('inspectBeneficiaryExcel يتعرّف على عمودي "خط العرض"/"خط الطول" كأعمدة اختيارية (keyMap)',
+  /'خط العرض':\s*'lat'/.test(source) && /'خط الطول':\s*'lng'/.test(source));
+assert('"خط العرض"/"خط الطول" ليسا ضمن الأعمدة الإلزامية "expected" (ملفات قديمة بلا إحداثيات تبقى مقبولة)', (() => {
+  const start = source.indexOf('function inspectBeneficiaryExcel(');
+  const expectedLine = source.slice(start, start + 3000).match(/const expected = \[[^\]]*\];/);
+  return expectedLine && !expectedLine[0].includes('خط العرض') && !expectedLine[0].includes('خط الطول');
+})());
+assert('inspectBeneficiaryExcel يتحقق من صحة الإحداثيات لكل صف عبر optionalCoordinate_', (() => {
+  const start = source.indexOf('function inspectBeneficiaryExcel(');
+  const end = source.indexOf('\nfunction ', start + 10);
+  const body = source.slice(start, end === -1 ? start + 4000 : end);
+  return /optionalCoordinate_\(row\.lat, row\.lng\)/.test(body);
+})());
+
 /* -------- النتيجة -------- */
 
 console.log('\n' + '='.repeat(56));
