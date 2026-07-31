@@ -1826,8 +1826,11 @@
         + 'ومسار المندوب اليومي — Excel يقبل أيضًا "Latitude"/"Longitude" بالإنجليزية)، والعلامة المميزة '
         + '(وصف موقع حر مثل "بجانب المسجد"). خط العرض وخط الطول لا بد أن يظهرا معًا أو يُتركا معًا؛ عمود واحد منهما '
         + 'فقط يُرفض. الملفات القديمة بلا هذه الأعمدة الاختيارية تُقبَل كاملة كما كانت دائمًا.</p>'
-        + '<button type="button" class="btn btn-ghost btn-sm" data-act="download-import-template" style="margin-bottom:10px">'
-        + '⬇ تنزيل نموذج القالب (CSV)</button>'
+        + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'
+        + '<button type="button" class="btn btn-primary btn-sm" data-act="download-import-template-xlsx">'
+        + '⬇ تنزيل قالب Excel (xlsx)</button>'
+        + '<button type="button" class="btn btn-ghost btn-sm" data-act="download-import-template">'
+        + '⬇ تنزيل نموذج القالب (CSV احتياطي)</button></div>'
         + '<div class="drop"><label class="btn btn-primary" for="bulkFile">اختيار ملف</label>'
         + '<input id="bulkFile" type="file" data-act="bulk-file" '
         + 'accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv">'
@@ -1949,6 +1952,23 @@
       link.click();
       link.remove();
       setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    }
+
+    /**
+     * قالب Excel حقيقي (.xlsx) يُبنى بالكامل على الخادم ويُطلَب فقط عند
+     * ضغط هذا الزر — لا مكتبة تُحمَّل هنا ولا في أي مكان آخر من الواجهة؛
+     * التوليد بايتات جاهزة من Utilities.zip داخل Apps Script نفسه.
+     */
+    function downloadImportTemplateXlsx() {
+      busy(true);
+      api('downloadBeneficiaryImportTemplateXlsx', state.token).then(function (result) {
+        var link = document.createElement('a');
+        link.href = result.dataUrl;
+        link.download = result.filename || 'قالب-استيراد-المستفيدين.xlsx';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }, reportError).finally(function () { busy(false); });
     }
 
     function parseCsv(text) {
@@ -3332,6 +3352,7 @@
       'go': function (el) { goTo(el.getAttribute('data-value')); },
       'assoc-scope': function (el) { goToAssociationScope(el.getAttribute('data-page'), el.getAttribute('data-id')); },
       'download-import-template': downloadImportTemplate,
+      'download-import-template-xlsx': downloadImportTemplateXlsx,
       'th-sort': function (el) {
         var field = el.getAttribute('data-field');
         if (state.sortBy === field) state.sortDir = state.sortDir === 'desc' ? 'asc' : 'desc';

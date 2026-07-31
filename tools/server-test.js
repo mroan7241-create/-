@@ -56,7 +56,79 @@ const sandbox = {
       const base = date.getFullYear() + '/' + p(date.getMonth() + 1) + '/' + p(date.getDate());
       return pattern.indexOf('HH') >= 0 ? base + ' ' + p(date.getHours()) + ':' + p(date.getMinutes()) : base;
     },
-    newBlob: () => ({ getBytes: () => [] }),
+    newBlob: (content, mimeType, name) => ({
+      getBytes: () => Array.from(Buffer.from(content == null ? '' : String(content), 'utf8')),
+      getName: () => name || '',
+      getContentType: () => mimeType || ''
+    }),
+    base64Encode: bytes => Buffer.from(bytes).toString('base64'),
+    // تنفيذ ZIP حقيقي بأسلوب STORE (بلا ضغط) لأغراض الاختبار المحلي فقط —
+    // Apps Script الحقيقي يستخدم تطبيقه الخاص لـ Utilities.zip، لكن الناتج
+    // هنا حزمة ZIP سليمة بنيويًا فعلًا يمكن فتحها بأي أداة ZIP قياسية
+    // (يُتحقّق من ذلك في tools/xlsx-test.js عبر python3 zipfile).
+    zip: (blobs, archiveName) => {
+      const zlib = require('zlib');
+      const entries = blobs.map(blob => {
+        const bytes = Buffer.from(blob.getBytes());
+        const crc = zlib.crc32 ? zlib.crc32(bytes) : 0;
+        return { name: blob.getName(), bytes, crc };
+      });
+      const localParts = [];
+      const centralParts = [];
+      let offset = 0;
+      entries.forEach(entry => {
+        const nameBuf = Buffer.from(entry.name, 'utf8');
+        const local = Buffer.alloc(30);
+        local.writeUInt32LE(0x04034b50, 0);
+        local.writeUInt16LE(20, 4);
+        local.writeUInt16LE(0x0800, 6); // بادئة اسم UTF-8
+        local.writeUInt16LE(0, 8);
+        local.writeUInt16LE(0, 10);
+        local.writeUInt16LE(0, 12);
+        local.writeUInt32LE(entry.crc >>> 0, 14);
+        local.writeUInt32LE(entry.bytes.length, 18);
+        local.writeUInt32LE(entry.bytes.length, 22);
+        local.writeUInt16LE(nameBuf.length, 26);
+        local.writeUInt16LE(0, 28);
+        localParts.push(local, nameBuf, entry.bytes);
+        const central = Buffer.alloc(46);
+        central.writeUInt32LE(0x02014b50, 0);
+        central.writeUInt16LE(20, 4);
+        central.writeUInt16LE(20, 6);
+        central.writeUInt16LE(0x0800, 8);
+        central.writeUInt16LE(0, 10);
+        central.writeUInt16LE(0, 12);
+        central.writeUInt16LE(0, 14);
+        central.writeUInt32LE(entry.crc >>> 0, 16);
+        central.writeUInt32LE(entry.bytes.length, 20);
+        central.writeUInt32LE(entry.bytes.length, 24);
+        central.writeUInt16LE(nameBuf.length, 28);
+        central.writeUInt16LE(0, 30);
+        central.writeUInt16LE(0, 32);
+        central.writeUInt16LE(0, 34);
+        central.writeUInt16LE(0, 36);
+        central.writeUInt32LE(0, 38);
+        central.writeUInt32LE(offset, 42);
+        centralParts.push(central, nameBuf);
+        offset += local.length + nameBuf.length + entry.bytes.length;
+      });
+      const centralStart = offset;
+      const centralBuf = Buffer.concat(centralParts);
+      const end = Buffer.alloc(22);
+      end.writeUInt32LE(0x06054b50, 0);
+      end.writeUInt16LE(0, 4);
+      end.writeUInt16LE(0, 6);
+      end.writeUInt16LE(entries.length, 8);
+      end.writeUInt16LE(entries.length, 10);
+      end.writeUInt32LE(centralBuf.length, 12);
+      end.writeUInt32LE(centralStart, 16);
+      end.writeUInt16LE(0, 20);
+      const zipBytes = Buffer.concat(localParts.concat([centralBuf, end]));
+      return {
+        getBytes: () => Array.from(zipBytes),
+        getName: () => archiveName || 'archive.zip'
+      };
+    },
     DigestAlgorithm: { SHA_256: 'SHA_256' },
     Charset: { UTF_8: 'UTF_8' },
     sleep: () => {}
@@ -722,6 +794,78 @@ assert('importBeneficiaries يعيد فحص التكرار المؤكَّد دا
   const body = source.slice(start, end === -1 ? start + 4000 : end);
   return /LockService\.getScriptLock\(\)/.test(body) && /raceDuplicate/.test(body);
 })());
+
+/* -------- 19) قالب Excel حقيقي (.xlsx) -------- */
+
+section('19) قالب استيراد المستفيدين بصيغة Excel حقيقية (.xlsx)');
+
+const xlsxAssocSession = S2.createSession_({id: 'USR-ASSOC-XLSX', name: 'جمعية اختبار القالب', role: 'ASSOCIATION', associationId: accepted.associationId});
+const xlsxResult = S2.downloadBeneficiaryImportTemplateXlsx(xlsxAssocSession.token);
+assert('downloadBeneficiaryImportTemplateXlsx يعيد dataUrl بصيغة xlsx الرسمية', xlsxResult.ok === true
+  && /^data:application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet;base64,/.test(xlsxResult.dataUrl));
+
+throws('غير المسجَّل دخوله لا يمكنه تنزيل القالب', () => S2.downloadBeneficiaryImportTemplateXlsx('token-غير-صحيح'), '');
+
+(function structuralXlsxTest() {
+  const fs = require('fs');
+  const path = require('path');
+  const cp = require('child_process');
+  const base64 = xlsxResult.dataUrl.split(',')[1];
+  const bytes = Buffer.from(base64, 'base64');
+  const tmpFile = path.join(require('os').tmpdir(), 'beneficiary-import-template-test.xlsx');
+  fs.writeFileSync(tmpFile, bytes);
+
+  // اختبار بنيوي حقيقي عبر python3 (وحدة zipfile القياسية) — يفتح الملف
+  // كأرشيف ZIP فعلي (وهذا هو الأساس البنيوي لصيغة xlsx نفسها)، يتحقق من
+  // وجود كل الأجزاء المطلوبة، ويتحقق أن كل جزء XML سليم البنية (parseable)
+  // فعلًا لا نصًا عشوائيًا بامتداد مغاير. هذا اختبار بنيوي محلي فقط،
+  // وليس فتحًا فعليًا داخل تطبيق Excel حقيقي (يتطلب اختبارًا يدويًا حيًا).
+  const pyScript = `
+import zipfile, sys, xml.etree.ElementTree as ET
+path = ${JSON.stringify(tmpFile)}
+required = ["[Content_Types].xml", "_rels/.rels", "xl/workbook.xml", "xl/_rels/workbook.xml.rels", "xl/styles.xml", "xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml"]
+try:
+    zf = zipfile.ZipFile(path)
+    bad = zf.testzip()
+    if bad:
+        print("BAD_ENTRY:" + bad); sys.exit(1)
+    names = zf.namelist()
+    missing = [n for n in required if n not in names]
+    if missing:
+        print("MISSING:" + ",".join(missing)); sys.exit(1)
+    for n in required:
+        content = zf.read(n)
+        try:
+            ET.fromstring(content)
+        except Exception as e:
+            print("XML_PARSE_ERROR:" + n + ":" + str(e)); sys.exit(1)
+    sheet1 = zf.read("xl/worksheets/sheet1.xml").decode("utf-8")
+    if "الاسم" not in sheet1 or "الجوال" not in sheet1:
+        print("MISSING_HEADERS"); sys.exit(1)
+    if "0501234567" not in sheet1:
+        print("PHONE_LEADING_ZERO_LOST"); sys.exit(1)
+    if "dataValidation" not in sheet1:
+        print("NO_DATA_VALIDATION"); sys.exit(1)
+    print("OK")
+except zipfile.BadZipFile as e:
+    print("NOT_A_ZIP:" + str(e)); sys.exit(1)
+`;
+  let output;
+  try {
+    output = cp.execFileSync('python3', ['-c', pyScript], {encoding: 'utf8'}).trim();
+  } catch (error) {
+    output = 'EXEC_ERROR:' + (error.stdout || error.message);
+  }
+  assert('الملف الناتج أرشيف ZIP سليم فعليًا (وليس CSV بامتداد مغاير)', output.indexOf('NOT_A_ZIP') !== 0 && output.indexOf('EXEC_ERROR') !== 0, output);
+  assert('كل أجزاء OOXML المطلوبة موجودة (Content_Types، workbook، worksheets، styles، rels)', output.indexOf('MISSING:') !== 0, output);
+  assert('كل جزء XML داخل الملف سليم البنية (parseable) فعلًا', output.indexOf('XML_PARSE_ERROR') !== 0, output);
+  assert('صف العناوين الرسمية موجود في ورقة "مستفيدون" (الاسم، الجوال...)', output.indexOf('MISSING_HEADERS') !== 0, output);
+  assert('رقم الجوال في صف المثال يحافظ على الصفر الأول (تنسيق نصي)', output.indexOf('PHONE_LEADING_ZERO_LOST') !== 0, output);
+  assert('قوائم Excel المنسدلة المرجعية (dataValidation) موجودة فعليًا في الملف', output.indexOf('NO_DATA_VALIDATION') !== 0, output);
+  assert('الاختبار البنيوي الكامل نجح (OK) عبر أداة ZIP/XML قياسية مستقلة', output.trim() === 'OK', output);
+
+  try { fs.unlinkSync(tmpFile); } catch (ignore) {}
+})();
 
 /* -------- النتيجة -------- */
 
