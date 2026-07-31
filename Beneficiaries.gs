@@ -3,7 +3,7 @@
 function saveBeneficiary(token, payload) {
   const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
   payload = payload || {};
-  const existing = payload.id ? findById_(APP.sheets.beneficiaries, 'رقم المستفيد', payload.id) : null;
+  const existing = payload.id ? findById_(APP.sheets.beneficiaries, 'رقم المستفيد', cleanId_(payload.id)) : null;
   const associationId = user.role === 'ASSOCIATION' ? user.associationId : cleanId_(payload.associationId);
   if (!associationId || !findById_(APP.sheets.associations, 'رقم الجمعية', associationId)) throw new Error('اختر جمعية صحيحة');
   if (existing && user.role === 'ASSOCIATION') {

@@ -19,8 +19,12 @@ const BEFORE_COMMIT = process.argv[2] || 'c188f74';
 
 function loadSourceAt(ref) {
   if (ref === 'WORKTREE') {
-    return require('fs').readFileSync(path.join(REPO_ROOT, 'Code.gs'), 'utf8');
+    // بعد تقسيم Code.gs إلى ملفات .gs متعددة (منظّمة عبر tools/gs-manifest.js)،
+    // النسخة "بعد" هي دمج كل هذه الملفات — سلوكيًا مطابق تمامًا لملف Code.gs
+    // الأصلي الواحد (Apps Script يدمجها بنفس الطريقة داخل نطاق عام واحد).
+    return require('./gs-manifest').readMergedServerSource(REPO_ROOT);
   }
+  // "قبل" يشير إلى commit سابق للتقسيم، حين كان كل شيء في Code.gs واحد.
   return execSync(`git show ${ref}:Code.gs`, { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
 }
 

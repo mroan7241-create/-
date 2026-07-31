@@ -9,10 +9,10 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { readMergedServerSource } = require('./gs-manifest');
 
 const ROOT = path.join(__dirname, '..');
 const INDEX = path.join(ROOT, 'Index.html');
-const CODE = path.join(ROOT, 'Code.gs');
 
 let failures = 0;
 let checks = 0;
@@ -31,7 +31,7 @@ function section(title) {
 }
 
 const html = fs.readFileSync(INDEX, 'utf8');
-const gs = fs.readFileSync(CODE, 'utf8');
+const gs = readMergedServerSource(ROOT);
 
 /* ---------- 1) استخراج كتل script والتحقق النحوي ---------- */
 
@@ -61,10 +61,10 @@ scriptBlocks.forEach((block, i) => {
 });
 
 try {
-  new vm.Script(gs, { filename: 'Code.gs' });
-  ok('Code.gs صحيح نحويًا');
+  new vm.Script(gs, { filename: 'ملفات .gs المدموجة' });
+  ok('كل ملفات .gs صحيحة نحويًا مجتمعة');
 } catch (error) {
-  fail('Code.gs', error.message);
+  fail('ملفات .gs', error.message);
 }
 
 /* ---------- 2) توازن الوسوم والأقواس ---------- */
@@ -128,7 +128,7 @@ else fail('توجد بقايا رابط Markdown "](http"');
 // معرّفات مباشرة داخل JS inline
 if (!/data-act="[^"]*"[^>]*on\w+=/.test(html)) ok('لا تُحقن قيم المستخدم داخل JavaScript inline');
 
-/* ---------- 4) مطابقة api() مع دوال Code.gs ---------- */
+/* ---------- 4) مطابقة api() مع دوال ملفات .gs ---------- */
 
 section('4) مطابقة استدعاءات الخادم');
 
@@ -146,7 +146,7 @@ const privateCalls = [...called].filter(name => name.endsWith('_'));
 if (!called.size) fail('لم يُعثر على أي استدعاء api()');
 else ok('عدد استدعاءات الخادم المميزة', String(called.size));
 
-if (!missing.length) ok('كل استدعاءات api() لها دوال في Code.gs', [...called].sort().join(', '));
+if (!missing.length) ok('كل استدعاءات api() لها دوال في ملفات .gs', [...called].sort().join(', '));
 else fail('استدعاءات بلا دالة مقابلة', missing.join(', '));
 
 if (!privateCalls.length) ok('لا يُستدعى أي دالة خاصة (تنتهي بـ _) من الواجهة');
@@ -218,8 +218,8 @@ const badGs = [...gs].filter(ch => {
   const c = ch.codePointAt(0);
   return c < 32 && ch !== '\n' && ch !== '\r' && ch !== '\t';
 });
-if (!badGs.length) ok('لا توجد محارف تحكم في Code.gs');
-else fail('محارف تحكم في Code.gs', String(badGs.length));
+if (!badGs.length) ok('لا توجد محارف تحكم في ملفات .gs');
+else fail('محارف تحكم في ملفات .gs', String(badGs.length));
 
 /* ---------- النتيجة ---------- */
 

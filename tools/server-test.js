@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * اختبار منطق الخادم: يحمّل Code.gs داخل بيئة تُحاكي خدمات Apps Script،
+ * اختبار منطق الخادم: يحمّل ملفات .gs المدموجة داخل بيئة تُحاكي خدمات Apps Script،
  * ثم يفحص دوال التحقق والتنقية والأمان.
  *   تشغيل:  node tools/server-test.js
  */
@@ -10,7 +10,8 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'Code.gs'), 'utf8');
+const { readMergedServerSource } = require('./gs-manifest');
+const source = readMergedServerSource(path.join(__dirname, '..'));
 
 let failures = 0;
 let checks = 0;
@@ -82,12 +83,12 @@ const sandbox = {
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 
-section('0) تحميل Code.gs');
+section('0) تحميل ملفات .gs');
 try {
-  vm.runInContext(source, sandbox, { filename: 'Code.gs' });
-  assert('تم تحميل Code.gs دون خطأ', true);
+  vm.runInContext(source, sandbox, { filename: 'gs-merged' });
+  assert('تم تحميل كل ملفات .gs دون خطأ', true);
 } catch (error) {
-  assert('تحميل Code.gs', false, error.message);
+  assert('تحميل ملفات .gs', false, error.message);
   process.exit(1);
 }
 const S = sandbox;
