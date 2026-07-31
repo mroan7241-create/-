@@ -42,6 +42,11 @@ const section = t => console.log('\n' + t);
 
 /* -------- بناء بيئة محاكاة كاملة (شيت في الذاكرة + خدمات Apps Script) -------- */
 
+/** يحاكي سلوك Sheets الحقيقي: علامة الاقتباس البادئة "فرض نص" تُخزَّن كإشارة فقط ولا تصبح جزءًا من القيمة الفعلية عند القراءة. */
+function stripForceText_(value) {
+  return (typeof value === 'string' && value.charAt(0) === "'") ? value.slice(1) : value;
+}
+
 function buildMockSpreadsheet() {
   const data = {};
   function makeSheet(name) {
@@ -60,13 +65,13 @@ function buildMockSpreadsheet() {
           return rows.slice(r1 - 1, r1 - 1 + (numRows || rows.length - r1 + 1)).map(r => r.slice());
         },
         getDisplayValues: () => [(rows[0] || []).map(String)],
-        setValues: values => { values.forEach((row, i) => { rows[r1 - 1 + i] = row.slice(); }); },
-        setValue: value => { rows[r1 - 1] = rows[r1 - 1] || []; rows[r1 - 1][c1 - 1] = value; },
+        setValues: values => { values.forEach((row, i) => { rows[r1 - 1 + i] = row.slice().map(stripForceText_); }); },
+        setValue: value => { rows[r1 - 1] = rows[r1 - 1] || []; rows[r1 - 1][c1 - 1] = stripForceText_(value); },
         setBackground() { return this; }, setFontColor() { return this; }, setFontWeight() { return this; },
         setHorizontalAlignment() { return this; }, setWrap() { return this; }, setDataValidation() { return this; }
       }),
       setFrozenRows: () => {}, autoResizeColumns: () => {}, getMaxRows: () => rows.length,
-      appendRow: row => { rows.push(row.slice()); }
+      appendRow: row => { rows.push(row.slice().map(stripForceText_)); }
     };
   }
   return {
@@ -318,8 +323,10 @@ section('4) XSS وحقن الصيغ (Formula Injection) — اختبار كتا�
     phone: '0501234570', familyCount: 1, socialStatus: 'أرملة', needs: []
   });
   const rawRow = S.findById_('المستفيدون', 'رقم المستفيد', saved.id);
-  assert('نص يبدأ بصيغة Sheets يُخزَّن مسبوقًا بعلامة نص صريح (لا يُنفَّذ كصيغة)',
-    String(rawRow['الاسم']).charAt(0) === "'" && String(rawRow['الاسم']).includes(maliciousName));
+  assert('safeCell_ يسبق نص الصيغة بعلامة نص صريح قبل الكتابة (تمنع Sheets من تنفيذها كصيغة)',
+    S.safeCell_(maliciousName).charAt(0) === "'");
+  assert('نص الصيغة الخبيث يُخزَّن ويُقرأ سليمًا كنص خام دون تحوير (Sheets تحذف علامة الاقتباس عند التخزين كنص، فلا صيغة تُنفَّذ رغم أن القيمة المقروءة تبدأ بـ"=")',
+    String(rawRow['الاسم']) === maliciousName);
 
   const scriptName = '<script>alert(1)</script>';
   const savedScript = S.saveBeneficiary(userA.token, {

@@ -30,7 +30,7 @@ function listAssociations(token, options) {
     const devices = readTable_(APP.sheets.devices).rows;
     const delegates = readTable_(APP.sheets.delegates).rows;
     let items = readTable_(APP.sheets.associations).rows.map(row => normalizeAssociation_(row, beneficiaries, devices, delegates));
-    items = applySearch_(items, options.search, ['name', 'id', 'email', 'phone']);
+    items = applySearch_(items, options.search, ['name', 'id', 'email', 'phone', 'region', 'city']);
     if (options.filter) items = items.filter(item => item.status === options.filter);
     items = applySort_(items, options.sortBy, options.sortDir);
     return Object.assign({ok: true}, paginate_(items, options));
@@ -80,7 +80,7 @@ function saveDevice(token, payload) {
 
   const values = {
     'اسم الجهاز': requiredText_(payload.name, 'اسم الجهاز', 100),
-    'النوع': requiredText_(payload.type, 'نوع الجهاز', 80),
+    'النوع': validateDeviceType_(payload.type),
     'رقم الجمعية': associationId,
     'رقم المستفيد': beneficiaryId,
     'حالة الجهاز': status,
@@ -111,7 +111,7 @@ function saveAssociation(token, payload) {
   const place = validateRegionCity_(payload.region, payload.city);
   const values = {
     'اسم الجمعية': requiredText_(payload.name, 'اسم الجمعية', 150),
-    'التصنيف': cleanText_(payload.category, 80),
+    'التصنيف': validateAssociationCategory_(payload.category),
     'المنطقة': place.region,
     'المدينة': place.city,
     'أرقام التواصل': normalizePhone_(payload.phone),

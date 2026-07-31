@@ -92,10 +92,16 @@ function appendObject_(sheetName, object) {
  * يمنع Formula Injection: أي نص يبدأ بمحرف تفعيل صيغة في Sheets
  * يُسبق بعلامة اقتباس مفردة، وهي علامة "نص صريح" لا تظهر للمستخدم
  * ولا تعود ضمن القيمة عند القراءة.
+ *
+ * يحمي أيضًا من عطل حقيقي كان يفقد الصفر البادئ لأرقام الجوال:
+ * Range.setValues() في Apps Script يحوّل أي نص "يبدو رقمًا" (مثل
+ * "0501234567") تلقائيًا إلى Number عند الكتابة، فيضيع الصفر الأول —
+ * نفس علامة الاقتباس المُستخدَمة لمنع الحقن تفرض تخزينه نصًا صريحًا دائمًا.
  */
 function safeCell_(value) {
   if (typeof value !== 'string' || !value) return value;
-  return /^[=+\-@\t\r]/.test(value) ? "'" + value : value;
+  if (/^[=+\-@\t\r]/.test(value) || /^0\d+$/.test(value)) return "'" + value;
+  return value;
 }
 
 function appendObjects_(sheetName, objects) {

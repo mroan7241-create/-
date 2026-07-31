@@ -40,6 +40,11 @@ const section = t => console.log('\n' + t);
 
 /* -------- بيئة محاكاة (مطابقة لتلك المستخدَمة في server-test.js/security-test.js) -------- */
 
+/** يحاكي سلوك Sheets الحقيقي: علامة الاقتباس البادئة "فرض نص" تُخزَّن كإشارة فقط ولا تصبح جزءًا من القيمة الفعلية عند القراءة. */
+function stripForceText_(value) {
+  return (typeof value === 'string' && value.charAt(0) === "'") ? value.slice(1) : value;
+}
+
 function buildMockSpreadsheet() {
   const data = {};
   function makeSheet(name) {
@@ -58,13 +63,13 @@ function buildMockSpreadsheet() {
           return rows.slice(r1 - 1, r1 - 1 + (numRows || rows.length - r1 + 1)).map(r => r.slice());
         },
         getDisplayValues: () => [(rows[0] || []).map(String)],
-        setValues: values => { values.forEach((row, i) => { rows[r1 - 1 + i] = row.slice(); }); },
-        setValue: value => { rows[r1 - 1] = rows[r1 - 1] || []; rows[r1 - 1][c1 - 1] = value; },
+        setValues: values => { values.forEach((row, i) => { rows[r1 - 1 + i] = row.slice().map(stripForceText_); }); },
+        setValue: value => { rows[r1 - 1] = rows[r1 - 1] || []; rows[r1 - 1][c1 - 1] = stripForceText_(value); },
         setBackground() { return this; }, setFontColor() { return this; }, setFontWeight() { return this; },
         setHorizontalAlignment() { return this; }, setWrap() { return this; }, setDataValidation() { return this; }
       }),
       setFrozenRows: () => {}, autoResizeColumns: () => {}, getMaxRows: () => rows.length,
-      appendRow: row => { rows.push(row.slice()); }
+      appendRow: row => { rows.push(row.slice().map(stripForceText_)); }
     };
   }
   return {

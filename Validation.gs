@@ -117,6 +117,22 @@ function normalizePhone_(value) {
   return phone;
 }
 
+/**
+ * شبكة أمان للعرض فقط (لا تكتب شيئًا) لسجلات كُتبت رقم جوالها قبل إصلاح
+ * safeCell_ (كان Range.setValues() يحوّل نصًا مثل "0501234567" تلقائيًا
+ * إلى Number فيضيع صفره الأول عند التخزين). تُعيد بناء الصفر البادئ عند
+ * القراءة فقط إن كانت القيمة المخزَّنة رقمًا سعوديًا صريحًا بلا صفر —
+ * لا تفترض شيئًا آخر ولا تلمس البيانات المخزَّنة فعليًا.
+ */
+function displayPhone_(value) {
+  const raw = String(value === undefined || value === null ? '' : value).trim();
+  if (!raw) return '';
+  const digits = raw.replace(/\D/g, '');
+  if (digits.indexOf('966') === 0 && digits.length === 12) return '0' + digits.slice(3);
+  if (digits.charAt(0) === '5' && digits.length === 9 && raw.charAt(0) !== '0') return '0' + digits;
+  return raw;
+}
+
 function boundedNumber_(value, min, max, label) {
   const number = Number(value);
   if (!isFinite(number) || number < min || number > max) throw new Error(label + ' غير صحيح');

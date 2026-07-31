@@ -17,7 +17,7 @@ function listBeneficiaries(token, options) {
       rows = rows.filter(row => String(row['رقم الجمعية']) === cleanId_(options.associationId));
     }
     let items = rows.map(normalizeBeneficiary_);
-    items = applySearch_(items, options.search, ['name', 'id', 'phone']);
+    items = applySearch_(items, options.search, ['name', 'id', 'phone', 'region', 'city']);
     if (options.filter) items = items.filter(item => item.status === options.filter || item.deliveryStatus === options.filter);
     items = applySort_(items, options.sortBy, options.sortDir);
     return Object.assign({ok: true}, paginate_(items, options));
@@ -47,7 +47,7 @@ function saveBeneficiary(token, payload) {
     'رقم جوال إضافي': payload.phone2 ? normalizePhone_(payload.phone2) : '',
     'عدد الأفراد': boundedNumber_(payload.familyCount, 1, 99, 'عدد الأفراد'),
     'ضمان اجتماعي': payload.socialSecurity === true || payload.socialSecurity === 'نعم' ? 'نعم' : 'لا',
-    'الحالة الاجتماعية': cleanText_(payload.socialStatus, 80),
+    'الحالة الاجتماعية': validateSocialStatus_(payload.socialStatus),
     'مبلغ الدخل': boundedNumber_(payload.income || 0, 0, 1000000, 'مبلغ الدخل'),
     'الاحتياج': normalizeNeeds_(payload.needs),
     'حالة المستفيد': existing ? String(existing['حالة المستفيد']) : 'جديد',
@@ -98,7 +98,7 @@ function importBeneficiaries(token, rows, acceptedPledge) {
         'رقم جوال إضافي': row.phone2 ? normalizePhone_(row.phone2) : '',
         'عدد الأفراد': boundedNumber_(row.familyCount, 1, 99, 'عدد الأفراد'),
         'ضمان اجتماعي': row.socialSecurity === true || row.socialSecurity === 'نعم' ? 'نعم' : 'لا',
-        'الحالة الاجتماعية': cleanText_(row.socialStatus, 80),
+        'الحالة الاجتماعية': validateSocialStatus_(row.socialStatus),
         'مبلغ الدخل': boundedNumber_(row.income || 0, 0, 1000000, 'مبلغ الدخل'),
         'الاحتياج': normalizeNeeds_(row.needs),
         'حالة المستفيد': 'جديد',
@@ -188,6 +188,7 @@ function inspectBeneficiaryExcel(token, payload) {
         boundedNumber_(row.familyCount, 1, 99, 'عدد الأفراد');
         boundedNumber_(row.income || 0, 0, 1000000, 'مبلغ الدخل');
         optionalCoordinate_(row.lat, row.lng);
+        validateSocialStatus_(row.socialStatus);
       } catch (error) {
         errors.push({row: index + 2, message: error.message});
       }

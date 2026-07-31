@@ -101,7 +101,9 @@ assert('يحيّد الصيغة +', S.safeCell_('+1+1').charAt(0) === "'");
 assert('يحيّد الصيغة -', S.safeCell_('-1+1').charAt(0) === "'");
 assert('يحيّد الأمر @', S.safeCell_('@SUM(A1)').charAt(0) === "'");
 assert('لا يمس الاسم العربي', S.safeCell_('محمد العتيبي') === 'محمد العتيبي');
-assert('لا يمس رقم الجوال النصي', S.safeCell_('0501234567') === '0501234567');
+assert('يحمي رقم الجوال الذي يبدأ بصفر من فقدان الصفر عند الكتابة (تحويل Sheets الرقمي التلقائي)',
+  S.safeCell_('0501234567') === "'0501234567");
+assert('لا يمس رقمًا نصيًا لا يبدأ بصفر', S.safeCell_('501234567') === '501234567');
 assert('لا يمس الأرقام (نوع Number)', S.safeCell_(1500) === 1500);
 assert('لا يمس القيمة الفارغة', S.safeCell_('') === '');
 
@@ -305,6 +307,11 @@ throws('previewPhoneNormalization يفشل بأمان بلا شيت مرتبط (
 
 section('14) بوابة تقديم الجمعيات: تقديم، قبول، رفض');
 
+/** يحاكي سلوك Sheets الحقيقي: علامة الاقتباس البادئة "فرض نص" تُخزَّن كإشارة فقط ولا تصبح جزءًا من القيمة الفعلية عند القراءة. */
+function stripForceText_(value) {
+  return (typeof value === 'string' && value.charAt(0) === "'") ? value.slice(1) : value;
+}
+
 function buildMockSpreadsheet() {
   const data = {};
   function makeSheet(name) {
@@ -323,13 +330,13 @@ function buildMockSpreadsheet() {
           return rows.slice(r1 - 1, r1 - 1 + (numRows || rows.length - r1 + 1)).map(r => r.slice());
         },
         getDisplayValues: () => [(rows[0] || []).map(String)],
-        setValues: values => { values.forEach((row, i) => { rows[r1 - 1 + i] = row.slice(); }); },
-        setValue: value => { rows[r1 - 1] = rows[r1 - 1] || []; rows[r1 - 1][c1 - 1] = value; },
+        setValues: values => { values.forEach((row, i) => { rows[r1 - 1 + i] = row.slice().map(stripForceText_); }); },
+        setValue: value => { rows[r1 - 1] = rows[r1 - 1] || []; rows[r1 - 1][c1 - 1] = stripForceText_(value); },
         setBackground() { return this; }, setFontColor() { return this; }, setFontWeight() { return this; },
         setHorizontalAlignment() { return this; }, setWrap() { return this; }, setDataValidation() { return this; }
       }),
       setFrozenRows: () => {}, autoResizeColumns: () => {}, getMaxRows: () => rows.length,
-      appendRow: row => { rows.push(row.slice()); }
+      appendRow: row => { rows.push(row.slice().map(stripForceText_)); }
     };
   }
   return {

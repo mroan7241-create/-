@@ -23,7 +23,7 @@ function submitAssociationApplication(payload) {
   const place = validateRegionCity_(payload.region, payload.city);
   const values = {
     'اسم الجمعية': requiredText_(payload.name, 'اسم الجمعية', 150),
-    'التصنيف': cleanText_(payload.category, 80),
+    'التصنيف': validateAssociationCategory_(payload.category),
     'المنطقة': place.region,
     'المدينة': place.city,
     'أرقام التواصل': phone,
@@ -53,15 +53,24 @@ function submitAssociationApplication(payload) {
   return {ok: true, id: id, message: 'تم استلام طلب الانضمام وسيتم التواصل معكم بعد المراجعة'};
 }
 
+/**
+ * تاريخا التقديم والمراجعة كانا يُعادان كنص خام (String(row[...])) دون
+ * المرور بـ parseDate_/formatDateTime_ — Google Sheets يحوّل نصًا شبيهًا
+ * بتاريخ (كالمُخزَّن عبر now_()) إلى خلية Date فعليًا أحيانًا، فكانت
+ * القراءة التالية تُعيد كائن JS Date خامًا وString() عليه ينتج صيغة
+ * إنجليزية تقنية مثل "Thu Jan 01 2026 00:00:00 GMT+0300" بدل تاريخ عربي
+ * منسَّق — هذا هو عطل "تواريخ JavaScript غير المنسَّقة" المرصود حيًّا.
+ */
 function normalizeApplication_(row) {
   return {
     id: String(row['رقم الطلب']), name: String(row['اسم الجمعية']),
     category: String(row['التصنيف'] || ''), region: String(row['المنطقة']), city: String(row['المدينة']),
-    phone: String(row['أرقام التواصل']), email: String(row['البريد الإلكتروني']),
+    phone: displayPhone_(row['أرقام التواصل']), email: String(row['البريد الإلكتروني']),
     contactName: String(row['اسم المسؤول'] || ''), notes: String(row['ملاحظات مقدّم الطلب'] || ''),
     status: String(row['الحالة']), rejectionReason: String(row['سبب الرفض'] || ''),
     resultingAssociationId: String(row['رقم الجمعية الناتجة'] || ''),
-    submittedAt: String(row['تاريخ التقديم'] || ''), reviewedAt: String(row['تاريخ المراجعة'] || ''),
+    submittedAt: formatDateTime_(parseDate_(row['تاريخ التقديم'])),
+    reviewedAt: formatDateTime_(parseDate_(row['تاريخ المراجعة'])),
     reviewer: String(row['المراجع'] || '')
   };
 }

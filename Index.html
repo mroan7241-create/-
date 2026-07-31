@@ -1367,6 +1367,17 @@
         + optionList(ref.associationCategories, value, '— اختر —') + '</select></div>';
     }
 
+    /** قبل الترحيل: حقل نص حر كما كان. بعده: قائمة أنواع أجهزة معتمدة. */
+    function deviceTypeField(value) {
+      var ref = state.referenceData;
+      if (!ref || !ref.ready || !ref.deviceTypes.length) {
+        return textField('type', 'النوع', value, {required: true, max: 80, hint: 'مثال: أجهزة كهربائية منزلية'});
+      }
+      return '<div class="field"><label for="f_type">النوع</label>'
+        + '<select class="control" id="f_type" name="type" required>'
+        + optionList(ref.deviceTypes, value, '— اختر —') + '</select></div>';
+    }
+
     function regionCityFields(regionValue, cityValue, idPrefix) {
       idPrefix = idPrefix || 'f';
       var ref = state.referenceData;
@@ -1906,7 +1917,7 @@
       var body = '<form id="deviceForm" class="form-grid" novalidate>'
         + '<input type="hidden" name="id" value="' + esc(id || '') + '">'
         + textField('name', 'اسم الجهاز', d.name, {required: true, max: 100})
-        + textField('type', 'النوع', d.type, {required: true, max: 80, hint: 'مثال: أجهزة كهربائية منزلية'})
+        + deviceTypeField(d.type)
         + '<div class="field"><label for="f_assoc">الجمعية</label>'
         + '<select class="control" id="f_assoc" name="associationId">' + associationOptions + '</select></div>'
         + '<div class="field"><label for="f_ben">المستفيد</label>'

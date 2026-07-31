@@ -8,8 +8,8 @@ function normalizeBeneficiary_(row) {
     region: String(row['المنطقة'] || ''),
     city: String(row['المدينة'] || ''),
     address: String(row['العنوان'] || ''),
-    phone: String(row['رقم الجوال'] || ''),
-    phone2: String(row['رقم جوال إضافي'] || ''),
+    phone: displayPhone_(row['رقم الجوال']),
+    phone2: displayPhone_(row['رقم جوال إضافي']),
     familyCount: safeNumber_(row['عدد الأفراد']),
     socialSecurity: String(row['ضمان اجتماعي']) === 'نعم',
     socialStatus: String(row['الحالة الاجتماعية'] || ''),
@@ -38,7 +38,7 @@ function normalizeAssociation_(row, beneficiaries, devices, delegates) {
   return {
     id: id, name: String(row['اسم الجمعية'] || ''), category: String(row['التصنيف'] || ''),
     region: String(row['المنطقة'] || ''), city: String(row['المدينة'] || ''),
-    phone: String(row['أرقام التواصل'] || ''), email: String(row['البريد الإلكتروني'] || ''),
+    phone: displayPhone_(row['أرقام التواصل']), email: String(row['البريد الإلكتروني'] || ''),
     status: String(row['الحالة'] || ''), beneficiaries: beneficiaries.filter(x => !id || String(x['رقم الجمعية']) === id).length,
     approvedDevices: ownDevices.length, receivedDevices: ownDevices.filter(x => String(x['حالة الجهاز']) !== 'بالمستودع').length,
     deliveredDevices: delivered, delegates: delegates.filter(x => !id || String(x['رقم الجمعية']) === id).length,
@@ -65,7 +65,7 @@ function normalizeDelegate_(row, beneficiaries) {
   const assigned = beneficiaries.filter(x => String(x['رقم المندوب']) === id && String(x['حالة التسليم']) !== 'تم التسليم').length;
   return {
     id: id, associationId: String(row['رقم الجمعية'] || ''), name: String(row['اسم المندوب'] || ''),
-    phone: String(row['رقم الجوال'] || ''), status: String(row['الحالة'] || ''),
+    phone: displayPhone_(row['رقم الجوال']), status: String(row['الحالة'] || ''),
     served: served, assigned: assigned, lastLogin: formatDateTime_(parseDate_(row['آخر دخول']))
   };
 }

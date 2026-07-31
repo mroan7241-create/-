@@ -75,6 +75,221 @@ function invalidateReferenceDataCache_() {
 }
 
 /**
+ * مرادفات معروفة بثقة فقط (اختصارات شائعة) — قائمة قصيرة عمدًا. أي قيمة
+ * لا تطابق منطقة معتمدة حرفيًا ولا توجد في هذه القائمة تُعتبر غامضة ولا
+ * يُخمَّن لها بديل إطلاقًا.
+ */
+const REFERENCE_LEGACY_REGION_SYNONYMS = Object.freeze({
+  'مكة': 'مكة المكرمة',
+  'المدينة': 'المدينة المنورة',
+  'الشرقيه': 'الشرقية',
+  'الجوف ': 'الجوف'
+});
+
+/** فهرس عكسي: كل مدينة معتمدة ← قائمة المناطق التي تظهر تحتها (عادة منطقة واحدة فقط). */
+function buildCityToRegionIndex_(data) {
+  const index = {};
+  Object.keys(data.citiesByRegion).forEach(region => {
+    (data.citiesByRegion[region] || []).forEach(city => {
+      if (!index[city]) index[city] = [];
+      if (index[city].indexOf(region) === -1) index[city].push(region);
+    });
+  });
+  return index;
+}
+
+/** يعيد {value, changed} إن وُجد بديل مؤكَّد بلا غموض، أو null إن كانت القيمة غامضة/غير معروفة. */
+function proposeCanonicalRegion_(rawRegion, data) {
+  const trimmed = cleanText_(rawRegion, 80);
+  if (data.regions.indexOf(trimmed) >= 0) return {value: trimmed, changed: trimmed !== rawRegion};
+  const synonym = REFERENCE_LEGACY_REGION_SYNONYMS[trimmed] || REFERENCE_LEGACY_REGION_SYNONYMS[rawRegion];
+  if (synonym && data.regions.indexOf(synonym) >= 0) return {value: synonym, changed: true};
+  return null;
+}
+
+/** نفس المبدأ للمدينة، ضمن منطقة معيَّنة (بعد تصحيح المنطقة إن أمكن). */
+function proposeCanonicalCity_(rawCity, canonicalRegion, data, cityToRegionIndex) {
+  const trimmed = cleanText_(rawCity, 80);
+  const citiesOfRegion = data.citiesByRegion[canonicalRegion] || [];
+  if (citiesOfRegion.indexOf(trimmed) >= 0) return {value: trimmed, changed: trimmed !== rawCity};
+  // المدينة موجودة حرفيًا في القائمة المرجعية لكن تحت منطقة أخرى — لا
+  // نقترح نقلها تلقائيًا لأن ذلك تغيير أوسع من مجرد تصحيح إملائي؛ إن
+  // كانت تتبع تلك المنطقة نفسها فقط (بلا غموض) فهي مطابقة فعلًا لا تحتاج تعديلًا.
+  const owners = cityToRegionIndex[trimmed] || [];
+  if (owners.length === 1 && owners[0] === canonicalRegion) return {value: trimmed, changed: trimmed !== rawCity};
+  return null;
+}
+
+/**
+ * تشخيص قراءة فقط — لا تكتب أي شيء إطلاقًا. يقارن المستفيدين والجمعيات
+ * والأجهزة بالقوائم المرجعية المعتمدة (بعد تشغيل migrateReferenceData)
+ * ويُخرج تقريرًا مُصنَّفًا بعدد السجلات المتأثرة وموقعها. آمن للتشغيل
+ * اليدوي من محرر Apps Script في أي وقت.
+ */
+function diagnoseReferenceDataIssues() {
+  const data = getReferenceData();
+  if (!data.ready) {
+    return {
+      ok: true, ready: false, issueCount: 0, issues: [],
+      message: 'لم يُشغَّل migrateReferenceData بعد — لا توجد قائمة معتمدة للمقارنة حاليًا. كل الحقول تُقبل كنص حر (سلوك متوافق مع الوضع الحالي).'
+    };
+  }
+  const issues = [];
+  function report(type, severity, sheet, id, field, value, message) {
+    issues.push({type: type, severity: severity, sheet: sheet, id: String(id || ''), field: field, value: String(value || ''), message: message});
+  }
+
+  readTable_(APP.sheets.beneficiaries).rows.forEach(row => {
+    const id = row['رقم المستفيد'];
+    const region = String(row['المنطقة'] || '');
+    const city = String(row['المدينة'] || '');
+    if (region && data.regions.indexOf(region) === -1) {
+      report('UNKNOWN_REGION', 'high', 'المستفيدون', id, 'المنطقة', region, 'منطقة غير معروفة في القائمة المعتمدة');
+    } else if (region && city && (data.citiesByRegion[region] || []).indexOf(city) === -1) {
+      report('CITY_REGION_MISMATCH', 'high', 'المستفيدون', id, 'المدينة', city, 'مدينة لا تتبع منطقتها المسجَّلة "' + region + '"');
+    }
+    const socialStatus = String(row['الحالة الاجتماعية'] || '');
+    if (socialStatus && data.socialStatuses.length && data.socialStatuses.indexOf(socialStatus) === -1) {
+      report('UNKNOWN_SOCIAL_STATUS', 'medium', 'المستفيدون', id, 'الحالة الاجتماعية', socialStatus, 'حالة اجتماعية غير معروفة في القائمة المعتمدة');
+    }
+  });
+
+  readTable_(APP.sheets.associations).rows.forEach(row => {
+    const id = row['رقم الجمعية'];
+    const region = String(row['المنطقة'] || '');
+    const city = String(row['المدينة'] || '');
+    if (region && data.regions.indexOf(region) === -1) {
+      report('UNKNOWN_REGION', 'high', 'الجمعيات', id, 'المنطقة', region, 'منطقة غير معروفة في القائمة المعتمدة');
+    } else if (region && city && (data.citiesByRegion[region] || []).indexOf(city) === -1) {
+      report('CITY_REGION_MISMATCH', 'high', 'الجمعيات', id, 'المدينة', city, 'مدينة لا تتبع منطقتها المسجَّلة "' + region + '"');
+    }
+    const category = String(row['التصنيف'] || '');
+    if (category && data.associationCategories.length && data.associationCategories.indexOf(category) === -1) {
+      report('UNKNOWN_CATEGORY', 'low', 'الجمعيات', id, 'التصنيف', category, 'تصنيف جمعية غير معروف في القائمة المعتمدة');
+    }
+  });
+
+  readTable_(APP.sheets.devices).rows.forEach(row => {
+    const id = row['رقم الجهاز'];
+    const type = String(row['النوع'] || '');
+    if (type && data.deviceTypes.length && data.deviceTypes.indexOf(type) === -1) {
+      report('UNKNOWN_DEVICE_TYPE', 'low', 'الأجهزة', id, 'النوع', type, 'نوع جهاز غير معروف في القائمة المعتمدة');
+    }
+  });
+
+  const bySeverity = {high: 0, medium: 0, low: 0};
+  const byType = {};
+  issues.forEach(issue => {
+    bySeverity[issue.severity] = (bySeverity[issue.severity] || 0) + 1;
+    byType[issue.type] = (byType[issue.type] || 0) + 1;
+  });
+
+  return {
+    ok: true, ready: true, generatedAt: formatDateTime_(new Date()),
+    issueCount: issues.length, bySeverity: bySeverity, byType: byType, issues: issues
+  };
+}
+
+/**
+ * ⚠️ ترحيل كتابة فعلي — لم يُستدعَ تلقائيًا من أي مكان في المشروع، ويجب
+ * تشغيله يدويًا من محرر Apps Script بعد المراجعة والموافقة فقط.
+ *
+ * dryRun (افتراضيًا true — معاينة آمنة بالكامل): يبني قائمة الاقتراحات
+ * (القيمة القديمة والجديدة المقترحة) دون كتابة أي شيء إطلاقًا. مرِّر
+ * false صراحة لتطبيق الاقتراحات المؤكَّدة فقط (لا الغامضة).
+ *
+ * لا يُخمِّن أبدًا: يقترح تصحيحًا فقط عند تطابق حرفي بعد تنظيف المسافات،
+ * أو مرادف معروف بثقة (REFERENCE_LEGACY_REGION_SYNONYMS)، أو مدينة تتبع
+ * منطقة واحدة فقط بلا غموض. أي حالة غير ذلك تُدرَج في "ambiguous" دون
+ * أي تعديل مقترَح لها — تحتاج مراجعة يدوية دائمًا.
+ *
+ * آمنة لإعادة التشغيل: بعد تطبيق تصحيح، القيمة تصبح مطابقة للقائمة
+ * المعتمدة فتُستبعَد تلقائيًا من proposals في أي تشغيل تالٍ (لا تكرار).
+ */
+function migrateLegacyReferenceValues(dryRun) {
+  dryRun = dryRun !== false;
+  const data = getReferenceData();
+  if (!data.ready) {
+    return {ok: false, ready: false, dryRun: dryRun,
+      message: 'شغّل migrateReferenceData أولًا لبناء القائمة المعتمدة قبل أي ترحيل لقيم قديمة.'};
+  }
+  const cityToRegionIndex = buildCityToRegionIndex_(data);
+  const proposals = [];
+  const ambiguous = [];
+  let applied = 0;
+
+  function proposeField(sheetName, idHeader, id, field, oldValue, newValue) {
+    if (newValue === null) {
+      ambiguous.push({sheet: sheetName, id: String(id || ''), field: field, value: String(oldValue || ''),
+        reason: 'قيمة غامضة أو غير معروفة — لم يُخمَّن أي بديل، تحتاج مراجعة يدوية'});
+      return;
+    }
+    if (String(newValue) === String(oldValue || '')) return;
+    proposals.push({sheet: sheetName, id: String(id || ''), field: field, oldValue: String(oldValue || ''), newValue: String(newValue)});
+    if (!dryRun) {
+      updateById_(sheetName, idHeader, id, {[field]: newValue});
+      applied++;
+    }
+  }
+
+  function migrateRegionCity(sheetName, idHeader, row, idField) {
+    const id = row[idField];
+    const rawRegion = String(row['المنطقة'] || '');
+    let effectiveRegion = rawRegion;
+    if (rawRegion) {
+      const regionProposal = proposeCanonicalRegion_(rawRegion, data);
+      proposeField(sheetName, idHeader, id, 'المنطقة', rawRegion, regionProposal ? regionProposal.value : null);
+      if (regionProposal) effectiveRegion = regionProposal.value;
+    }
+    const rawCity = String(row['المدينة'] || '');
+    if (rawCity && effectiveRegion) {
+      const cityProposal = proposeCanonicalCity_(rawCity, effectiveRegion, data, cityToRegionIndex);
+      proposeField(sheetName, idHeader, id, 'المدينة', rawCity, cityProposal ? cityProposal.value : null);
+    }
+  }
+
+  readTable_(APP.sheets.beneficiaries).rows.forEach(row => {
+    migrateRegionCity(APP.sheets.beneficiaries, 'رقم المستفيد', row, 'رقم المستفيد');
+    const id = row['رقم المستفيد'];
+    const rawStatus = String(row['الحالة الاجتماعية'] || '');
+    if (rawStatus && data.socialStatuses.length && data.socialStatuses.indexOf(rawStatus) === -1) {
+      ambiguous.push({sheet: APP.sheets.beneficiaries, id: String(id), field: 'الحالة الاجتماعية', value: rawStatus,
+        reason: 'لا مرادف معروف بثقة — تحتاج مراجعة يدوية'});
+    }
+  });
+
+  readTable_(APP.sheets.associations).rows.forEach(row => {
+    migrateRegionCity(APP.sheets.associations, 'رقم الجمعية', row, 'رقم الجمعية');
+    const id = row['رقم الجمعية'];
+    const rawCategory = String(row['التصنيف'] || '');
+    if (rawCategory && data.associationCategories.length && data.associationCategories.indexOf(rawCategory) === -1) {
+      ambiguous.push({sheet: APP.sheets.associations, id: String(id), field: 'التصنيف', value: rawCategory,
+        reason: 'لا مرادف معروف بثقة — تحتاج مراجعة يدوية'});
+    }
+  });
+
+  readTable_(APP.sheets.devices).rows.forEach(row => {
+    const id = row['رقم الجهاز'];
+    const rawType = String(row['النوع'] || '');
+    if (rawType && data.deviceTypes.length && data.deviceTypes.indexOf(rawType) === -1) {
+      ambiguous.push({sheet: APP.sheets.devices, id: String(id), field: 'النوع', value: rawType,
+        reason: 'لا مرادف معروف بثقة — تحتاج مراجعة يدوية'});
+    }
+  });
+
+  if (!dryRun) { invalidateTableCache_(APP.sheets.beneficiaries); invalidateTableCache_(APP.sheets.associations); }
+
+  return {
+    ok: true, ready: true, dryRun: dryRun,
+    proposedCount: proposals.length, ambiguousCount: ambiguous.length, appliedCount: dryRun ? 0 : applied,
+    proposals: proposals, ambiguous: ambiguous,
+    message: dryRun
+      ? 'وضع المعاينة (dry-run): لم يُعدَّل أي شيء. راجع proposals وambiguous قبل أي تشغيل فعلي.'
+      : 'تم تطبيق ' + applied + ' تعديلًا مؤكَّدًا. راجع ambiguous للحالات التي تحتاج مراجعة يدوية.'
+  };
+}
+
+/**
  * يعيد المصادر المرجعية مُهيكلة وجاهزة للعرض، مع تخزين مؤقت لتقليل قراءات الشيت.
  * إن لم تُنشأ الورقة بعد يعيد بنية فارغة بأمان دون أي خطأ — الواجهة تتراجع
  * تلقائيًا إلى الحقول النصية الحرة في هذه الحالة (توافق كامل مع الوضع الحالي).
@@ -142,6 +357,42 @@ function validateRegionCity_(region, city) {
     throw new Error('المدينة "' + city + '" لا تتبع منطقة "' + region + '" في القائمة المعتمدة');
   }
   return {region: region, city: city};
+}
+
+/**
+ * نفس مبدأ validateRegionCity_ (تحقّق لين، مفروض فقط بعد تشغيل الترحيل)
+ * لبقية القوائم الموحَّدة — التحقق هنا في الخادم دائمًا، لا في الواجهة
+ * فقط، حتى لو تجاوز طلب مباشر نموذج الواجهة كليًا.
+ */
+function validateSocialStatus_(value) {
+  value = requiredText_(value, 'الحالة الاجتماعية', 80);
+  const data = getReferenceData();
+  if (!data.ready || !data.socialStatuses.length) return value;
+  if (data.socialStatuses.indexOf(value) === -1) {
+    throw new Error('الحالة الاجتماعية "' + value + '" غير معروفة. اختر من القائمة المعتمدة');
+  }
+  return value;
+}
+
+function validateAssociationCategory_(value) {
+  value = cleanText_(value, 80);
+  if (!value) return value; // التصنيف اختياري دائمًا، بخلاف المنطقة/المدينة/الحالة الاجتماعية
+  const data = getReferenceData();
+  if (!data.ready || !data.associationCategories.length) return value;
+  if (data.associationCategories.indexOf(value) === -1) {
+    throw new Error('تصنيف الجمعية "' + value + '" غير معروف. اختر من القائمة المعتمدة');
+  }
+  return value;
+}
+
+function validateDeviceType_(value) {
+  value = requiredText_(value, 'نوع الجهاز', 80);
+  const data = getReferenceData();
+  if (!data.ready || !data.deviceTypes.length) return value;
+  if (data.deviceTypes.indexOf(value) === -1) {
+    throw new Error('نوع الجهاز "' + value + '" غير معروف. اختر من القائمة المعتمدة');
+  }
+  return value;
 }
 
 function doGet() {
