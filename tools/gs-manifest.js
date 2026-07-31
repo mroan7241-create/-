@@ -34,7 +34,8 @@ const GS_FILES_ORDER = [
   'StateRules.gs',
   'Pagination.gs',
   'DataUtils.gs',
-  'Validation.gs'
+  'Validation.gs',
+  'ReleaseOps.gs'
 ];
 
 /** يقرأ كل ملفات .gs بالترتيب ويدمجها في نص واحد، ويتحقق أن لا ملف .gs في الجذر منسيّ من القائمة. */

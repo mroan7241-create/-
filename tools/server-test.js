@@ -446,6 +446,7 @@ sandbox2.globalThis = sandbox2;
 vm.createContext(sandbox2);
 vm.runInContext(source, sandbox2, { filename: 'Code.gs(applications)' });
 const S2 = sandbox2;
+const read2 = expr => vm.runInContext(expr, sandbox2);
 const ALL_HEADERS = {
   'إعدادات المشروع': ['المفتاح', 'القيمة', 'الوصف'],
   'المستخدمون': ['رقم المستخدم', 'الاسم', 'البريد الإلكتروني', 'كلمة المرور المشفرة', 'الملح', 'الدور', 'رقم الجمعية', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول', 'يجب تغيير كلمة المرور', 'كلمة مرور سابقة مشفرة', 'ملح سابق'],
@@ -915,6 +916,39 @@ throws('مندوب لا يستطيع الاطلاع على سجل عمليات �
 
 const otherAssocDelegateSession = S2.createSession_({id: 'USR-OTHER-ASSOC-DELEGATE', name: 'جمعية أخرى', role: 'ASSOCIATION', associationId: 'ASC-NONEXISTENT-XYZ'});
 throws('جمعية أخرى لا تستطيع الاطلاع على سجل مندوب لا يتبعها', () => S2.listDelegateAuditLog(otherAssocDelegateSession.token, detailDelegate.id, {}), 'صلاحية');
+
+/* -------- 21) preflightRelease وapplyReleaseSchema -------- */
+
+section('21) preflightRelease وapplyReleaseSchema (تجهيز الإصدار الآمن)');
+
+const beneficiaryCountBeforeSchema = S2.readTable_('المستفيدون').rows.length;
+const usersCountBeforeSchema = S2.readTable_('المستخدمون').rows.length;
+
+const preflightBefore = S2.preflightRelease();
+assert('preflightRelease لا تكتب أي شيء — قراءة فقط', S2.readTable_('المستفيدون').rows.length === beneficiaryCountBeforeSchema);
+assert('preflightRelease يعيد تقرير كل الأوراق المعرَّفة في HEADERS', preflightBefore.sheets.length === Object.keys(read2('HEADERS')).length);
+assert('preflightRelease يكتشف ورقة "البيانات المرجعية" الناقصة (لم تُنشأ بعد في هذا الاختبار)',
+  preflightBefore.missingSheets.indexOf('البيانات المرجعية') >= 0 && preflightBefore.readyForSchemaApply === true);
+assert('preflightRelease يتضمن تقرير تعارضات الحالات (stateIntegrity) وتقرير المرجعيات (referenceData)',
+  preflightBefore.stateIntegrity && typeof preflightBefore.stateIntegrity.issueCount === 'number' && preflightBefore.referenceData);
+assert('preflightRelease يتضمن معلومات إصدار المخطط الحالي/المطلوب', typeof preflightBefore.schemaVersion.required === 'number');
+
+throws('applyReleaseSchema يرفض العمل بلا رمز موافقة صريح', () => S2.applyReleaseSchema({}), 'approvalCode');
+throws('applyReleaseSchema يرفض رمز موافقة غير مطابق', () => S2.applyReleaseSchema({approvalCode: 'رمز خاطئ'}), 'approvalCode');
+assert('applyReleaseSchema لم تُطبَّق فعليًا بعد الرفض (لا تغيير على البيانات)', S2.readTable_('المستفيدون').rows.length === beneficiaryCountBeforeSchema);
+
+const applyResult = S2.applyReleaseSchema({approvalCode: read2('RELEASE_SCHEMA_APPROVAL_CODE_')});
+assert('applyReleaseSchema بموافقة صحيحة تنشئ الورقة الناقصة فقط', applyResult.ok === true && applyResult.createdSheets.indexOf('البيانات المرجعية') >= 0);
+assert('applyReleaseSchema لا تمسّ عدد صفوف المستفيدين الحاليين إطلاقًا (إضافة لا استبدال)',
+  S2.readTable_('المستفيدون').rows.length === beneficiaryCountBeforeSchema);
+assert('applyReleaseSchema لا تُنشئ أي حساب مدير جديد', S2.readTable_('المستخدمون').rows.length === usersCountBeforeSchema);
+
+const preflightAfter = S2.preflightRelease();
+assert('preflightRelease بعد التطبيق: الورقة لم تعد ناقصة', preflightAfter.missingSheets.indexOf('البيانات المرجعية') === -1);
+
+const applyResultAgain = S2.applyReleaseSchema({approvalCode: read2('RELEASE_SCHEMA_APPROVAL_CODE_')});
+assert('applyReleaseSchema آمنة لإعادة التشغيل (لا تُنشئ الورقة نفسها مرتين ولا تكرر شيئًا)',
+  applyResultAgain.ok === true && applyResultAgain.createdSheets.length === 0 && applyResultAgain.addedColumns.length === 0);
 
 /* -------- النتيجة -------- */
 

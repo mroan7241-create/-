@@ -541,8 +541,8 @@ section('10) عدم تراجع قواعد سلامة الحالات وإدارة
     (source.match(/repairStateIntegrityIssues\(\)/g) || []).length === 1);
   assert('migrateLegacyReferenceValues ما زالت غير مُستدعاة تلقائيًا من أي دالة أخرى في المصدر (لن تعمل تلقائيًا أبدًا)',
     !/^\s*migrateLegacyReferenceValues\(/m.test(source.replace(/function migrateLegacyReferenceValues[\s\S]*?\n}\n/, '')));
-  assert('diagnoseReferenceDataIssues ما زالت غير مُستدعاة تلقائيًا من أي دالة أخرى في المصدر',
-    (source.match(/diagnoseReferenceDataIssues\(\)/g) || []).length === 1);
+  assert('diagnoseReferenceDataIssues لا يستدعيها إلا تعريفها وpreflightRelease القراءة-فقط (لا مسار تلقائي آخر)',
+    (source.match(/diagnoseReferenceDataIssues\(\)/g) || []).length === 2 && /function preflightRelease\(\)[\s\S]*?diagnoseReferenceDataIssues\(\)/.test(source));
   assert('perfTime_ ما زالت مستخدَمة في saveBeneficiary رغم إضافة validateSocialStatus_', /function saveBeneficiary[\s\S]{0,80}perfTime_/.test(source));
 }
 

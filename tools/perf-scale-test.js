@@ -235,7 +235,7 @@ function runScenario(count) {
   const delegateSession = S.createSession_({ id: delegate.id, name: 'مندوب القياس', role: 'DELEGATE', associationId: assoc.id });
   resetPerCallCache();
   const confirm = timeIt(() => S.confirmDelivery(delegateSession.token, {
-    beneficiaryId: newBeneficiaryId, confirmed: true, proofDataUrl: 'data:image/png;base64,aGVsbG8='
+    beneficiaryId: newBeneficiaryId, confirmed: true, proofDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
   }));
   metrics.confirm = confirm.ms;
 

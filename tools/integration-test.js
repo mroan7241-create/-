@@ -258,7 +258,7 @@ assert('إعادة تعيين المندوب بعد التعذّر (إعادة �
 
 section('11) إثبات التسليم');
 throws('confirmDelivery يرفض بلا صورة إثبات', () => S.confirmDelivery(delegateToken, { beneficiaryId: beneficiary.id, confirmed: true }), 'صورة إثبات');
-const proofDataUrl = 'data:image/png;base64,aGVsbG8=';
+const proofDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 const delivered = S.confirmDelivery(delegateToken, { beneficiaryId: beneficiary.id, confirmed: true, proofDataUrl: proofDataUrl });
 assert('تأكيد التسليم ينجح ويحدّث المستفيد والجهاز معًا', delivered.ok
   && delivered.record.deliveryStatus === 'تم التسليم' && delivered.record.status === 'تم التسليم');

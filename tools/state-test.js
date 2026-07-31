@@ -244,7 +244,7 @@ section('2) الدورة الكاملة الناجحة: تخصيص → خروج 
 
   assert('تأكيد التسليم ينجح ويحوّل المستفيد وجميع أجهزته إلى "تم التسليم" كوحدة واحدة', (() => {
     const result = S.confirmDelivery(delegateSession.token, {
-      beneficiaryId: beneficiaryId, confirmed: true, proofDataUrl: 'data:image/png;base64,aGVsbG8='
+      beneficiaryId: beneficiaryId, confirmed: true, proofDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
     });
     const b = beneficiaryRow(S, beneficiaryId);
     const d = deviceRow(S, deviceId);
@@ -256,7 +256,7 @@ section('2) الدورة الكاملة الناجحة: تخصيص → خروج 
   })());
 
   throws('إعادة تأكيد تسليم مكتمل بالفعل تُرفض (لا تُقبل كعملية بلا أثر)', () =>
-    S.confirmDelivery(delegateSession.token, { beneficiaryId: beneficiaryId, confirmed: true, proofDataUrl: 'data:image/png;base64,aGVsbG8=' }),
+    S.confirmDelivery(delegateSession.token, { beneficiaryId: beneficiaryId, confirmed: true, proofDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=' }),
     'لا توجد أجهزة');
 
   const deliveries = S.readTable_('التسليمات').rows.filter(r => String(r['رقم المستفيد']) === beneficiaryId);
@@ -290,7 +290,7 @@ section('3) تعذر التسليم ثم إعادة المحاولة بنجاح'
 
   assert('تأكيد التسليم بعد إعادة المحاولة ينجح', (() => {
     const result = S.confirmDelivery(delegateSession.token, {
-      beneficiaryId: beneficiaryId, confirmed: true, proofDataUrl: 'data:image/png;base64,aGVsbG8='
+      beneficiaryId: beneficiaryId, confirmed: true, proofDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
     });
     return result.ok && String(beneficiaryRow(S, beneficiaryId)['حالة التسليم']) === 'تم التسليم';
   })());
@@ -316,7 +316,7 @@ section('4) رفض الانتقالات غير الصحيحة عبر الدوا�
   // لا يمكن أصلًا الوصول لفحص انتقال الحالة قبل أن يملك المندوب صلاحية العرض.
   const delegateSession = S.createSession_({ id: delegateId, name: 'مندوب الحالات', role: 'DELEGATE', associationId: assoc.id });
   throws('تأكيد تسليم لمستفيد لم يُعيَّن له هذا المندوب أصلًا يُرفض', () =>
-    S.confirmDelivery(delegateSession.token, { beneficiaryId: beneficiaryId, confirmed: true, proofDataUrl: 'data:image/png;base64,aGVsbG8=' }),
+    S.confirmDelivery(delegateSession.token, { beneficiaryId: beneficiaryId, confirmed: true, proofDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=' }),
     'غير متاح لك');
 
   throws('تسجيل تعذّر تسليم لمستفيد لم يُعيَّن له هذا المندوب أصلًا يُرفض', () =>

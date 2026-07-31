@@ -194,11 +194,35 @@ function confirmDelivery_(user, beneficiaryId, payload) {
   return {ok: true, record: normalizeBeneficiary_(findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId))};
 }
 
+/**
+ * يتحقق من التوقيع الفعلي (magic bytes) لأول بايتات الصورة المفكوكة —
+ * لا يكتفي بتصديق نوع MIME الذي يدّعيه العميل في بادئة data: (يمكن
+ * لأي عميل كتابة "data:image/jpeg;base64,..." أمام أي محتوى إطلاقًا).
+ * يرفض أي محتوى لا يطابق التوقيع الحقيقي لنوعه المُعلَن.
+ */
+function verifyImageMagicBytes_(bytes, kind) {
+  const b = bytes;
+  if (kind === 'jpeg') return b.length > 3 && (b[0] & 0xFF) === 0xFF && (b[1] & 0xFF) === 0xD8 && (b[2] & 0xFF) === 0xFF;
+  if (kind === 'png') {
+    const sig = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    return b.length > sig.length && sig.every((byte, index) => (b[index] & 0xFF) === byte);
+  }
+  if (kind === 'webp') {
+    const isRiff = b.length > 11 && [0x52, 0x49, 0x46, 0x46].every((byte, index) => (b[index] & 0xFF) === byte);
+    const isWebp = isRiff && [0x57, 0x45, 0x42, 0x50].every((byte, index) => (b[index + 8] & 0xFF) === byte);
+    return isWebp;
+  }
+  return false;
+}
+
 function saveProofImage_(dataUrl, beneficiaryId) {
   const match = String(dataUrl || '').match(/^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/);
   if (!match) throw new Error('أرفق صورة إثبات بصيغة JPG أو PNG أو WEBP');
   const bytes = Utilities.base64Decode(match[2]);
   if (bytes.length > 6 * 1024 * 1024) throw new Error('حجم الصورة يتجاوز 6 ميجابايت');
+  if (!verifyImageMagicBytes_(bytes, match[1])) {
+    throw new Error('محتوى الملف الفعلي لا يطابق صيغة الصورة المُعلَنة — أرفق صورة JPG أو PNG أو WEBP حقيقية');
+  }
   const mime = 'image/' + match[1];
   const ext = match[1] === 'jpeg' ? 'jpg' : match[1];
   const folder = proofFolder_();

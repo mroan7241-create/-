@@ -406,6 +406,22 @@ section('6) رفع الملفات والصور');
   const oversized = 'data:image/png;base64,' + 'A'.repeat(9 * 1024 * 1024);
   throws('صورة إثبات تتجاوز 6 ميجابايت تُرفض قبل أي رفع فعلي', () => S.saveProofImage_(oversized, 'BEN-000001'), 'حجم');
 
+  // نوع الملف الحقيقي (magic bytes) لا بادئة data: المُعلَنة من العميل فقط —
+  // محتوى نصي عادي (غير صورة إطلاقًا) مموَّه ببادئة "data:image/jpeg" يجب أن يُرفض.
+  throws('محتوى نصي عادي مموَّه ببادئة data:image/jpeg (توقيع JPEG حقيقي مفقود) يُرفض',
+    () => S.saveProofImage_('data:image/jpeg;base64,' + Buffer.from('ceci nest pas une image').toString('base64'), 'BEN-000001'),
+    'محتوى الملف الفعلي');
+  throws('محتوى HTML مموَّه ببادئة data:image/png (توقيع PNG حقيقي مفقود) يُرفض',
+    () => S.saveProofImage_('data:image/png;base64,' + Buffer.from('<script>alert(1)</script>').toString('base64'), 'BEN-000001'),
+    'محتوى الملف الفعلي');
+  // اختبار توقيع البايتات مباشرة (بلا حاجة لمحاكاة Drive الكاملة، غير
+  // المُهيَّأة في رمل هذا الملف): صورة PNG حقيقية يجب أن تُقبل بنيويًا.
+  const realPngBytes = Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
+  assert('صورة PNG حقيقية (توقيع بايتات صحيح فعليًا) تُقبل بنيويًا عبر verifyImageMagicBytes_',
+    S.verifyImageMagicBytes_(realPngBytes, 'png') === true);
+  assert('نص عادي بتوقيع png مزعوم يُرفض بنيويًا عبر verifyImageMagicBytes_',
+    S.verifyImageMagicBytes_(Array.from(Buffer.from('hello world')), 'png') === false);
+
   throws('ملف Excel بنوع MIME غير صحيح يُرفض', () => {
     const A = adminSession(S);
     S.inspectBeneficiaryExcel(A.token, { dataUrl: 'data:text/plain;base64,aGVsbG8=' });
