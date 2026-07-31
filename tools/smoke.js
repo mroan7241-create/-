@@ -193,6 +193,12 @@ app.renderLogin();
 assert('ترسم شاشة الدخول', out().includes('تسجيل الدخول'));
 assert('تعرض Brand Lockup للشريك', out().includes('بالشراكة مع'));
 assert('لا تعرض مربعًا خلف الشعار', !out().includes('background:#000'));
+assert('شعار الزاد الفعلي مضمَّن (data URI حقيقي لا بديل نصي)',
+  app.BRAND.zadLogo.indexOf('data:image/png;base64,') === 0 && app.BRAND.zadLogo.length > 1000);
+assert('شعار مؤسسة أبانمي الفعلي مضمَّن (data URI حقيقي لا بديل نصي)',
+  app.BRAND.partnerLogo.indexOf('data:image/png;base64,') === 0 && app.BRAND.partnerLogo.length > 1000);
+assert('شاشة الدخول تعرض وسم <img> فعليًا لشعار الزاد (لا SVG بديل)', out().includes('class="lockup-logo"'));
+assert('شاشة الدخول تعرض وسم <img> فعليًا لشعار الشريك (لا اسم نصي بديل)', out().includes('class="lockup-partner-logo"'));
 app.state.loginType = 'delegate';
 app.renderLogin();
 assert('تبديل تبويب المندوب يعرض حقل الرمز', out().includes('رمز دخول المندوب'));
@@ -212,6 +218,9 @@ setRole(ADMIN_DATA);
 const adminNav = app.navFor('ADMIN');
 assert('قائمة الإدارة تحتوي الجمعيات والأنشطة', adminNav.includes('associations') && adminNav.includes('activities'));
 assert('قائمة الإدارة تتضمن الإعدادات (تغيير كلمة المرور)', adminNav.includes('settings'));
+app.state.page = 'dashboard'; app.render();
+assert('الشريط الجانبي يعرض شعار الزاد الفعلي (مضغوط، بلا شعار الشريك المكرّر)',
+  out().includes('class="lockup-logo"') && !out().includes('class="lockup-partner-logo"'));
 
 const adminPages = ['dashboard', 'applications', 'beneficiaries', 'associations', 'devices', 'delegates', 'activities', 'audit', 'settings'];
 adminPages.forEach(page => {
@@ -367,6 +376,8 @@ let delegateError = null;
 try { app.render(); } catch (e) { delegateError = e; }
 assert('ترسم واجهة المندوب', !delegateError && out().includes('مهام التسليم'), delegateError && delegateError.message);
 assert('تعرض عدد المتبقّين', out().includes('مستفيدون متبقّون'));
+assert('رأس بوابة المندوب يعرض شعاري الزاد والشريك معًا',
+  out().includes('class="lockup-logo"') && out().includes('class="lockup-partner-logo"'));
 
 const listHtml = app.renderDelegateList();
 assert('رابط واتساب سليم', listHtml.includes('https://wa.me/966501234567'));
