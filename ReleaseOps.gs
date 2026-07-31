@@ -1,28 +1,101 @@
-// -------------------- تجهيز الإصدار: preflight وتطبيق مخطط آمن --------------------
+// -------------------- عمليات الصيانة: منح وصول مؤقت، preflight، وتطبيق مخطط آمن --------------------
 //
-// هذا الملف بديل آمن لاستخدام setupSheets() كخطوة "نشر عامة" متكررة.
-// preflightRelease() قراءة فقط بالكامل — لا تكتب أي شيء إطلاقًا مهما
-// استُدعيت. applyReleaseSchema(options) تكتب فقط الأعمدة/الأوراق الناقصة
-// إضافةً لا استبدالًا، ولا تعمل إطلاقًا دون رمز موافقة صريح مطابق تمامًا.
+// كل دالة صيانة في هذا الملف (وفي بقية المشروع: setupSheets_،
+// migrateReferenceData_، migrateLegacyReferenceValues_، previewPhoneNormalization_،
+// migratePhoneNumbers_، diagnoseReferenceDataIssues_، diagnoseStateIntegrity_،
+// repairStateIntegrityIssues_) **تنتهي أسماؤها بشرطة سفلية `_` عمدًا**
+// (اصطلاح "خاص" في هذا المشروع، يفرضه tools/verify.js آليًا بمنع أي استدعاء
+// لها من Index.html)، **وتتطلب جميعها رمز وصول صيانة صالح** كأول معامل عبر
+// requireMaintenanceAccess_ — طبقتا حماية مستقلتان، لا طبقة واحدة فقط.
 //
-// ⚠️ لم تُستدعَ أي من الدالتين هنا تلقائيًا من أي مكان آخر في المشروع،
-// ولم تُشغَّلا على أي بيانات حية من هذه الجلسة. راجع DEPLOYMENT.md لترتيب
-// الاستخدام الموصى به قبل أي تركيب حي.
+// آلية منح الوصول (grantMaintenanceAccess_) لا تعتمد على جلسة ويب ولا على
+// أي رمز مكتوب في الكود إطلاقًا: تُشغَّل يدويًا من محرر Apps Script فقط
+// (▶ Run)، تولّد رمزًا عشوائيًا بالكامل، تخزّن بصمته المُجزَّأة فقط
+// (Script Properties)، وتُظهر الرمز الخام مرة واحدة فقط في سجل التنفيذ —
+// لا يُعاد الرمز أبدًا في أي قيمة راجعة قد تصل لمتصفح، ولا يُسجَّل في
+// audit_ أو أي سجل آخر. راجع DEPLOYMENT.md لترتيب الاستخدام الكامل.
+//
+// ⚠️ لم تُستدعَ أي دالة هنا تلقائيًا من أي مكان آخر في المشروع، ولم
+// تُشغَّل أي منها على أي بيانات حية من هذه الجلسة.
+
+const MAINT_ACCESS_PROPERTY_ = 'MAINT_ACCESS_GRANT';
+const MAINT_ACCESS_MAX_ATTEMPTS_ = 5;
+const MAINT_ACCESS_DEFAULT_MINUTES_ = 20;
+const MAINT_ACCESS_MAX_MINUTES_ = 60;
 
 /**
- * رمز موافقة applyReleaseSchema — نص ثابت يجب مطابقته حرفيًا، وليس سرًّا
- * بمعنى كلمة مرور (لا يحمي من مطوّر يقرأ الكود)، بل حاجز واضح يمنع
- * الاستدعاء العرضي أو التشغيل بلا قصد (مثل نسخ/لصق أو استدعاء بمعامل فارغ).
+ * يمنح وصول صيانة مؤقتًا لكل دوال هذا الملف/المشروع الحساسة. **شغّلها من
+ * محرر Apps Script فقط (▶ Run)** — لا تُستدعى من أي مكان في الواجهة أو
+ * الشبكة، ولا تتطلب أي جلسة ويب. تولّد رمزًا عشوائيًا بالكامل (لا رمز ثابت
+ * في الكود إطلاقًا)، تخزّن بصمته المُجزَّأة فقط في Script Properties،
+ * وتطبع الرمز الخام **مرة واحدة فقط** في سجل التنفيذ (Executions) —
+ * انسخه فورًا من هناك، فلن يظهر مرة أخرى ولا يُعاد في القيمة الراجعة.
+ *
+ * الرمز صالح للاستخدام المتكرر (ليس أحادي الاستخدام) خلال نافذة زمنية
+ * قصيرة فقط (افتراضيًا 20 دقيقة، حد أقصى 60) — يكفي لجلسة صيانة واحدة
+ * متصلة (preflight ← dry-run ← تطبيق)، وينتهي تلقائيًا بعدها. يُقفَل
+ * تلقائيًا بعد 5 محاولات فاشلة بصرف النظر عن الوقت المتبقي.
  */
-const RELEASE_SCHEMA_APPROVAL_CODE_ = 'أوافق-على-تطبيق-مخطط-الإصدار';
+function grantMaintenanceAccess_(minutes) {
+  const windowMinutes = Math.min(MAINT_ACCESS_MAX_MINUTES_, Math.max(1, Number(minutes) || MAINT_ACCESS_DEFAULT_MINUTES_));
+  const token = Utilities.getUuid() + Utilities.getUuid();
+  const salt = Utilities.getUuid();
+  const record = {
+    hash: hashSecret_(token, salt), salt: salt,
+    expiresAt: Date.now() + windowMinutes * 60 * 1000,
+    attempts: 0
+  };
+  PropertiesService.getScriptProperties().setProperty(MAINT_ACCESS_PROPERTY_, JSON.stringify(record));
+  // القناة الوحيدة لإظهار الرمز الخام — سجل تنفيذ المحرر، لا يصل لأي
+  // طالب عبر google.script.run إطلاقًا مهما كانت طريقة الاستدعاء.
+  Logger.log('رمز وصول الصيانة (صالح ' + windowMinutes + ' دقيقة، مرة واحدة يُعرض فيها فقط): ' + token);
+  return {ok: true, message: 'انسخ الرمز من سجل التنفيذ الآن — صالح ' + windowMinutes + ' دقيقة ولن يُعرض مرة أخرى.'};
+}
+
+/** يبطل رمز الوصول الحالي فورًا قبل انتهاء صلاحيته الطبيعية — شغّلها من المحرر عند انتهاء جلسة الصيانة. */
+function revokeMaintenanceAccess_() {
+  PropertiesService.getScriptProperties().deleteProperty(MAINT_ACCESS_PROPERTY_);
+  return {ok: true, message: 'أُبطل رمز وصول الصيانة (إن وُجد).'};
+}
+
+/**
+ * حارس مشترك تستدعيه كل دالة صيانة كأول سطر فيها. يرمي خطأً عامًا (لا
+ * يكشف أي تفصيل عن حالة المخطط أو الإعدادات) عند غياب رمز صالح، انتهاء
+ * صلاحيته، أو تجاوز محاولات الفشل المسموحة — القفل نفسه يُطبَّق بمجرد
+ * الفشل الخامس بصرف النظر عمّن يستدعي بعدها بالرمز الصحيح أو الخاطئ.
+ */
+function requireMaintenanceAccess_(token) {
+  const props = PropertiesService.getScriptProperties();
+  const raw = props.getProperty(MAINT_ACCESS_PROPERTY_);
+  if (!raw) throw new Error('الوصول لعمليات الصيانة مقفل. شغّل grantMaintenanceAccess_() من محرر Apps Script أولًا.');
+  let record;
+  try { record = JSON.parse(raw); } catch (error) { props.deleteProperty(MAINT_ACCESS_PROPERTY_); throw new Error('حالة وصول الصيانة تالفة — أُعيد قفلها. شغّل grantMaintenanceAccess_() من جديد.'); }
+  if (Date.now() > record.expiresAt) {
+    props.deleteProperty(MAINT_ACCESS_PROPERTY_);
+    throw new Error('انتهت صلاحية رمز وصول الصيانة. شغّل grantMaintenanceAccess_() من جديد.');
+  }
+  if (record.attempts >= MAINT_ACCESS_MAX_ATTEMPTS_) {
+    props.deleteProperty(MAINT_ACCESS_PROPERTY_);
+    throw new Error('أُقفل الوصول للصيانة بعد محاولات فاشلة متكررة. شغّل grantMaintenanceAccess_() من جديد.');
+  }
+  if (!token || !constantTimeEquals_(hashSecret_(String(token), record.salt), record.hash)) {
+    record.attempts += 1;
+    props.setProperty(MAINT_ACCESS_PROPERTY_, JSON.stringify(record));
+    throw new Error('رمز وصول الصيانة غير صحيح.');
+  }
+  return true;
+}
 
 /**
  * تقرير قراءة فقط شامل عن جاهزية القاعدة الحالية لاستقبال هذا الإصدار:
  * الأوراق والأعمدة الموجودة/الناقصة وترتيبها، تعارضات الحالات، القيم
  * المرجعية غير المطابقة، إصدار المخطط الحالي/المطلوب، ومجلد الإثباتات.
- * آمنة للاستدعاء في أي وقت وبأي عدد من المرات — لا تُعدِّل أي شيء إطلاقًا.
+ * لا تُعدِّل أي شيء إطلاقًا مهما استُدعيت — لكنها **ليست عامة**: تتطلب
+ * رمز وصول صيانة صالح مثل بقية دوال هذا الملف، حتى لا تُسرِّب أسماء
+ * الأوراق/الأعمدة/الإعدادات لأي طرف غير مصرَّح.
  */
-function preflightRelease() {
+function preflightRelease_(token) {
+  requireMaintenanceAccess_(token);
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheetsReport = Object.keys(HEADERS).map(name => {
     const sheet = ss.getSheetByName(name);
@@ -40,10 +113,10 @@ function preflightRelease() {
   });
 
   let referenceData;
-  try { referenceData = diagnoseReferenceDataIssues(); } catch (error) { referenceData = {ok: false, error: error.message}; }
+  try { referenceData = diagnoseReferenceDataIssues_(token); } catch (error) { referenceData = {ok: false, error: error.message}; }
 
   let stateIntegrity;
-  try { stateIntegrity = diagnoseStateIntegrity(); } catch (error) { stateIntegrity = {ok: false, error: error.message}; }
+  try { stateIntegrity = diagnoseStateIntegrity_(token); } catch (error) { stateIntegrity = {ok: false, error: error.message}; }
 
   let proofFolder;
   try {
@@ -80,20 +153,16 @@ function preflightRelease() {
 }
 
 /**
- * تطبيق إضافي بحت لمخطط البيانات: يُنشئ الأوراق الناقصة فقط، ويضيف
- * الأعمدة الناقصة فقط لأي ورقة موجودة — لا يحذف عمودًا، لا يعيد ترتيب
- * بيانات، لا يُنشئ حساب مدير، لا يستبدل كلمة مرور، ولا يلمس أي صف بيانات
- * قائم إطلاقًا (يستخدم نفس ensureSheet_ المستخدَمة في setupSheets نفسها).
- * يرفض العمل تمامًا دون options.approvalCode مطابق حرفيًا لتفادي أي
- * استدعاء عرضي. آمنة لإعادة التشغيل (لا تكرار عند تشغيلها على مخطط مكتمل
- * أصلًا).
+ * تطبيق إضافي بحت لمخطط البيانات فقط (لا ترحيل مرجعيات، لا إصلاح حالات —
+ * كل منها دالة صيانة منفصلة عمدًا، لا تُستدعى تلقائيًا من هنا): يُنشئ
+ * الأوراق الناقصة فقط، ويضيف الأعمدة الناقصة فقط لأي ورقة موجودة — لا
+ * يحذف عمودًا، لا يعيد ترتيب بيانات، لا يُنشئ حساب مدير، لا يستبدل كلمة
+ * مرور، ولا يلمس أي صف بيانات قائم إطلاقًا. آمنة لإعادة التشغيل.
  */
-function applyReleaseSchema(options) {
+function applyReleaseSchema_(token, options) {
+  requireMaintenanceAccess_(token);
   options = options || {};
-  if (options.approvalCode !== RELEASE_SCHEMA_APPROVAL_CODE_) {
-    throw new Error('applyReleaseSchema يتطلب options.approvalCode مطابقًا حرفيًا للرمز الموثَّق في DEPLOYMENT.md — لم يُطبَّق أي تغيير. راجع preflightRelease() أولًا دائمًا قبل هذه الدالة.');
-  }
-  const before = preflightRelease();
+  const before = preflightRelease_(token);
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const createdSheets = [];
   const addedColumns = [];
@@ -116,7 +185,7 @@ function applyReleaseSchema(options) {
   Object.keys(HEADERS).forEach(invalidateTableCache_);
   PropertiesService.getScriptProperties().setProperty('SCHEMA_VERSION', String(APP.schemaVersion));
   clearDashboardCache();
-  const after = preflightRelease();
+  const after = preflightRelease_(token);
 
   return {
     ok: true,

@@ -2,7 +2,7 @@
 
 function sheet_(name) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
-  if (!sheet) throw new Error('شغّل setupSheets() أولًا. الورقة المفقودة: ' + name);
+  if (!sheet) throw new Error('شغّل setupSheets_() أولًا. الورقة المفقودة: ' + name);
   return sheet;
 }
 

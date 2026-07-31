@@ -37,6 +37,7 @@ const section = t => console.log('\n' + t);
 
 const props = {};
 const cache = {};
+const logs = [];
 const sandbox = {
   console, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp, Error,
   isNaN, isFinite, parseInt, parseFloat, Set,
@@ -136,7 +137,8 @@ const sandbox = {
   PropertiesService: {
     getScriptProperties: () => ({
       getProperty: k => (k in props ? props[k] : null),
-      setProperty: (k, v) => { props[k] = String(v); }
+      setProperty: (k, v) => { props[k] = String(v); },
+      deleteProperty: k => { delete props[k]; }
     })
   },
   CacheService: {
@@ -150,8 +152,17 @@ const sandbox = {
   ScriptApp: { getScriptId: () => 'script-id-test', getOAuthToken: () => 'token' },
   SpreadsheetApp: { getActiveSpreadsheet: () => null },
   HtmlService: { createHtmlOutputFromFile: () => ({ setTitle() { return this; }, addMetaTag() { return this; } }) },
-  DriveApp: {}, UrlFetchApp: {}
+  DriveApp: {}, UrlFetchApp: {}, Logger: { log: msg => { logs.push(String(msg)); } }
 };
+
+/** يستخرج آخر رمز وصول صيانة مطبوع عبر Logger.log بعد استدعاء grantMaintenanceAccess_ — يحاكي القناة الوحيدة الحقيقية لإظهار الرمز (سجل تنفيذ المحرر). */
+function grantToken_(S, logsArray) {
+  logsArray.length = 0;
+  S.grantMaintenanceAccess_();
+  const line = logsArray.find(l => l.indexOf('رمز وصول الصيانة') >= 0);
+  if (!line) throw new Error('لم يُطبع رمز وصول الصيانة في السجل (اختبار)');
+  return line.split(': ').pop();
+}
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 
@@ -332,8 +343,8 @@ assert('عمودا الموقع الجغرافي إضافيان في نهاية 
 assert('حالات الجهاز الخمس كما هي', read('DEVICE_STATUSES').length === 5);
 assert('أسباب التعذر الستة كما هي', read('FAILED_REASONS').length === 6);
 assert('doGet ما زال يقرأ الملف Index', /createHtmlOutputFromFile\('Index'\)/.test(source));
-assert('setupSheets موجودة ولم تُستدعَ تلقائيًا',
-  /function setupSheets\(/.test(source) && !/^\s*setupSheets\(\);/m.test(source));
+assert('setupSheets_ موجودة، خاصة (شرطة سفلية)، ولم تُستدعَ تلقائيًا',
+  /function setupSheets_\(/.test(source) && !/^\s*setupSheets_\(/m.test(source.replace(/function setupSheets_[\s\S]*?\n}\n/, '')));
 
 /* -------- 12) المصادر المرجعية (مناطق/مدن) -------- */
 
@@ -344,8 +355,8 @@ assert('جدول البيانات المرجعية إضافي فقط ولم يم
 assert('أعمدة البيانات المرجعية كما صُممت', HEADERS['البيانات المرجعية'].join('|')
   === ['المعرف', 'النوع', 'القيمة', 'يتبع', 'الترتيب', 'نشط'].join('|'));
 
-assert('migrateReferenceData لم تُستدعَ تلقائيًا من أي مكان',
-  /function migrateReferenceData\(/.test(source) && !/^\s*migrateReferenceData\(\);/m.test(source));
+assert('migrateReferenceData_ خاصة (شرطة سفلية) ولم تُستدعَ تلقائيًا من أي مكان',
+  /function migrateReferenceData_\(/.test(source) && !/^\s*migrateReferenceData_\(/m.test(source.replace(/function migrateReferenceData_[\s\S]*?\n}\n/, '')));
 
 assert('getReferenceData تتعامل بأمان مع غياب الجدول (بلا استثناء)', (() => {
   try {
@@ -380,16 +391,16 @@ assert('inspectBeneficiaryExcel يستخدم التحقق الموحّد من ا
 /* -------- 13) تصحيح صيغة الجوال (معاينة آمنة، بلا كتابة عمياء) -------- */
 
 section('13) معاينة وترحيل أرقام الجوال');
-assert('previewPhoneNormalization معرّفة', /function previewPhoneNormalization\(/.test(source));
-assert('migratePhoneNumbers معرّفة ولم تُستدعَ تلقائيًا',
-  /function migratePhoneNumbers\(/.test(source) && !/^\s*migratePhoneNumbers\(\);/m.test(source));
+assert('previewPhoneNormalization_ معرّفة وخاصة (شرطة سفلية)', /function previewPhoneNormalization_\(/.test(source));
+assert('migratePhoneNumbers_ معرّفة، خاصة، ولم تُستدعَ تلقائيًا',
+  /function migratePhoneNumbers_\(/.test(source) && !/^\s*migratePhoneNumbers_\(/m.test(source.replace(/function migratePhoneNumbers_[\s\S]*?\n}\n/, '')));
 assert('الترحيل يعتمد على المعاينة نفسها (مصدر حقيقة واحد)', (() => {
-  const start = source.indexOf('function migratePhoneNumbers(');
+  const start = source.indexOf('function migratePhoneNumbers_(');
   const body = source.slice(start, start + 400);
-  return body.includes('previewPhoneNormalization()');
+  return body.includes('previewPhoneNormalization_(');
 })());
-throws('previewPhoneNormalization يفشل بأمان بلا شيت مرتبط (بيئة الاختبار) بدل قراءة بيانات فاسدة',
-  () => S.previewPhoneNormalization());
+throws('previewPhoneNormalization_ ترفض العمل بلا رمز وصول صيانة صالح (حتى قبل أي فحص شيت)',
+  () => S.previewPhoneNormalization_());
 
 /* -------- 14) بوابة تقديم الجمعيات ودورة الاعتماد (بمحاكاة شيت كاملة) -------- */
 
@@ -917,38 +928,51 @@ throws('مندوب لا يستطيع الاطلاع على سجل عمليات �
 const otherAssocDelegateSession = S2.createSession_({id: 'USR-OTHER-ASSOC-DELEGATE', name: 'جمعية أخرى', role: 'ASSOCIATION', associationId: 'ASC-NONEXISTENT-XYZ'});
 throws('جمعية أخرى لا تستطيع الاطلاع على سجل مندوب لا يتبعها', () => S2.listDelegateAuditLog(otherAssocDelegateSession.token, detailDelegate.id, {}), 'صلاحية');
 
-/* -------- 21) preflightRelease وapplyReleaseSchema -------- */
+/* -------- 21) preflightRelease_ وapplyReleaseSchema_ (رمز وصول صيانة) -------- */
 
-section('21) preflightRelease وapplyReleaseSchema (تجهيز الإصدار الآمن)');
+section('21) preflightRelease_ وapplyReleaseSchema_ (رمز وصول صيانة مؤقت)');
 
 const beneficiaryCountBeforeSchema = S2.readTable_('المستفيدون').rows.length;
 const usersCountBeforeSchema = S2.readTable_('المستخدمون').rows.length;
 
-const preflightBefore = S2.preflightRelease();
-assert('preflightRelease لا تكتب أي شيء — قراءة فقط', S2.readTable_('المستفيدون').rows.length === beneficiaryCountBeforeSchema);
-assert('preflightRelease يعيد تقرير كل الأوراق المعرَّفة في HEADERS', preflightBefore.sheets.length === Object.keys(read2('HEADERS')).length);
-assert('preflightRelease يكتشف ورقة "البيانات المرجعية" الناقصة (لم تُنشأ بعد في هذا الاختبار)',
+throws('preflightRelease_ ترفض العمل بلا رمز وصول صيانة (لا تُسرِّب شيئًا لمستخدم عام)', () => S2.preflightRelease_(), 'مقفل');
+throws('applyReleaseSchema_ ترفض العمل بلا رمز وصول صيانة', () => S2.applyReleaseSchema_(undefined, {}), 'مقفل');
+
+const token1 = grantToken_(S2, logs);
+throws('preflightRelease_ ترفض رمزًا خاطئًا حتى بعد منح رمز صحيح', () => S2.preflightRelease_('رمز-عشوائي-خاطئ'), 'غير صحيح');
+const preflightBefore = S2.preflightRelease_(token1);
+assert('preflightRelease_ برمز صالح لا تكتب أي شيء — قراءة فقط', S2.readTable_('المستفيدون').rows.length === beneficiaryCountBeforeSchema);
+assert('preflightRelease_ يعيد تقرير كل الأوراق المعرَّفة في HEADERS', preflightBefore.sheets.length === Object.keys(read2('HEADERS')).length);
+assert('preflightRelease_ يكتشف ورقة "البيانات المرجعية" الناقصة (لم تُنشأ بعد في هذا الاختبار)',
   preflightBefore.missingSheets.indexOf('البيانات المرجعية') >= 0 && preflightBefore.readyForSchemaApply === true);
-assert('preflightRelease يتضمن تقرير تعارضات الحالات (stateIntegrity) وتقرير المرجعيات (referenceData)',
+assert('preflightRelease_ يتضمن تقرير تعارضات الحالات (stateIntegrity) وتقرير المرجعيات (referenceData)',
   preflightBefore.stateIntegrity && typeof preflightBefore.stateIntegrity.issueCount === 'number' && preflightBefore.referenceData);
-assert('preflightRelease يتضمن معلومات إصدار المخطط الحالي/المطلوب', typeof preflightBefore.schemaVersion.required === 'number');
+assert('preflightRelease_ يتضمن معلومات إصدار المخطط الحالي/المطلوب', typeof preflightBefore.schemaVersion.required === 'number');
 
-throws('applyReleaseSchema يرفض العمل بلا رمز موافقة صريح', () => S2.applyReleaseSchema({}), 'approvalCode');
-throws('applyReleaseSchema يرفض رمز موافقة غير مطابق', () => S2.applyReleaseSchema({approvalCode: 'رمز خاطئ'}), 'approvalCode');
-assert('applyReleaseSchema لم تُطبَّق فعليًا بعد الرفض (لا تغيير على البيانات)', S2.readTable_('المستفيدون').rows.length === beneficiaryCountBeforeSchema);
-
-const applyResult = S2.applyReleaseSchema({approvalCode: read2('RELEASE_SCHEMA_APPROVAL_CODE_')});
-assert('applyReleaseSchema بموافقة صحيحة تنشئ الورقة الناقصة فقط', applyResult.ok === true && applyResult.createdSheets.indexOf('البيانات المرجعية') >= 0);
-assert('applyReleaseSchema لا تمسّ عدد صفوف المستفيدين الحاليين إطلاقًا (إضافة لا استبدال)',
+// نفس الرمز صالح لاستدعاءات متعددة خلال نافذة صلاحيته (ليس أحادي الاستخدام) — مريح تشغيليًا لجلسة صيانة واحدة متصلة.
+const applyResult = S2.applyReleaseSchema_(token1, {});
+assert('applyReleaseSchema_ بنفس الرمز (لا يزال ساريًا) تنشئ الورقة الناقصة فقط', applyResult.ok === true && applyResult.createdSheets.indexOf('البيانات المرجعية') >= 0);
+assert('applyReleaseSchema_ لا تمسّ عدد صفوف المستفيدين الحاليين إطلاقًا (إضافة لا استبدال)',
   S2.readTable_('المستفيدون').rows.length === beneficiaryCountBeforeSchema);
-assert('applyReleaseSchema لا تُنشئ أي حساب مدير جديد', S2.readTable_('المستخدمون').rows.length === usersCountBeforeSchema);
+assert('applyReleaseSchema_ لا تُنشئ أي حساب مدير جديد', S2.readTable_('المستخدمون').rows.length === usersCountBeforeSchema);
 
-const preflightAfter = S2.preflightRelease();
-assert('preflightRelease بعد التطبيق: الورقة لم تعد ناقصة', preflightAfter.missingSheets.indexOf('البيانات المرجعية') === -1);
+const preflightAfter = S2.preflightRelease_(token1);
+assert('preflightRelease_ بعد التطبيق: الورقة لم تعد ناقصة', preflightAfter.missingSheets.indexOf('البيانات المرجعية') === -1);
 
-const applyResultAgain = S2.applyReleaseSchema({approvalCode: read2('RELEASE_SCHEMA_APPROVAL_CODE_')});
-assert('applyReleaseSchema آمنة لإعادة التشغيل (لا تُنشئ الورقة نفسها مرتين ولا تكرر شيئًا)',
+const applyResultAgain = S2.applyReleaseSchema_(token1, {});
+assert('applyReleaseSchema_ آمنة لإعادة التشغيل بنفس الرمز (لا تُنشئ الورقة نفسها مرتين ولا تكرر شيئًا)',
   applyResultAgain.ok === true && applyResultAgain.createdSheets.length === 0 && applyResultAgain.addedColumns.length === 0);
+
+// انتهاء الصلاحية الزمنية
+S2.revokeMaintenanceAccess_();
+throws('بعد إبطال الرمز صراحة (revokeMaintenanceAccess_)، نفس الرمز القديم لم يعد يعمل', () => S2.preflightRelease_(token1), 'مقفل');
+
+// القفل بعد محاولات فاشلة متكررة
+const token2 = grantToken_(S2, logs);
+for (let i = 0; i < 5; i++) {
+  try { S2.preflightRelease_('رمز-خاطئ-متكرر-' + i); } catch (ignore) {}
+}
+throws('بعد 5 محاولات فاشلة، حتى الرمز الصحيح نفسه يُرفض (القفل التلقائي)', () => S2.preflightRelease_(token2), 'محاولات فاشلة');
 
 /* -------- النتيجة -------- */
 

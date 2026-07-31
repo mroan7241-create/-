@@ -82,6 +82,7 @@ function buildMockSpreadsheet() {
 function buildSandbox() {
   const props = {};
   const cache = {};
+  const logs = [];
   const mockSs = buildMockSpreadsheet();
   const sandbox = {
     console, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp, Error,
@@ -128,12 +129,22 @@ function buildSandbox() {
       }),
       getFolderById: () => ({ createFile: () => ({ getUrl: () => 'https://drive.example/file' }) })
     },
-    UrlFetchApp: {}
+    UrlFetchApp: {}, Logger: { log: msg => { logs.push(String(msg)); } }
   };
   sandbox.globalThis = sandbox;
+  sandbox.__logs = logs;
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox, { filename: 'gs-merged(state)' });
   return sandbox;
+}
+
+/** يستخرج رمز وصول صيانة جديد صالح لسندبوكس معطى — يحاكي القناة الوحيدة الحقيقية (سجل تنفيذ المحرر). */
+function grantToken_(S) {
+  S.__logs.length = 0;
+  S.grantMaintenanceAccess_();
+  const line = S.__logs.find(l => l.indexOf('رمز وصول الصيانة') >= 0);
+  if (!line) throw new Error('لم يُطبع رمز وصول الصيانة في السجل (اختبار)');
+  return line.split(': ').pop();
 }
 
 const ALL_HEADERS = {
@@ -376,40 +387,46 @@ section('7) تشخيص سلامة الحالات (قراءة فقط) والإص�
   const ctx = seedScenario(buildSandbox());
   const { S, admin, assocSession, beneficiaryId, deviceId, delegateId, assoc } = ctx;
 
-  const cleanReport = S.diagnoseStateIntegrity();
+  throws('diagnoseStateIntegrity_ ترفض العمل بلا أي رمز ممنوح أصلًا', () => S.diagnoseStateIntegrity_(), 'مقفل');
+  throws('repairStateIntegrityIssues_ ترفض العمل بلا أي رمز ممنوح أصلًا', () => S.repairStateIntegrityIssues_(), 'مقفل');
+
+  const maintToken = grantToken_(S);
+  throws('diagnoseStateIntegrity_ ترفض رمزًا خاطئًا حتى بعد منح رمز صحيح', () => S.diagnoseStateIntegrity_('رمز-خاطئ'), 'غير صحيح');
+
+  const cleanReport = S.diagnoseStateIntegrity_(maintToken);
   assert('بيئة سليمة تمامًا تُنتج تقريرًا بلا أي تعارض', cleanReport.ok === true && cleanReport.issueCount === 0);
-  assert('diagnoseStateIntegrity لا تكتب أي شيء (قراءة فقط) — التحقق بمقارنة نفس البيانات بعد الاستدعاء', (() => {
+  assert('diagnoseStateIntegrity_ لا تكتب أي شيء (قراءة فقط) — التحقق بمقارنة نفس البيانات بعد الاستدعاء', (() => {
     const before = JSON.stringify(S.readTable_('الأجهزة').rows);
-    S.diagnoseStateIntegrity();
+    S.diagnoseStateIntegrity_(maintToken);
     const after = JSON.stringify(S.readTable_('الأجهزة').rows);
     return before === after;
   })());
 
   // إفساد متعمَّد يحاكي تعديلًا يدويًا سابقًا من داخل الشيت مباشرة (تجاوز الدوال الآمنة)
   S.updateById_('الأجهزة', 'رقم الجهاز', deviceId, {'رقم المستفيد': beneficiaryId, 'حالة الجهاز': 'بالمستودع'});
-  const afterCorruption1 = S.diagnoseStateIntegrity();
+  const afterCorruption1 = S.diagnoseStateIntegrity_(maintToken);
   assert('التشخيص يكتشف جهازًا مرتبطًا بمستفيد لكن حالته "بالمستودع"',
     afterCorruption1.issues.some(x => x.type === 'DEVICE_ASSIGNED_BUT_WAREHOUSE' && x.deviceId === deviceId));
 
   const otherDevice = S.saveDevice(admin.token, { name: 'غسالة', type: 'أجهزة منزلية', associationId: assoc.id });
   S.updateById_('الأجهزة', 'رقم الجهاز', otherDevice.id, {'رقم المستفيد': 'BEN-999999', 'حالة الجهاز': 'مخصص'});
-  const afterCorruption2 = S.diagnoseStateIntegrity();
+  const afterCorruption2 = S.diagnoseStateIntegrity_(maintToken);
   assert('التشخيص يكتشف جهازًا يشير إلى مستفيد غير موجود',
     afterCorruption2.issues.some(x => x.type === 'DEVICE_UNKNOWN_BENEFICIARY' && x.deviceId === otherDevice.id));
 
   const thirdDevice = S.saveDevice(admin.token, { name: 'مكيف', type: 'أجهزة منزلية', associationId: assoc.id });
   S.updateById_('الأجهزة', 'رقم الجهاز', thirdDevice.id, {'حالة الجهاز': 'مخصص'}); // مخصص بلا رقم مستفيد إطلاقًا
-  const afterCorruption3 = S.diagnoseStateIntegrity();
+  const afterCorruption3 = S.diagnoseStateIntegrity_(maintToken);
   assert('التشخيص يكتشف جهازًا بحالة "مخصص" بلا رقم مستفيد (حالة يتيمة)',
     afterCorruption3.issues.some(x => x.type === 'DEVICE_ORPHAN_STATUS' && x.deviceId === thirdDevice.id));
 
-  const repairResult = S.repairStateIntegrityIssues();
+  const repairResult = S.repairStateIntegrityIssues_(maintToken);
   assert('الإصلاح المُجهَّز يُصلح الحالات الآمنة الثلاث المُكتشَفة', repairResult.fixedCount >= 3);
-  const afterRepair = S.diagnoseStateIntegrity();
+  const afterRepair = S.diagnoseStateIntegrity_(maintToken);
   assert('بعد الإصلاح: لا تبقى مشكلات DEVICE_ASSIGNED_BUT_WAREHOUSE/DEVICE_UNKNOWN_BENEFICIARY/DEVICE_ORPHAN_STATUS',
     !afterRepair.issues.some(x => ['DEVICE_ASSIGNED_BUT_WAREHOUSE', 'DEVICE_UNKNOWN_BENEFICIARY', 'DEVICE_ORPHAN_STATUS'].indexOf(x.type) >= 0));
-  assert('repairStateIntegrityIssues غير مُستدعاة من أي دالة أخرى في المصدر (لن تعمل تلقائيًا أبدًا)', (() => {
-    const callSites = (source.match(/repairStateIntegrityIssues\(\)/g) || []).length;
+  assert('repairStateIntegrityIssues_ غير مُستدعاة من أي دالة أخرى في المصدر (لن تعمل تلقائيًا أبدًا)', (() => {
+    const callSites = (source.match(/repairStateIntegrityIssues_\(/g) || []).length;
     return callSites === 1; // التعريف نفسه فقط، لا أي استدعاء آخر
   })());
 }

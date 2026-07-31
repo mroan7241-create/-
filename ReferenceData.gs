@@ -31,9 +31,11 @@ const REFERENCE_SEED_ASSOCIATION_CATEGORIES = ['جمعية أهلية', 'جمع�
  *
  * ⚠️ لم يُستدعَ هذا الترحيل تلقائيًا من أي مكان في المشروع.
  * يجب تشغيله يدويًا من محرر Apps Script بعد المراجعة والموافقة،
- * تمامًا مثل setupSheets ولنفس السبب: يكتب في الملف الحي.
+ * تمامًا مثل setupSheets_ ولنفس السبب: يكتب في الملف الحي. يتطلب رمز
+ * وصول صيانة صالح (راجع ReleaseOps.gs) — دالة خاصة، لا تُستدعى من الواجهة.
  */
-function migrateReferenceData() {
+function migrateReferenceData_(token) {
+  requireMaintenanceAccess_(token);
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ensureSheet_(ss, APP.sheets.referenceData, HEADERS[APP.sheets.referenceData]);
 
@@ -122,11 +124,13 @@ function proposeCanonicalCity_(rawCity, canonicalRegion, data, cityToRegionIndex
 
 /**
  * تشخيص قراءة فقط — لا تكتب أي شيء إطلاقًا. يقارن المستفيدين والجمعيات
- * والأجهزة بالقوائم المرجعية المعتمدة (بعد تشغيل migrateReferenceData)
- * ويُخرج تقريرًا مُصنَّفًا بعدد السجلات المتأثرة وموقعها. آمن للتشغيل
- * اليدوي من محرر Apps Script في أي وقت.
+ * والأجهزة بالقوائم المرجعية المعتمدة (بعد تشغيل migrateReferenceData_)
+ * ويُخرج تقريرًا مُصنَّفًا بعدد السجلات المتأثرة وموقعها. يتطلب رمز وصول
+ * صيانة صالح رغم كونها قراءة فقط — لا تُسرِّب أسماء أوراق/قيم مرجعية لأي
+ * طرف غير مصرَّح. دالة خاصة، لا تُستدعى من الواجهة.
  */
-function diagnoseReferenceDataIssues() {
+function diagnoseReferenceDataIssues_(token) {
+  requireMaintenanceAccess_(token);
   const data = getReferenceData();
   if (!data.ready) {
     return {
@@ -192,7 +196,8 @@ function diagnoseReferenceDataIssues() {
 
 /**
  * ⚠️ ترحيل كتابة فعلي — لم يُستدعَ تلقائيًا من أي مكان في المشروع، ويجب
- * تشغيله يدويًا من محرر Apps Script بعد المراجعة والموافقة فقط.
+ * تشغيله يدويًا من محرر Apps Script بعد المراجعة والموافقة فقط. يتطلب
+ * رمز وصول صيانة صالح. دالة خاصة، لا تُستدعى من الواجهة.
  *
  * dryRun (افتراضيًا true — معاينة آمنة بالكامل): يبني قائمة الاقتراحات
  * (القيمة القديمة والجديدة المقترحة) دون كتابة أي شيء إطلاقًا. مرِّر
@@ -206,12 +211,13 @@ function diagnoseReferenceDataIssues() {
  * آمنة لإعادة التشغيل: بعد تطبيق تصحيح، القيمة تصبح مطابقة للقائمة
  * المعتمدة فتُستبعَد تلقائيًا من proposals في أي تشغيل تالٍ (لا تكرار).
  */
-function migrateLegacyReferenceValues(dryRun) {
+function migrateLegacyReferenceValues_(token, dryRun) {
+  requireMaintenanceAccess_(token);
   dryRun = dryRun !== false;
   const data = getReferenceData();
   if (!data.ready) {
     return {ok: false, ready: false, dryRun: dryRun,
-      message: 'شغّل migrateReferenceData أولًا لبناء القائمة المعتمدة قبل أي ترحيل لقيم قديمة.'};
+      message: 'شغّل migrateReferenceData_ أولًا لبناء القائمة المعتمدة قبل أي ترحيل لقيم قديمة.'};
   }
   const cityToRegionIndex = buildCityToRegionIndex_(data);
   const proposals = [];
@@ -404,8 +410,12 @@ function doGet() {
 /**
  * ينشئ قاعدة البيانات دون المساس بأي صف موجود.
  * يسجل بيانات دخول المدير المؤقتة في سجل التنفيذ عند أول تشغيل.
+ * يتطلب رمز وصول صيانة صالح (شغّل grantMaintenanceAccess_() أولًا —
+ * تعمل حتى على مشروع فارغ تمامًا، لا تعتمد على أي ورقة موجودة). دالة
+ * خاصة، لا تُستدعى من الواجهة.
  */
-function setupSheets() {
+function setupSheets_(token) {
+  requireMaintenanceAccess_(token);
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   Object.keys(HEADERS).forEach(name => ensureSheet_(ss, name, HEADERS[name]));
   seedSettings_();

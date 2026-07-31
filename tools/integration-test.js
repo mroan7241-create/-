@@ -84,6 +84,7 @@ function buildMockSpreadsheet() {
 function buildSandbox() {
   const props = {};
   const cache = {};
+  const logs = [];
   const mockSs = buildMockSpreadsheet();
   const sandbox = {
     console, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp, Error,
@@ -130,12 +131,22 @@ function buildSandbox() {
       }),
       getFolderById: () => ({ createFile: () => ({ getUrl: () => 'https://drive.example/file' }) })
     },
-    UrlFetchApp: {}
+    UrlFetchApp: {}, Logger: { log: msg => { logs.push(String(msg)); } }
   };
   sandbox.globalThis = sandbox;
+  sandbox.__logs = logs;
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox, { filename: 'gs-merged(integration)' });
   return sandbox;
+}
+
+/** يستخرج رمز وصول صيانة جديد صالح لسندبوكس معطى — يحاكي القناة الوحيدة الحقيقية (سجل تنفيذ المحرر). */
+function grantToken_(S) {
+  S.__logs.length = 0;
+  S.grantMaintenanceAccess_();
+  const line = S.__logs.find(l => l.indexOf('رمز وصول الصيانة') >= 0);
+  if (!line) throw new Error('لم يُطبع رمز وصول الصيانة في السجل (اختبار)');
+  return line.split(': ').pop();
 }
 
 const ALL_HEADERS = {
@@ -284,7 +295,7 @@ assert('سجل العمليات يوثّق كل خطوات الرحلة (إضا�
   return ['إضافة مستفيد', 'استيراد مستفيدين', 'إضافة جهاز', 'تعيين مندوب', 'تعذر التسليم', 'تأكيد تسليم'].every(a => actions.includes(a));
 })());
 assert('حالة الجهاز وحالة التسليم متّسقتان (لا تعارض جهاز "تم التسليم" مع مستفيد لم يُسلَّم)', (() => {
-  const report = S.diagnoseStateIntegrity();
+  const report = S.diagnoseStateIntegrity_(grantToken_(S));
   return report.issueCount === 0;
 })());
 

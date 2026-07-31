@@ -48,9 +48,11 @@ function cleanId_(value) {
 /**
  * معاينة آمنة (بلا كتابة) لأرقام الجوال غير المطابقة لصيغة التخزين
  * الموحّدة 05XXXXXXXX في المستفيدين والجمعيات والمناديب. تُشغَّل من
- * محرر Apps Script للمراجعة فقط — لا تغيّر أي بيانات.
+ * محرر Apps Script للمراجعة فقط — لا تغيّر أي بيانات. تتطلب رمز وصول
+ * صيانة صالح. دالة خاصة، لا تُستدعى من الواجهة.
  */
-function previewPhoneNormalization() {
+function previewPhoneNormalization_(token) {
+  requireMaintenanceAccess_(token);
   const targets = [
     [APP.sheets.beneficiaries, 'رقم المستفيد', ['رقم الجوال', 'رقم جوال إضافي']],
     [APP.sheets.associations, 'رقم الجمعية', ['أرقام التواصل']],
@@ -80,12 +82,14 @@ function previewPhoneNormalization() {
 
 /**
  * ⚠️ لم تُستدعَ تلقائيًا من أي مكان. ترحيل كتابة فعلي — راجع تقرير
- * previewPhoneNormalization() أولًا. يصحّح فقط الصيغة القابلة للتطبيع
+ * previewPhoneNormalization_() أولًا. يصحّح فقط الصيغة القابلة للتطبيع
  * تلقائيًا (5XXXXXXXX أو 9665XXXXXXXX أو +9665XXXXXXXX)، ولا يغيّر أي
- * رقم غير صالح أصلًا — تلك تُترك للمراجعة اليدوية.
+ * رقم غير صالح أصلًا — تلك تُترك للمراجعة اليدوية. يتطلب رمز وصول صيانة
+ * صالح. دالة خاصة، لا تُستدعى من الواجهة.
  */
-function migratePhoneNumbers() {
-  const preview = previewPhoneNormalization();
+function migratePhoneNumbers_(token) {
+  requireMaintenanceAccess_(token);
+  const preview = previewPhoneNormalization_(token);
   const fixable = preview.report.filter(item => !item.invalid);
   fixable.forEach(item => updateById_(item.sheet, item.idHeader, item.id, {[item.field]: item.suggested}));
   return {ok: true, fixed: fixable.length, skippedInvalid: preview.report.length - fixable.length};

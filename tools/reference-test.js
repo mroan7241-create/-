@@ -80,6 +80,7 @@ function buildMockSpreadsheet() {
 function buildSandbox() {
   const props = {};
   const cache = {};
+  const logs = [];
   const mockSs = buildMockSpreadsheet();
   const tzCalls = [];
   const sandbox = {
@@ -128,13 +129,23 @@ function buildSandbox() {
       }),
       getFolderById: () => ({ createFile: () => ({ getUrl: () => 'https://drive.example/file' }) })
     },
-    UrlFetchApp: {}
+    UrlFetchApp: {}, Logger: { log: msg => { logs.push(String(msg)); } }
   };
   sandbox.globalThis = sandbox;
   sandbox.__tzCalls = tzCalls;
+  sandbox.__logs = logs;
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox, { filename: 'gs-merged(reference)' });
   return sandbox;
+}
+
+/** يستخرج رمز وصول صيانة جديد صالح لسندبوكس معطى — يحاكي القناة الوحيدة الحقيقية (سجل تنفيذ المحرر). */
+function grantToken_(S) {
+  S.__logs.length = 0;
+  S.grantMaintenanceAccess_();
+  const line = S.__logs.find(l => l.indexOf('رمز وصول الصيانة') >= 0);
+  if (!line) throw new Error('لم يُطبع رمز وصول الصيانة في السجل (اختبار)');
+  return line.split(': ').pop();
 }
 
 const ALL_HEADERS = {
@@ -167,7 +178,7 @@ section('1) ترابط المنطقة والمدينة عبر validateRegionCity
 {
   const S = buildSandbox();
   seedSheets(S);
-  S.migrateReferenceData();
+  S.migrateReferenceData_(grantToken_(S));
 
   assert('منطقة ومدينة صحيحتان تمران دون تعديل', (() => {
     const place = S.validateRegionCity_('الرياض', 'الخرج');
@@ -185,7 +196,7 @@ section('2) رفض مدينة لا تتبع المنطقة المختارة');
 {
   const S = buildSandbox();
   seedSheets(S);
-  S.migrateReferenceData();
+  S.migrateReferenceData_(grantToken_(S));
 
   throws('مدينة تتبع منطقة أخرى (جدة تحت الرياض) تُرفض صراحة',
     () => S.validateRegionCity_('الرياض', 'جدة'), 'لا تتبع منطقة');
@@ -207,11 +218,11 @@ section('3) التوافق قبل الترحيل + تشخيص القيم الق�
   assert('قبل الترحيل: تصنيف جمعية حر يُقبل كما هو', S.validateAssociationCategory_('تصنيف قديم غريب') === 'تصنيف قديم غريب');
   assert('قبل الترحيل: نوع جهاز حر يُقبل كما هو', S.validateDeviceType_('نوع قديم غريب') === 'نوع قديم غريب');
   assert('قبل الترحيل: diagnoseReferenceDataIssues يُبلغ ready:false ولا مشكلات', (() => {
-    const report = S.diagnoseReferenceDataIssues();
+    const report = S.diagnoseReferenceDataIssues_(grantToken_(S));
     return report.ready === false && report.issueCount === 0;
   })());
 
-  S.migrateReferenceData();
+  S.migrateReferenceData_(grantToken_(S));
   const admin = adminSession(S);
   // نُدخل بيانات تحمل قيمًا قديمة/غير معروفة مباشرة عبر appendObject_ لمحاكاة
   // سجلات موجودة قبل الترحيل (تفاديًا لرفض القوالب الصارمة عبر saveAssociation).
@@ -235,7 +246,7 @@ section('3) التوافق قبل الترحيل + تشخيص القيم الق�
   });
   S.invalidateTableCache_('الجمعيات'); S.invalidateTableCache_('المستفيدون'); S.invalidateTableCache_('الأجهزة');
 
-  const report = S.diagnoseReferenceDataIssues();
+  const report = S.diagnoseReferenceDataIssues_(grantToken_(S));
   assert('بعد الترحيل: التشخيص جاهز (ready:true)', report.ready === true);
   assert('يكتشف مدينة لا تتبع منطقتها المسجَّلة لدى المستفيد (جدة تحت الرياض)',
     report.issues.some(i => i.type === 'CITY_REGION_MISMATCH' && i.sheet === 'المستفيدون' && i.id === 'BEN-OLD-1'));
@@ -249,7 +260,7 @@ section('3) التوافق قبل الترحيل + تشخيص القيم الق�
 
   assert('diagnoseReferenceDataIssues قراءة فقط — لا يكتب أي شيء (نفس البيانات قبل وبعد الاستدعاء)', (() => {
     const before = JSON.stringify(S.readTable_('المستفيدون').rows);
-    S.diagnoseReferenceDataIssues();
+    S.diagnoseReferenceDataIssues_(grantToken_(S));
     const after = JSON.stringify(S.readTable_('المستفيدون').rows);
     return before === after;
   })());
@@ -261,7 +272,7 @@ section('3) التوافق قبل الترحيل + تشخيص القيم الق�
 
 function seedLegacyValuesForMigration(S) {
   seedSheets(S);
-  S.migrateReferenceData();
+  S.migrateReferenceData_(grantToken_(S));
   S.appendObject_('الجمعيات', {
     'رقم الجمعية': 'ASC-M-1', 'اسم الجمعية': 'جمعية الترحيل', 'التصنيف': 'جمعية خيرية',
     'المنطقة': 'مكة', 'المدينة': 'جدة', 'أرقام التواصل': '0500000097',
@@ -295,8 +306,8 @@ section('4) وضع المعاينة (dry-run) لا يعدّل أي بيانات'
   const beforeAssoc = JSON.stringify(S.readTable_('الجمعيات').rows);
   const beforeBen = JSON.stringify(S.readTable_('المستفيدون').rows);
 
-  const preview = S.migrateLegacyReferenceValues(true);
-  assert('dryRun افتراضيًا true بلا تمرير وسيط', S.migrateLegacyReferenceValues().dryRun === true);
+  const preview = S.migrateLegacyReferenceValues_(grantToken_(S), true);
+  assert('dryRun افتراضيًا true بلا تمرير وسيط', S.migrateLegacyReferenceValues_(grantToken_(S)).dryRun === true);
   assert('المعاينة تقترح تصحيح المنطقة "مكة" ← "مكة المكرمة"',
     preview.proposals.some(p => p.sheet === 'الجمعيات' && p.field === 'المنطقة' && p.oldValue === 'مكة' && p.newValue === 'مكة المكرمة'));
   assert('المعاينة تقترح تصحيح "الشرقيه" ← "الشرقية"',
@@ -320,14 +331,14 @@ section('5) الترحيل الفعلي (dryRun=false) قابل لإعادة ا�
   const S = buildSandbox();
   seedLegacyValuesForMigration(S);
 
-  const first = S.migrateLegacyReferenceValues(false);
+  const first = S.migrateLegacyReferenceValues_(grantToken_(S), false);
   assert('التشغيل الأول يطبّق التعديلات المؤكَّدة فقط', first.appliedCount === first.proposedCount && first.appliedCount > 0);
   assert('التشغيل الأول لا يطبّق أي تعديل على السجل الغامض', !first.proposals.some(p => p.id === 'BEN-M-2'));
 
   const associationAfterFirst = S.findById_('الجمعيات', 'رقم الجمعية', 'ASC-M-1');
   assert('المنطقة أصبحت "مكة المكرمة" فعليًا بعد التشغيل الأول', String(associationAfterFirst['المنطقة']) === 'مكة المكرمة');
 
-  const second = S.migrateLegacyReferenceValues(false);
+  const second = S.migrateLegacyReferenceValues_(grantToken_(S), false);
   assert('التشغيل الثاني على نفس البيانات لا يقترح شيئًا جديدًا (لا تكرار)', second.proposedCount === 0 && second.appliedCount === 0);
   assert('التشغيل الثاني لا يزال يبلّغ عن نفس السجل الغامض (لم يُفسَد ولم يُخفَ)',
     second.ambiguous.some(a => a.id === 'BEN-M-2' && a.field === 'المنطقة'));
@@ -349,7 +360,7 @@ section('6) تقديم الجمعية + حفظ المستفيد + الاستير
 {
   const S = buildSandbox();
   seedSheets(S);
-  S.migrateReferenceData();
+  S.migrateReferenceData_(grantToken_(S));
 
   assert('submitAssociationApplication ينجح بتصنيف معتمد ومنطقة/مدينة صحيحتين', (() => {
     const result = S.submitAssociationApplication({
@@ -537,12 +548,19 @@ section('10) عدم تراجع قواعد سلامة الحالات وإدارة
     try { S.assertDeviceTransition_('بالمستودع', 'تم التسليم'); return false; }
     catch (error) { return error.message.includes('غير مسموح'); }
   })());
-  assert('repairStateIntegrityIssues ما زالت غير مُستدعاة تلقائيًا من أي دالة أخرى في المصدر',
-    (source.match(/repairStateIntegrityIssues\(\)/g) || []).length === 1);
-  assert('migrateLegacyReferenceValues ما زالت غير مُستدعاة تلقائيًا من أي دالة أخرى في المصدر (لن تعمل تلقائيًا أبدًا)',
-    !/^\s*migrateLegacyReferenceValues\(/m.test(source.replace(/function migrateLegacyReferenceValues[\s\S]*?\n}\n/, '')));
-  assert('diagnoseReferenceDataIssues لا يستدعيها إلا تعريفها وpreflightRelease القراءة-فقط (لا مسار تلقائي آخر)',
-    (source.match(/diagnoseReferenceDataIssues\(\)/g) || []).length === 2 && /function preflightRelease\(\)[\s\S]*?diagnoseReferenceDataIssues\(\)/.test(source));
+  assert('repairStateIntegrityIssues_ ما زالت غير مُستدعاة تلقائيًا من أي دالة أخرى في المصدر',
+    (source.match(/repairStateIntegrityIssues_\(/g) || []).length === 1);
+  assert('migrateLegacyReferenceValues_ ما زالت غير مُستدعاة تلقائيًا من أي دالة أخرى في المصدر (لن تعمل تلقائيًا أبدًا)',
+    !/^\s*migrateLegacyReferenceValues_\(/m.test(source.replace(/function migrateLegacyReferenceValues_[\s\S]*?\n}\n/, '')));
+  assert('diagnoseReferenceDataIssues_ لا يستدعيها إلا تعريفها وpreflightRelease_ القراءة-فقط (لا مسار تلقائي آخر)',
+    (source.match(/diagnoseReferenceDataIssues_\(/g) || []).length === 2 && /function preflightRelease_\(token\)[\s\S]*?diagnoseReferenceDataIssues_\(/.test(source));
+  assert('كل دوال الصيانة تنتهي بشرطة سفلية (خاصة، لا تُستدعى من الواجهة) وتتطلب requireMaintenanceAccess_',
+    ['setupSheets_', 'migrateReferenceData_', 'migrateLegacyReferenceValues_', 'previewPhoneNormalization_',
+      'migratePhoneNumbers_', 'diagnoseReferenceDataIssues_', 'diagnoseStateIntegrity_', 'repairStateIntegrityIssues_',
+      'preflightRelease_', 'applyReleaseSchema_'].every(name => {
+      const match = source.match(new RegExp('function ' + name + '\\([^)]*\\)\\s*\\{([\\s\\S]{0,120})'));
+      return match && /requireMaintenanceAccess_\(/.test(match[1]);
+    }));
   assert('perfTime_ ما زالت مستخدَمة في saveBeneficiary رغم إضافة validateSocialStatus_', /function saveBeneficiary[\s\S]{0,80}perfTime_/.test(source));
 }
 

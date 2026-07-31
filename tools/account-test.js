@@ -457,8 +457,8 @@ section('10) عدم تراجع قواعد سلامة الحالات (StateRules.
   assert('assertDeliveryTransition_ ما زالت ترفض إعادة تأكيد تسليم مكتمل', (() => {
     try { S.assertDeliveryTransition_('تم التسليم', 'تم التسليم'); return false; } catch (e) { return e.message.indexOf('غير مسموح') >= 0; }
   })());
-  assert('repairStateIntegrityIssues ما زالت غير مُستدعاة تلقائيًا من أي مكان', (() => {
-    const callSites = (source.match(/repairStateIntegrityIssues\(\)/g) || []).length;
+  assert('repairStateIntegrityIssues_ ما زالت غير مُستدعاة تلقائيًا من أي مكان', (() => {
+    const callSites = (source.match(/repairStateIntegrityIssues_\(/g) || []).length;
     return callSites === 1;
   })());
 }

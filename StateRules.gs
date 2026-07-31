@@ -90,9 +90,11 @@ function dispatchedDevicesForBeneficiary_(beneficiaryId) {
  * تشخيص قراءة فقط — لا يكتب أي شيء إطلاقًا. يفحص كل الأجهزة والمستفيدين
  * بحثًا عن حالات متعارضة (بيانات قديمة أو تعديل يدوي سابق من داخل
  * الشيت مباشرة قد يكون كسر الترابط)، ويعيد تقريرًا منظَّمًا.
- * يمكن تشغيلها يدويًا من محرر Apps Script في أي وقت بأمان تام.
+ * يمكن تشغيلها يدويًا من محرر Apps Script في أي وقت بأمان تام. يتطلب
+ * رمز وصول صيانة صالح رغم كونها قراءة فقط. دالة خاصة، لا تُستدعى من الواجهة.
  */
-function diagnoseStateIntegrity() {
+function diagnoseStateIntegrity_(token) {
+  requireMaintenanceAccess_(token);
   const beneficiaries = readTable_(APP.sheets.beneficiaries).rows.map(normalizeBeneficiary_);
   const devices = readTable_(APP.sheets.devices).rows.map(normalizeDevice_);
   const beneficiaryById = {};
@@ -167,10 +169,12 @@ function diagnoseStateIntegrity() {
  * المشروع** ولا تُشغَّل تلقائيًا. تُصلح فقط الحالات الآمنة التي لا
  * تحتمل أكثر من تفسير واحد صحيح؛ أي حالة غامضة (مثل تعارض الجمعية) تُترك
  * دون لمس وتُذكر في التقرير المُعاد ضمن "skipped". يجب تشغيلها يدويًا من
- * محرر Apps Script فقط، بعد مراجعة تقرير diagnoseStateIntegrity() أولًا.
+ * محرر Apps Script فقط، بعد مراجعة تقرير diagnoseStateIntegrity_() أولًا.
+ * تتطلب رمز وصول صيانة صالح. دالة خاصة، لا تُستدعى من الواجهة.
  */
-function repairStateIntegrityIssues() {
-  const diagnosis = diagnoseStateIntegrity();
+function repairStateIntegrityIssues_(token) {
+  requireMaintenanceAccess_(token);
+  const diagnosis = diagnoseStateIntegrity_(token);
   const fixed = [];
   const skipped = [];
 

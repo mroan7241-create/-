@@ -27,7 +27,7 @@ Script يدمج كل ملفات `.gs` في مشروع واحد ضمن نطاق �
 | `Normalize.gs` | تحويل صفوف الأوراق إلى كائنات جاهزة للواجهة، ودوال `list*`/`getAuditRows_` المُرقَّمة |
 | `DataUtils.gs` | القراءة/الكتابة في Sheets، التخزين المؤقت، المعرّفات |
 | `Validation.gs` | التحقق من المدخلات، التشفير، منع الحقن |
-| `ReleaseOps.gs` | `preflightRelease()` (قراءة فقط) و`applyReleaseSchema(options)` (إضافي فقط، يتطلب رمز موافقة) — بديل آمن لاستخدام `setupSheets()` مباشرة كخطوة نشر عامة متكررة |
+| `ReleaseOps.gs` | `preflightRelease_(token)` (قراءة فقط) و`applyReleaseSchema_(token, options)` (إضافي فقط) — كلاهما خاص ومقفل خلف رمز وصول صيانة مؤقت (`grantMaintenanceAccess_`)، بديل آمن لاستخدام `setupSheets_()` مباشرة كخطوة نشر عامة متكررة |
 | `Index.html` | الواجهة الكاملة: HTML + CSS + JavaScript (ملف واحد). يحمّل Leaflet/OpenStreetMap كسولًا فقط عند فتح نموذج موقع المستفيد (مجانيان بالكامل، بلا مفتاح API) — مصدرا خطوط Google Fonts هما الموردان الخارجيان الآخران الوحيدان |
 | `DEPLOYMENT.md` | دليل تركيب ونشر تنفيذي: المتطلبات، النسخ الاحتياطي، preflight/dry-run/تطبيق المخطط، نشر تجريبي، اختبار البوابات الأربع، معايير القبول، الرجوع |
 | `SECURITY_REVIEW.md` | مراجعة أمنية برمجية ومحاكاة: جرد كامل لكل دالة Apps Script (الدور/الجلسة/الملكية/الكتابة)، مصفوفة الصلاحيات وIDOR، الأسرار، رفع الملفات، الروابط الخارجية |
@@ -195,16 +195,19 @@ base64 صحيحة (لا نص فارغ) عند كل تشغيل.
 
 ## قواعد لا تُخالَف
 
-- لا تُشغّل `setupSheets()` على ملف يحتوي بيانات إنتاجية فعلية دون تأكّد —
-  آمنة ومتكررة (لا تحذف ولا تكرر بيانات) لكنها خطوة يجب أن تكون واعية.
+- لا تُشغّل `setupSheets_(token)` على ملف يحتوي بيانات إنتاجية فعلية دون
+  تأكّد — آمنة ومتكررة (لا تحذف ولا تكرر بيانات) لكنها خطوة يجب أن تكون
+  واعية. **كل دوال الإعداد/الترحيل/التشخيص أصبحت خاصة (`_`) ومقفلة خلف رمز
+  وصول صيانة مؤقت** — راجع `DEPLOYMENT.md` القسم 5 و`SECURITY_REVIEW.md`
+  القسم 2 قبل أي تشغيل.
 - لا تُغيّر عناوين أعمدة Google Sheets؛ الكود يقرأ بالاسم العربي حرفيًا.
 - لا تُعِد تسمية `Index.html`؛ `doGet` يستدعيه بالاسم `'Index'`.
 - لا تضع أي سر أو مفتاح داخل `Index.html` — الملف يصل إلى المتصفح كاملًا.
-- لا تُشغّل أي دالة ترحيل (`migrateReferenceData`, `migratePhoneNumbers`,
-  `migrateLegacyReferenceValues`) على نسخة إنتاجية دون تشغيل نسخة المعاينة
-  القابلة للقراءة أولًا حين تتوفر (`previewPhoneNormalization` قبل
-  `migratePhoneNumbers`، أو `diagnoseReferenceDataIssues`/
-  `migrateLegacyReferenceValues(true)` قبل `migrateLegacyReferenceValues(false)`).
+- لا تُشغّل أي دالة ترحيل (`migrateReferenceData_`, `migratePhoneNumbers_`,
+  `migrateLegacyReferenceValues_`) على نسخة إنتاجية دون تشغيل نسخة المعاينة
+  القابلة للقراءة أولًا حين تتوفر (`previewPhoneNormalization_` قبل
+  `migratePhoneNumbers_`، أو `diagnoseReferenceDataIssues_`/
+  `migrateLegacyReferenceValues_(token, true)` قبل `migrateLegacyReferenceValues_(token, false)`).
 
 ## التثبيت والتشغيل داخل Google Apps Script (من الصفر)
 

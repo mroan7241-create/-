@@ -84,6 +84,7 @@ function buildMockSpreadsheet() {
 function buildSandbox() {
   const props = {};
   const cache = {};
+  const logs = [];
   const mockSs = buildMockSpreadsheet();
   const sandbox = {
     console, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp, Error,
@@ -123,9 +124,10 @@ function buildSandbox() {
     ScriptApp: { getScriptId: () => 'security-test', getOAuthToken: () => 'token' },
     SpreadsheetApp: { getActiveSpreadsheet: () => mockSs },
     HtmlService: { createHtmlOutputFromFile: () => ({ setTitle() { return this; }, addMetaTag() { return this; } }) },
-    DriveApp: {}, UrlFetchApp: {}
+    DriveApp: {}, UrlFetchApp: {}, Logger: { log: msg => { logs.push(String(msg)); } }
   };
   sandbox.globalThis = sandbox;
+  sandbox.__logs = logs;
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox, { filename: 'gs-merged(security)' });
   return sandbox;
@@ -583,6 +585,85 @@ section('10) خصوصية الموقع الجغرافي (المرحلة الخا
 
   assert('optionalCoordinate_ تُستخدَم دائمًا للتحقق من الإحداثيات في الخادم (لا اعتماد على تحقق الواجهة فقط)',
     (source.match(/optionalCoordinate_\(/g) || []).length >= 3);
+}
+
+/* ================================================================
+   11) دوال الصيانة: محاكاة استدعاء غير مصرَّح كما تفعل google.script.run
+   ================================================================ */
+
+section('11) دوال الصيانة: رفض الاستدعاء غير المصرَّح (محاكاة google.script.run)');
+{
+  const S = buildSandbox();
+  // كل دالة صيانة يجب أن تنتهي بشرطة سفلية (خاصة، لا يستدعيها Index.html أصلًا
+  // حسب فحص tools/verify.js) **و** ترفض العمل فعليًا عند استدعائها مباشرة
+  // بلا رمز وصول صيانة صالح — دفاع مزدوج مستقل، لا طبقة واحدة.
+  const maintenanceFunctions = [
+    'setupSheets_', 'migrateReferenceData_', 'migrateLegacyReferenceValues_',
+    'previewPhoneNormalization_', 'migratePhoneNumbers_', 'diagnoseReferenceDataIssues_',
+    'diagnoseStateIntegrity_', 'repairStateIntegrityIssues_', 'preflightRelease_', 'applyReleaseSchema_'
+  ];
+  maintenanceFunctions.forEach(name => {
+    assert('اسم الدالة "' + name + '" ينتهي بشرطة سفلية (خاصة، لا تُستدعى من الواجهة)', /_$/.test(name));
+    assert('الدالة "' + name + '" غير معرَّفة بلا شرطة سفلية في المصدر (لا نسخة عامة موازية)',
+      !new RegExp('function ' + name.slice(0, -1) + '\\(').test(source));
+    let rejected = false;
+    let rejectedWithToken = false;
+    try { S[name](); } catch (error) { rejected = true; }
+    try { S[name]('رمز-مزوَّر-عشوائي-لا-يطابق-شيئًا'); } catch (error) { rejectedWithToken = true; }
+    assert('استدعاء "' + name + '" بلا أي رمز (محاكاة google.script.run من متصفح غير مصرَّح) يُرفض', rejected);
+    assert('استدعاء "' + name + '" برمز مزوَّر عشوائي (محاكاة تخمين) يُرفض أيضًا', rejectedWithToken);
+  });
+
+  assert('grantMaintenanceAccess_ نفسها خاصة أيضًا (لا تُستدعى من الواجهة)، ولا تتطلب جلسة ويب (تُشغَّل من المحرر فقط)',
+    /function grantMaintenanceAccess_\(/.test(source) && !/requireSession_/.test(extractFunctionBody_(source, 'grantMaintenanceAccess_') || ''));
+  assert('grantMaintenanceAccess_ لا تُعيد الرمز الخام في القيمة الراجعة (القناة الوحيدة Logger.log فقط)', (() => {
+    const body = extractFunctionBody_(source, 'grantMaintenanceAccess_') || '';
+    const returnMatch = body.match(/return\s*\{[^}]*\}/);
+    return returnMatch && !/token/.test(returnMatch[0]);
+  })());
+  assert('requireMaintenanceAccess_ لا تُسجِّل الرمز نفسه في أي مكان (لا Logger.log ولا audit_ يحمل المعامل token)', (() => {
+    const body = extractFunctionBody_(source, 'requireMaintenanceAccess_') || '';
+    return !/Logger\.log\([^)]*token/.test(body) && !/audit_\([^)]*token/.test(body);
+  })());
+  assert('لا تُخزَّن أي نسخة من الرمز الخام في Script Properties — فقط hash/salt', (() => {
+    const body = extractFunctionBody_(source, 'grantMaintenanceAccess_') || '';
+    return /hash:\s*hashSecret_\(token/.test(body) && !/setProperty\([^)]*,\s*token\)/.test(body);
+  })());
+}
+
+/* ================================================================
+   12) لا يوجد رمز موافقة أو سرّ ثابت في المستودع
+   ================================================================ */
+
+section('12) عدم وجود رمز موافقة أو سرّ ثابت مكتوب في المصدر');
+{
+  const repoRoot = path.join(__dirname, '..');
+  const gsFiles = fs.readdirSync(repoRoot).filter(name => name.endsWith('.gs'));
+  const combinedGsSource = gsFiles.map(name => fs.readFileSync(path.join(repoRoot, name), 'utf8')).join('\n');
+
+  assert('لا وجود إطلاقًا لثابت رمز الموافقة القديم المكتوب حرفيًا (RELEASE_SCHEMA_APPROVAL_CODE_) في أي ملف .gs',
+    !/RELEASE_SCHEMA_APPROVAL_CODE_/.test(combinedGsSource));
+  assert('لا وجود لعبارة الموافقة النصية القديمة المكتوبة حرفيًا في أي ملف .gs',
+    !/أوافق-على-تطبيق-مخطط-الإصدار/.test(combinedGsSource));
+  assert('applyReleaseSchema_ لا تقارن بأي نص ثابت مكتوب حرفيًا — تعتمد فقط على requireMaintenanceAccess_', (() => {
+    const body = extractFunctionBody_(combinedGsSource, 'applyReleaseSchema_') || '';
+    return !/===\s*['"][^'"]{4,}['"]/.test(body.replace(/requireMaintenanceAccess_\([^)]*\)/, ''));
+  })());
+  assert('requireMaintenanceAccess_ نفسها لا تقارن الرمز بأي نص ثابت — فقط بصمة مخزَّنة عبر constantTimeEquals_', (() => {
+    const body = extractFunctionBody_(combinedGsSource, 'requireMaintenanceAccess_') || '';
+    return /constantTimeEquals_\(/.test(body) && !/token\s*===\s*['"]/.test(body);
+  })());
+
+  // فحص عام إضافي: لا يوجد أي متغيّر/ثابت باسم يوحي بسرّ أو رمز موافقة مربوط بقيمة نصية عربية/إنجليزية ثابتة داخل .gs.
+  const suspiciousConstant = /const\s+\w*(APPROVAL|SECRET|TOKEN)\w*_?\s*=\s*['"][^'"]+['"]/i;
+  assert('لا يوجد أي ثابت آخر باسم يوحي بسر/رمز موافقة مربوط بقيمة نصية ثابتة في .gs', !suspiciousConstant.test(combinedGsSource));
+
+  const mdFiles = ['DEPLOYMENT.md', 'RELEASE.md', 'SECURITY_REVIEW.md', 'HANDOFF.md', 'README.md']
+    .filter(name => fs.existsSync(path.join(repoRoot, name)));
+  assert('التوثيق (DEPLOYMENT.md/RELEASE.md/...) لا يذكر رمز الموافقة الثابت القديم كخطوة موصى بها', mdFiles.every(name => {
+    const text = fs.readFileSync(path.join(repoRoot, name), 'utf8');
+    return !/أوافق-على-تطبيق-مخطط-الإصدار/.test(text);
+  }));
 }
 
 /* -------- النتيجة -------- */

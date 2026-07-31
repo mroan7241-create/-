@@ -19,7 +19,7 @@ Script**، **المرحلة الرابعة: توحيد البيانات المر
 الثامنة: المراجعة الأمنية النهائية (برمجية ومحاكاة)، preflight/dry-run
 آمنَين لمخطط البيانات، وRelease Candidate كامل** — التفاصيل الكاملة في
 الأقسام أدناه وفي `SECURITY_REVIEW.md`/`DEPLOYMENT.md`. الإجمالي الآن
-**745 تأكيدًا عبر تسع أدوات اختبار وظيفية، جميعها ناجحة عند آخر commit**
+**801 تأكيدًا عبر تسع أدوات اختبار وظيفية، جميعها ناجحة عند آخر commit** (بعد تصحيح أمني لاحق: قفل كل دوال الصيانة خلف رمز وصول صيانة مؤقت — راجع قسم التصحيح أدناه)
 (بالإضافة إلى `tools/perf-scale-test.js` و`tools/perf-bench.js`، أداتا
 تقرير أداء لا تعتمدان على نجاح/فشل). لم يُنشر أي إصدار جديد على Apps
 Script الحي بهذه التعديلات، ولم تُشغَّل أي دالة إعداد أو ترحيل أو إصلاح
@@ -1076,8 +1076,8 @@ API)، عدم تسجيل أي سرّ في سجل العمليات، إعادة �
   عامة تلقائيًا عبر `google.script.run`)، لا خللًا محليًا. التفصيل الكامل
   والأثر الفعلي والتخفيف المقترَح في `SECURITY_REVIEW.md` §2 — **يحتاج
   قرارك صراحة قبل أي نشر عام واسع**.
-- **بديل آمن جديد (`ReleaseOps.gs`)**: `preflightRelease()` (قراءة فقط
-  بالكامل) و`applyReleaseSchema(options)` (إضافي فقط، يرفض العمل بلا
+- **بديل آمن جديد (`ReleaseOps.gs`)**: `preflightRelease_(token)` (قراءة فقط
+  بالكامل) و`applyReleaseSchema_(token, options)` (إضافي فقط، خاصتان ومقفلتان خلف رمز وصول صيانة مؤقت، ترفضان العمل بلا
   `options.approvalCode` مطابق حرفيًا، آمنة لإعادة التشغيل) — موصى بهما
   بدل `setupSheets()` المباشرة لأي عمل مخطط بيانات مستقبلي.
 - **معالجة أمنية فعلية**: `verifyImageMagicBytes_()` جديدة تتحقق من
@@ -1101,6 +1101,41 @@ API)، عدم تسجيل أي سرّ في سجل العمليات، إعادة �
 - **لم يُشغَّل** أي من `setupSheets`/`preflightRelease`/`applyReleaseSchema`/
   أي دالة ترحيل أو إصلاح على أي بيانات حية من هذه الجلسة. لم يُنشر أي
   إصدار، لم يُدمَج أي Pull Request.
+
+## تصحيح أمني لاحق للمرحلة الثامنة: قفل كل دوال الصيانة عن google.script.run
+
+القسم أعلاه وثَّق فجوة معمارية مؤكَّدة (دوال الإعداد/الترحيل بلا أي تحقق
+جلسة، قابلة للاستدعاء نظريًا من أي زائر عبر console المتصفح) **دون
+معالجتها تلقائيًا** في حينها. طُلب لاحقًا تصحيحها فعليًا، ونُفِّذ كاملًا:
+
+- **إعادة تسمية عشر دوال صيانة لتنتهي بشرطة سفلية** (`setupSheets_`،
+  `migrateReferenceData_`، `migrateLegacyReferenceValues_`،
+  `previewPhoneNormalization_`، `migratePhoneNumbers_`،
+  `diagnoseReferenceDataIssues_`، `diagnoseStateIntegrity_`،
+  `repairStateIntegrityIssues_`، `preflightRelease_`، `applyReleaseSchema_`).
+- **حارس وصول جديد (`requireMaintenanceAccess_` في `ReleaseOps.gs`)**
+  تستدعيه كل واحدة منها أولًا — لا تعمل أي منها بلا رمز وصول صيانة مؤقت،
+  حتى من محرر Apps Script نفسه.
+- **`grantMaintenanceAccess_()`**: تُشغَّل يدويًا من المحرر فقط (لا جلسة
+  ويب)، تولّد رمزًا عشوائيًا بالكامل، تخزّن بصمته المُجزَّأة فقط في Script
+  Properties، تطبع الرمز الخام مرة واحدة فقط في سجل التنفيذ (لا يُعاد في
+  أي قيمة راجعة). صالح 20 دقيقة افتراضيًا (حتى 60)، يُقفَل تلقائيًا بعد 5
+  محاولات فاشلة. `revokeMaintenanceAccess_()` لإبطاله يدويًا قبل الأوان.
+- **لا رمز موافقة ثابت في الكود بعد الآن** — الثابت القديم
+  `RELEASE_SCHEMA_APPROVAL_CODE_` أُزيل بالكامل من `applyReleaseSchema_`.
+- الفصل بين فحص المخطط/إضافته/ترحيل المرجعيات/تشخيص الحالات/إصلاحها بقي
+  كما هو (لم يتغيّر) — فقط أُضيف حاجز الوصول فوق كل دالة بشكل مستقل.
+- **`DEPLOYMENT.md` أُعيد ترقيمه وتحديثه بالكامل** (قسم 5 جديد: منح
+  الوصول قبل preflight)، وحُذفت أي توصية بتشغيل `setupSheets` مباشرة
+  كخطوة نشر عامة. `RELEASE.md`/`SECURITY_REVIEW.md`/`README.md` حُدِّثت
+  للأسماء والآلية الجديدة.
+- **56 اختبارًا جديدًا**: `security-test.js` أقسام 11–12 (محاكاة استدعاء
+  كل دالة صيانة كما تفعل `google.script.run` بلا رمز وبرمز مزوَّر، والتحقق
+  من عدم وجود أي سرّ/رمز موافقة ثابت في المستودع)، بالإضافة لتحديث
+  اختبارات `server-test.js`/`reference-test.js`/`state-test.js`/
+  `account-test.js`/`integration-test.js` للأسماء والتوقيعات الجديدة.
+- **لم يُشغَّل** أي من هذه الدوال، ولا `grantMaintenanceAccess_` نفسها، على
+  أي بيانات أو مشروع Apps Script حي من هذه الجلسة.
 
 ## المتبقي (قرارات مدروسة موثَّقة، وليست إغفالًا)
 
@@ -1165,7 +1200,7 @@ API)، عدم تسجيل أي سرّ في سجل العمليات، إعادة �
 | `tools/smoke.js` | اختبار DOM تشغيلي — 186 تأكيدًا |
 | `tools/server-test.js` | اختبار منطق خادم بمحاكاة Apps Script — 196 تأكيدًا |
 | `tools/security-test.js` | مراجعة أمنية آلية — 91 اختبارًا |
-| `ReleaseOps.gs` | `preflightRelease()`/`applyReleaseSchema(options)` — بديل آمن لـ`setupSheets()` كخطوة نشر عامة |
+| `ReleaseOps.gs` | `preflightRelease_`/`applyReleaseSchema_` (خاصتان + رمز وصول صيانة مؤقت) — بديل آمن لـ`setupSheets_()` كخطوة نشر عامة |
 | `DEPLOYMENT.md` | دليل تركيب ونشر تنفيذي كامل (المرحلة الثامنة) |
 | `SECURITY_REVIEW.md` | جرد سطح النظام الكامل ومصفوفة الصلاحيات (المرحلة الثامنة) |
 | `tools/state-test.js` | اختبار سلامة الحالات والترابط — 53 تأكيدًا |
@@ -1183,16 +1218,16 @@ API)، عدم تسجيل أي سرّ في سجل العمليات، إعادة �
 ```
 node tools/verify.js            → 31/31
 node tools/smoke.js             → 186/186
-node tools/server-test.js       → 196/196
-node tools/security-test.js     → 91/91
-node tools/state-test.js        → 53/53
+node tools/server-test.js       → 198/198
+node tools/security-test.js     → 141/141
+node tools/state-test.js        → 56/56
 node tools/account-test.js      → 53/53
 node tools/perf-test.js         → 32/32
-node tools/reference-test.js    → 60/60
+node tools/reference-test.js    → 61/61
 node tools/integration-test.js  → 43/43
 ```
 
-**المجموع: 745/745، بلا أي تراجع وظيفي عبر كل commit في هذا الفرع.**
+**المجموع: 801/801، بلا أي تراجع وظيفي عبر كل commit في هذا الفرع.**
 (بالإضافة إلى `tools/perf-scale-test.js` و`tools/perf-bench.js`، أداتا تقرير أداء لا تعتمدان على نجاح/فشل.)
 
 ## نقطة المتابعة الدقيقة للجلسة القادمة (إن وُجدت)
