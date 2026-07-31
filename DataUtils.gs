@@ -18,9 +18,43 @@ function sheet_(name) {
 const _TABLE_CACHE_ = {};
 const _TABLE_CACHE_TTL_MS_ = 4000;
 
+/**
+ * عدّادات قراءة/كتابة على مستوى تنفيذ الطلب الواحد (لا تُخزَّن بين
+ * الطلبات) — تُستخدم فقط لقياس تكلفة كل عملية عبر perfTime_ أدناه، ولا
+ * تُسجَّل أي بيانات حساسة معها (عدد فقط، لا محتوى الصفوف). "قراءة" هنا
+ * تعني قراءة ورقة كاملة فعليًا من Sheets API (تُستثنى إعادة القراءة من
+ * الذاكرة المؤقتة _TABLE_CACHE_ لأنها لا تُكلّف شيئًا فعليًا).
+ */
+const _PERF_ = {reads: 0, writes: 0};
+
+function perfSnapshot_() {
+  return {reads: _PERF_.reads, writes: _PERF_.writes};
+}
+
+/**
+ * يُغلّف دالة بقياس زمن التنفيذ وعدد قراءات/كتابات الجداول الفعلية
+ * أثناء تشغيلها، ويطبع سطرًا واحدًا منظّمًا (JSON) إلى console.log —
+ * يظهر في سجل التنفيذ (Executions) في محرر Apps Script. لا يحتوي أي
+ * قيمة مُدخَلة من المستخدم أو أي حقل حساس، فقط اسم العملية والأرقام.
+ */
+function perfTime_(label, fn) {
+  const startedAt = Date.now();
+  const before = perfSnapshot_();
+  const result = fn();
+  const after = perfSnapshot_();
+  try {
+    console.log(JSON.stringify({
+      perf: label, ms: Date.now() - startedAt,
+      reads: after.reads - before.reads, writes: after.writes - before.writes
+    }));
+  } catch (ignore) { /* التسجيل تحسين تشخيصي، لا يوقف الطلب أبدًا */ }
+  return result;
+}
+
 function readTable_(name) {
   const cached = _TABLE_CACHE_[name];
   if (cached && (Date.now() - cached.at) < _TABLE_CACHE_TTL_MS_) return cached.value;
+  _PERF_.reads++;
   const sheet = sheet_(name);
   const values = sheet.getDataRange().getValues();
   let result;
@@ -66,6 +100,7 @@ function safeCell_(value) {
 
 function appendObjects_(sheetName, objects) {
   if (!objects.length) return;
+  _PERF_.writes++;
   const sheet = sheet_(sheetName);
   const headers = HEADERS[sheetName];
   const rows = objects.map(object =>
@@ -80,6 +115,7 @@ function findById_(sheetName, idHeader, id) {
 }
 
 function updateById_(sheetName, idHeader, id, changes) {
+  _PERF_.writes++;
   const sheet = sheet_(sheetName);
   const values = sheet.getDataRange().getValues();
   const map = {};
@@ -98,6 +134,7 @@ function updateById_(sheetName, idHeader, id, changes) {
  * بثلاثية (المرحلة، النشاط الرئيسي، النشاط الفرعي) لا برقم منفصل.
  */
 function updateRowByMatch_(sheetName, matchHeaders, changes) {
+  _PERF_.writes++;
   const sheet = sheet_(sheetName);
   const values = sheet.getDataRange().getValues();
   const map = {};
@@ -133,6 +170,26 @@ function nextIds_(prefix, count) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * تُنفَّذ العملية مرة واحدة فقط لكل (فاعل + opId) خلال خمس دقائق، وتُعاد
+ * نفس النتيجة الأصلية عند أي تكرار بنفس opId (لا تُعاد كتابة البيانات).
+ * تُستخدم للعمليات التي يخطر تكرارها فعليًا عند إعادة محاولة بعد انتهاء
+ * مهلة الواجهة رغم أن الطلب الأول قد يكون نجح فعليًا على الخادم (راجع
+ * confirmDelivery وsaveDelegate/saveAssociation عند الإنشاء). opId يُنشئه
+ * العميل مرة واحدة لكل محاولة منطقية ويُعاد استخدامه فقط عند "إعادة
+ * المحاولة" الصريحة لنفس تلك المحاولة — وليس عند عملية جديدة تمامًا.
+ */
+function withIdempotency_(actorId, opId, fn) {
+  if (!opId) return fn();
+  const cache = CacheService.getScriptCache();
+  const key = 'opid:' + actorId + ':' + String(opId).slice(0, 80);
+  const cached = cache.get(key);
+  if (cached) return JSON.parse(cached);
+  const result = fn();
+  try { cache.put(key, JSON.stringify(result), 300); } catch (ignore) { /* تحسين، لا يوقف الاستجابة */ }
+  return result;
 }
 
 function audit_(user, action, section, recordId, notes) {

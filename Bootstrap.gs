@@ -4,9 +4,18 @@
  * يُخزَّن ناتج البوابة الكامل مؤقتًا لكل دور/جمعية/مندوب لمدة قصيرة
  * (APP.cacheSeconds)، فلا يعيد كل دخول أو تحديث أو تنقل بين المتصفحات
  * قراءة كل الأوراق من جديد إن كان هناك طلب حديث بالفعل لنفس الفاعل أو
- * نفس نطاقه. كل عملية تعديل (save*) تمرّر forceFresh=true فتتجاوز
- * الذاكرة المؤقتة وتكتب نتيجة جديدة فورًا، فيرى منفّذ التعديل أثره
- * فورًا دائمًا مهما كانت حالة الذاكرة المؤقتة.
+ * نفس نطاقه. كل عملية تعديل (save*) تُحدّث الحالة عبر استجابة جزئية الآن
+ * (سجل + ملخص فقط — راجع كل دالة save* لتفاصيلها) بدل استدعاء
+ * getBootstrapData(token, true) كما كان سابقًا؛ لذلك كل كتابة تستدعي
+ * clearDashboardCache() لإبطال هذه الذاكرة المؤقتة حتى لا يبقى Bootstrap
+ * القديم صالحًا لأي طلب لاحق يطلبه (كتحديث الصفحة أو دخول جديد).
+ *
+ * ⚠️ تغيير مهم في هذه المرحلة: Bootstrap الأولي لم يعد يتضمّن القوائم
+ * الثقيلة (المستفيدون، سجل العمليات، الأنشطة وشواهدها، طلبات الانضمام).
+ * الواجهة تجلبها بشكل منفصل ومُرقَّم عند فتح الصفحة المعنية فقط
+ * (listBeneficiaries/listAuditLog/getActivitiesBundle/listApplications) —
+ * راجع RELEASE.md قسم "الأداء" للتفصيل الكامل ولماذا لا يزال حساب
+ * summary/alerts يتطلّب قراءة كاملة لبعض الجداول رغم ذلك.
  */
 function bootstrapCacheKey_(user) {
   if (user.role === 'ADMIN') return 'bootstrap:ADMIN';
@@ -27,9 +36,11 @@ function getBootstrapData(token, forceFresh) {
     }
   }
 
-  const data = user.role === 'DELEGATE' ? buildDelegatePortal_(user)
-    : user.role === 'ASSOCIATION' ? buildAssociationPortal_(user)
-    : buildAdminPortal_(user);
+  const data = perfTime_('getBootstrapData:' + user.role, () =>
+    user.role === 'DELEGATE' ? buildDelegatePortal_(user)
+      : user.role === 'ASSOCIATION' ? buildAssociationPortal_(user)
+      : buildAdminPortal_(user)
+  );
 
   try {
     const serialized = JSON.stringify(data);
@@ -45,11 +56,28 @@ function getDashboardData(token) {
   return getBootstrapData(token);
 }
 
+/**
+ * لوحة الإدارة — الآن بلا: الأنشطة/المراحل/الشواهد (من getActivitiesBundle)،
+ * طلبات الانضمام (من listApplications)، سجل العمليات (من listAuditLog) —
+ * الثلاثة الأكثر ثقلًا نسبةً لتكرار استخدامها (تُفتح غالبًا مرة كل جلسة،
+ * لا في كل تنقّل). المستفيدون/الجمعيات/الأجهزة/المناديب **بقيت في
+ * Bootstrap لهذه المرحلة عمدًا**: عشرات المواضع في الواجهة (نماذج تخصيص
+ * الأجهزة، تعيين المندوب، البحث الفوري، عدّادات لوحة البيانات القابلة
+ * للنقر) تفترض وجودها كمصفوفة كاملة محليًا؛ فصلها الكامل إلى تحميل
+ * مُرقَّم يتطلّب إعادة كتابة تلك المواضع كافة والتحقق منها في متصفح حي —
+ * غير متاح داخل بيئة هذه الجلسة (لا وصول لـ Apps Script حي). الخادم
+ * يوفّر الآن listBeneficiaries/listDevices/listAssociations/listDelegates
+ * مُرقَّمة وجاهزة ومختبَرة لدمج الواجهة بها لاحقًا — راجع HANDOFF.md/
+ * RELEASE.md لتفاصيل هذا القرار وأثره على حجم الحمولة عند نمو البيانات.
+ */
 function buildAdminPortal_(user) {
   const associations = readTable_(APP.sheets.associations).rows;
   const beneficiaries = readTable_(APP.sheets.beneficiaries).rows;
   const devices = readTable_(APP.sheets.devices).rows;
   const delegates = readTable_(APP.sheets.delegates).rows;
+  // summary/alerts تحتاج فعليًا قراءة كاملة لجدولي الأنشطة/الشواهد حتى
+  // لو لم يصلا للعميل ضمن الحمولة — هذه تكلفة قراءة لا يمكن تفاديها في
+  // بنية Sheets الحالية دون فهرس مُجمَّع مستقل (راجع RELEASE.md).
   const activities = getActivitiesData_();
   const evidence = getMainActivityEvidence_();
   return {
@@ -63,15 +91,15 @@ function buildAdminPortal_(user) {
     associations: associations.map(row => normalizeAssociation_(row, beneficiaries, devices, delegates)),
     devices: devices.map(normalizeDevice_),
     delegates: delegates.map(row => normalizeDelegate_(row, beneficiaries)),
-    activities: activities,
-    stages: getStagesData_(activities),
-    evidence: evidence,
     alerts: buildAlerts_(beneficiaries, associations, devices, activities, evidence),
-    applications: getAssociationApplications_(),
-    audit: getAuditRows_(30)
+    pendingApplicationsCount: countBy_(readTable_(APP.sheets.applications).rows, 'الحالة', 'قيد المراجعة'),
+    // معاينة صغيرة فقط (لوحة البيانات تعرض ٧ سطور كحد أقصى) — التصفّح
+    // الكامل المُرقَّم لسجل العمليات عبر listAuditLog عند فتح صفحته.
+    audit: getAuditRows_(10, null)
   };
 }
 
+/** بوابة الجمعية — معاينة صغيرة لسجل العمليات فقط؛ التصفّح الكامل عبر listAuditLog. المستفيدون بقوا لنفس سبب لوحة الإدارة أعلاه. */
 function buildAssociationPortal_(user) {
   const associationId = user.associationId;
   const association = findById_(APP.sheets.associations, 'رقم الجمعية', associationId);
@@ -89,10 +117,14 @@ function buildAssociationPortal_(user) {
     beneficiaries: beneficiaries.map(normalizeBeneficiary_),
     devices: devices.map(normalizeDevice_),
     delegates: delegates.map(row => normalizeDelegate_(row, beneficiaries)),
-    audit: getAuditRows_(20, associationId)
+    audit: getAuditRows_(10, associationId)
   };
 }
 
+/**
+ * بوابة المندوب لم تتغيّر — قائمة مستفيديه محدودة بطبيعتها (فقط من
+ * عُيِّن له)، وليست مصدر النمو الذي يستهدفه الترقيم في هذه المرحلة.
+ */
 function buildDelegatePortal_(user) {
   const beneficiaries = readTable_(APP.sheets.beneficiaries).rows
     .filter(row => String(row['رقم المندوب']) === user.id);
@@ -137,3 +169,36 @@ function buildProjectSummary_(beneficiaries, associations, devices, delegates, a
   };
 }
 
+/**
+ * ملخّص "سريع" لاستجابات الحفظ الجزئية — بلا الأنشطة (لا تتأثر بحفظ
+ * مستفيد/جهاز/مندوب)، ومُقيَّد بجمعية واحدة عند تمرير associationId
+ * (يطابق نطاق ما تملكه الجمعية أصلًا في state.data.summary لديها).
+ * العميل يدمج هذا الكائن جزئيًا (Object.assign) فوق الملخص المحفوظ لديه
+ * بدل استبداله بالكامل، فتبقى حقول لم تتأثر (كنِسَب الأنشطة) كما كانت.
+ */
+function computeCoreSummary_(associationId) {
+  let beneficiaries = readTable_(APP.sheets.beneficiaries).rows;
+  let devices = readTable_(APP.sheets.devices).rows;
+  let delegates = readTable_(APP.sheets.delegates).rows;
+  if (associationId) {
+    beneficiaries = beneficiaries.filter(row => String(row['رقم الجمعية']) === associationId);
+    devices = devices.filter(row => String(row['رقم الجمعية']) === associationId);
+    delegates = delegates.filter(row => String(row['رقم الجمعية']) === associationId);
+  }
+  const deliveredBeneficiaries = beneficiaries.filter(row => String(row['حالة التسليم']) === 'تم التسليم').length;
+  const validBeneficiaries = beneficiaries.filter(row => String(row['حالة المستفيد']) !== 'ملغي').length;
+  return {
+    beneficiaries: beneficiaries.length,
+    delegates: delegates.filter(row => String(row['الحالة']) !== 'غير نشط').length,
+    devices: devices.length,
+    devicesWarehouse: countBy_(devices, 'حالة الجهاز', 'بالمستودع'),
+    devicesAllocated: devices.filter(row => ['مخصص', 'مع المندوب'].indexOf(String(row['حالة الجهاز'])) >= 0).length,
+    devicesDelivered: countBy_(devices, 'حالة الجهاز', 'تم التسليم'),
+    deliveryRate: validBeneficiaries ? Math.round(deliveredBeneficiaries / validBeneficiaries * 100) : 0
+  };
+}
+
+/** يُستخدم في استجابة saveAssociation الجزئية — يضيف عدد الجمعيات (لا يتغيّر من عمليات أخرى). */
+function computeAssociationsCount_() {
+  return readTable_(APP.sheets.associations).rows.length;
+}

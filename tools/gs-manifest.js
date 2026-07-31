@@ -31,6 +31,7 @@ const GS_FILES_ORDER = [
   'ExecutionTracking.gs',
   'Normalize.gs',
   'StateRules.gs',
+  'Pagination.gs',
   'DataUtils.gs',
   'Validation.gs'
 ];

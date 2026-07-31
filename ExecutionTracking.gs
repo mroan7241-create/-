@@ -81,6 +81,20 @@ function getMainActivityEvidence_() {
 const ACTIVITY_STATUSES = ['لم يبدأ', 'جارٍ', 'متأخر', 'مكتمل'];
 
 /**
+ * حزمة الأنشطة الكاملة (أنشطة + مراحل + شواهد) — لم تعد ضمن Bootstrap
+ * الأولي؛ تُجلب فقط عند فتح صفحة "متابعة المشروع". عدد الأنشطة صغير
+ * نسبيًا (لا يتناسب مع نمو المستفيدين) فلم تُرقَّم صفحاتها هنا؛ الأولوية
+ * كانت لترقيم المستفيدين وسجل العمليات (أكبر مصدرَي نمو فعليَّين).
+ */
+function getActivitiesBundle(token) {
+  return perfTime_('getActivitiesBundle', () => {
+    requireSession_(token, ['ADMIN']);
+    const activities = getActivitiesData_();
+    return {ok: true, activities: activities, stages: getStagesData_(activities), evidence: getMainActivityEvidence_()};
+  });
+}
+
+/**
  * إضافة نشاط رئيسي/فرعي جديد أو تعديل نشاط قائم. لا يوجد عمود رقم
  * تسلسلي مستقل في ورقة "إدارة الأنشطة" (تصميم قائم منذ البداية)، لذا
  * تُطابَق الأنشطة القائمة بثلاثية (المرحلة، النشاط الرئيسي، النشاط
@@ -121,7 +135,18 @@ function saveActivity(token, payload) {
     audit_(user, 'إضافة نشاط', 'الأنشطة', values['اسم النشاط الفرعي'], values['اسم المرحلة'] + ' / ' + values['اسم النشاط الرئيسي']);
   }
   clearDashboardCache();
-  return {ok: true, data: getBootstrapData(token, true)};
+  const activities = getActivitiesData_();
+  const completedActivities = activities.filter(row => safeNumber_(row.progress) >= 100).length;
+  return {
+    ok: true,
+    activities: activities,
+    stages: getStagesData_(activities),
+    summary: {
+      activityRate: activities.length ? Math.round(completedActivities / activities.length * 100) : 0,
+      completedActivities: completedActivities,
+      totalActivities: activities.length
+    }
+  };
 }
 
 function getAssociationsData_() {
@@ -144,7 +169,11 @@ function updateAssociationSettings(token, payload) {
   updateById_(APP.sheets.users, 'رقم المستخدم', user.id, {'البريد الإلكتروني': values['البريد الإلكتروني']});
   audit_(user, 'تحديث إعدادات الجمعية', 'الإعدادات', user.associationId, '');
   clearDashboardCache();
-  return {ok: true, data: getBootstrapData(token, true)};
+  const beneficiaries = readTable_(APP.sheets.beneficiaries).rows.filter(row => String(row['رقم الجمعية']) === user.associationId);
+  const devices = readTable_(APP.sheets.devices).rows.filter(row => String(row['رقم الجمعية']) === user.associationId);
+  const delegates = readTable_(APP.sheets.delegates).rows.filter(row => String(row['رقم الجمعية']) === user.associationId);
+  const association = normalizeAssociation_(findById_(APP.sheets.associations, 'رقم الجمعية', user.associationId), beneficiaries, devices, delegates);
+  return {ok: true, association: association};
 }
 
 /**

@@ -81,6 +81,7 @@
     /* ---------- Buttons ---------- */
     .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:11px 18px;border-radius:var(--r-md);font-weight:700;font-size:14px;transition:background .18s,color .18s,box-shadow .18s,transform .18s;white-space:nowrap}
     .btn:active{transform:translateY(1px)}
+    .btn[disabled],.btn.is-busy{opacity:.6;cursor:progress;pointer-events:none}
     .btn-primary{background:var(--zad-700);color:#fff;box-shadow:0 8px 20px rgba(142,27,69,.22)}
     .btn-primary:hover:not([disabled]){background:var(--zad-800)}
     .btn-gold{background:var(--gold-500);color:#3B2A05;box-shadow:0 8px 20px rgba(226,166,46,.26)}
@@ -205,6 +206,7 @@
     .search .glyph{position:absolute;inset-inline-start:15px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none}
     .toolbar select.control{width:auto;min-width:172px}
     .result-count{font-size:12.5px;color:var(--muted);margin-inline-start:auto}
+    .pager{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:16px;font-size:13px}
 
     /* ---------- Status ---------- */
     .status{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:var(--r-pill);font-size:11.5px;font-weight:700;white-space:nowrap;border:1px solid transparent}
@@ -489,9 +491,29 @@
       pendingRows: [],
       referenceData: null,
       activityTab: '',
-      delegateRoute: null
+      delegateRoute: null,
+      activeTrigger: null,
+      // أقسام "ثقيلة" لم تعد ضمن Bootstrap — تُجلب فقط عند فتح صفحتها.
+      // null = لم تُجلَب بعد؛ كائن {loading,...} بعد أول طلب.
+      lazy: {audit: null, activities: null, applications: null}
     };
 
+    /**
+     * مهلة موحّدة لكل استدعاء خادم. Apps Script نفسه يقطع تنفيذ أي دالة
+     * خادم بعد نحو 30 ثانية من HtmlService (حد المنصّة، لا نتحكم فيه) —
+     * ننهي الانتظار من طرف الواجهة قبل ذلك بقليل بدل تعليق صامت غير
+     * محدود، ونُرجع خطأً صريحًا يوسم بـ timeout=true بدل رسالة عامة.
+     */
+    var API_TIMEOUT_MS = 25000;
+
+    /**
+     * google.script.run لا يملك آلية إلغاء حقيقية — عند انتهاء المهلة من
+     * طرفنا فقط نتوقف عن الانتظار، لكن الطلب قد يكون لا يزال قيد التنفيذ
+     * فعليًا على الخادم (قد ينجح لاحقًا رغم أننا أظهرنا خطأ مهلة). لذلك
+     * withSuccessHandler/withFailureHandler هنا تتجاهلان أي رد متأخر يصل
+     * بعد أن اعتبرنا الاستدعاء منتهيًا بالمهلة (settled) — لتفادي "نجاح
+     * صامت" يُحدّث الحالة بعد أن رأى المستخدم رسالة الفشل وربما غادر الشاشة.
+     */
     function api(method) {
       var args = Array.prototype.slice.call(arguments, 1);
       return new Promise(function (resolve, reject) {
@@ -499,23 +521,51 @@
           reject(new Error('افتح النظام من رابط تطبيق Google Apps Script المنشور.'));
           return;
         }
+        var settled = false;
+        var timer = window.setTimeout(function () {
+          if (settled) return;
+          settled = true;
+          var err = new Error('استغرقت العملية وقتًا أطول من المتوقع. لا نعرف نتيجتها بعد — تحقّق من البيانات قبل إعادة المحاولة.');
+          err.timeout = true;
+          err.method = method;
+          reject(err);
+        }, API_TIMEOUT_MS);
         google.script.run
-          .withSuccessHandler(resolve)
+          .withSuccessHandler(function (result) {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timer);
+            resolve(result);
+          })
           .withFailureHandler(function (error) {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timer);
             reject(new Error((error && error.message) || 'تعذر الاتصال بالخادم. تحقق من الاتصال وحاول مجددًا.'));
           })[method].apply(null, args);
       });
     }
 
-    /** يمنع النقر المتكرر ويعرض حالة انشغال موحدة. */
+    /**
+     * تعطيل الزر أو النموذج الذي نفّذ العملية فقط — لا كل أزرار النظام.
+     * `state.activeTrigger` يُضبط في موزّع الأحداث (click/submit) قبل
+     * استدعاء أي معالج، فتُغلق busy(true)/busy(false) على العنصر نفسه.
+     * state.inflight يبقى للعدّاد العام (مؤشر تحميل بصري خفيف فقط).
+     */
     function busy(on) {
       state.inflight = Math.max(0, state.inflight + (on ? 1 : -1));
-      var isBusy = state.inflight > 0;
-      state.loading = isBusy;
-      document.body.style.cursor = isBusy ? 'progress' : '';
-      $$('[data-act]').forEach(function (el) {
-        if (el.tagName === 'BUTTON') el.disabled = isBusy;
-      });
+      state.loading = state.inflight > 0;
+      document.body.style.cursor = state.loading ? 'progress' : '';
+      var target = state.activeTrigger;
+      if (target) {
+        if (target.tagName === 'FORM') {
+          $$('button', target).forEach(function (b) { b.disabled = on; });
+        } else if ('disabled' in target) {
+          target.disabled = on;
+          target.classList.toggle('is-busy', on);
+        }
+      }
+      if (!on) state.activeTrigger = null;
     }
 
     function toast(message, kind) {
@@ -534,10 +584,22 @@
       setTimeout(function () { el.remove(); }, kind === 'error' ? 6000 : 3800);
     }
 
+    /**
+     * عند انتهاء المهلة تحديدًا (لا فشل مؤكَّد) لا نفترض النجاح ولا الفشل:
+     * نعرض رسالة صريحة تنصح بالتحقق، ثم — إن كانت هناك جلسة وبيانات
+     * محمَّلة أصلًا — نُحدّث لوحة البيانات بأمان في الخلفية بدل ترك
+     * الواجهة على حالة قديمة قد لا تعكس ما حدث فعليًا على الخادم.
+     */
     function reportError(error) {
       var message = (error && error.message) || 'حدث خطأ غير متوقع. حاول مجددًا.';
       toast(message, 'error');
-      if (message.indexOf('انتهت الجلسة') >= 0) doLogout(false);
+      if (message.indexOf('انتهت الجلسة') >= 0) { doLogout(false); return; }
+      if (error && error.timeout && state.token && state.data) {
+        api('getBootstrapData', state.token).then(function (data) {
+          state.data = data;
+          render();
+        }, function () { /* فشل التحقق الصامت لا يُضيف رسالة خطأ ثانية مربكة */ });
+      }
     }
 
     /* ============================================================
@@ -670,6 +732,47 @@
       for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
       return null;
     }
+
+    /**
+     * تُدرج سجلًا محدَّثًا/جديدًا في مصفوفة محلية دون إعادة تحميل كامل —
+     * تُستخدم بعد كل عملية حفظ لدمج استجابتها الجزئية (record) بدل
+     * استبدال state.data بأكمله من Bootstrap جديد. تُعيد المصفوفة نفسها
+     * (تعديل داخل المكان) حتى تبقى المرجعية في state.data كما هي.
+     */
+    function upsertRecord(list, record) {
+      if (!list || !record || !record.id) return list;
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id === record.id) { list[i] = record; return list; }
+      }
+      list.unshift(record);
+      return list;
+    }
+
+    /** يدمج ملخّصًا جزئيًا (من استجابة حفظ) فوق state.data.summary الحالي بدل استبداله بالكامل. */
+    function mergeSummary(patch) {
+      if (patch && patch.summary && state.data) {
+        state.data.summary = Object.assign({}, state.data.summary, patch.summary);
+      }
+    }
+
+    /**
+     * معرّف عملية عشوائي لمرة واحدة — يُنشأ عند أول محاولة ويُعاد
+     * استخدامه فقط عند إعادة محاولة نفس تلك العملية بعد مهلة (راجع
+     * withIdempotency_ في الخادم). لا علاقة له بأي هوية مستخدم أو جلسة.
+     */
+    function genOpId() {
+      return 'op-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+    }
+
+    /**
+     * يحفظ opId لكل مفتاح عملية حساسة (إنشاء جمعية/مندوب، قبول طلب،
+     * تأكيد تسليم) طوال فشل/مهلة متكررة على نفس المحاولة، ويُنسيه عند
+     * النجاح — إعادة الضغط على نفس الزر بعد مهلة تُعيد استخدام نفس
+     * المعرّف فيتعرّف الخادم عليها كإعادة محاولة لا عملية جديدة مكرَّرة.
+     */
+    var pendingOpIds = {};
+    function opIdFor(key) { return pendingOpIds[key] || (pendingOpIds[key] = genOpId()); }
+    function clearOpId(key) { delete pendingOpIds[key]; }
     function needGlyph(name) {
       name = String(name || '');
       if (name.indexOf('ثلا') >= 0) return '❄';
@@ -749,7 +852,6 @@
         if (result.mustChangePassword) {
           state.data = null;
           renderForcePasswordChange();
-          busy(false);
           return;
         }
         state.data = result.bootstrap;
@@ -757,8 +859,7 @@
         render();
         toast('مرحبًا بك، ' + (result.user && result.user.name ? result.user.name : ''), 'success');
         loadReferenceDataOnce();
-        busy(false);
-      }, function (error) { reportError(error); busy(false); });
+      }, reportError).finally(function () { busy(false); });
     }
 
     /** شاشة إلزامية كاملة الصفحة: لا وصول لأي بيانات بوابة قبل تغيير كلمة المرور المؤقتة. */
@@ -805,7 +906,7 @@
         state.data = null;
         renderLogin();
         toast('تم تغيير كلمة المرور بنجاح. سجّل الدخول بكلمة المرور الجديدة.', 'success');
-      }, reportError).then(function () { busy(false); });
+      }, reportError).finally(function () { busy(false); });
     }
 
     /**
@@ -853,7 +954,7 @@
       api('submitAssociationApplication', payload).then(function (result) {
         renderLogin();
         toast(result.message || 'تم استلام طلب الانضمام.', 'success');
-      }, reportError).then(function () { busy(false); });
+      }, reportError).finally(function () { busy(false); });
     }
 
     /* ============================================================
@@ -927,17 +1028,60 @@
       return (pages[state.page] || renderDashboard)();
     }
 
+    /** الصفحات التي تُحمَّل عند فتحها فقط (لا ضمن Bootstrap) — مفتاحها في state.lazy وطريقة جلبها. */
+    var LAZY_PAGES = {audit: 'listAuditLog', applications: 'listApplications'};
+
     function goTo(page) {
       state.page = page;
       state.search = '';
       state.filter = '';
       state.activityTab = '';
+      if (LAZY_PAGES[page]) fetchLazyPage(page, LAZY_PAGES[page], 1);
+      else if (page === 'activities' && state.data.role === 'ADMIN') fetchActivitiesBundle();
       render();
       var sidebar = $('#sidebar');
       if (sidebar) sidebar.classList.remove('open');
       var scrim = $('.scrim');
       if (scrim) scrim.remove();
       window.scrollTo(0, 0);
+    }
+
+    /** يجلب صفحة واحدة من قسم مُرقَّم (سجل العمليات/طلبات الانضمام) — يُعاد استخدامها للبحث والفلترة وأزرار التنقّل بين الصفحات. */
+    function fetchLazyPage(key, method, page) {
+      state.lazy[key] = Object.assign({}, state.lazy[key], {loading: true});
+      render();
+      api(method, state.token, {page: page || 1, pageSize: 25, search: state.search, filter: state.filter})
+        .then(function (result) {
+          state.lazy[key] = Object.assign({loading: false}, result);
+          render();
+        }, function (error) {
+          state.lazy[key] = Object.assign({items: [], total: 0, page: 1, totalPages: 1}, state.lazy[key], {loading: false});
+          reportError(error);
+          render();
+        });
+    }
+
+    function fetchActivitiesBundle() {
+      state.lazy.activities = Object.assign({}, state.lazy.activities, {loading: true});
+      render();
+      api('getActivitiesBundle', state.token).then(function (result) {
+        state.lazy.activities = Object.assign({loading: false}, result);
+        render();
+      }, function (error) {
+        state.lazy.activities = Object.assign({}, state.lazy.activities, {loading: false});
+        reportError(error);
+        render();
+      });
+    }
+
+    /** عناصر تنقّل بسيطة بين صفحات قسم مُرقَّم — تُخفى تلقائيًا إن كانت صفحة واحدة فقط. */
+    function pagerControls(key, bundle) {
+      if (!bundle || !bundle.totalPages || bundle.totalPages <= 1) return '';
+      return '<div class="pager">'
+        + '<button type="button" class="btn btn-ghost btn-sm" data-act="' + key + '-prev-page"' + (bundle.page <= 1 ? ' disabled' : '') + '>← السابق</button>'
+        + '<span class="muted">صفحة ' + fmt(bundle.page) + ' من ' + fmt(bundle.totalPages) + ' (' + fmt(bundle.total) + ' سجلًا)</span>'
+        + '<button type="button" class="btn btn-ghost btn-sm" data-act="' + key + '-next-page"' + (bundle.page >= bundle.totalPages ? ' disabled' : '') + '>التالي →</button>'
+        + '</div>';
     }
 
     /* ============================================================
@@ -1042,20 +1186,9 @@
       }).join('') + '</div>';
     }
 
+    /** معاينة صغيرة ثابتة للوحة البيانات فقط (من Bootstrap) — لا علاقة لها بصفحة سجل العمليات الكاملة المُرقَّمة. */
     function renderAuditRows(limit) {
       return auditRowsHtml((state.data.audit || []).slice(0, limit));
-    }
-
-    /** يبحث في المستخدم/الإجراء/القسم/رقم السجل معًا، ويصفّي بالقسم عبر state.filter. */
-    function filterAuditRows(all) {
-      var query = state.search.trim().toLowerCase();
-      return all.filter(function (row) {
-        if (state.filter && row.section !== state.filter) return false;
-        if (!query) return true;
-        return [row.user, row.action, row.section, row.recordId].some(function (value) {
-          return String(value || '').toLowerCase().indexOf(query) >= 0;
-        });
-      });
     }
 
     /* ============================================================
@@ -1286,11 +1419,12 @@
       };
       busy(true);
       api('saveBeneficiary', state.token, payload).then(function (result) {
-        state.data = result.data;
+        upsertRecord(state.data.beneficiaries, result.record);
+        mergeSummary(result);
         closeModal();
         render();
         toast('تم حفظ بيانات المستفيد.', 'success');
-      }, reportError).then(function () { busy(false); });
+      }, reportError).finally(function () { busy(false); });
     }
 
     /**
@@ -1343,11 +1477,13 @@
       if (!select) { toast('اختر المندوب أولًا.', 'error'); return; }
       busy(true);
       api('assignDelegate', state.token, id, select.value).then(function (result) {
-        state.data = result.data;
+        upsertRecord(state.data.beneficiaries, result.record);
+        (result.devices || []).forEach(function (d) { upsertRecord(state.data.devices, d); });
+        mergeSummary(result);
         closeModal();
         render();
         toast('تمت إحالة المستفيد إلى المندوب.', 'success');
-      }, reportError).then(function () { busy(false); });
+      }, reportError).finally(function () { busy(false); });
     }
 
     /* ---------- الاستيراد بالجملة ---------- */
@@ -1413,7 +1549,7 @@
             state.pendingRows = [];
             reportError(error);
             setBulkSummary('تعذر مراجعة الملف.');
-          }).then(function () { busy(false); });
+          }).finally(function () { busy(false); });
       };
       reader.onerror = function () { setBulkSummary('تعذر قراءة الملف.'); };
       reader.readAsDataURL(file);
@@ -1453,11 +1589,15 @@
           toast('الاستيراد متوقف: صحّح السجلات الخاطئة أولًا.', 'error');
           return;
         }
-        state.data = result.data;
+        mergeSummary(result);
         closeModal();
         render();
         toast('تم استيراد ' + fmt(result.imported) + ' مستفيدًا.', 'success');
-      }, reportError).then(function () { busy(false); });
+        // الاستيراد الجماعي لا يعيد السجلات المستورَدة كاملة (قد تصل لألف
+        // سجل) — إعادة جلب Bootstrap هنا عملية واحدة نادرة ومقبولة، أفضل
+        // من تضخيم استجابة كل استيراد بمئات الكائنات المكرَّرة أصلًا.
+        api('getBootstrapData', state.token, true).then(function (data) { state.data = data; render(); }, function () {});
+      }, reportError).finally(function () { busy(false); });
     }
 
     /* ============================================================
@@ -1492,15 +1632,17 @@
     }
 
     function findApplication(id) {
-      var list = state.data.applications || [];
+      var list = (state.lazy.applications && state.lazy.applications.items) || [];
       for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
       return null;
     }
 
+    /** تُجلب مُرقَّمة عند فتح الصفحة (listApplications) — لا ضمن Bootstrap. */
     function renderApplications() {
-      var all = state.data.applications || [];
-      var items = applyFilters(all, ['name', 'id', 'city', 'region', 'email', 'phone', 'contactName']);
-      if (!all.length) {
+      var bundle = state.lazy.applications || {};
+      var items = bundle.items || [];
+      if (bundle.loading) return skeletonCards(3);
+      if (!bundle.total) {
         return emptyState({glyph: ICONS.applications, title: 'لا توجد طلبات انضمام',
           body: 'ستظهر هنا طلبات الجمعيات الجديدة فور تقديمها من صفحة تسجيل الدخول العامة.'});
       }
@@ -1522,7 +1664,7 @@
         : emptyState({glyph: '⌕', title: 'لا نتائج مطابقة', body: 'جرّب تصفية أو كلمة بحث أخرى.'});
 
       return toolbar({placeholder: 'ابحث باسم الجمعية أو البريد أو الجوال…', filters: filters,
-        count: fmt(items.length) + ' من ' + fmt(all.length)}) + body;
+        count: fmt(bundle.total || 0) + ' طلبًا'}) + body + pagerControls('applications', bundle);
     }
 
     function viewApplication(id) {
@@ -1569,12 +1711,22 @@
       } else if (!window.confirm('تأكيد قبول الطلب؟ سيتم إنشاء سجل الجمعية وحساب دخولها فورًا.')) {
         return;
       }
+      var opKey = 'accept-application:' + id;
+      var opId = decision === 'accept' ? opIdFor(opKey) : undefined;
       busy(true);
-      api('reviewAssociationApplication', state.token, id, decision, payload.reason || '').then(function (result) {
-        state.data = result.data;
+      api('reviewAssociationApplication', state.token, id, decision, payload.reason || '', opId).then(function (result) {
+        clearOpId(opKey);
+        if (state.lazy.applications && state.lazy.applications.items) upsertRecord(state.lazy.applications.items, result.record);
+        mergeSummary(result);
         closeModal();
         render();
         if (decision === 'accept') {
+          if (state.data.associations) upsertRecord(state.data.associations, {
+            id: result.associationId, name: result.record.name, category: result.record.category,
+            region: result.record.region, city: result.record.city, phone: result.record.phone,
+            email: result.record.email, status: 'نشطة', beneficiaries: 0, delegates: 0,
+            approvedDevices: 0, receivedDevices: 0, deliveredDevices: 0, progress: 0
+          });
           openModal('تم إنشاء الجمعية',
             '<p>تم قبول الطلب وإنشاء حساب الجمعية بنجاح.</p>'
             + '<div class="metas"><div class="meta"><small>رقم الجمعية</small><strong class="mono">' + esc(result.associationId) + '</strong></div>'
@@ -1584,7 +1736,7 @@
         } else {
           toast('تم رفض الطلب.', 'success');
         }
-      }, reportError).then(function () { busy(false); });
+      }, reportError).finally(function () { busy(false); });
     }
 
     function findAssociation(id) {
@@ -1634,7 +1786,7 @@
           'سلّمها لمسؤول الجمعية عبر قناة آمنة الآن — لن تُعرض مرة أخرى. إن ضاعت، أعد تعيين كلمة مرور جديدة بدل محاولة استرجاع هذه.'
           + ' الجمعية ستُطالَب بتغييرها فور تسجيل الدخول بها.');
         toast('تم إعادة تعيين كلمة مرور الجمعية.', 'success');
-      }, reportError).then(function () { busy(false); });
+      }, reportError).finally(function () { busy(false); });
     }
 
     function associationForm(id) {
@@ -1679,13 +1831,17 @@
         status: data.get('status')
       };
       if (data.get('password')) payload.password = data.get('password');
+      var opKey = 'new-association';
+      if (!payload.id) payload.opId = opIdFor(opKey);
       busy(true);
       api('saveAssociation', state.token, payload).then(function (result) {
-        state.data = result.data;
+        clearOpId(opKey);
+        upsertRecord(state.data.associations, result.record);
+        mergeSummary(result);
         closeModal();
         render();
         toast('تم حفظ بيانات الجمعية.', 'success');
-      }, reportError).then(function () { busy(false); });
+      }, reportError).finally(function () { busy(false); });
     }
 
     /* ============================================================
@@ -1781,11 +1937,12 @@
         status: data.get('status'),
         notes: data.get('notes')
       }).then(function (result) {
-        state.data = result.data;
+        upsertRecord(state.data.devices, result.record);
+        mergeSummary(result);
         closeModal();
         render();
         toast('تم حفظ بيانات الجهاز.', 'success');
-      }, reportError).then(function () { busy(false); });
+      }, reportError).finally(function () { busy(false); });
     }
 
     /* ============================================================
@@ -1889,14 +2046,17 @@
       if (!form || !form.reportValidity()) return;
       var data = new FormData(form);
       var association = state.data.association || {};
+      var opKey = 'new-delegate:' + (association.id || '');
       busy(true);
       api('saveDelegate', state.token, {
-        name: data.get('name'), phone: data.get('phone'), associationId: association.id || ''
+        name: data.get('name'), phone: data.get('phone'), associationId: association.id || '', opId: opIdFor(opKey)
       }).then(function (result) {
-        state.data = result.data;
+        clearOpId(opKey);
+        upsertRecord(state.data.delegates, result.record);
+        mergeSummary(result);
         showAccessCode('تم إنشاء المندوب', result.accessCode,
           'اعرض الرمز للمندوب الآن — لن يظهر مرة أخرى. يمكنك إنشاء بديل في أي وقت.');
-      }, reportError).then(function () { busy(false); });
+      }, reportError).finally(function () { busy(false); });
     }
 
     function regenerateCode(id) {
@@ -1904,7 +2064,7 @@
       busy(true);
       api('regenerateDelegateCode', state.token, id).then(function (result) {
         showAccessCode('رمز الدخول الجديد', result.accessCode, 'الرمز السابق لم يعد صالحًا.');
-      }, reportError).then(function () { busy(false); });
+      }, reportError).finally(function () { busy(false); });
     }
 
     function toggleDelegate(id, next) {
@@ -1912,10 +2072,11 @@
       if (!window.confirm('هل تريد ' + verb + ' هذا المندوب؟')) return;
       busy(true);
       api('setDelegateStatus', state.token, id, next).then(function (result) {
-        state.data = result.data;
+        upsertRecord(state.data.delegates, result.record);
+        mergeSummary(result);
         render();
         toast('تم ' + verb + ' المندوب.', 'success');
-      }, reportError).then(function () { busy(false); });
+      }, reportError).finally(function () { busy(false); });
     }
 
     /* ============================================================
@@ -1929,10 +2090,13 @@
       {value: 'لم يبدأ', label: 'قادمة'}
     ];
 
+    /** الأنشطة/المراحل/الشواهد تُجلب عند فتح الصفحة فقط (getActivitiesBundle) — لا ضمن Bootstrap. */
     function renderActivities() {
       var isAdmin = state.data.role === 'ADMIN';
-      var stages = state.data.stages || [];
-      var all = state.data.activities || [];
+      var bundle = state.lazy.activities;
+      if (isAdmin && bundle && bundle.loading) return skeletonCards(3);
+      var stages = (bundle && bundle.stages) || [];
+      var all = (bundle && bundle.activities) || [];
       if (!all.length) {
         return emptyState({glyph: ICONS.activities, title: 'لا توجد أنشطة مسجّلة',
           body: isAdmin ? 'أضف أول نشاط رئيسي أو فرعي لبدء متابعة مراحل المشروع.' : 'لم تُضَف أنشطة بعد.',
@@ -1990,7 +2154,7 @@
     }
 
     function findActivity(stage, mainActivity, subActivity) {
-      var list = state.data.activities || [];
+      var list = (state.lazy.activities && state.lazy.activities.activities) || [];
       for (var i = 0; i < list.length; i++) {
         var x = list[i];
         if (x.stage === stage && x.mainActivity === mainActivity && x.subActivity === subActivity) return x;
@@ -2055,27 +2219,31 @@
         progress: data.get('progress'), status: data.get('status'),
         evidenceUrl: data.get('evidenceUrl'), notes: data.get('notes')
       }).then(function (result) {
-        state.data = result.data;
+        state.lazy.activities = Object.assign({loading: false}, result);
+        mergeSummary(result);
         closeModal();
         render();
         toast('تم حفظ النشاط.', 'success');
-      }, reportError).then(function () { busy(false); });
+      }, reportError).finally(function () { busy(false); });
     }
 
+    var AUDIT_SECTIONS = ['المستفيدون', 'الأجهزة', 'الجمعيات', 'المناديب', 'التسليمات', 'الأنشطة', 'الإعدادات', 'طلبات الانضمام', 'المصادقة'];
+
+    /**
+     * صفحة سجل العمليات الكاملة — تُجلب مُرقَّمة من الخادم (listAuditLog)
+     * عند فتح الصفحة، لا ضمن Bootstrap؛ البحث والفلترة يُعاد تنفيذهما
+     * على الخادم أيضًا (لا تصفية محلية على مصفوفة كاملة كما كان سابقًا).
+     */
     function renderAudit() {
-      var all = state.data.audit || [];
-      var sections = [];
-      all.forEach(function (row) { if (row.section && sections.indexOf(row.section) === -1) sections.push(row.section); });
-      sections.sort();
-      var items = filterAuditRows(all);
-      var toolbarHtml = all.length
-        ? toolbar({placeholder: 'ابحث بالمستخدم أو الإجراء أو رقم السجل…',
-            filters: optionList(sections, state.filter, 'كل الأقسام'),
-            count: fmt(items.length) + ' من ' + fmt(all.length)})
-        : '';
+      var bundle = state.lazy.audit || {};
+      var items = bundle.items || [];
+      var toolbarHtml = toolbar({placeholder: 'ابحث بالمستخدم أو الإجراء أو رقم السجل…',
+        filters: optionList(AUDIT_SECTIONS, state.filter, 'كل الأقسام'),
+        count: bundle.loading ? 'جارٍ التحميل…' : (fmt(bundle.total || 0) + ' سجلًا')});
+      var body = bundle.loading ? skeletonCards(4) : auditRowsHtml(items);
       return '<section class="panel"><div class="panel-head"><div><h3>سجل العمليات</h3>'
         + '<p>سجل غير قابل للتعديل من الواجهة، يوثّق كل إجراء في النظام</p></div></div>'
-        + toolbarHtml + auditRowsHtml(items.slice(0, 300)) + '</section>';
+        + toolbarHtml + body + pagerControls('audit', bundle) + '</section>';
     }
 
     function renderSettings() {
@@ -2127,10 +2295,10 @@
       busy(true);
       api('updateAssociationSettings', state.token, {phone: data.get('phone'), email: data.get('email')})
         .then(function (result) {
-          state.data = result.data;
+          state.data.association = result.association;
           render();
           toast('تم حفظ إعدادات الجمعية.', 'success');
-        }, reportError).then(function () { busy(false); });
+        }, reportError).finally(function () { busy(false); });
     }
 
     function savePassword() {
@@ -2145,7 +2313,7 @@
       api('changePassword', state.token, data.get('current'), data.get('next')).then(function () {
         form.reset();
         toast('تم تغيير كلمة المرور بنجاح.', 'success');
-      }, reportError).then(function () { busy(false); });
+      }, reportError).finally(function () { busy(false); });
     }
 
     /* ============================================================
@@ -2349,11 +2517,11 @@
       busy(true);
       api('updateDeliveryStatus', state.token, id, reason.value, notes ? notes.value : '')
         .then(function (result) {
-          state.data = result.data;
+          upsertRecord(state.data.beneficiaries, result.record);
           closeModal();
           renderDelegate();
           toast('تم تحديث حالة المستفيد.', 'success');
-        }, reportError).then(function () { busy(false); });
+        }, reportError).finally(function () { busy(false); });
     }
 
     function deliveryModal(id) {
@@ -2409,16 +2577,27 @@
       var confirmBox = $('#deliveryConfirm');
       if (!state.proofData) { toast('أرفق صورة إثبات التسليم أولًا.', 'error'); return; }
       if (!confirmBox || !confirmBox.checked) { toast('يجب تأكيد إتمام التسليم.', 'error'); return; }
+      // opId ثابت لكل مستفيد طوال محاولات إعادة الإرسال المتتالية (مثلًا
+      // بعد انتهاء مهلة) — يمنع تكرار تسجيل تسليم واحد فعليًا مرتين لو
+      // نجحت المحاولة الأولى فعلًا على الخادم رغم ظهور خطأ مهلة للمستخدم.
+      var opKey = 'confirm-delivery:' + id;
       busy(true);
       api('confirmDelivery', state.token, {
-        beneficiaryId: id, proofDataUrl: state.proofData, confirmed: true
+        beneficiaryId: id, proofDataUrl: state.proofData, confirmed: true, opId: opIdFor(opKey)
       }).then(function (result) {
+        clearOpId(opKey);
         state.proofData = '';
-        state.data = result.data;
+        // المستفيد المسلَّم يخرج من قائمة "مهامي الحالية" (لم يعد ضمن
+        // النشطين في بوابة المندوب) — لا يكفي تحديث حقوله فقط.
+        state.data.beneficiaries = (state.data.beneficiaries || []).filter(function (b) { return b.id !== id; });
+        if (state.data.summary) {
+          state.data.summary.remaining = Math.max(0, (state.data.summary.remaining || 0) - 1);
+          state.data.summary.deliveredToday = (state.data.summary.deliveredToday || 0) + 1;
+        }
         closeModal();
         renderDelegate();
         toast('تم توثيق التسليم بنجاح.', 'success');
-      }, reportError).then(function () { busy(false); });
+      }, reportError).finally(function () { busy(false); });
     }
 
     function delegateSettings() {
@@ -2524,7 +2703,7 @@
         state.data = data;
         render();
         toast('تم تحديث البيانات.', 'success');
-      }, reportError).then(function () { busy(false); });
+      }, reportError).finally(function () { busy(false); });
     }
 
     function toggleMenu() {
@@ -2612,7 +2791,11 @@
       'dg-status': function (el) { delegateStatusModal(el.getAttribute('data-id')); },
       'dg-save-status': function (el) { saveDelegateStatus(el.getAttribute('data-id')); },
       'dg-deliver': function (el) { deliveryModal(el.getAttribute('data-id')); },
-      'dg-save-delivery': function (el) { saveDelivery(el.getAttribute('data-id')); }
+      'dg-save-delivery': function (el) { saveDelivery(el.getAttribute('data-id')); },
+      'audit-prev-page': function () { fetchLazyPage('audit', 'listAuditLog', (state.lazy.audit.page || 1) - 1); },
+      'audit-next-page': function () { fetchLazyPage('audit', 'listAuditLog', (state.lazy.audit.page || 1) + 1); },
+      'applications-prev-page': function () { fetchLazyPage('applications', 'listApplications', (state.lazy.applications.page || 1) - 1); },
+      'applications-next-page': function () { fetchLazyPage('applications', 'listApplications', (state.lazy.applications.page || 1) + 1); }
     };
 
     /**
@@ -2666,6 +2849,7 @@
       var handler = CLICK_ACTIONS[action];
       if (!handler) return;
       event.preventDefault();
+      state.activeTrigger = el;
       handler(el);
     });
 
@@ -2677,6 +2861,7 @@
       window.clearTimeout(searchTimer);
       searchTimer = window.setTimeout(function () {
         state.search = value;
+        if (LAZY_PAGES[state.page]) { fetchLazyPage(state.page, LAZY_PAGES[state.page], 1); return; }
         render();
         var box = $('#searchBox');
         if (box) {
@@ -2689,7 +2874,12 @@
     document.addEventListener('change', function (event) {
       var el = event.target;
       var action = el.getAttribute ? el.getAttribute('data-act') : null;
-      if (action === 'set-filter') { state.filter = el.value; render(); return; }
+      if (action === 'set-filter') {
+        state.filter = el.value;
+        if (LAZY_PAGES[state.page]) { fetchLazyPage(state.page, LAZY_PAGES[state.page], 1); return; }
+        render();
+        return;
+      }
       if (action === 'bulk-file') { handleBulkFile(el); return; }
       if (action === 'proof-file') { handleProofFile(el); return; }
       if (action === 'region-select') { onRegionChange(el); }
@@ -2708,6 +2898,8 @@
     document.addEventListener('submit', function (event) {
       var form = event.target;
       var action = form.getAttribute && form.getAttribute('data-act');
+      if (!action) return;
+      state.activeTrigger = form;
       if (action === 'submit-login') { event.preventDefault(); submitLogin(form); return; }
       if (action === 'submit-application') { event.preventDefault(); submitApplication(form); return; }
       if (action === 'submit-force-password') { event.preventDefault(); submitForcePasswordChange(form); return; }

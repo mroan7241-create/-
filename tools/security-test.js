@@ -496,16 +496,31 @@ section('9) سلامة سجل العمليات');
     'reviewAssociationApplication'
   ];
   mutatingFunctions.forEach(fnName => {
-    const start = source.indexOf('function ' + fnName + '(');
-    if (start === -1) { assert(fnName + ' موجودة', false); return; }
-    let depth = 0, i = source.indexOf('{', start), end = -1;
-    for (; i < source.length; i++) {
-      if (source[i] === '{') depth++;
-      else if (source[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
-    }
-    const body = source.slice(start, end + 1);
+    const body = extractFunctionBody_(source, fnName);
+    if (!body) { assert(fnName + ' موجودة', false); return; }
     assert(fnName + ' يسجّل العملية في audit_ عند النجاح', /audit_\(/.test(body));
   });
+}
+
+/**
+ * يستخرج جسم دالة بمطابقة الأقواس، ويتبع مستوى واحدًا من التفويض إلى
+ * دالة مساعدة بنفس الاسم مع شرطة سفلية (نمط شائع الآن: الدالة المُصدَّرة
+ * غلاف رقيق حول perfTime_/withIdempotency_ يستدعي fnName_ الفعلية).
+ */
+function extractFunctionBody_(source, fnName) {
+  const start = source.indexOf('function ' + fnName + '(');
+  if (start === -1) return null;
+  let depth = 0, i = source.indexOf('{', start), end = -1;
+  for (; i < source.length; i++) {
+    if (source[i] === '{') depth++;
+    else if (source[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+  }
+  let body = source.slice(start, end + 1);
+  if (new RegExp(fnName + '_\\(').test(body)) {
+    const helperBody = extractFunctionBody_(source, fnName + '_');
+    if (helperBody) body += helperBody;
+  }
+  return body;
 }
 
 /* -------- النتيجة -------- */

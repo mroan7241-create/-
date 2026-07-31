@@ -183,7 +183,19 @@ const DELEGATE_DATA = {
   history: [{ beneficiaryName: 'نورة السالم', deliveredAt: '2026/07/28 11:00', devices: ['DEV-000002'] }]
 };
 
-const setRole = data => { app.state.data = data; app.state.user = data.user; };
+// audit/activities/applications لم تعد ضمن Bootstrap (Bootstrap.gs) —
+// تُحاكى هنا القيم نفسها ضمن state.lazy لمطابقة العقد الجديد بين الخادم
+// والواجهة (fetchLazyPage/fetchActivitiesBundle في Index.html) دون تغيير
+// بيانات الاختبار الأصلية نفسها.
+const setRole = data => {
+  app.state.data = data;
+  app.state.user = data.user;
+  app.state.lazy = {
+    audit: {loading: false, items: data.audit || [], total: (data.audit || []).length, page: 1, totalPages: 1, pageSize: 25},
+    activities: {loading: false, activities: data.activities || [], stages: data.stages || [], evidence: data.evidence || []},
+    applications: {loading: false, items: data.applications || [], total: (data.applications || []).length, page: 1, totalPages: 1, pageSize: 25}
+  };
+};
 const out = () => registry.root.innerHTML;
 
 /* ---------------- 1) شاشة الدخول ---------------- */
@@ -336,24 +348,28 @@ app.render();
 assert('الفلتر بحالة غير مطابقة يُخفي السجل', !out().includes('فاطمة العتيبي'));
 app.state.filter = '';
 
+// سجل العمليات لم يعد يُصفَّى محليًا (listAuditLog على الخادم يُصفّي
+// ويُرقّم قبل الإرسال) — smoke.js يختبر هنا فقط أن الصفحة ترسم ما وصلها
+// في state.lazy.audit.items بشكل صحيح لكل حالة (نتائج/بحث فارغ/تحميل)،
+// لا منطق البحث نفسه (ذاك مختبَر خادميًا في account-test.js/server-test.js).
 setRole(ADMIN_DATA);
 app.state.page = 'audit'; app.state.search = ''; app.state.filter = ''; app.render();
 assert('سجل العمليات يعرض شريط بحث وتصفية بالقسم', out().includes('data-act="set-search"') && out().includes('data-act="set-filter"'));
 assert('سجل العمليات يعرض السجل الموجود افتراضيًا', out().includes('إضافة مستفيد'));
-app.state.search = 'مدير النظام';
+
+app.state.lazy.audit = {loading: false, items: [], total: 0, page: 1, totalPages: 1, pageSize: 25};
 app.render();
-assert('البحث في سجل العمليات باسم المستخدم يُرجع نتيجة', out().includes('إضافة مستفيد'));
-app.state.search = 'عملية لا وجود لها إطلاقًا';
+assert('نتيجة بحث فارغة من الخادم تعرض حالة فارغة مناسبة', out().includes('لا توجد عمليات مسجّلة'));
+
+app.state.lazy.audit = {loading: true, items: [], total: 0, page: 1, totalPages: 1, pageSize: 25};
 app.render();
-assert('بحث بلا نتائج في سجل العمليات يعرض حالة فارغة', out().includes('لا توجد عمليات مسجّلة'));
-app.state.search = '';
-app.state.filter = 'المستفيدون';
+assert('حالة التحميل تعرض هيكلًا عظميًا بدل صفوف فارغة مضلِّلة', out().includes('sk-card'));
+
+app.state.lazy.audit = {loading: false, items: ADMIN_DATA.audit, total: 40, page: 2, totalPages: 2, pageSize: 25};
 app.render();
-assert('تصفية سجل العمليات بالقسم الصحيح تُبقي السجل', out().includes('إضافة مستفيد'));
-app.state.filter = 'الجمعيات';
-app.render();
-assert('تصفية سجل العمليات بقسم آخر تُخفي السجل غير المطابق', !out().includes('إضافة مستفيد'));
+assert('صفحة ثانية من النتائج تعرض أزرار تنقّل بين الصفحات', out().includes('audit-prev-page') && out().includes('audit-next-page'));
 app.state.filter = '';
+setRole(ADMIN_DATA);
 
 /* ---------------- 5) الحالات الفارغة ---------------- */
 

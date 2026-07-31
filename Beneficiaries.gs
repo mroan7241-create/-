@@ -1,6 +1,31 @@
 // -------------------- المستفيدون --------------------
 
+/**
+ * قائمة مستفيدين مُرقَّمة (صفحة واحدة فقط تصل للعميل) مع بحث/فلترة —
+ * هذه هي مصدر بيانات صفحة "المستفيدون" الآن بدل مصفوفة كاملة في
+ * Bootstrap. العزل بين الجمعيات مفروض هنا صراحة قبل أي بحث أو ترقيم:
+ * جمعية لا تستطيع طلب صفحة تخص جمعية أخرى مهما كانت options.associationId.
+ */
+function listBeneficiaries(token, options) {
+  return perfTime_('listBeneficiaries', () => {
+    const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
+    options = options || {};
+    let rows = readTable_(APP.sheets.beneficiaries).rows;
+    if (user.role === 'ASSOCIATION') {
+      rows = rows.filter(row => String(row['رقم الجمعية']) === user.associationId);
+    } else if (options.associationId) {
+      rows = rows.filter(row => String(row['رقم الجمعية']) === cleanId_(options.associationId));
+    }
+    let items = rows.map(normalizeBeneficiary_);
+    items = applySearch_(items, options.search, ['name', 'id', 'phone']);
+    if (options.filter) items = items.filter(item => item.status === options.filter || item.deliveryStatus === options.filter);
+    items = applySort_(items, options.sortBy, options.sortDir);
+    return Object.assign({ok: true}, paginate_(items, options));
+  });
+}
+
 function saveBeneficiary(token, payload) {
+  return perfTime_('saveBeneficiary', () => {
   const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
   payload = payload || {};
   const existing = payload.id ? findById_(APP.sheets.beneficiaries, 'رقم المستفيد', cleanId_(payload.id)) : null;
@@ -44,7 +69,10 @@ function saveBeneficiary(token, payload) {
     audit_(user, 'إضافة مستفيد', 'المستفيدون', id, '');
   }
   clearDashboardCache();
-  return {ok: true, id: id, data: getBootstrapData(token, true)};
+  const record = normalizeBeneficiary_(findById_(APP.sheets.beneficiaries, 'رقم المستفيد', id));
+  const summary = computeCoreSummary_(user.role === 'ASSOCIATION' ? user.associationId : null);
+  return {ok: true, id: id, record: record, summary: summary};
+  });
 }
 
 function importBeneficiaries(token, rows, acceptedPledge) {
@@ -93,7 +121,10 @@ function importBeneficiaries(token, rows, acceptedPledge) {
   appendObjects_(APP.sheets.beneficiaries, valid);
   audit_(user, 'استيراد مستفيدين', 'المستفيدون', '', 'عدد السجلات: ' + valid.length);
   clearDashboardCache();
-  return {ok: true, imported: valid.length, data: getBootstrapData(token, true)};
+  // لا تُعاد السجلات المستوردة كاملة (قد تصل لألف سجل) — الواجهة تُعيد
+  // طلب صفحة المستفيدين الأولى بعد نجاح الاستيراد بدلًا من ذلك.
+  const summary = computeCoreSummary_(user.role === 'ASSOCIATION' ? user.associationId : null);
+  return {ok: true, imported: valid.length, summary: summary};
 }
 
 /**
@@ -168,6 +199,7 @@ function inspectBeneficiaryExcel(token, payload) {
 }
 
 function assignDelegate(token, beneficiaryId, delegateId) {
+  return perfTime_('assignDelegate', () => {
   const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
   beneficiaryId = cleanId_(beneficiaryId);
   delegateId = cleanId_(delegateId);
@@ -201,6 +233,10 @@ function assignDelegate(token, beneficiaryId, delegateId) {
   }
   audit_(user, 'تعيين مندوب', 'المستفيدون', beneficiaryId, 'المندوب: ' + delegateId + ' — عدد الأجهزة: ' + activeDevices.length);
   clearDashboardCache();
-  return {ok: true, data: getBootstrapData(token, true)};
+  const record = normalizeBeneficiary_(findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId));
+  const updatedDevices = devicesForBeneficiary_(beneficiaryId);
+  const summary = computeCoreSummary_(user.role === 'ASSOCIATION' ? user.associationId : null);
+  return {ok: true, record: record, devices: updatedDevices, summary: summary};
+  });
 }
 

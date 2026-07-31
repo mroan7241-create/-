@@ -90,7 +90,8 @@ function getDeliveryHistory_(delegateId) {
     }).reverse();
 }
 
-function getAuditRows_(limit, associationId) {
+/** كل صفوف سجل العمليات المطابقة لنطاق جمعية معيّنة (أو الكل)، الأحدث أولًا، بلا حد أقصى. */
+function auditRowsFiltered_(associationId) {
   const rows = readTable_(APP.sheets.audit).rows;
   let actorIds = null;
   let recordIds = null;
@@ -119,10 +120,32 @@ function getAuditRows_(limit, associationId) {
     if (!associationId) return true;
     const record = String(row['رقم السجل'] || '');
     return actorIds.has(String(row['رقم المستخدم'])) || recordIds.has(record);
-  }).slice(-limit).reverse().map(row => ({
+  }).reverse().map(row => ({
     user: String(row['اسم المستخدم'] || ''), action: String(row['العملية'] || ''),
     section: String(row['القسم'] || ''), recordId: String(row['رقم السجل'] || ''),
     notes: String(row['ملاحظات'] || ''), at: formatDateTime_(parseDate_(row['التاريخ والوقت']))
   }));
+}
+
+function getAuditRows_(limit, associationId) {
+  return auditRowsFiltered_(associationId).slice(0, limit);
+}
+
+/**
+ * سجل العمليات مُرقَّم — أثقل جدول قراءةً بعد المستفيدين لأنه يتراكم مع
+ * كل عملية في النظام. لم يعد ضمن Bootstrap إطلاقًا؛ يُجلب فقط عند فتح
+ * صفحة "سجل العمليات"، صفحة بصفحة.
+ */
+function listAuditLog(token, options) {
+  return perfTime_('listAuditLog', () => {
+    const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
+    options = options || {};
+    const associationId = user.role === 'ASSOCIATION' ? user.associationId
+      : (options.associationId ? cleanId_(options.associationId) : null);
+    let items = auditRowsFiltered_(associationId);
+    items = applySearch_(items, options.search, ['user', 'action', 'section', 'recordId', 'notes']);
+    if (options.filter) items = items.filter(item => item.section === options.filter);
+    return Object.assign({ok: true}, paginate_(items, options));
+  });
 }
 

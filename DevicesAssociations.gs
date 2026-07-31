@@ -5,6 +5,38 @@
 // ينكسر الترابط بتعديل مستقل من صفحة الأجهزة (راجع StateRules.gs).
 const DEVICE_MANUAL_STATUSES_ = Object.freeze(['بالمستودع', 'مخصص', 'تالف']);
 
+/** قائمة أجهزة مُرقَّمة — عزل الجمعيات مفروض قبل أي بحث أو ترقيم. */
+function listDevices(token, options) {
+  return perfTime_('listDevices', () => {
+    const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
+    options = options || {};
+    let rows = readTable_(APP.sheets.devices).rows;
+    if (user.role === 'ASSOCIATION') rows = rows.filter(row => String(row['رقم الجمعية']) === user.associationId);
+    else if (options.associationId) rows = rows.filter(row => String(row['رقم الجمعية']) === cleanId_(options.associationId));
+    let items = rows.map(normalizeDevice_);
+    items = applySearch_(items, options.search, ['name', 'id', 'type', 'beneficiaryId']);
+    if (options.filter) items = items.filter(item => item.status === options.filter);
+    items = applySort_(items, options.sortBy, options.sortDir);
+    return Object.assign({ok: true}, paginate_(items, options));
+  });
+}
+
+/** قائمة جمعيات مُرقَّمة (ADMIN فقط — الجمعية ترى بياناتها الخاصة فقط عبر association في Bootstrap). */
+function listAssociations(token, options) {
+  return perfTime_('listAssociations', () => {
+    requireSession_(token, ['ADMIN']);
+    options = options || {};
+    const beneficiaries = readTable_(APP.sheets.beneficiaries).rows;
+    const devices = readTable_(APP.sheets.devices).rows;
+    const delegates = readTable_(APP.sheets.delegates).rows;
+    let items = readTable_(APP.sheets.associations).rows.map(row => normalizeAssociation_(row, beneficiaries, devices, delegates));
+    items = applySearch_(items, options.search, ['name', 'id', 'email', 'phone']);
+    if (options.filter) items = items.filter(item => item.status === options.filter);
+    items = applySort_(items, options.sortBy, options.sortDir);
+    return Object.assign({ok: true}, paginate_(items, options));
+  });
+}
+
 function saveDevice(token, payload) {
   const user = requireSession_(token, ['ADMIN']);
   payload = payload || {};
@@ -62,13 +94,20 @@ function saveDevice(token, payload) {
     audit_(user, 'إضافة جهاز', 'الأجهزة', id, 'الحالة الابتدائية: ' + status);
   }
   clearDashboardCache();
-  return {ok: true, id: id, data: getBootstrapData(token, true)};
+  const record = normalizeDevice_(findById_(APP.sheets.devices, 'رقم الجهاز', id));
+  // saveDevice للإدارة فقط — الملخّص دائمًا غير مُقيَّد بجمعية (يطابق لوحة الإدارة).
+  const summary = computeCoreSummary_(null);
+  return {ok: true, id: id, record: record, summary: summary};
 }
 
+/**
+ * إنشاء جمعية جديدة يُنشئ أيضًا حساب دخولها بكلمة مرور — إعادة محاولة
+ * بعد مهلة واجهة يجب ألّا تُنشئ جمعيتين وحسابين مكرَّرين؛ لذلك تُلفّ
+ * عملية الإنشاء فقط بـ withIdempotency_ عند توفّر payload.opId.
+ */
 function saveAssociation(token, payload) {
   const user = requireSession_(token, ['ADMIN']);
   payload = payload || {};
-  const id = payload.id ? cleanId_(payload.id) : nextId_('ASC');
   const place = validateRegionCity_(payload.region, payload.city);
   const values = {
     'اسم الجمعية': requiredText_(payload.name, 'اسم الجمعية', 150),
@@ -80,6 +119,7 @@ function saveAssociation(token, payload) {
     'الحالة': payload.status === 'غير نشطة' ? 'غير نشطة' : 'نشطة'
   };
   if (payload.id) {
+    const id = cleanId_(payload.id);
     const before = findById_(APP.sheets.associations, 'رقم الجمعية', id);
     if (!before) throw new Error('الجمعية غير موجودة');
     updateById_(APP.sheets.associations, 'رقم الجمعية', id, values);
@@ -87,16 +127,30 @@ function saveAssociation(token, payload) {
     if (values['الحالة'] === 'غير نشطة' && String(before['الحالة']) !== 'غير نشطة') {
       revokeAssociationSessions_(id);
     }
-  } else {
-    if (!payload.password) throw new Error('كلمة مرور حساب الجمعية مطلوبة');
-    assertStrongPassword_(payload.password);
+    audit_(user, 'تعديل جمعية', 'الجمعيات', id, '');
+    clearDashboardCache();
+    const record = normalizeAssociation_(findById_(APP.sheets.associations, 'رقم الجمعية', id),
+      readTable_(APP.sheets.beneficiaries).rows, readTable_(APP.sheets.devices).rows, readTable_(APP.sheets.delegates).rows);
+    return {ok: true, id: id, record: record};
+  }
+
+  if (!payload.password) throw new Error('كلمة مرور حساب الجمعية مطلوبة');
+  assertStrongPassword_(payload.password);
+  // فحص تكرار البريد داخل الكتلة المُغلَّفة بـ withIdempotency_ عمدًا:
+  // لو كان خارجها، إعادة محاولة بنفس opId بعد نجاح فعلي أول ستجد البريد
+  // مستخدَمًا (لأن الحساب أُنشئ فعلًا) وترمي خطأً مربكًا بدل إعادة نتيجة
+  // النجاح الأصلية المُخزَّنة.
+  return withIdempotency_(user.id, payload.opId, () => {
     if (findUserByEmail_(values['البريد الإلكتروني'])) throw new Error('البريد الإلكتروني مستخدم في حساب آخر');
+    const id = nextId_('ASC');
     appendObject_(APP.sheets.associations, Object.assign({'رقم الجمعية': id, 'تاريخ الإنشاء': now_()}, values));
     createAssociationUser_(id, values['اسم الجمعية'], values['البريد الإلكتروني'], payload.password);
-  }
-  audit_(user, payload.id ? 'تعديل جمعية' : 'إضافة جمعية', 'الجمعيات', id, '');
-  clearDashboardCache();
-  return {ok: true, id: id, data: getBootstrapData(token, true)};
+    audit_(user, 'إضافة جمعية', 'الجمعيات', id, '');
+    clearDashboardCache();
+    const record = normalizeAssociation_(findById_(APP.sheets.associations, 'رقم الجمعية', id), [], [], []);
+    const summary = {associations: computeAssociationsCount_()};
+    return {ok: true, id: id, record: record, summary: summary};
+  });
 }
 
 function assertStrongPassword_(password) {

@@ -1,12 +1,36 @@
 // -------------------- المناديب والتسليم --------------------
 
+/**
+ * قائمة مناديب مُرقَّمة — عزل الجمعيات مفروض هنا قبل أي بحث أو ترقيم.
+ */
+function listDelegates(token, options) {
+  return perfTime_('listDelegates', () => {
+    const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
+    options = options || {};
+    const beneficiaries = readTable_(APP.sheets.beneficiaries).rows;
+    let rows = readTable_(APP.sheets.delegates).rows;
+    if (user.role === 'ASSOCIATION') rows = rows.filter(row => String(row['رقم الجمعية']) === user.associationId);
+    else if (options.associationId) rows = rows.filter(row => String(row['رقم الجمعية']) === cleanId_(options.associationId));
+    let items = rows.map(row => normalizeDelegate_(row, beneficiaries));
+    items = applySearch_(items, options.search, ['name', 'id', 'phone']);
+    if (options.filter) items = items.filter(item => item.status === options.filter);
+    items = applySort_(items, options.sortBy, options.sortDir);
+    return Object.assign({ok: true}, paginate_(items, options));
+  });
+}
+
+/**
+ * إنشاء مندوب جديد يولّد رمز دخول (سرّ يُعرض مرة واحدة) — إعادة محاولة
+ * بعد مهلة واجهة يجب ألّا تُنشئ حساب مندوب مكرَّرًا برمز آخر؛ لذلك تُلفّ
+ * عملية الإنشاء فقط بـ withIdempotency_ عند توفّر payload.opId. التعديل
+ * (existing) لا يُنشئ سرًّا جديدًا فلا حاجة له.
+ */
 function saveDelegate(token, payload) {
   const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
   payload = payload || {};
   const associationId = user.role === 'ASSOCIATION' ? user.associationId : cleanId_(payload.associationId);
   if (!associationId) throw new Error('رقم الجمعية مطلوب');
-  const id = payload.id ? cleanId_(payload.id) : nextId_('MND');
-  const existing = payload.id ? findById_(APP.sheets.delegates, 'رقم المندوب', id) : null;
+  const existing = payload.id ? findById_(APP.sheets.delegates, 'رقم المندوب', cleanId_(payload.id)) : null;
   if (existing && user.role === 'ASSOCIATION' && String(existing['رقم الجمعية']) !== user.associationId) throw new Error('ليس لديك صلاحية');
   const base = {
     'رقم الجمعية': associationId,
@@ -14,12 +38,15 @@ function saveDelegate(token, payload) {
     'رقم الجوال': normalizePhone_(payload.phone),
     'الحالة': payload.status === 'غير نشط' ? 'غير نشط' : 'نشط'
   };
-  let accessCode = '';
   if (existing) {
+    const id = String(existing['رقم المندوب']);
     updateById_(APP.sheets.delegates, 'رقم المندوب', id, base);
     audit_(user, 'تعديل مندوب', 'المناديب', id, '');
-  } else {
-    accessCode = createAccessCode_('MND', 6);
+    return {ok: true, id: id, accessCode: '', record: normalizeDelegate_(findById_(APP.sheets.delegates, 'رقم المندوب', id), readTable_(APP.sheets.beneficiaries).rows)};
+  }
+  return withIdempotency_(user.id, payload.opId, () => {
+    const id = nextId_('MND');
+    const accessCode = createAccessCode_('MND', 6);
     const salt = Utilities.getUuid();
     appendObject_(APP.sheets.delegates, Object.assign({
       'رقم المندوب': id,
@@ -29,8 +56,10 @@ function saveDelegate(token, payload) {
       'آخر دخول': ''
     }, base));
     audit_(user, 'إضافة مندوب', 'المناديب', id, '');
-  }
-  return {ok: true, id: id, accessCode: accessCode, data: getBootstrapData(token, true)};
+    const record = normalizeDelegate_(findById_(APP.sheets.delegates, 'رقم المندوب', id), readTable_(APP.sheets.beneficiaries).rows);
+    const summary = computeCoreSummary_(user.role === 'ASSOCIATION' ? user.associationId : null);
+    return {ok: true, id: id, accessCode: accessCode, record: record, summary: summary};
+  });
 }
 
 /**
@@ -74,7 +103,9 @@ function setDelegateStatus(token, delegateId, status) {
   // التعطيل يقطع جلسات المندوب القائمة فورًا، لا عند انتهاء المهلة فقط.
   if (status !== 'نشط') revokeSessions_(cleanId_(delegateId));
   audit_(user, status === 'نشط' ? 'تفعيل مندوب' : 'تعطيل مندوب', 'المناديب', delegateId, '');
-  return {ok: true, data: getBootstrapData(token, true)};
+  const record = normalizeDelegate_(findById_(APP.sheets.delegates, 'رقم المندوب', delegateId), readTable_(APP.sheets.beneficiaries).rows);
+  const summary = computeCoreSummary_(user.role === 'ASSOCIATION' ? user.associationId : null);
+  return {ok: true, record: record, summary: summary};
 }
 
 function updateDeliveryStatus(token, beneficiaryId, reason, notes) {
@@ -100,14 +131,28 @@ function updateDeliveryStatus(token, beneficiaryId, reason, notes) {
   });
   audit_(user, 'تعذر التسليم', 'التسليمات', beneficiaryId, reason);
   clearDashboardCache();
-  return {ok: true, data: getBootstrapData(token, true)};
+  return {ok: true, record: normalizeBeneficiary_(findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId))};
 }
 
+/**
+ * إعادة محاولة بعد مهلة واجهة قد تصادف أن التأكيد الأول نجح فعليًا على
+ * الخادم (الحالة النهائية "تم التسليم" لا تحمل حلقة ذاتية عمدًا —
+ * StateRules.gs — فتُرفض إعادة المحاولة العادية برسالة مربكة توحي بالفشل
+ * رغم النجاح الفعلي الأول). withIdempotency_ بـ payload.opId يكسر هذا
+ * اللبس: نفس opId يُعيد نتيجة التأكيد الأصلية الناجحة حرفيًا بدل تشغيل
+ * منطق التحقق من جديد.
+ */
 function confirmDelivery(token, payload) {
-  const user = requireSession_(token, ['DELEGATE']);
-  payload = payload || {};
-  if (payload.confirmed !== true) throw new Error('يجب تأكيد إتمام التسليم');
-  const beneficiaryId = cleanId_(payload.beneficiaryId);
+  return perfTime_('confirmDelivery', () => {
+    const user = requireSession_(token, ['DELEGATE']);
+    payload = payload || {};
+    if (payload.confirmed !== true) throw new Error('يجب تأكيد إتمام التسليم');
+    const beneficiaryId = cleanId_(payload.beneficiaryId);
+    return withIdempotency_(user.id, payload.opId, () => confirmDelivery_(user, beneficiaryId, payload));
+  });
+}
+
+function confirmDelivery_(user, beneficiaryId, payload) {
   const beneficiary = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId);
   if (!beneficiary || String(beneficiary['رقم المندوب']) !== user.id) throw new Error('المستفيد غير متاح لك');
   // تأكيد التسليم يشمل فقط الأجهزة التي خرجت فعليًا مع المندوب — لا
@@ -146,7 +191,7 @@ function confirmDelivery(token, payload) {
   }
   audit_(user, 'تأكيد تسليم', 'التسليمات', beneficiaryId, 'عدد الأجهزة: ' + devices.length);
   clearDashboardCache();
-  return {ok: true, data: getBootstrapData(token, true)};
+  return {ok: true, record: normalizeBeneficiary_(findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId))};
 }
 
 function saveProofImage_(dataUrl, beneficiaryId) {

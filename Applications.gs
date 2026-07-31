@@ -73,6 +73,23 @@ function getAssociationApplications_() {
     .sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1));
 }
 
+/**
+ * طلبات الانضمام — عدد الطلبات صغير طبيعيًا (لا يتناسب مع نمو المستفيدين)
+ * لكنها تبقى ضمن الأقسام "الثقيلة" التي لا تُحمَّل إلا عند فتح الصفحة،
+ * لا ضمن Bootstrap الأولي — لذلك مُرقَّمة بنفس النمط العام للاتساق.
+ */
+function listApplications(token, options) {
+  return perfTime_('listApplications', () => {
+    requireSession_(token, ['ADMIN']);
+    options = options || {};
+    let items = getAssociationApplications_();
+    items = applySearch_(items, options.search, ['name', 'id', 'email', 'contactName']);
+    if (options.filter) items = items.filter(item => item.status === options.filter);
+    return Object.assign({ok: true}, paginate_(items, options));
+  });
+}
+
+/** يُبقى للتوافق الخلفي إن استُدعي من أي مكان قديم — يعيد كل الطلبات بلا ترقيم. */
 function listAssociationApplications(token) {
   requireSession_(token, ['ADMIN']);
   return {ok: true, applications: getAssociationApplications_()};
@@ -89,35 +106,46 @@ function generateTempPassword_() {
   return 'Zad-' + randomPart + '-' + digitPart;
 }
 
-function reviewAssociationApplication(token, id, decision, reason) {
+/**
+ * القبول يُنشئ جمعية وحسابًا بكلمة مرور — إعادة محاولة بعد مهلة واجهة
+ * يجب ألّا تُنشئ جمعيتين مكرَّرتين؛ لذلك يُلفّ فرع القبول بـ withIdempotency_.
+ */
+function reviewAssociationApplication(token, id, decision, reason, opId) {
   const user = requireSession_(token, ['ADMIN']);
   id = cleanId_(id);
-  const application = findById_(APP.sheets.applications, 'رقم الطلب', id);
-  if (!application) throw new Error('طلب الانضمام غير موجود');
-  if (String(application['الحالة']) !== 'قيد المراجعة') throw new Error('سبق البتّ في هذا الطلب');
 
   if (decision === 'accept') {
-    const email = String(application['البريد الإلكتروني']);
-    if (findUserByEmail_(email)) throw new Error('البريد الإلكتروني مستخدم في حساب آخر الآن');
-    const associationId = nextId_('ASC');
-    const tempPassword = generateTempPassword_();
-    appendObject_(APP.sheets.associations, {
-      'رقم الجمعية': associationId, 'اسم الجمعية': String(application['اسم الجمعية']),
-      'التصنيف': String(application['التصنيف'] || ''), 'المنطقة': String(application['المنطقة']),
-      'المدينة': String(application['المدينة']), 'أرقام التواصل': String(application['أرقام التواصل']),
-      'البريد الإلكتروني': email, 'الحالة': 'نشطة', 'تاريخ الإنشاء': now_()
+    return withIdempotency_(user.id, opId, () => {
+      const application = findById_(APP.sheets.applications, 'رقم الطلب', id);
+      if (!application) throw new Error('طلب الانضمام غير موجود');
+      if (String(application['الحالة']) !== 'قيد المراجعة') throw new Error('سبق البتّ في هذا الطلب');
+      const email = String(application['البريد الإلكتروني']);
+      if (findUserByEmail_(email)) throw new Error('البريد الإلكتروني مستخدم في حساب آخر الآن');
+      const associationId = nextId_('ASC');
+      const tempPassword = generateTempPassword_();
+      appendObject_(APP.sheets.associations, {
+        'رقم الجمعية': associationId, 'اسم الجمعية': String(application['اسم الجمعية']),
+        'التصنيف': String(application['التصنيف'] || ''), 'المنطقة': String(application['المنطقة']),
+        'المدينة': String(application['المدينة']), 'أرقام التواصل': String(application['أرقام التواصل']),
+        'البريد الإلكتروني': email, 'الحالة': 'نشطة', 'تاريخ الإنشاء': now_()
+      });
+      createAssociationUser_(associationId, String(application['اسم الجمعية']), email, tempPassword);
+      updateById_(APP.sheets.applications, 'رقم الطلب', id, {
+        'الحالة': 'مقبول', 'رقم الجمعية الناتجة': associationId,
+        'تاريخ المراجعة': now_(), 'المراجع': user.name
+      });
+      audit_(user, 'قبول طلب انضمام جمعية', 'طلبات الانضمام', id, 'الجمعية الناتجة: ' + associationId);
+      clearDashboardCache();
+      const record = normalizeApplication_(findById_(APP.sheets.applications, 'رقم الطلب', id));
+      return {ok: true, associationId: associationId, temporaryPassword: tempPassword, record: record,
+        summary: {associations: computeAssociationsCount_()}};
     });
-    createAssociationUser_(associationId, String(application['اسم الجمعية']), email, tempPassword);
-    updateById_(APP.sheets.applications, 'رقم الطلب', id, {
-      'الحالة': 'مقبول', 'رقم الجمعية الناتجة': associationId,
-      'تاريخ المراجعة': now_(), 'المراجع': user.name
-    });
-    audit_(user, 'قبول طلب انضمام جمعية', 'طلبات الانضمام', id, 'الجمعية الناتجة: ' + associationId);
-    clearDashboardCache();
-    return {ok: true, associationId: associationId, temporaryPassword: tempPassword, data: getBootstrapData(token, true)};
   }
 
   if (decision === 'reject') {
+    const application = findById_(APP.sheets.applications, 'رقم الطلب', id);
+    if (!application) throw new Error('طلب الانضمام غير موجود');
+    if (String(application['الحالة']) !== 'قيد المراجعة') throw new Error('سبق البتّ في هذا الطلب');
     const rejectionReason = requiredText_(reason, 'سبب الرفض', 300);
     updateById_(APP.sheets.applications, 'رقم الطلب', id, {
       'الحالة': 'مرفوض', 'سبب الرفض': rejectionReason,
@@ -125,7 +153,7 @@ function reviewAssociationApplication(token, id, decision, reason) {
     });
     audit_(user, 'رفض طلب انضمام جمعية', 'طلبات الانضمام', id, rejectionReason);
     clearDashboardCache();
-    return {ok: true, data: getBootstrapData(token, true)};
+    return {ok: true, record: normalizeApplication_(findById_(APP.sheets.applications, 'رقم الطلب', id))};
   }
 
   throw new Error('قرار غير معروف');

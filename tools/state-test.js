@@ -416,32 +416,36 @@ section('7) تشخيص سلامة الحالات (قراءة فقط) والإص�
 section('8) اتساق القواعد عبر كل المسارات (فحص ثابت من الكود)');
 {
   ['assignDelegate', 'confirmDelivery', 'updateDeliveryStatus'].forEach(fnName => {
-    const start = source.indexOf('function ' + fnName + '(');
-    let depth = 0, i = source.indexOf('{', start), end = -1;
-    for (; i < source.length; i++) {
-      if (source[i] === '{') depth++;
-      else if (source[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
-    }
-    const body = source.slice(start, end + 1);
+    const body = extractFunctionBody_(source, fnName);
     assert(fnName + ' يستخدم assertDeliveryTransition_ (لا يكتب حالة التسليم مباشرة بلا تحقق)',
-      /assertDeliveryTransition_\(/.test(body));
+      !!body && /assertDeliveryTransition_\(/.test(body));
   });
-  const saveDeviceStart = source.indexOf('function saveDevice(');
-  let depth = 0, i = source.indexOf('{', saveDeviceStart), end = -1;
+  assert('saveDevice يستخدم assertDeviceTransition_', /assertDeviceTransition_\(/.test(extractFunctionBody_(source, 'saveDevice') || ''));
+  assert('assignDelegate يستخدم assertDeviceTransition_ (لأجهزة المستفيد أيضًا لا حالة التسليم فقط)',
+    /assertDeviceTransition_\(/.test(extractFunctionBody_(source, 'assignDelegate') || ''));
+  assert('importBeneficiaries لا يكتب أي حالة جهاز أو تسليم (لا يتجاوز قواعد الحالة، يُنشئ سجلات جديدة فقط)',
+    !/importBeneficiaries[\s\S]{0,3000}?'حالة الجهاز'/.test(source));
+}
+
+/**
+ * يستخرج جسم دالة بمطابقة الأقواس، ويتبع مستوى واحدًا من التفويض إلى
+ * دالة مساعدة بنفس الاسم مع شرطة سفلية (نمط شائع الآن: الدالة المُصدَّرة
+ * غلاف رقيق حول perfTime_/withIdempotency_ يستدعي fnName_ الفعلية).
+ */
+function extractFunctionBody_(source, fnName) {
+  const start = source.indexOf('function ' + fnName + '(');
+  if (start === -1) return null;
+  let depth = 0, i = source.indexOf('{', start), end = -1;
   for (; i < source.length; i++) {
     if (source[i] === '{') depth++;
     else if (source[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
   }
-  assert('saveDevice يستخدم assertDeviceTransition_', /assertDeviceTransition_\(/.test(source.slice(saveDeviceStart, end + 1)));
-  assert('assignDelegate يستخدم assertDeviceTransition_ (لأجهزة المستفيد أيضًا لا حالة التسليم فقط)',
-    (() => {
-      const s = source.indexOf('function assignDelegate(');
-      let d = 0, j = source.indexOf('{', s), e = -1;
-      for (; j < source.length; j++) { if (source[j] === '{') d++; else if (source[j] === '}') { d--; if (d === 0) { e = j; break; } } }
-      return /assertDeviceTransition_\(/.test(source.slice(s, e + 1));
-    })());
-  assert('importBeneficiaries لا يكتب أي حالة جهاز أو تسليم (لا يتجاوز قواعد الحالة، يُنشئ سجلات جديدة فقط)',
-    !/importBeneficiaries[\s\S]{0,3000}?'حالة الجهاز'/.test(source));
+  let body = source.slice(start, end + 1);
+  if (new RegExp(fnName + '_\\(').test(body)) {
+    const helperBody = extractFunctionBody_(source, fnName + '_');
+    if (helperBody) body += helperBody;
+  }
+  return body;
 }
 
 /* -------- النتيجة -------- */

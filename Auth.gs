@@ -16,8 +16,9 @@ function throttle_(bucket, limit, windowSeconds) {
 function login(payload) {
   payload = payload || {};
   const type = cleanText_(payload.type, 20);
-  if (type === 'delegate') return loginDelegate_(payload.code);
-  return loginUser_(payload.email, payload.password);
+  return perfTime_('login:' + (type === 'delegate' ? 'delegate' : 'user'), () =>
+    type === 'delegate' ? loginDelegate_(payload.code) : loginUser_(payload.email, payload.password)
+  );
 }
 
 function loginUser_(email, password) {
