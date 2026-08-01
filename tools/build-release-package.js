@@ -19,14 +19,18 @@ const PKG_NAME = 'alzad-rc-split-17-files';
 const STAGE = path.join(DIST, PKG_NAME);
 const ZIP_PATH = path.join(DIST, PKG_NAME + '.zip');
 
-const REPLACED_FILES = [
-  'Applications.gs', 'Auth.gs', 'Beneficiaries.gs', 'Bootstrap.gs',
-  'Config.gs', 'DataUtils.gs', 'Delegates.gs', 'DevicesAssociations.gs',
-  'ExecutionTracking.gs', 'Normalize.gs', 'ReferenceData.gs', 'Validation.gs'
-];
-const NEW_FILES = ['StateRules.gs', 'Pagination.gs', 'ExcelTemplate.gs', 'ReleaseOps.gs'];
 const ALL_GS = GS_FILES_ORDER.slice();
 const ALL_FILES = ALL_GS.concat(['Index.html']);
+
+/**
+ * بعد المرحلة التاسعة: **كل الملفات الـ17 تُستبدل بالكامل**، ولا ملف
+ * جديد يُنشأ. البنية نفسها لم تتغيّر (16 `.gs` + `Index.html` بنفس
+ * الأسماء تمامًا)، لكن التعديلات متشابكة عبر الملفات (نطاق الطلب، شكل
+ * الاستجابات، عقد الواجهة/الخادم) — فخلط نسخة قديمة بأخرى جديدة يكسر
+ * العقد بينهما. لذلك لا يوجد تقسيم "استبدال/إنشاء" بعد الآن.
+ */
+const REPLACED_FILES = ALL_FILES.slice();
+const NEW_FILES = [];
 
 function sha256File(filePath) {
   const buf = fs.readFileSync(filePath);
@@ -77,11 +81,15 @@ function writeManifest(meta) {
     lines.push('  - ' + name + '  [' + typeOf(name) + ']');
   });
   lines.push('');
-  lines.push('الملفات الـ12 التي سيُستبدل محتواها في المشروع التجريبي الحالي (ملفات موجودة مسبقًا):');
+  lines.push('الملفات التي سيُستبدل محتواها بالكامل (' + REPLACED_FILES.length + ' ملفًا — أي كل ملفات الحزمة):');
   REPLACED_FILES.forEach(name => lines.push('  - ' + name));
   lines.push('');
-  lines.push('الملفات الـ4 الجديدة التي يجب إنشاؤها بنفس الاسم تمامًا (غير موجودة حاليًا في المشروع التجريبي):');
-  NEW_FILES.forEach(name => lines.push('  - ' + name));
+  lines.push('ملفات جديدة يجب إنشاؤها: لا يوجد. البنية نفسها لم تتغيّر');
+  lines.push('(16 ملف .gs + Index.html بنفس الأسماء تمامًا).');
+  lines.push('');
+  lines.push('⚠️ مهم: استبدل الملفات الـ17 كلها، لا بعضها. التعديلات متشابكة');
+  lines.push('عبر الملفات (نطاق الطلب الواحد، شكل الاستجابات، عقد الواجهة/الخادم)،');
+  lines.push('وخلط نسخة قديمة بأخرى جديدة يكسر العقد بينهما.');
   lines.push('');
   lines.push('Index.html: يُستبدل بالكامل (محتوى كامل جديد، وليس تعديلًا جزئيًا).');
   lines.push('');
@@ -111,26 +119,33 @@ function writeInstall() {
   lines.push('   - احذف الملف TempPasswordReset.gs من مشروع Apps Script التجريبي إن وُجد.');
   lines.push('   - هذا الملف ليس جزءًا من النسخة النهائية ولا يوجد داخل هذه الحزمة.');
   lines.push('');
-  lines.push('3) استبدل محتوى الملفات الـ12 التالية واحدًا تلو الآخر (افتح كل ملف، احذف');
-  lines.push('   محتواه بالكامل، ثم الصق المحتوى الجديد من نفس الاسم داخل هذه الحزمة):');
-  REPLACED_FILES.forEach(name => lines.push('   - ' + name));
+  lines.push('3) استبدل محتوى كل ملف من الملفات الـ17 التالية واحدًا تلو الآخر');
+  lines.push('   (افتح الملف، احذف محتواه بالكامل بـCtrl+A، ثم الصق المحتوى الجديد');
+  lines.push('   من الملف الذي يحمل نفس الاسم داخل هذه الحزمة):');
+  ALL_FILES.forEach((name, index) => lines.push('   ' + (index + 1) + '. ' + name));
   lines.push('');
-  lines.push('4) استبدل Index.html بالكامل (احذف المحتوى القديم بالكامل والصق المحتوى الجديد).');
+  lines.push('   ⚠️ استبدلها كلها، لا بعضها — التعديلات متشابكة عبر الملفات،');
+  lines.push('   وخلط نسخة قديمة بأخرى جديدة يكسر العقد بين الواجهة والخادم.');
   lines.push('');
-  lines.push('5) أنشئ 4 ملفات جديدة بنفس الأسماء تمامًا (بدون أي تغيير في الاسم أو الامتداد):');
-  NEW_FILES.forEach(name => lines.push('   - ' + name));
+  lines.push('4) لا يوجد أي ملف جديد يجب إنشاؤه في هذه النسخة — البنية نفسها');
+  lines.push('   لم تتغيّر (16 ملف .gs + Index.html بنفس الأسماء تمامًا).');
   lines.push('');
-  lines.push('6) احفظ المشروع (Ctrl+S أو من قائمة الملف).');
+  lines.push('5) احفظ المشروع (Ctrl+S أو من قائمة الملف).');
   lines.push('');
-  lines.push('7) ممنوعات مهمة بعد الحفظ مباشرة:');
+  lines.push('6) ممنوعات مهمة بعد الحفظ مباشرة:');
   lines.push('   - لا تُشغّل setupSheets أو أي دالة ترحيل/إصلاح مباشرة من المحرر.');
   lines.push('   - لا تنشر (Deploy) المشروع قبل إكمال preflightRelease_ وخطوات التحضير الآمنة.');
   lines.push('   - لا تُنشئ دالة مؤقتة تحمل رمز وصول صيانة (Maintenance Access Token)');
   lines.push('     إلا في الخطوة المخصّصة لذلك تحديدًا في دليل DEPLOYMENT.md.');
   lines.push('   - إن أنشأت دالة مؤقتة كهذه، احذفها فورًا من المحرر قبل أي نشر.');
   lines.push('');
-  lines.push('8) بعد ذلك، اتّبع الخطوات التفصيلية الكاملة الموجودة في DEPLOYMENT.md');
-  lines.push('   (فحص preflight، منح وصول الصيانة، تطبيق المخطط، ثم النشر التجريبي).');
+  lines.push('7) بعد ذلك، اتّبع الخطوات التفصيلية الكاملة الموجودة في DEPLOYMENT.md');
+  lines.push('   وRELEASE.md القسم 18 (فحص preflight قراءة-فقط، ثم diagnoseIdSequences_');
+  lines.push('   لتقرير المعرّفات المكرَّرة، ثم النشر التجريبي).');
+  lines.push('');
+  lines.push('8) البيانات التاريخية المكرَّرة (APP-000001 مزدوج) لن تُصحَّح تلقائيًا.');
+  lines.push('   بعد هذه النسخة، أي عملية تلمس معرّفًا مكرَّرًا تتوقف برسالة واضحة');
+  lines.push('   بدل العمل على أول صف بصمت. التصحيح يدوي — راجع RELEASE.md 18.3.');
   lines.push('');
   return lines.join('\n') + '\n';
 }

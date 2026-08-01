@@ -1,4 +1,4 @@
 بصمة SHA-256 لأرشيف الحزمة alzad-rc-split-17-files.zip:
-  db197d548c601b275537db78fb4540d7ff683e9fe701c956a9a9f9a8125857ef  alzad-rc-split-17-files.zip
-الكوميت المصدر: a271e8d1a99676aca168530a08afa183de1acd55
-تاريخ البناء: 2026-07-31
+  de9a3810aa5234cd4bbd926567ae64b081027e9467795bd227a673c5edee750f  alzad-rc-split-17-files.zip
+الكوميت المصدر: 8a923672ad3d74a039ba5af7d45d621e600937cc
+تاريخ البناء: 2026-08-01
