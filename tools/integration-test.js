@@ -18,6 +18,8 @@
 const path = require('path');
 const vm = require('vm');
 const { readMergedServerSource } = require('./gs-manifest');
+const { createDriveMock } = require('./drive-mock');
+const { applicationFixture } = require('./application-fixtures');
 
 const source = readMergedServerSource(path.join(__dirname, '..'));
 
@@ -86,6 +88,7 @@ function buildSandbox() {
   const cache = {};
   const logs = [];
   const mockSs = buildMockSpreadsheet();
+  const driveMock = createDriveMock();
   const sandbox = {
     console, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp, Error,
     isNaN, isFinite, parseInt, parseFloat, Set,
@@ -103,7 +106,7 @@ function buildSandbox() {
         const base = date.getFullYear() + '/' + p(date.getMonth() + 1) + '/' + p(date.getDate());
         return pattern.indexOf('HH') >= 0 ? base + ' ' + p(date.getHours()) + ':' + p(date.getMinutes()) : base;
       },
-      newBlob: () => ({ getBytes: () => [] }),
+      newBlob: driveMock.newBlob,
       DigestAlgorithm: { SHA_256: 'SHA_256' }, Charset: { UTF_8: 'UTF_8' }, sleep: () => {}
     },
     PropertiesService: {
@@ -124,13 +127,7 @@ function buildSandbox() {
     ScriptApp: { getScriptId: () => 'integration-test', getOAuthToken: () => 'token' },
     SpreadsheetApp: { getActiveSpreadsheet: () => mockSs },
     HtmlService: { createHtmlOutputFromFile: () => ({ setTitle() { return this; }, addMetaTag() { return this; } }) },
-    DriveApp: {
-      createFolder: () => ({
-        getId: () => 'folder-id', getUrl: () => 'https://drive.example/folder',
-        createFile: () => ({ getUrl: () => 'https://drive.example/file' })
-      }),
-      getFolderById: () => ({ createFile: () => ({ getUrl: () => 'https://drive.example/file' }) })
-    },
+    DriveApp: driveMock.DriveApp,
     UrlFetchApp: {}, Logger: { log: msg => { logs.push(String(msg)); } }
   };
   sandbox.globalThis = sandbox;
@@ -149,6 +146,7 @@ function grantToken_(S) {
   return line.split(': ').pop();
 }
 
+const __headerSandbox = buildSandbox();
 const ALL_HEADERS = {
   'إعدادات المشروع': ['المفتاح', 'القيمة', 'الوصف'],
   'المستخدمون': ['رقم المستخدم', 'الاسم', 'البريد الإلكتروني', 'كلمة المرور المشفرة', 'الملح', 'الدور', 'رقم الجمعية', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول', 'يجب تغيير كلمة المرور', 'كلمة مرور سابقة مشفرة', 'ملح سابق'],
@@ -160,7 +158,7 @@ const ALL_HEADERS = {
   'إدارة الأنشطة': ['ترتيب المرحلة', 'اسم المرحلة', 'ترتيب النشاط الرئيسي', 'اسم النشاط الرئيسي', 'اسم النشاط الفرعي', 'المسؤول', 'تاريخ البداية', 'تاريخ النهاية', 'نسبة الإنجاز', 'الحالة', 'رابط الشاهد', 'ملاحظات'],
   'شواهد الأنشطة الرئيسية': ['اسم المرحلة', 'اسم النشاط الرئيسي', 'رابط الشاهد', 'حالة الاعتماد', 'ملاحظات', 'تاريخ الرفع'],
   'سجل العمليات': ['رقم العملية', 'رقم المستخدم', 'اسم المستخدم', 'الدور', 'العملية', 'القسم', 'رقم السجل', 'ملاحظات', 'التاريخ والوقت'],
-  'طلبات انضمام الجمعيات': ['رقم الطلب', 'اسم الجمعية', 'التصنيف', 'المنطقة', 'المدينة', 'أرقام التواصل', 'البريد الإلكتروني', 'اسم المسؤول', 'ملاحظات مقدّم الطلب', 'الحالة', 'سبب الرفض', 'رقم الجمعية الناتجة', 'تاريخ التقديم', 'تاريخ المراجعة', 'المراجع'],
+  'طلبات انضمام الجمعيات': vm.runInContext("HEADERS['طلبات انضمام الجمعيات']", __headerSandbox),
   'البيانات المرجعية': ['المعرف', 'النوع', 'القيمة', 'يتبع', 'الترتيب', 'نشط']
 };
 
@@ -180,10 +178,10 @@ seedSheets(S);
 const admin = adminSession(S);
 
 section('1) تقديم طلب انضمام جمعية (بوابة عامة، بلا جلسة)');
-const application = S.submitAssociationApplication({
+const application = S.submitAssociationApplication(applicationFixture({
   name: 'جمعية الرحلة الكاملة', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
-  phone: '0501110001', email: 'full-journey@example.org', contactName: 'أحمد المطيري'
-});
+  phone: '0501110001', email: 'full-journey@example.org', contactName: 'أحمد المطيري', licenseNumber: 'LIC-J1'
+}));
 assert('التقديم ينجح ويعيد رقم طلب', application.ok && /^APP-/.test(application.id));
 
 section('2) قبول الطلب من الإدارة');
@@ -311,10 +309,10 @@ assert('حالة الجهاز وحالة التسليم متّسقتان (لا �
 })());
 
 section('13) عزل جمعيتين عن بعضهما داخل نفس الرحلة');
-const otherApplication = S.submitAssociationApplication({
+const otherApplication = S.submitAssociationApplication(applicationFixture({
   name: 'جمعية أخرى للعزل', category: 'جمعية أهلية', region: 'مكة المكرمة', city: 'جدة',
-  phone: '0501110099', email: 'isolated@example.org', contactName: 'مسؤول آخر'
-});
+  phone: '0501110099', email: 'isolated@example.org', contactName: 'مسؤول آخر', licenseNumber: 'LIC-J2'
+}));
 const otherAccepted = S.reviewAssociationApplication(admin.token, otherApplication.id, 'accept', '');
 const otherLogin = S.loginUser_('isolated@example.org', otherAccepted.temporaryPassword);
 S.changePassword(otherLogin.token, otherAccepted.temporaryPassword, 'OtherPass789');
@@ -366,10 +364,10 @@ const PROOF_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC
 {
   const J = buildSandbox();
   const boot = seedAdmin(J);
-  const applied = J.submitAssociationApplication({
+  const applied = J.submitAssociationApplication(applicationFixture({
     name: 'جمعية الرحلة الأولى', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
-    contactName: 'مسؤول', phone: '0551110001', email: 'j1@example.org'
-  });
+    contactName: 'مسؤول', phone: '0551110001', email: 'j1@example.org', licenseNumber: 'LIC-J1A'
+  }));
   assert('رحلة 1: التقديم العام ينجح بلا جلسة', applied.ok && /^APP-/.test(applied.id));
   const accepted = J.reviewAssociationApplication(boot.token, applied.id, 'accept', '', 'j1-accept');
   assert('رحلة 1: القبول يُنشئ جمعية وحسابًا بكلمة مرور مؤقتة',
@@ -377,20 +375,20 @@ const PROOF_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC
   const login1 = J.loginUser_('j1@example.org', accepted.temporaryPassword);
   assert('رحلة 1: الحساب الجديد يعمل ويُفرَض عليه تغيير كلمة المرور', login1.ok && login1.mustChangePassword === true);
 
-  const rejectedApp = J.submitAssociationApplication({
+  const rejectedApp = J.submitAssociationApplication(applicationFixture({
     name: 'جمعية مرفوضة', category: 'جمعية خيرية', region: 'الرياض', city: 'الخرج',
-    contactName: 'مسؤول', phone: '0551110002', email: 'j1r@example.org'
-  });
+    contactName: 'مسؤول', phone: '0551110002', email: 'j1r@example.org', licenseNumber: 'LIC-J1B'
+  }));
   throws('رحلة 1: الرفض يتطلب سببًا', () => J.reviewAssociationApplication(boot.token, rejectedApp.id, 'reject', '  ', 'j1-rej-a'), 'مطلوب');
   const rejected = J.reviewAssociationApplication(boot.token, rejectedApp.id, 'reject', 'بيانات ناقصة', 'j1-rej');
   assert('رحلة 1: الرفض يُسجَّل بسببه ولا يُنشئ حسابًا',
     rejected.record.status === 'مرفوض' && rejected.record.rejectionReason === 'بيانات ناقصة'
     && !J.findUserByEmail_('j1r@example.org'));
   assert('رحلة 1: الطلب المرفوض لا يمنع تقديم طلب جديد بنفس البريد لاحقًا', (() => {
-    const again = J.submitAssociationApplication({
+    const again = J.submitAssociationApplication(applicationFixture({
       name: 'جمعية معاد تقديمها', category: 'جمعية خيرية', region: 'الرياض', city: 'الخرج',
-      contactName: 'مسؤول', phone: '0551110002', email: 'j1r@example.org'
-    });
+      contactName: 'مسؤول', phone: '0551110002', email: 'j1r@example.org', licenseNumber: 'LIC-J1C'
+    }));
     return again.ok === true;
   })());
 }

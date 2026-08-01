@@ -24,6 +24,8 @@ const REFERENCE_SEED_REGIONS_CITIES = Object.freeze({
 const REFERENCE_SEED_DEVICE_TYPES = ['ثلاجة', 'غسالة', 'فرن', 'مكيف', 'فريزر', 'سخان'];
 const REFERENCE_SEED_SOCIAL_STATUSES = ['يتيم', 'أرملة', 'مطلق/مطلقة', 'متزوج/متزوجة', 'أخرى'];
 const REFERENCE_SEED_ASSOCIATION_CATEGORIES = ['جمعية أهلية', 'جمعية خيرية', 'مؤسسة أهلية', 'جمعية تنموية', 'أخرى'];
+/** مجال عمل الجمعية — حقل جديد في نموذج تقديم الجمعيات، مستقل عن "التصنيف". */
+const REFERENCE_SEED_ASSOCIATION_SECTORS = ['رعاية الأيتام', 'رعاية الأسر المنتجة', 'ذوو الإعاقة', 'رعاية كبار السن', 'الإغاثة والكوارث', 'التنمية المجتمعية', 'أخرى'];
 
 /**
  * ترحيل آمن وقابل لإعادة التشغيل: ينشئ ورقة "البيانات المرجعية" ويبذرها
@@ -64,16 +66,19 @@ function migrateReferenceData_(token) {
   REFERENCE_SEED_ASSOCIATION_CATEGORIES.forEach((value, index) => {
     rows.push([nextId_('REF'), 'ASSOCIATION_CATEGORY', value, '', index + 1, 'نعم']);
   });
+  REFERENCE_SEED_ASSOCIATION_SECTORS.forEach((value, index) => {
+    rows.push([nextId_('REF'), 'ASSOCIATION_SECTOR', value, '', index + 1, 'نعم']);
+  });
 
   sheet.getRange(2, 1, rows.length, HEADERS[APP.sheets.referenceData].length).setValues(rows);
   invalidateTableCache_(APP.sheets.referenceData);
   invalidateReferenceDataCache_();
   return {ok: true, skipped: false, inserted: rows.length,
-    message: 'تم إنشاء ' + rows.length + ' سجلًا مرجعيًا (مناطق، مدن، أنواع أجهزة، حالات اجتماعية، تصنيفات جمعيات).'};
+    message: 'تم إنشاء ' + rows.length + ' سجلًا مرجعيًا (مناطق، مدن، أنواع أجهزة، حالات اجتماعية، تصنيفات ومجالات جمعيات).'};
 }
 
 function invalidateReferenceDataCache_() {
-  CacheService.getScriptCache().remove('refdata:v2');
+  CacheService.getScriptCache().remove('refdata:v3');
 }
 
 /**
@@ -319,6 +324,7 @@ function builtinReferenceData_() {
     deviceTypes: REFERENCE_SEED_DEVICE_TYPES.slice(),
     socialStatuses: REFERENCE_SEED_SOCIAL_STATUSES.slice(),
     associationCategories: REFERENCE_SEED_ASSOCIATION_CATEGORIES.slice(),
+    associationSectors: REFERENCE_SEED_ASSOCIATION_SECTORS.slice(),
     ready: true, source: 'builtin'
   };
   Object.keys(REFERENCE_SEED_REGIONS_CITIES).forEach(region => {
@@ -330,7 +336,9 @@ function builtinReferenceData_() {
 
 function getReferenceData(token) {
   if (token) requireSession_(token);
-  const cacheKey = 'refdata:v2';
+  // v3: أضيف نوع ASSOCIATION_SECTOR — رفع رقم الإصدار يمنع إعادة قيمة
+  // مخزَّنة مؤقتًا من نسخة سابقة لا تحمل associationSectors.
+  const cacheKey = 'refdata:v3';
   const cache = CacheService.getScriptCache();
   const cached = cache.get(cacheKey);
   if (cached) return JSON.parse(cached);
@@ -348,7 +356,7 @@ function getReferenceData(token) {
     .sort((a, b) => safeNumber_(a['الترتيب']) - safeNumber_(b['الترتيب']));
 
   const result = {regions: [], citiesByRegion: {}, deviceTypes: [], socialStatuses: [],
-    associationCategories: [], ready: true, source: 'sheet'};
+    associationCategories: [], associationSectors: [], ready: true, source: 'sheet'};
   rows.forEach(row => {
     const type = String(row['النوع']);
     const value = String(row['القيمة']);
@@ -365,6 +373,8 @@ function getReferenceData(token) {
       result.socialStatuses.push(value);
     } else if (type === 'ASSOCIATION_CATEGORY') {
       result.associationCategories.push(value);
+    } else if (type === 'ASSOCIATION_SECTOR') {
+      result.associationSectors.push(value);
     }
   });
 
@@ -431,6 +441,23 @@ function validateAssociationCategory_(value, previous) {
   if (!data.ready || !data.associationCategories.length) return value;
   if (data.associationCategories.indexOf(value) === -1 && !isGrandfatheredValue_(value, previous)) {
     throw new Error('تصنيف الجمعية "' + value + '" غير معروف. اختر من القائمة المعتمدة');
+  }
+  return value;
+}
+
+/**
+ * مجال عمل الجمعية (حقل جديد في نموذج التقديم) — مطلوب دائمًا، بنفس
+ * نمط validateAssociationCategory_ (قائمة معتمدة + grandfathering).
+ * القائمة المعتمدة نفسها تتضمن قيمة "أخرى" صراحةً
+ * (REFERENCE_SEED_ASSOCIATION_SECTORS)، فاختيار "أخرى" من الواجهة يمر
+ * دون أي معالجة خاصة — لا حاجة لمسار تحقّق منفصل للنص الحر.
+ */
+function validateAssociationSector_(value, previous) {
+  value = requiredText_(value, 'مجال عمل الجمعية', 80);
+  const data = getReferenceData();
+  if (!data.ready || !data.associationSectors.length) return value;
+  if (data.associationSectors.indexOf(value) === -1 && !isGrandfatheredValue_(value, previous)) {
+    throw new Error('مجال عمل الجمعية "' + value + '" غير معروف. اختر من القائمة المعتمدة');
   }
   return value;
 }

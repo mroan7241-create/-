@@ -212,6 +212,24 @@ function safeNumber_(value) {
   return isFinite(number) ? number : 0;
 }
 
+/**
+ * إجابة نعم/لا مطلوبة (تُقبل true/false أو 'نعم'/'لا' من العميل) —
+ * تُخزَّن دائمًا كنص عربي موحَّد 'نعم'/'لا'، متسقة مع بقية أعمدة النظام
+ * من نفس النوع (مثل "ضمان اجتماعي" و"يجب تغيير كلمة المرور").
+ */
+function requiredYesNo_(value, label) {
+  if (value === true || value === 'نعم' || value === 'yes' || value === 'on') return 'نعم';
+  if (value === false || value === 'لا' || value === 'no') return 'لا';
+  throw new Error(label + ': أجب بنعم أو لا');
+}
+
+/** تاريخ مطلوب بصيغة صحيحة (yyyy-mm-dd أو yyyy/mm/dd) — يعيده منسَّقًا عربيًا موحَّدًا. */
+function requiredDate_(value, label) {
+  const parsed = parseDate_(value);
+  if (!parsed) throw new Error(label + ' غير صحيح — استخدم صيغة تاريخ صالحة');
+  return formatDate_(parsed);
+}
+
 function parseDate_(value) {
   if (!value) return null;
   if (Object.prototype.toString.call(value) === '[object Date]' && !isNaN(value.getTime())) return value;

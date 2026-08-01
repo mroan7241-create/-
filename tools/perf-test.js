@@ -12,6 +12,8 @@
 const path = require('path');
 const vm = require('vm');
 const { readMergedServerSource } = require('./gs-manifest');
+const { createDriveMock } = require('./drive-mock');
+const { applicationFixture } = require('./application-fixtures');
 
 const source = readMergedServerSource(path.join(__dirname, '..'));
 
@@ -80,6 +82,7 @@ function buildSandbox() {
   const props = {};
   const cache = {};
   const mockSs = buildMockSpreadsheet();
+  const driveMock = createDriveMock();
   const sandbox = {
     console, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp, Error,
     isNaN, isFinite, parseInt, parseFloat, Set,
@@ -97,7 +100,7 @@ function buildSandbox() {
         const base = date.getFullYear() + '/' + p(date.getMonth() + 1) + '/' + p(date.getDate());
         return pattern.indexOf('HH') >= 0 ? base + ' ' + p(date.getHours()) + ':' + p(date.getMinutes()) : base;
       },
-      newBlob: () => ({ getBytes: () => [] }),
+      newBlob: driveMock.newBlob,
       sleep: () => {},
       DigestAlgorithm: { SHA_256: 'SHA_256' }, Charset: { UTF_8: 'UTF_8' }
     },
@@ -119,13 +122,7 @@ function buildSandbox() {
     ScriptApp: { getScriptId: () => 'perf-test', getOAuthToken: () => 'token' },
     SpreadsheetApp: { getActiveSpreadsheet: () => mockSs },
     HtmlService: { createHtmlOutputFromFile: () => ({ setTitle() { return this; }, addMetaTag() { return this; } }) },
-    DriveApp: {
-      createFolder: () => ({
-        getId: () => 'folder-id', getUrl: () => 'https://drive.example/folder',
-        createFile: () => ({ getUrl: () => 'https://drive.example/file' })
-      }),
-      getFolderById: () => ({ createFile: () => ({ getUrl: () => 'https://drive.example/file' }) })
-    },
+    DriveApp: driveMock.DriveApp,
     UrlFetchApp: {}
   };
   sandbox.globalThis = sandbox;
@@ -134,6 +131,7 @@ function buildSandbox() {
   return sandbox;
 }
 
+const __headerSandbox = buildSandbox();
 const ALL_HEADERS = {
   'إعدادات المشروع': ['المفتاح', 'القيمة', 'الوصف'],
   'المستخدمون': ['رقم المستخدم', 'الاسم', 'البريد الإلكتروني', 'كلمة المرور المشفرة', 'الملح', 'الدور', 'رقم الجمعية', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول', 'يجب تغيير كلمة المرور', 'كلمة مرور سابقة مشفرة', 'ملح سابق'],
@@ -145,7 +143,7 @@ const ALL_HEADERS = {
   'إدارة الأنشطة': ['ترتيب المرحلة', 'اسم المرحلة', 'ترتيب النشاط الرئيسي', 'اسم النشاط الرئيسي', 'اسم النشاط الفرعي', 'المسؤول', 'تاريخ البداية', 'تاريخ النهاية', 'نسبة الإنجاز', 'الحالة', 'رابط الشاهد', 'ملاحظات'],
   'شواهد الأنشطة الرئيسية': ['اسم المرحلة', 'اسم النشاط الرئيسي', 'رابط الشاهد', 'حالة الاعتماد', 'ملاحظات', 'تاريخ الرفع'],
   'سجل العمليات': ['رقم العملية', 'رقم المستخدم', 'اسم المستخدم', 'الدور', 'العملية', 'القسم', 'رقم السجل', 'ملاحظات', 'التاريخ والوقت'],
-  'طلبات انضمام الجمعيات': ['رقم الطلب', 'اسم الجمعية', 'التصنيف', 'المنطقة', 'المدينة', 'أرقام التواصل', 'البريد الإلكتروني', 'اسم المسؤول', 'ملاحظات مقدّم الطلب', 'الحالة', 'سبب الرفض', 'رقم الجمعية الناتجة', 'تاريخ التقديم', 'تاريخ المراجعة', 'المراجع'],
+  'طلبات انضمام الجمعيات': vm.runInContext("HEADERS['طلبات انضمام الجمعيات']", __headerSandbox),
   'البيانات المرجعية': ['المعرف', 'النوع', 'القيمة', 'يتبع', 'الترتيب', 'نشط']
 };
 
@@ -317,10 +315,11 @@ section('4) listAuditLog وlistApplications — ترقيم وعزل');
     throw new Error('تم فرض النطاق من الخادم بأمان');
   }, 'تم فرض النطاق من الخادم بأمان');
 
-  S.submitAssociationApplication({
+  S.submitAssociationApplication(applicationFixture({
     name: 'جمعية طلب أداء', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
-    phone: '0500033333', email: 'perf-app@example.org', contactName: 'مسؤول', notes: ''
-  });
+    phone: '0500033333', email: 'perf-app@example.org', contactName: 'مسؤول', notes: '',
+    licenseNumber: 'LIC-PERF-1'
+  }));
   const apps = S.listApplications(admin.token, { page: 1, pageSize: 10 });
   assert('listApplications تُرجع الطلب المُقدَّم حديثًا', apps.total >= 1 && apps.items.some(a => a.email === 'perf-app@example.org'));
   throws('غير الإدارة لا تستطيع استدعاء listApplications', () => S.listApplications(assocASession.token, {}), 'صلاحية');

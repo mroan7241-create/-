@@ -268,19 +268,27 @@ const ID_PREFIX_SOURCES_ = Object.freeze({
   REF: {sheet: 'البيانات المرجعية', column: 'المعرف'}
 });
 
-/** يعيد كل قيم عمود المعرّف الفعلية (نصًا، غير فارغة) لبادئة معيّنة من ورقتها المصدر، أو [] إن كانت البادئة/الورقة/العمود غير موجودة. */
+/**
+ * يعيد كل قيم عمود المعرّف الفعلية (نصًا، غير فارغة) لبادئة معيّنة من
+ * ورقتها المصدر، أو [] إن كانت البادئة/الورقة/العمود غير موجودة.
+ *
+ * تمر عبر readTable_ (ذاكرة الطلب الواحد) بدل قراءة الورقة مباشرة من
+ * Sheets API — كانت nextId_ تُنتج قراءة إضافية غير مُخزَّنة مؤقتًا في كل
+ * استدعاء حتى لو كانت الورقة نفسها قُرئت أصلًا ضمن الطلب نفسه (مثال:
+ * submitAssociationApplication تقرأ ورقة الطلبات لفحص التكرار، ثم
+ * nextId_('APP') كانت تقرأها مجددًا من الصفر). الفحص المسبق لوجود
+ * الورقة يبقى مباشرًا (بلا readTable_) حتى لا يُفشِل sheet_() الطلب
+ * حين تكون الورقة غير موجودة بعد (سيناريو مشروع لم يُهيَّأ بالكامل).
+ */
 function existingIdsForPrefix_(prefix) {
   const source = ID_PREFIX_SOURCES_[prefix];
   if (!source) return [];
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss ? ss.getSheetByName(source.sheet) : null;
   if (!sheet) return [];
-  const values = sheet.getDataRange().getValues();
-  if (values.length < 2) return [];
-  const headers = values[0].map(String);
-  const colIndex = headers.indexOf(source.column);
-  if (colIndex === -1) return [];
-  return values.slice(1).map(row => String(row[colIndex] || '').trim()).filter(Boolean);
+  return readTable_(source.sheet).rows
+    .map(row => String(row[source.column] || '').trim())
+    .filter(Boolean);
 }
 
 /** أعلى رقم تسلسلي فعليًا موجود في ورقة المصدر لهذه البادئة (0 إن لم يوجد أي معرّف مطابق للنمط). */

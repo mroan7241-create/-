@@ -13,6 +13,8 @@
 const path = require('path');
 const vm = require('vm');
 const { readMergedServerSource } = require('./gs-manifest');
+const { createDriveMock } = require('./drive-mock');
+const { applicationFixture } = require('./application-fixtures');
 
 const source = readMergedServerSource(path.join(__dirname, '..'));
 
@@ -83,6 +85,7 @@ function buildSandbox() {
   const logs = [];
   const mockSs = buildMockSpreadsheet();
   const tzCalls = [];
+  const driveMock = createDriveMock();
   const sandbox = {
     console, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp, Error,
     isNaN, isFinite, parseInt, parseFloat, Set,
@@ -101,7 +104,7 @@ function buildSandbox() {
         const base = date.getFullYear() + '/' + p(date.getMonth() + 1) + '/' + p(date.getDate());
         return pattern.indexOf('HH') >= 0 ? base + ' ' + p(date.getHours()) + ':' + p(date.getMinutes()) : base;
       },
-      newBlob: () => ({ getBytes: () => [] }),
+      newBlob: driveMock.newBlob,
       DigestAlgorithm: { SHA_256: 'SHA_256' }, Charset: { UTF_8: 'UTF_8' }, sleep: () => {}
     },
     PropertiesService: {
@@ -122,13 +125,7 @@ function buildSandbox() {
     ScriptApp: { getScriptId: () => 'reference-test', getOAuthToken: () => 'token' },
     SpreadsheetApp: { getActiveSpreadsheet: () => mockSs },
     HtmlService: { createHtmlOutputFromFile: () => ({ setTitle() { return this; }, addMetaTag() { return this; } }) },
-    DriveApp: {
-      createFolder: () => ({
-        getId: () => 'folder-id', getUrl: () => 'https://drive.example/folder',
-        createFile: () => ({ getUrl: () => 'https://drive.example/file' })
-      }),
-      getFolderById: () => ({ createFile: () => ({ getUrl: () => 'https://drive.example/file' }) })
-    },
+    DriveApp: driveMock.DriveApp,
     UrlFetchApp: {}, Logger: { log: msg => { logs.push(String(msg)); } }
   };
   sandbox.globalThis = sandbox;
@@ -148,6 +145,7 @@ function grantToken_(S) {
   return line.split(': ').pop();
 }
 
+const __headerSandbox = buildSandbox();
 const ALL_HEADERS = {
   'إعدادات المشروع': ['المفتاح', 'القيمة', 'الوصف'],
   'المستخدمون': ['رقم المستخدم', 'الاسم', 'البريد الإلكتروني', 'كلمة المرور المشفرة', 'الملح', 'الدور', 'رقم الجمعية', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول'],
@@ -159,7 +157,7 @@ const ALL_HEADERS = {
   'إدارة الأنشطة': ['ترتيب المرحلة', 'اسم المرحلة', 'ترتيب النشاط الرئيسي', 'اسم النشاط الرئيسي', 'اسم النشاط الفرعي', 'المسؤول', 'تاريخ البداية', 'تاريخ النهاية', 'نسبة الإنجاز', 'الحالة', 'رابط الشاهد', 'ملاحظات'],
   'شواهد الأنشطة الرئيسية': ['اسم المرحلة', 'اسم النشاط الرئيسي', 'رابط الشاهد', 'حالة الاعتماد', 'ملاحظات', 'تاريخ الرفع'],
   'سجل العمليات': ['رقم العملية', 'رقم المستخدم', 'اسم المستخدم', 'الدور', 'العملية', 'القسم', 'رقم السجل', 'ملاحظات', 'التاريخ والوقت'],
-  'طلبات انضمام الجمعيات': ['رقم الطلب', 'اسم الجمعية', 'التصنيف', 'المنطقة', 'المدينة', 'أرقام التواصل', 'البريد الإلكتروني', 'اسم المسؤول', 'ملاحظات مقدّم الطلب', 'الحالة', 'سبب الرفض', 'رقم الجمعية الناتجة', 'تاريخ التقديم', 'تاريخ المراجعة', 'المراجع'],
+  'طلبات انضمام الجمعيات': vm.runInContext("HEADERS['طلبات انضمام الجمعيات']", __headerSandbox),
   'البيانات المرجعية': ['المعرف', 'النوع', 'القيمة', 'يتبع', 'الترتيب', 'نشط']
 };
 
@@ -386,24 +384,24 @@ section('6) تقديم الجمعية + حفظ المستفيد + الاستير
   S.migrateReferenceData_(grantToken_(S));
 
   assert('submitAssociationApplication ينجح بتصنيف معتمد ومنطقة/مدينة صحيحتين', (() => {
-    const result = S.submitAssociationApplication({
+    const result = S.submitAssociationApplication(applicationFixture({
       name: 'جمعية جديدة', category: 'جمعية أهلية', region: 'الرياض', city: 'الرياض',
-      phone: '0501112222', email: 'apply@example.org', contactName: 'مسؤول'
-    });
+      phone: '0501112222', email: 'apply@example.org', contactName: 'مسؤول', licenseNumber: 'LIC-REF-1'
+    }));
     return result.ok && !!result.id;
   })());
 
   throws('submitAssociationApplication يرفض تصنيفًا غير معروف بعد الترحيل',
-    () => S.submitAssociationApplication({
+    () => S.submitAssociationApplication(applicationFixture({
       name: 'جمعية أخرى', category: 'تصنيف غير موجود إطلاقًا', region: 'الرياض', city: 'الرياض',
-      phone: '0501112223', email: 'apply2@example.org', contactName: 'مسؤول'
-    }), 'غير معروف');
+      phone: '0501112223', email: 'apply2@example.org', contactName: 'مسؤول', licenseNumber: 'LIC-REF-2'
+    })), 'غير معروف');
 
   throws('submitAssociationApplication يرفض مدينة لا تتبع المنطقة',
-    () => S.submitAssociationApplication({
+    () => S.submitAssociationApplication(applicationFixture({
       name: 'جمعية ثالثة', category: 'جمعية أهلية', region: 'الرياض', city: 'جدة',
-      phone: '0501112224', email: 'apply3@example.org', contactName: 'مسؤول'
-    }), 'لا تتبع منطقة');
+      phone: '0501112224', email: 'apply3@example.org', contactName: 'مسؤول', licenseNumber: 'LIC-REF-3'
+    })), 'لا تتبع منطقة');
 
   const admin = adminSession(S);
   const assoc = S.saveAssociation(admin.token, {
@@ -512,10 +510,10 @@ section('8) تنسيق التاريخ العربي (yyyy/MM/dd) بتوقيت Asi
     // لا شيء — applicationsSheetReady_ فقط دالة قراءة، لا تلمس أي بيانات.
   }
   S.SpreadsheetApp.getActiveSpreadsheet().insertSheet('طلبات انضمام الجمعيات');
-  const submitted = S.submitAssociationApplication({
+  const submitted = S.submitAssociationApplication(applicationFixture({
     name: 'جمعية التاريخ', category: 'جمعية أهلية', region: 'الرياض', city: 'الرياض',
-    phone: '0501230000', email: 'date-app@example.org', contactName: 'مسؤول'
-  });
+    phone: '0501230000', email: 'date-app@example.org', contactName: 'مسؤول', licenseNumber: 'LIC-REF-DATE'
+  }));
   const record = S.getAssociationApplications_().find(a => a.id === submitted.id);
   assert('تاريخ تقديم طلب الجمعية منسَّق عربيًا/رقميًا وليس كائن JS Date خامًا (إصلاح عطل Applications.gs المرصود حيًّا)',
     /^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}$/.test(record.submittedAt));

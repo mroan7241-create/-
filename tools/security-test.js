@@ -17,6 +17,8 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const { readMergedServerSource } = require('./gs-manifest');
+const { createDriveMock } = require('./drive-mock');
+const { applicationFixture } = require('./application-fixtures');
 
 const source = readMergedServerSource(path.join(__dirname, '..'));
 
@@ -86,6 +88,7 @@ function buildSandbox() {
   const cache = {};
   const logs = [];
   const mockSs = buildMockSpreadsheet();
+  const driveMock = createDriveMock();
   const sandbox = {
     console, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp, Error,
     isNaN, isFinite, parseInt, parseFloat, Set,
@@ -103,7 +106,7 @@ function buildSandbox() {
         const base = date.getFullYear() + '/' + p(date.getMonth() + 1) + '/' + p(date.getDate());
         return pattern.indexOf('HH') >= 0 ? base + ' ' + p(date.getHours()) + ':' + p(date.getMinutes()) : base;
       },
-      newBlob: () => ({ getBytes: () => [] }),
+      newBlob: driveMock.newBlob,
       DigestAlgorithm: { SHA_256: 'SHA_256' }, Charset: { UTF_8: 'UTF_8' }, sleep: () => {}
     },
     PropertiesService: {
@@ -124,7 +127,7 @@ function buildSandbox() {
     ScriptApp: { getScriptId: () => 'security-test', getOAuthToken: () => 'token' },
     SpreadsheetApp: { getActiveSpreadsheet: () => mockSs },
     HtmlService: { createHtmlOutputFromFile: () => ({ setTitle() { return this; }, addMetaTag() { return this; } }) },
-    DriveApp: {}, UrlFetchApp: {}, Logger: { log: msg => { logs.push(String(msg)); } }
+    DriveApp: driveMock.DriveApp, UrlFetchApp: {}, Logger: { log: msg => { logs.push(String(msg)); } }
   };
   sandbox.globalThis = sandbox;
   sandbox.__logs = logs;
@@ -133,6 +136,7 @@ function buildSandbox() {
   return sandbox;
 }
 
+const __headerSandbox = buildSandbox();
 const ALL_HEADERS = {
   'إعدادات المشروع': ['المفتاح', 'القيمة', 'الوصف'],
   'المستخدمون': ['رقم المستخدم', 'الاسم', 'البريد الإلكتروني', 'كلمة المرور المشفرة', 'الملح', 'الدور', 'رقم الجمعية', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول', 'يجب تغيير كلمة المرور', 'كلمة مرور سابقة مشفرة', 'ملح سابق'],
@@ -144,7 +148,7 @@ const ALL_HEADERS = {
   'إدارة الأنشطة': ['ترتيب المرحلة', 'اسم المرحلة', 'ترتيب النشاط الرئيسي', 'اسم النشاط الرئيسي', 'اسم النشاط الفرعي', 'المسؤول', 'تاريخ البداية', 'تاريخ النهاية', 'نسبة الإنجاز', 'الحالة', 'رابط الشاهد', 'ملاحظات'],
   'شواهد الأنشطة الرئيسية': ['اسم المرحلة', 'اسم النشاط الرئيسي', 'رابط الشاهد', 'حالة الاعتماد', 'ملاحظات', 'تاريخ الرفع'],
   'سجل العمليات': ['رقم العملية', 'رقم المستخدم', 'اسم المستخدم', 'الدور', 'العملية', 'القسم', 'رقم السجل', 'ملاحظات', 'التاريخ والوقت'],
-  'طلبات انضمام الجمعيات': ['رقم الطلب', 'اسم الجمعية', 'التصنيف', 'المنطقة', 'المدينة', 'أرقام التواصل', 'البريد الإلكتروني', 'اسم المسؤول', 'ملاحظات مقدّم الطلب', 'الحالة', 'سبب الرفض', 'رقم الجمعية الناتجة', 'تاريخ التقديم', 'تاريخ المراجعة', 'المراجع'],
+  'طلبات انضمام الجمعيات': vm.runInContext("HEADERS['طلبات انضمام الجمعيات']", __headerSandbox),
   'البيانات المرجعية': ['المعرف', 'النوع', 'القيمة', 'يتبع', 'الترتيب', 'نشط']
 };
 
@@ -227,7 +231,9 @@ section('2) مصفوفة صلاحيات الأدوار (كل دالة خادم �
     ['updateAssociationSettings', ['ASSOCIATION']],
     ['changePassword', ['ADMIN', 'ASSOCIATION']],
     ['listAssociationApplications', ['ADMIN']],
-    ['reviewAssociationApplication', ['ADMIN']]
+    ['reviewAssociationApplication', ['ADMIN']],
+    ['listApplications', ['ADMIN']],
+    ['getApplicationLicenseFile', ['ADMIN']]
   ];
   const ALL_ROLES = ['ADMIN', 'ASSOCIATION', 'DELEGATE'];
 
@@ -459,10 +465,11 @@ section('7) تحديد المعدّل (Rate Limiting)');
   seedFullEnvironment(S3);
   for (let i = 0; i < 5; i++) {
     try {
-      S3.submitAssociationApplication({
+      S3.submitAssociationApplication(applicationFixture({
         name: 'جمعية تجريبية ' + i, category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
-        contactName: 'فلان', phone: '05' + (10000000 + i), email: 'rl-test-' + i + '@example.org'
-      });
+        contactName: 'فلان', phone: '05' + (10000000 + i), email: 'rl-test-' + i + '@example.org',
+        licenseNumber: 'LIC-RL-' + i
+      }));
     } catch (ignore) { /* قد يفشل لأسباب أخرى، المهم أنه يستهلك عدّاد المعدّل بالبريد المتغيّر لا يُحسب هنا */ }
   }
   // throttle_ في submitAssociationApplication مبني على هاش البريد نفسه، فلا يتراكم عبر بريد متغيّر — نتحقق مباشرة من throttle_ بدلًا من ذلك

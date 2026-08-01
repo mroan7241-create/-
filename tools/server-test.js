@@ -11,6 +11,8 @@ const path = require('path');
 const vm = require('vm');
 
 const { readMergedServerSource } = require('./gs-manifest');
+const { createDriveMock } = require('./drive-mock');
+const { applicationFixture } = require('./application-fixtures');
 const source = readMergedServerSource(path.join(__dirname, '..'));
 
 let failures = 0;
@@ -57,8 +59,11 @@ const sandbox = {
       const base = date.getFullYear() + '/' + p(date.getMonth() + 1) + '/' + p(date.getDate());
       return pattern.indexOf('HH') >= 0 ? base + ' ' + p(date.getHours()) + ':' + p(date.getMinutes()) : base;
     },
+    // يمرّر المحتوى كما وصل: مصفوفة بايتات (رفع ملف حقيقي كالترخيص/إثبات
+    // التسليم) تبقى مصفوفة بايتات، ونص (تصدير Excel/CSV) يُحوَّل UTF-8 —
+    // كلاهما يمرّان لاحقًا عبر Buffer.from() الذي يقبل الشكلين معًا.
     newBlob: (content, mimeType, name) => ({
-      getBytes: () => Array.from(Buffer.from(content == null ? '' : String(content), 'utf8')),
+      getBytes: () => (Array.isArray(content) ? content : Array.from(Buffer.from(content == null ? '' : String(content), 'utf8'))),
       getName: () => name || '',
       getContentType: () => mimeType || ''
     }),
@@ -451,11 +456,13 @@ function buildMockSpreadsheet() {
 }
 
 const props2 = {}; const cache2 = {};
+const driveMock2 = createDriveMock();
 const sandbox2 = Object.assign({}, sandbox, {
   Utilities: sandbox.Utilities,
   PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k in props2 ? props2[k] : null), setProperty: (k, v) => { props2[k] = String(v); }, deleteProperty: k => { delete props2[k]; } }) },
   CacheService: { getScriptCache: () => ({ get: k => (k in cache2 ? cache2[k] : null), put: (k, v) => { cache2[k] = v; }, remove: k => { delete cache2[k]; } }) },
-  SpreadsheetApp: { getActiveSpreadsheet: () => mockSs }
+  SpreadsheetApp: { getActiveSpreadsheet: () => mockSs },
+  DriveApp: driveMock2.DriveApp
 });
 const mockSs = buildMockSpreadsheet();
 sandbox2.globalThis = sandbox2;
@@ -474,7 +481,7 @@ const ALL_HEADERS = {
   'إدارة الأنشطة': ['ترتيب المرحلة', 'اسم المرحلة', 'ترتيب النشاط الرئيسي', 'اسم النشاط الرئيسي', 'اسم النشاط الفرعي', 'المسؤول', 'تاريخ البداية', 'تاريخ النهاية', 'نسبة الإنجاز', 'الحالة', 'رابط الشاهد', 'ملاحظات'],
   'شواهد الأنشطة الرئيسية': ['اسم المرحلة', 'اسم النشاط الرئيسي', 'رابط الشاهد', 'حالة الاعتماد', 'ملاحظات', 'تاريخ الرفع'],
   'سجل العمليات': ['رقم العملية', 'رقم المستخدم', 'اسم المستخدم', 'الدور', 'العملية', 'القسم', 'رقم السجل', 'ملاحظات', 'التاريخ والوقت'],
-  'طلبات انضمام الجمعيات': ['رقم الطلب', 'اسم الجمعية', 'التصنيف', 'المنطقة', 'المدينة', 'أرقام التواصل', 'البريد الإلكتروني', 'اسم المسؤول', 'ملاحظات مقدّم الطلب', 'الحالة', 'سبب الرفض', 'رقم الجمعية الناتجة', 'تاريخ التقديم', 'تاريخ المراجعة', 'المراجع']
+  'طلبات انضمام الجمعيات': read2("HEADERS['طلبات انضمام الجمعيات']")
 };
 Object.keys(ALL_HEADERS).forEach(name => S2.ensureSheet_(mockSs, name, ALL_HEADERS[name]));
 
@@ -487,21 +494,27 @@ assert('استقبال الطلبات غير مفعّل بلا شيت (يفشل 
   catch (error) { return error.message.indexOf('غير مفعّل') >= 0; }
 })());
 
-const submitted = S2.submitAssociationApplication({
+const submitted = S2.submitAssociationApplication(applicationFixture({
   name: 'جمعية الأمل الخيرية', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
-  contactName: 'سالم العتيبي', phone: '0501234567', email: 'amal@example.org', notes: 'طلب أول'
-});
+  contactName: 'سالم العتيبي', phone: '0501234567', email: 'amal@example.org', notes: 'طلب أول',
+  licenseNumber: 'LIC-AMAL'
+}));
 assert('submitAssociationApplication ينجح ويعيد رقم طلب', submitted.ok && /^APP-/.test(submitted.id));
 
-throws('يرفض طلبًا مكررًا بنفس البريد وهو قيد المراجعة', () => S2.submitAssociationApplication({
+throws('يرفض طلبًا مكررًا بنفس البريد وهو قيد المراجعة', () => S2.submitAssociationApplication(applicationFixture({
   name: 'جمعية أخرى', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
-  contactName: 'سالم', phone: '0559876543', email: 'amal@example.org'
-}), 'قيد المراجعة');
+  contactName: 'سالم', phone: '0559876543', email: 'amal@example.org', licenseNumber: 'LIC-DUP-EMAIL'
+})), 'قيد المراجعة');
 
-throws('يرفض طلبًا مكررًا بنفس رقم الجوال وهو قيد المراجعة', () => S2.submitAssociationApplication({
+throws('يرفض طلبًا مكررًا بنفس رقم الجوال وهو قيد المراجعة', () => S2.submitAssociationApplication(applicationFixture({
   name: 'جمعية ثالثة', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
-  contactName: 'سالم', phone: '0501234567', email: 'other@example.org'
-}), 'قيد المراجعة');
+  contactName: 'سالم', phone: '0501234567', email: 'other@example.org', licenseNumber: 'LIC-DUP-PHONE'
+})), 'قيد المراجعة');
+
+throws('يرفض طلبًا مكررًا بنفس رقم الترخيص وهو قيد المراجعة', () => S2.submitAssociationApplication(applicationFixture({
+  name: 'جمعية رابعة', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
+  contactName: 'سالم', phone: '0559876544', email: 'other2@example.org', licenseNumber: 'LIC-AMAL'
+})), 'قيد المراجعة');
 
 const adminSession = S2.createSession_({id: 'USR-ADMIN-TEST', name: 'مدير الاختبار', role: 'ADMIN', associationId: ''});
 const beforeAccept = S2.listAssociationApplications(adminSession.token);
@@ -522,10 +535,10 @@ throws('الحساب المُلزَم بتغيير كلمة المرور لا ي
 
 throws('لا يمكن البتّ في طلب سبق قبوله', () => S2.reviewAssociationApplication(adminSession.token, submitted.id, 'accept', ''), 'سبق البتّ');
 
-const submitted2 = S2.submitAssociationApplication({
+const submitted2 = S2.submitAssociationApplication(applicationFixture({
   name: 'جمعية النور', category: 'جمعية أهلية', region: 'مكة المكرمة', city: 'جدة',
-  contactName: 'منى القحطاني', phone: '0559998877', email: 'noor@example.org'
-});
+  contactName: 'منى القحطاني', phone: '0559998877', email: 'noor@example.org', licenseNumber: 'LIC-NOOR'
+}));
 throws('الرفض يتطلب سببًا نصيًا', () => S2.reviewAssociationApplication(adminSession.token, submitted2.id, 'reject', '  '), 'مطلوب');
 const rejected = S2.reviewAssociationApplication(adminSession.token, submitted2.id, 'reject', 'بيانات غير مكتملة');
 assert('الرفض ينجح دون إنشاء حساب', rejected.ok && !S2.findUserByEmail_('noor@example.org'));
@@ -781,10 +794,10 @@ assert('الاستيراد ينجح لصف جديد لا يطابق أي تكر�
 
 let dupImportNoLeak = null;
 try {
-  const otherApp = S2.submitAssociationApplication({
+  const otherApp = S2.submitAssociationApplication(applicationFixture({
     name: 'جمعية أخرى للاختبار', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
-    contactName: 'مسؤول آخر', phone: '0511112222', email: 'other-dup-test@example.org'
-  });
+    contactName: 'مسؤول آخر', phone: '0511112222', email: 'other-dup-test@example.org', licenseNumber: 'LIC-OTHERDUP'
+  }));
   const otherAccepted = S2.reviewAssociationApplication(adminSession.token, otherApp.id, 'accept', '');
   const otherAssocSession = S2.createSession_({id: 'USR-OTHER-ASSOC', name: 'جمعية أخرى', role: 'ASSOCIATION', associationId: otherAccepted.associationId});
   // نفس رقم الجوال (0509990001) يخص جمعية "accepted" الأولى — يجب ألا تكتشف
@@ -1225,6 +1238,89 @@ section('23) انحدارات مؤكَّدة من الاختبار الحي 2026
     'الرياض', 'الرياض', '0507770009', 'external@example.org', 'نشطة', '2026/08/01 10:00']);
   const after = S5.listAssociations(admin.token, {}).total;
   assert('طلب جديد يرى كتابة نفّذها تنفيذ آخر فورًا (لا نافذة تقادم زمنية)', after === before + 1);
+}
+
+section('24) بوابة التقديم الجديدة: idempotency، honeypot، ملف الترخيص، التوافق الخلفي');
+{
+  const countBefore = S2.listApplications(adminSession.token, {pageSize: 1000}).total;
+
+  const reqId = 'srv-idem-' + Date.now();
+  const first = S2.submitAssociationApplication(applicationFixture({
+    name: 'جمعية idempotency', phone: '0500001111', email: 'idem@example.org',
+    licenseNumber: 'LIC-IDEM', clientRequestId: reqId
+  }));
+  assert('أول إرسال بمعرّف عميل جديد ينجح', first.ok && /^APP-/.test(first.id));
+  const afterFirst = S2.listApplications(adminSession.token, {pageSize: 1000}).total;
+  assert('الإرسال الأول يزيد عدد الطلبات بواحد فقط', afterFirst === countBefore + 1);
+
+  const retry = S2.submitAssociationApplication(applicationFixture({
+    name: 'جمعية idempotency', phone: '0500001111', email: 'idem@example.org',
+    licenseNumber: 'LIC-IDEM', clientRequestId: reqId
+  }));
+  assert('إعادة الإرسال بنفس clientRequestId تعيد نفس رقم الطلب (لا سجل جديد)', retry.ok && retry.id === first.id && retry.duplicate === true);
+  const afterRetry = S2.listApplications(adminSession.token, {pageSize: 1000}).total;
+  assert('إعادة الإرسال بنفس المعرّف لا تُنشئ صفًا إضافيًا', afterRetry === afterFirst);
+
+  const status = S2.getApplicationStatus(reqId);
+  assert('getApplicationStatus (استعلام آمن بعد مهلة الواجهة) يعيد نفس رقم الطلب وحالته', status.found === true && status.id === first.id && status.status === 'قيد المراجعة');
+  const statusUnknown = S2.getApplicationStatus('unknown-request-id-000000');
+  assert('getApplicationStatus لمعرّف غير موجود يعيد found:false بأمان (لا خطأ)', statusUnknown.found === false);
+  assert('getApplicationStatus لا يُعيد أي بيانات شخصية (بريد/جوال/اسم)', status.email === undefined && status.phone === undefined && status.name === undefined);
+
+  const honeypotResult = S2.submitAssociationApplication(applicationFixture({
+    name: 'روبوت', phone: '0500002222', email: 'bot@example.org',
+    licenseNumber: 'LIC-BOT', website: 'https://spam.example.com'
+  }));
+  assert('الحقل المخفي (honeypot) الممتلئ يُعيد نجاحًا صوريًا دون أي كتابة فعلية', honeypotResult.ok === true);
+  const afterHoneypot = S2.listApplications(adminSession.token, {pageSize: 1000}).total;
+  assert('طلب العنكبوت الآلي (honeypot) لم يُضِف أي صف فعلي', afterHoneypot === afterRetry);
+
+  throws('الأسئلة الثمانية إلزامية — إجابة ناقصة تُرفض برسالة واضحة',
+    () => S2.submitAssociationApplication(applicationFixture({
+      name: 'جمعية أسئلة ناقصة', phone: '0500003333', email: 'q-missing@example.org', licenseNumber: 'LIC-Q1',
+      answers: {'الالتزام بالاتفاقية وتعيين منسق': undefined}
+    })), 'أجب بنعم أو لا');
+
+  throws('عدم الموافقة على الإقرار يمنع الإرسال',
+    () => S2.submitAssociationApplication(applicationFixture({
+      name: 'جمعية بلا إقرار', phone: '0500004444', email: 'pledge-missing@example.org',
+      licenseNumber: 'LIC-Q2', pledgeAccepted: false
+    })), 'الإقرار');
+
+  throws('تعارض تاريخ انتهاء الترخيص مع الإجابة "ساري" يُرفض بتنبيه واضح',
+    () => S2.submitAssociationApplication(applicationFixture({
+      name: 'جمعية ترخيص منتهٍ', phone: '0500005555', email: 'license-expired@example.org',
+      licenseNumber: 'LIC-Q3', licenseExpiryDate: '2020-01-01', answers: {'الترخيص ساري': true}
+    })), 'الترخيص ساري');
+
+  throws('ملف ترخيص بتوقيع بايتات مزيّف (امتداد jpeg لمحتوى غير صورة) يُرفض',
+    () => S2.submitAssociationApplication(applicationFixture({
+      name: 'جمعية ملف مزيّف', phone: '0500006666', email: 'fake-file@example.org',
+      licenseNumber: 'LIC-Q4', licenseFileDataUrl: 'data:image/jpeg;base64,' + Buffer.from('ليس صورة حقيقية').toString('base64')
+    })), 'لا يطابق');
+
+  const validAdminView = S2.getApplicationLicenseFile(adminSession.token, first.id);
+  assert('ADMIN يستطيع عرض ملف الترخيص عبر دالة محمية وتُعاد بيانات الصورة كـdata URL', validAdminView.ok && /^data:image\//.test(validAdminView.dataUrl));
+
+  const assocViewer = S2.createSession_({id: 'USR-ASSOC-VIEW-LIC', name: 'جمعية', role: 'ASSOCIATION', associationId: accepted.associationId});
+  throws('جمعية لا تستطيع الوصول إلى دالة عرض ملف الترخيص إطلاقًا', () => S2.getApplicationLicenseFile(assocViewer.token, first.id), 'صلاحية');
+  const delegateViewer = S2.createSession_({id: 'USR-DELEGATE-VIEW-LIC', name: 'مندوب', role: 'DELEGATE', associationId: accepted.associationId});
+  throws('مندوب لا يستطيع الوصول إلى دالة عرض ملف الترخيص إطلاقًا', () => S2.getApplicationLicenseFile(delegateViewer.token, first.id), 'صلاحية');
+
+  // توافق خلفي: صف طلب قديم بلا أي عمود من الأعمدة الـ18 الجديدة (كُتب
+  // مباشرة على الورقة، لا عبر submitAssociationApplication) — يجب أن
+  // يُقرأ بأمان تامًا بلا أي خطأ، بقيم افتراضية آمنة للحقول الغائبة.
+  const legacyId = 'APP-900001';
+  mockSs.getSheetByName('طلبات انضمام الجمعيات').appendRow([
+    legacyId, 'جمعية قديمة قبل التحديث', 'جمعية خيرية', 'الرياض', 'الرياض', '0500007777',
+    'legacy-app@example.org', 'مسؤول قديم', '', 'قيد المراجعة', '', '', '2026/01/01', '', ''
+  ]);
+  const legacyList = S2.listApplications(adminSession.token, {pageSize: 1000});
+  const legacyRecord = legacyList.items.find(item => item.id === legacyId);
+  assert('طلب قديم بلا الأعمدة الـ18 الجديدة يُقرأ دون أي خطأ ضمن listApplications', !!legacyRecord);
+  assert('حقول الطلب القديم الغائبة تُعاد بقيم افتراضية آمنة (لا استثناء، لا "undefined")',
+    legacyRecord.licenseNumber === '' && legacyRecord.sector === '' && legacyRecord.score === '0/8'
+    && legacyRecord.hasLicenseFile === false && legacyRecord.pledgeAccepted === false);
 }
 
 /* -------- النتيجة -------- */

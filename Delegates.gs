@@ -265,6 +265,10 @@ function confirmDelivery_(user, beneficiaryId, payload) {
   try {
     // إعادة القراءة والتحقق من الانتقال داخل القفل يمنع أي سباق تزامني
     // (مثل نقرتين متتاليتين سريعتين) من كتابة حالة غير متّسقة جزئيًا.
+    // إبطال الذاكرة أولًا: بدونه ستُعاد نفس اللقطة المأخوذة قبل الانتظار
+    // على القفل، فيفوّت التحقق أي تعديل كتبه تنفيذ آخر أثناء الانتظار.
+    invalidateTableCache_(APP.sheets.beneficiaries);
+    invalidateTableCache_(APP.sheets.devices);
     const latest = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId);
     assertDeliveryTransition_(String(latest['حالة التسليم'] || ''), 'تم التسليم');
     const latestDevices = dispatchedDevicesForBeneficiary_(beneficiaryId);

@@ -153,6 +153,12 @@ function saveBeneficiary(token, payload) {
     const lock = LockService.getScriptLock();
     lock.waitLock(15000);
     try {
+      // إبطال الذاكرة المؤقتة صراحةً قبل إعادة الفحص: منذ أن صارت
+      // _TABLE_CACHE_ محصورة بالطلب الواحد (لا TTL زمني)، القراءة هنا
+      // بلا إبطال كانت ستعيد نفس اللقطة المأخوذة قبل الانتظار على
+      // القفل — فيفقد إعادة الفحص غرضه تمامًا إن كتب طلب آخر أثناء
+      // الانتظار. الإبطال يضمن قراءة فعلية جديدة من الورقة هنا.
+      invalidateTableCache_(APP.sheets.beneficiaries);
       if (findConfirmedDuplicateBeneficiary_(associationId, phone, null)) {
         throw new Error('يوجد مستفيد آخر بنفس رقم الجوال لدى هذه الجمعية بالفعل — تحقق من عدم تكرار الإضافة');
       }
@@ -239,6 +245,10 @@ function importBeneficiaries(token, rows, acceptedPledge) {
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
+    // إبطال ذاكرة الجدول المخزَّنة لهذا الطلب قبل إعادة الفحص: بدون هذا،
+    // قد تُعاد قراءة لقطة سابقة على الانتظار للقفل نفسه، فيفوّت فحص
+    // السباق تكرارًا كتبه تنفيذ آخر أثناء الانتظار.
+    invalidateTableCache_(APP.sheets.beneficiaries);
     const raceDuplicate = valid.find(record => findConfirmedDuplicateBeneficiary_(String(record['رقم الجمعية']), String(record['رقم الجوال']), null));
     if (raceDuplicate) throw new Error('تم اكتشاف تكرار في رقم الجوال أثناء الاستيراد؛ أعد المحاولة');
     appendObjects_(APP.sheets.beneficiaries, valid);
@@ -379,7 +389,19 @@ function assignDelegate(token, beneficiaryId, delegateId) {
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
-    dispatchedNow.forEach(device => {
+    // إعادة القراءة والتحقق داخل القفل: الفحوصات أعلاه تمت قبل الانتظار
+    // على القفل، وقد يكون تنفيذ آخر غيّر حالة المستفيد أو الأجهزة أثناء
+    // ذلك الانتظار (مثل نقرتين متتاليتين أو تسليم مُتزامن).
+    invalidateTableCache_(APP.sheets.beneficiaries);
+    invalidateTableCache_(APP.sheets.devices);
+    const latestBeneficiary = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId);
+    if (!latestBeneficiary) throw new Error('المستفيد غير موجود');
+    assertDeliveryTransition_(String(latestBeneficiary['حالة التسليم'] || 'لم يبدأ'), 'خرج مع المندوب');
+    const latestDevices = devicesForBeneficiary_(beneficiaryId).filter(d => ['مخصص', 'مع المندوب'].indexOf(d.status) >= 0);
+    if (!latestDevices.length) throw new Error('لا توجد أجهزة مخصَّصة لهذا المستفيد بعد؛ خصِّص جهازًا أولًا قبل تعيين مندوب');
+    latestDevices.forEach(device => assertDeviceTransition_(device.status, 'مع المندوب'));
+    const latestDispatchedNow = latestDevices.filter(device => device.status === 'مخصص');
+    latestDispatchedNow.forEach(device => {
       updateById_(APP.sheets.devices, 'رقم الجهاز', device.id, {'حالة الجهاز': 'مع المندوب'});
     });
     updateById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId, {
