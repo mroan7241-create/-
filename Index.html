@@ -1087,11 +1087,16 @@
         }
         state.data = result.bootstrap;
         state.page = 'dashboard';
-        if (result.referenceData) state.referenceData = result.referenceData;
+        // الخادم يُرفق المصادر المرجعية مع استجابة الدخول نفسها، فلا
+        // حاجة لجولة ثانية إلا إن غابت لسبب ما (توافق خلفي).
+        if (result.referenceData && result.referenceData.ready) {
+          state.referenceData = result.referenceData;
+          state.referenceError = '';
+        }
         render();
         if (state.data.role === 'ADMIN') fetchActivitiesBundle();
         toast('مرحبًا بك، ' + (result.user && result.user.name ? result.user.name : ''), 'success');
-        loadReferenceDataOnce();
+        if (!state.referenceData) loadReferenceDataOnce();
       }, reportError).finally(function () { busy(false); });
     }
 
