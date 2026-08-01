@@ -140,7 +140,7 @@ const ADMIN_DATA = {
     delegates: 2, progress: 38
   }],
   devices: [{
-    id: 'DEV-000001', name: 'ثلاجة', type: 'أجهزة منزلية', associationId: 'ASC-000001',
+    id: 'DEV-000001', name: 'ثلاجة', type: 'ثلاجة', associationId: 'ASC-000001',
     beneficiaryId: 'BEN-000001', status: 'مخصص', createdAt: '2026/05/10', deliveredAt: '', notes: ''
   }],
   delegates: [{

@@ -73,7 +73,7 @@ function migrateReferenceData_(token) {
 }
 
 function invalidateReferenceDataCache_() {
-  CacheService.getScriptCache().remove('refdata:v1');
+  CacheService.getScriptCache().remove('refdata:v2');
 }
 
 /**
@@ -300,29 +300,55 @@ function migrateLegacyReferenceValues_(token, dryRun) {
  * إن لم تُنشأ الورقة بعد يعيد بنية فارغة بأمان دون أي خطأ — الواجهة تتراجع
  * تلقائيًا إلى الحقول النصية الحرة في هذه الحالة (توافق كامل مع الوضع الحالي).
  */
+/**
+ * القائمة المعتمدة المضمَّنة في الكود — تُستخدم عندما تكون ورقة
+ * "البيانات المرجعية" غير موجودة أو فارغة (أي قبل تشغيل
+ * migrateReferenceData_، وهو ترحيل يدوي محروس برمز صيانة).
+ *
+ * لماذا هذا التغيير: قبله كانت الورقة الفارغة تعني `ready: false`،
+ * فتسقط **كل** النماذج بصمت إلى حقول نصية حرة — وهو بالضبط ما رُصد حيًّا
+ * بتاريخ 2026/08/01 (تصنيف/منطقة/مدينة الجمعية ونوع الجهاز حقول نصية
+ * رغم وجود getReferenceData). القيم كانت أصلًا موجودة في هذا الملف
+ * كبذور للترحيل؛ جعلها مصدرًا صالحًا مباشرة يوفّر قوائم منسدلة مترابطة
+ * فورًا **بلا أي كتابة في الملف الحي ولا أي ترحيل**. الورقة — متى
+ * عُبِّئت — تبقى المصدر الأعلى وتتجاوز المضمَّن بالكامل.
+ */
+function builtinReferenceData_() {
+  const result = {
+    regions: [], citiesByRegion: {},
+    deviceTypes: REFERENCE_SEED_DEVICE_TYPES.slice(),
+    socialStatuses: REFERENCE_SEED_SOCIAL_STATUSES.slice(),
+    associationCategories: REFERENCE_SEED_ASSOCIATION_CATEGORIES.slice(),
+    ready: true, source: 'builtin'
+  };
+  Object.keys(REFERENCE_SEED_REGIONS_CITIES).forEach(region => {
+    result.regions.push(region);
+    result.citiesByRegion[region] = REFERENCE_SEED_REGIONS_CITIES[region].slice();
+  });
+  return result;
+}
+
 function getReferenceData(token) {
   if (token) requireSession_(token);
-  const cacheKey = 'refdata:v1';
+  const cacheKey = 'refdata:v2';
   const cache = CacheService.getScriptCache();
   const cached = cache.get(cacheKey);
   if (cached) return JSON.parse(cached);
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const empty = {
-    regions: [], citiesByRegion: {}, deviceTypes: [],
-    socialStatuses: [], associationCategories: [], ready: false
-  };
   const sheet = ss ? ss.getSheetByName(APP.sheets.referenceData) : null;
   if (!sheet || sheet.getLastRow() < 2) {
-    cache.put(cacheKey, JSON.stringify(empty), 300);
-    return empty;
+    const builtin = builtinReferenceData_();
+    cache.put(cacheKey, JSON.stringify(builtin), 300);
+    return builtin;
   }
 
   const rows = readTable_(APP.sheets.referenceData).rows
     .filter(row => String(row['نشط']) !== 'لا')
     .sort((a, b) => safeNumber_(a['الترتيب']) - safeNumber_(b['الترتيب']));
 
-  const result = {regions: [], citiesByRegion: {}, deviceTypes: [], socialStatuses: [], associationCategories: [], ready: true};
+  const result = {regions: [], citiesByRegion: {}, deviceTypes: [], socialStatuses: [],
+    associationCategories: [], ready: true, source: 'sheet'};
   rows.forEach(row => {
     const type = String(row['النوع']);
     const value = String(row['القيمة']);
@@ -350,16 +376,34 @@ function getReferenceData(token) {
  * تحقق لين: يُفرض فقط بعد تشغيل الترحيل وتعبئة الجدول. قبل ذلك يتصرف
  * كالسابق تمامًا (نص حر مطلوب) حتى لا يكسر أي بيانات أو استيراد قائم.
  */
-function validateRegionCity_(region, city) {
+/**
+ * تمرير القيم التاريخية (grandfathering): قيمة مخزَّنة مسبقًا في سجل
+ * قائم تُقبل كما هي حتى لو لم تعد ضمن القائمة المعتمدة — بشرط أن تكون
+ * **مطابقة حرفيًا** لما هو مخزَّن فعلًا في ذلك السجل بالذات.
+ *
+ * ضروري لأن القائمة المعتمدة صارت مفعَّلة افتراضيًا (المصدر المضمَّن)،
+ * فبدون هذا الاستثناء قد يعجز مستخدم عن تعديل *حقل آخر تمامًا* (ملاحظة
+ * مثلًا) في سجل قديم لمجرد أن مدينته كُتبت يدويًا قبل توحيد القوائم.
+ * لا يفتح أي ثغرة: لا يقبل إلا قيمة موجودة أصلًا في الجدول لنفس السجل،
+ * ولا يُطبَّق إطلاقًا على السجلات الجديدة (previous فارغة عند الإنشاء).
+ */
+function isGrandfatheredValue_(value, previous) {
+  return !!previous && String(value) === String(previous);
+}
+
+function validateRegionCity_(region, city, previous) {
   region = requiredText_(region, 'المنطقة', 80);
   city = requiredText_(city, 'المدينة', 80);
+  previous = previous || {};
   const data = getReferenceData();
   if (!data.ready) return {region: region, city: city};
-  if (data.regions.indexOf(region) === -1) {
+  const regionOk = data.regions.indexOf(region) >= 0 || isGrandfatheredValue_(region, previous.region);
+  if (!regionOk) {
     throw new Error('المنطقة غير معروفة. اختر منطقة من القائمة المعتمدة');
   }
   const cities = data.citiesByRegion[region] || [];
-  if (cities.indexOf(city) === -1) {
+  const cityOk = cities.indexOf(city) >= 0 || isGrandfatheredValue_(city, previous.city);
+  if (!cityOk) {
     throw new Error('المدينة "' + city + '" لا تتبع منطقة "' + region + '" في القائمة المعتمدة');
   }
   return {region: region, city: city};
@@ -370,32 +414,32 @@ function validateRegionCity_(region, city) {
  * لبقية القوائم الموحَّدة — التحقق هنا في الخادم دائمًا، لا في الواجهة
  * فقط، حتى لو تجاوز طلب مباشر نموذج الواجهة كليًا.
  */
-function validateSocialStatus_(value) {
+function validateSocialStatus_(value, previous) {
   value = requiredText_(value, 'الحالة الاجتماعية', 80);
   const data = getReferenceData();
   if (!data.ready || !data.socialStatuses.length) return value;
-  if (data.socialStatuses.indexOf(value) === -1) {
+  if (data.socialStatuses.indexOf(value) === -1 && !isGrandfatheredValue_(value, previous)) {
     throw new Error('الحالة الاجتماعية "' + value + '" غير معروفة. اختر من القائمة المعتمدة');
   }
   return value;
 }
 
-function validateAssociationCategory_(value) {
+function validateAssociationCategory_(value, previous) {
   value = cleanText_(value, 80);
   if (!value) return value; // التصنيف اختياري دائمًا، بخلاف المنطقة/المدينة/الحالة الاجتماعية
   const data = getReferenceData();
   if (!data.ready || !data.associationCategories.length) return value;
-  if (data.associationCategories.indexOf(value) === -1) {
+  if (data.associationCategories.indexOf(value) === -1 && !isGrandfatheredValue_(value, previous)) {
     throw new Error('تصنيف الجمعية "' + value + '" غير معروف. اختر من القائمة المعتمدة');
   }
   return value;
 }
 
-function validateDeviceType_(value) {
+function validateDeviceType_(value, previous) {
   value = requiredText_(value, 'نوع الجهاز', 80);
   const data = getReferenceData();
   if (!data.ready || !data.deviceTypes.length) return value;
-  if (data.deviceTypes.indexOf(value) === -1) {
+  if (data.deviceTypes.indexOf(value) === -1 && !isGrandfatheredValue_(value, previous)) {
     throw new Error('نوع الجهاز "' + value + '" غير معروف. اختر من القائمة المعتمدة');
   }
   return value;

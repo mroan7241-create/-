@@ -185,7 +185,7 @@ function seedScenario(S) {
     phone: '0500000012', familyCount: 2, socialStatus: 'أرملة', needs: ['ثلاجة']
   });
   const device = S.saveDevice(admin.token, {
-    name: 'ثلاجة', type: 'أجهزة منزلية', associationId: assoc.id
+    name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id
   });
   return { S, admin, assoc, assocSession, delegateId: delegateResult.id, beneficiaryId: beneficiary.id, deviceId: device.id };
 }
@@ -237,7 +237,7 @@ section('2) الدورة الكاملة الناجحة: تخصيص → خروج 
   const { S, assocSession, beneficiaryId, deviceId, delegateId } = ctx;
 
   assert('الجهاز عند إضافته لمستفيد بلا تحديد حالة صريحة يصبح "مخصص" تلقائيًا', (() => {
-    const d = S.saveDevice(ctx.admin.token, { id: deviceId, name: 'ثلاجة', type: 'أجهزة منزلية', associationId: ctx.assoc.id, beneficiaryId: beneficiaryId });
+    const d = S.saveDevice(ctx.admin.token, { id: deviceId, name: 'ثلاجة', type: 'ثلاجة', associationId: ctx.assoc.id, beneficiaryId: beneficiaryId });
     return d.ok && String(deviceRow(S, deviceId)['حالة الجهاز']) === 'مخصص';
   })());
 
@@ -282,7 +282,7 @@ section('3) تعذر التسليم ثم إعادة المحاولة بنجاح'
 {
   const ctx = seedScenario(buildSandbox());
   const { S, assocSession, beneficiaryId, deviceId, delegateId, assoc } = ctx;
-  S.saveDevice(ctx.admin.token, { id: deviceId, name: 'ثلاجة', type: 'أجهزة منزلية', associationId: assoc.id, beneficiaryId: beneficiaryId });
+  S.saveDevice(ctx.admin.token, { id: deviceId, name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiaryId });
   S.assignDelegate(assocSession.token, beneficiaryId, delegateId);
   const delegateSession = S.createSession_({ id: delegateId, name: 'مندوب الحالات', role: 'DELEGATE', associationId: assoc.id });
 
@@ -338,7 +338,7 @@ section('5) منع تخصيص جهاز نشط لمستفيد آخر دون تح�
 {
   const ctx = seedScenario(buildSandbox());
   const { S, admin, assocSession, beneficiaryId, deviceId, assoc } = ctx;
-  S.saveDevice(admin.token, { id: deviceId, name: 'ثلاجة', type: 'أجهزة منزلية', associationId: assoc.id, beneficiaryId: beneficiaryId });
+  S.saveDevice(admin.token, { id: deviceId, name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiaryId });
 
   const otherBeneficiary = S.saveBeneficiary(assocSession.token, {
     name: 'مستفيد آخر', region: 'الرياض', city: 'الرياض', address: 'حي آخر',
@@ -346,16 +346,16 @@ section('5) منع تخصيص جهاز نشط لمستفيد آخر دون تح�
   });
 
   throws('محاولة تخصيص جهاز "مخصص" أصلًا لمستفيد مختلف تُرفض دون تحريره', () =>
-    S.saveDevice(admin.token, { id: deviceId, name: 'ثلاجة', type: 'أجهزة منزلية', associationId: assoc.id, beneficiaryId: otherBeneficiary.id }),
+    S.saveDevice(admin.token, { id: deviceId, name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: otherBeneficiary.id }),
     'أعده إلى المستودع أولًا');
 
   assert('الجهاز يبقى مرتبطًا بالمستفيد الأصلي دون تغيير بعد الرفض', String(deviceRow(S, deviceId)['رقم المستفيد']) === beneficiaryId);
 
   assert('تحرير الجهاز للمستودع أولًا ثم تخصيصه لمستفيد آخر يُقبل', (() => {
-    S.saveDevice(admin.token, { id: deviceId, name: 'ثلاجة', type: 'أجهزة منزلية', associationId: assoc.id, beneficiaryId: '', status: 'بالمستودع' });
+    S.saveDevice(admin.token, { id: deviceId, name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: '', status: 'بالمستودع' });
     const freed = deviceRow(S, deviceId);
     if (String(freed['حالة الجهاز']) !== 'بالمستودع' || freed['رقم المستفيد']) return false;
-    S.saveDevice(admin.token, { id: deviceId, name: 'ثلاجة', type: 'أجهزة منزلية', associationId: assoc.id, beneficiaryId: otherBeneficiary.id });
+    S.saveDevice(admin.token, { id: deviceId, name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: otherBeneficiary.id });
     const reassigned = deviceRow(S, deviceId);
     return String(reassigned['حالة الجهاز']) === 'مخصص' && String(reassigned['رقم المستفيد']) === otherBeneficiary.id;
   })());
@@ -366,14 +366,14 @@ section('6) منع ضبط "مع المندوب"/"تم التسليم" يدويً
   const ctx = seedScenario(buildSandbox());
   const { S, admin, deviceId, assoc } = ctx;
   throws('ضبط حالة "مع المندوب" مباشرة من saveDevice يُرفض', () =>
-    S.saveDevice(admin.token, { id: deviceId, name: 'ثلاجة', type: 'أجهزة منزلية', associationId: assoc.id, status: 'مع المندوب' }),
+    S.saveDevice(admin.token, { id: deviceId, name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id, status: 'مع المندوب' }),
     'لا يمكن ضبط حالة');
   throws('ضبط حالة "تم التسليم" مباشرة من saveDevice يُرفض', () =>
-    S.saveDevice(admin.token, { id: deviceId, name: 'ثلاجة', type: 'أجهزة منزلية', associationId: assoc.id, status: 'تم التسليم' }),
+    S.saveDevice(admin.token, { id: deviceId, name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id, status: 'تم التسليم' }),
     'لا يمكن ضبط حالة');
   assert('تعديل حقل آخر (الاسم) بلا تغيير الحالة الفعلية لا يُرفض حتى لو الحالة نهائية لاحقًا', (() => {
     // نتأكد أولًا أن تعديل جهاز "بالمستودع" بحالة غير مُرسلة (نفس القيمة) يمر بأمان
-    const result = S.saveDevice(admin.token, { id: deviceId, name: 'ثلاجة مجدَّدة', type: 'أجهزة منزلية', associationId: assoc.id, status: 'بالمستودع' });
+    const result = S.saveDevice(admin.token, { id: deviceId, name: 'ثلاجة مجدَّدة', type: 'ثلاجة', associationId: assoc.id, status: 'بالمستودع' });
     return result.ok && String(deviceRow(S, deviceId)['اسم الجهاز']) === 'ثلاجة مجدَّدة';
   })());
 }
@@ -408,13 +408,13 @@ section('7) تشخيص سلامة الحالات (قراءة فقط) والإص�
   assert('التشخيص يكتشف جهازًا مرتبطًا بمستفيد لكن حالته "بالمستودع"',
     afterCorruption1.issues.some(x => x.type === 'DEVICE_ASSIGNED_BUT_WAREHOUSE' && x.deviceId === deviceId));
 
-  const otherDevice = S.saveDevice(admin.token, { name: 'غسالة', type: 'أجهزة منزلية', associationId: assoc.id });
+  const otherDevice = S.saveDevice(admin.token, { name: 'غسالة', type: 'ثلاجة', associationId: assoc.id });
   S.updateById_('الأجهزة', 'رقم الجهاز', otherDevice.id, {'رقم المستفيد': 'BEN-999999', 'حالة الجهاز': 'مخصص'});
   const afterCorruption2 = S.diagnoseStateIntegrity_(maintToken);
   assert('التشخيص يكتشف جهازًا يشير إلى مستفيد غير موجود',
     afterCorruption2.issues.some(x => x.type === 'DEVICE_UNKNOWN_BENEFICIARY' && x.deviceId === otherDevice.id));
 
-  const thirdDevice = S.saveDevice(admin.token, { name: 'مكيف', type: 'أجهزة منزلية', associationId: assoc.id });
+  const thirdDevice = S.saveDevice(admin.token, { name: 'مكيف', type: 'ثلاجة', associationId: assoc.id });
   S.updateById_('الأجهزة', 'رقم الجهاز', thirdDevice.id, {'حالة الجهاز': 'مخصص'}); // مخصص بلا رقم مستفيد إطلاقًا
   const afterCorruption3 = S.diagnoseStateIntegrity_(maintToken);
   assert('التشخيص يكتشف جهازًا بحالة "مخصص" بلا رقم مستفيد (حالة يتيمة)',

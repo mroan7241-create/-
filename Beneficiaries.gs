@@ -9,19 +9,29 @@
 function listBeneficiaries(token, options) {
   return perfTime_('listBeneficiaries', () => {
     const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
-    options = options || {};
-    let rows = readTable_(APP.sheets.beneficiaries).rows;
-    if (user.role === 'ASSOCIATION') {
-      rows = rows.filter(row => String(row['رقم الجمعية']) === user.associationId);
-    } else if (options.associationId) {
-      rows = rows.filter(row => String(row['رقم الجمعية']) === cleanId_(options.associationId));
-    }
-    let items = rows.map(normalizeBeneficiary_);
-    items = applySearch_(items, options.search, ['name', 'id', 'phone', 'region', 'city']);
-    if (options.filter) items = items.filter(item => item.status === options.filter || item.deliveryStatus === options.filter);
-    items = applySort_(items, options.sortBy, options.sortDir);
-    return Object.assign({ok: true}, paginate_(items, options));
+    return withMeta_(listBeneficiaries_(user, options));
   });
+}
+
+/**
+ * النسخة الداخلية (تأخذ المستخدم المُتحقَّق منه بدل الرمز) — تُستدعى من
+ * الدالة العامة أعلاه ومن endpoint البوابة المُجمَّع getPortalBundle دون
+ * إعادة التحقق من الجلسة ولا إعادة بدء الطلب، فتبقى قراءة الأوراق واحدة
+ * لكل جدول في الطلب المُجمَّع بدل قراءتها مرتين.
+ */
+function listBeneficiaries_(user, options) {
+  options = options || {};
+  let rows = readTable_(APP.sheets.beneficiaries).rows;
+  if (user.role === 'ASSOCIATION') {
+    rows = rows.filter(row => String(row['رقم الجمعية']) === user.associationId);
+  } else if (options.associationId) {
+    rows = rows.filter(row => String(row['رقم الجمعية']) === cleanId_(options.associationId));
+  }
+  let items = rows.map(normalizeBeneficiary_);
+  items = applySearch_(items, options.search, ['name', 'id', 'phone', 'region', 'city']);
+  if (options.filter) items = items.filter(item => item.status === options.filter || item.deliveryStatus === options.filter);
+  items = applySort_(items, options.sortBy, options.sortDir);
+  return Object.assign({ok: true}, paginate_(items, options));
 }
 
 /** يطبّع اسمًا للمقارنة التقريبية فقط (مسافات/حالة أحرف) — إشارة "مطابق محتمل"، لا دليل قاطع أبدًا وحده. */
@@ -82,7 +92,10 @@ function saveBeneficiary(token, payload) {
     throw new Error('يوجد مستفيد آخر بنفس رقم الجوال لدى هذه الجمعية بالفعل — تحقق من عدم تكرار الإضافة');
   }
   const possibleDuplicate = findPossibleDuplicateBeneficiary_(associationId, payload.name, payload.city, existingId);
-  const place = validateRegionCity_(payload.region, payload.city);
+  // تمرير القيم المخزَّنة حاليًا لهذا السجل بالذات: قيمة قديمة خارج
+  // القائمة المعتمدة لا تمنع تعديل حقل آخر في نفس السجل (grandfathering).
+  const previousPlace = existing ? {region: String(existing['المنطقة'] || ''), city: String(existing['المدينة'] || '')} : null;
+  const place = validateRegionCity_(payload.region, payload.city, previousPlace);
   const coordinates = optionalCoordinate_(payload.lat, payload.lng);
   const hasCoordinates = coordinates.lat !== '';
   // لا يُحدَّث "مصدر الموقع"/"تاريخ تحديث الموقع" إلا إذا تغيّرت الإحداثيات
@@ -112,7 +125,7 @@ function saveBeneficiary(token, payload) {
     'رقم جوال إضافي': payload.phone2 ? normalizePhone_(payload.phone2) : '',
     'عدد الأفراد': boundedNumber_(payload.familyCount, 1, 99, 'عدد الأفراد'),
     'ضمان اجتماعي': payload.socialSecurity === true || payload.socialSecurity === 'نعم' ? 'نعم' : 'لا',
-    'الحالة الاجتماعية': validateSocialStatus_(payload.socialStatus),
+    'الحالة الاجتماعية': validateSocialStatus_(payload.socialStatus, existing ? String(existing['الحالة الاجتماعية'] || '') : ''),
     'مبلغ الدخل': boundedNumber_(payload.income || 0, 0, 1000000, 'مبلغ الدخل'),
     'الاحتياج': normalizeNeeds_(payload.needs),
     'حالة المستفيد': existing ? String(existing['حالة المستفيد']) : 'جديد',

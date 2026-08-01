@@ -12,6 +12,15 @@ function applicationsSheetReady_() {
 }
 
 function submitAssociationApplication(payload) {
+  beginRequest_('submitAssociationApplication');
+  try {
+    return withMeta_(submitAssociationApplication_(payload));
+  } finally {
+    endRequest_();
+  }
+}
+
+function submitAssociationApplication_(payload) {
   payload = payload || {};
   if (!applicationsSheetReady_()) {
     throw new Error('استقبال طلبات الانضمام غير مفعّل حاليًا. يرجى التواصل مع إدارة المشروع');
@@ -89,13 +98,17 @@ function getAssociationApplications_() {
  */
 function listApplications(token, options) {
   return perfTime_('listApplications', () => {
-    requireSession_(token, ['ADMIN']);
-    options = options || {};
-    let items = getAssociationApplications_();
-    items = applySearch_(items, options.search, ['name', 'id', 'email', 'contactName']);
-    if (options.filter) items = items.filter(item => item.status === options.filter);
-    return Object.assign({ok: true}, paginate_(items, options));
+    const user = requireSession_(token, ['ADMIN']);
+    return withMeta_(listApplications_(user, options));
   });
+}
+
+function listApplications_(user, options) {
+  options = options || {};
+  let items = getAssociationApplications_();
+  items = applySearch_(items, options.search, ['name', 'id', 'email', 'contactName']);
+  if (options.filter) items = items.filter(item => item.status === options.filter);
+  return Object.assign({ok: true}, paginate_(items, options));
 }
 
 /** يُبقى للتوافق الخلفي إن استُدعي من أي مكان قديم — يعيد كل الطلبات بلا ترقيم. */
@@ -124,7 +137,14 @@ function reviewAssociationApplication(token, id, decision, reason, opId) {
   id = cleanId_(id);
 
   if (decision === 'accept') {
-    return withIdempotency_(user.id, opId, () => {
+    return withIdempotency_(user.id, opId, () => withApplicationDecisionLock_(id, () => {
+      // كل شيء داخل القفل: إعادة قراءة الطلب والتحقق من حالته ثم الكتابة.
+      // بدون هذا، نقرتان متزامنتان (أو نقرة + إعادة محاولة بعد انقطاع
+      // اتصال بـopId مختلف) تجتازان فحص "قيد المراجعة" كلتاهما فتُنشئان
+      // جمعيتين وحسابَي دخول لنفس الطلب. القفل يجعل القرار ذرّيًا فعليًا،
+      // وwithIdempotency_ يجعل إعادة المحاولة بنفس opId تُعيد النتيجة
+      // الأصلية بدل تنفيذ ثانٍ — الطبقتان مكمّلتان لا بديلتان.
+      invalidateTableCache_(APP.sheets.applications);
       const application = findById_(APP.sheets.applications, 'رقم الطلب', id);
       if (!application) throw new Error('طلب الانضمام غير موجود');
       if (String(application['الحالة']) !== 'قيد المراجعة') throw new Error('سبق البتّ في هذا الطلب');
@@ -148,23 +168,39 @@ function reviewAssociationApplication(token, id, decision, reason, opId) {
       const record = normalizeApplication_(findById_(APP.sheets.applications, 'رقم الطلب', id));
       return {ok: true, associationId: associationId, temporaryPassword: tempPassword, record: record,
         summary: {associations: computeAssociationsCount_()}};
-    });
+    }));
   }
 
   if (decision === 'reject') {
-    const application = findById_(APP.sheets.applications, 'رقم الطلب', id);
-    if (!application) throw new Error('طلب الانضمام غير موجود');
-    if (String(application['الحالة']) !== 'قيد المراجعة') throw new Error('سبق البتّ في هذا الطلب');
-    const rejectionReason = requiredText_(reason, 'سبب الرفض', 300);
-    updateById_(APP.sheets.applications, 'رقم الطلب', id, {
-      'الحالة': 'مرفوض', 'سبب الرفض': rejectionReason,
-      'تاريخ المراجعة': now_(), 'المراجع': user.name
-    });
-    audit_(user, 'رفض طلب انضمام جمعية', 'طلبات الانضمام', id, rejectionReason);
-    clearDashboardCache();
-    return {ok: true, record: normalizeApplication_(findById_(APP.sheets.applications, 'رقم الطلب', id))};
+    // الرفض أيضًا قرار نهائي لا يجوز تنفيذه مرتين: نفس القفل ونفس
+    // الحماية من التكرار (كان بلا أي منهما قبل هذه المرحلة).
+    return withIdempotency_(user.id, opId, () => withApplicationDecisionLock_(id, () => {
+      invalidateTableCache_(APP.sheets.applications);
+      const application = findById_(APP.sheets.applications, 'رقم الطلب', id);
+      if (!application) throw new Error('طلب الانضمام غير موجود');
+      if (String(application['الحالة']) !== 'قيد المراجعة') throw new Error('سبق البتّ في هذا الطلب');
+      const rejectionReason = requiredText_(reason, 'سبب الرفض', 300);
+      updateById_(APP.sheets.applications, 'رقم الطلب', id, {
+        'الحالة': 'مرفوض', 'سبب الرفض': rejectionReason,
+        'تاريخ المراجعة': now_(), 'المراجع': user.name
+      });
+      audit_(user, 'رفض طلب انضمام جمعية', 'طلبات الانضمام', id, rejectionReason);
+      clearDashboardCache();
+      return {ok: true, record: normalizeApplication_(findById_(APP.sheets.applications, 'رقم الطلب', id))};
+    }));
   }
 
   throw new Error('قرار غير معروف');
+}
+
+/** قفل موحّد لكل قرار على طلب انضمام (قبول أو رفض) — يضمن ذرّية القرار الواحد. */
+function withApplicationDecisionLock_(id, fn) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
 }
 

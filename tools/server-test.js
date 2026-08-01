@@ -358,16 +358,21 @@ assert('أعمدة البيانات المرجعية كما صُممت', HEADERS
 assert('migrateReferenceData_ خاصة (شرطة سفلية) ولم تُستدعَ تلقائيًا من أي مكان',
   /function migrateReferenceData_\(/.test(source) && !/^\s*migrateReferenceData_\(/m.test(source.replace(/function migrateReferenceData_[\s\S]*?\n}\n/, '')));
 
-assert('getReferenceData تتعامل بأمان مع غياب الجدول (بلا استثناء)', (() => {
+assert('getReferenceData تتعامل بأمان مع غياب الجدول: تعيد المصدر المضمَّن جاهزًا (لا بنية فارغة)', (() => {
   try {
     const result = S.getReferenceData();
-    return result && result.ready === false && Array.isArray(result.regions) && result.regions.length === 0;
+    return result && result.ready === true && result.source === 'builtin'
+      && Array.isArray(result.regions) && result.regions.length === 13
+      && result.deviceTypes.length > 0 && result.socialStatuses.length > 0;
   } catch (error) { return false; }
 })());
 
-assert('validateRegionCity_ يتصرف كنص حر قبل تشغيل الترحيل (توافق خلفي)', (() => {
-  const result = S.validateRegionCity_('منطقة اختبارية', 'مدينة اختبارية');
-  return result.region === 'منطقة اختبارية' && result.city === 'مدينة اختبارية';
+throws('بلا جدول مرجعي: منطقة خارج القائمة المعتمدة تُرفض (لا سقوط صامت إلى نص حر)',
+  () => S.validateRegionCity_('منطقة اختبارية', 'مدينة اختبارية'), 'غير معروفة');
+
+assert('بلا جدول مرجعي: منطقة ومدينة معتمدتان تمران', (() => {
+  const result = S.validateRegionCity_('الرياض', 'الخرج');
+  return result.region === 'الرياض' && result.city === 'الخرج';
 })());
 
 throws('validateRegionCity_ يرفض منطقة فارغة قبل الترحيل أيضًا',
@@ -383,8 +388,8 @@ assert('saveBeneficiary يستخدم التحقق الموحّد من المنط
   /validateRegionCity_\(payload\.region, payload\.city\)/.test(source));
 assert('importBeneficiaries يستخدم التحقق الموحّد من المنطقة/المدينة',
   /validateRegionCity_\(row\.region, row\.city\)/.test(source));
-assert('saveAssociation يستخدم التحقق الموحّد من المنطقة/المدينة',
-  (source.match(/validateRegionCity_\(payload\.region, payload\.city\)/g) || []).length >= 2);
+assert('saveAssociation وsaveBeneficiary يستخدمان التحقق الموحّد من المنطقة/المدينة (مع تمرير القيمة التاريخية)',
+  (source.match(/validateRegionCity_\(payload\.region, payload\.city, previousPlace\)/g) || []).length >= 2);
 assert('inspectBeneficiaryExcel يستخدم التحقق الموحّد من المنطقة/المدينة',
   /validateRegionCity_\(row\.region, row\.city\)/.test(source));
 

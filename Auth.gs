@@ -16,9 +16,17 @@ function throttle_(bucket, limit, windowSeconds) {
 function login(payload) {
   payload = payload || {};
   const type = cleanText_(payload.type, 20);
-  return perfTime_('login:' + (type === 'delegate' ? 'delegate' : 'user'), () =>
-    type === 'delegate' ? loginDelegate_(payload.code) : loginUser_(payload.email, payload.password)
-  );
+  // نقطة دخول عامة (لا جلسة بعد) — تبدأ الطلب بنفسها حتى يبقى بناء
+  // Bootstrap الذي يليها داخل نطاق الطلب نفسه فيستفيد من ذاكرة الجداول
+  // المؤقتة بدل إعادة قراءة الأوراق مرتين في دخول واحد.
+  beginRequest_('login:' + (type === 'delegate' ? 'delegate' : 'user'));
+  try {
+    return withMeta_(perfTime_('login:' + (type === 'delegate' ? 'delegate' : 'user'), () =>
+      type === 'delegate' ? loginDelegate_(payload.code) : loginUser_(payload.email, payload.password)
+    ));
+  } finally {
+    endRequest_();
+  }
 }
 
 function loginUser_(email, password) {
@@ -129,6 +137,11 @@ function createSession_(user) {
  * الوسم، حتى لو استُدعيت الدالة مباشرة بتجاوز الواجهة.
  */
 function requireSession_(token, roles, opts) {
+  // بوابة الجلسة هي نقطة الدخول الموحَّدة لكل دالة خادم محروسة، فهي
+  // الموضع الطبيعي لبدء "الطلب": مسح ذاكرة الجداول المؤقتة حتى لا يعبر
+  // أي إدخال حدود الطلب داخل warm isolate، وتصفير عدّادات القياس، وتوليد
+  // traceId. الاستدعاءات المتداخلة (endpoint مُجمَّع) لا تُعيد التصفير.
+  beginRequest_('session');
   token = String(token || '');
   if (!/^[A-Za-z0-9_-]{32,}$/.test(token)) throw new Error('انتهت الجلسة. يرجى تسجيل الدخول مجددًا');
   const cache = CacheService.getScriptCache();

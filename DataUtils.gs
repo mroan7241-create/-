@@ -7,28 +7,79 @@ function sheet_(name) {
 }
 
 /**
- * ذاكرة تخزين مؤقت محدودة العمر (أقل من نطاق أي طلب واحد بأمان) تمنع
- * قراءة الورقة نفسها أكثر من مرة ضمن الطلب الواحد. مثال حقيقي كان
- * موجودًا قبل هذا التغيير: buildAssociationPortal_ تقرأ المستفيدين
- * والأجهزة والمناديب، ثم getAuditRows_ المستدعاة بعدها مباشرة تعيد
- * قراءة الأوراق الأربع نفسها بالكامل من جديد لغرض تصفية السجل فقط.
- * أي عملية كتابة (appendObjects_/updateById_) تُبطل ورقتها فورًا، فلا
- * يمكن لهذه الذاكرة أن تُعيد بيانات قديمة بعد أي تعديل.
+ * ذاكرة تخزين مؤقت **محصورة في الطلب الواحد** تمنع قراءة الورقة نفسها
+ * أكثر من مرة ضمن الطلب الواحد. مثال حقيقي: buildAssociationPortal_ تقرأ
+ * المستفيدين والأجهزة والمناديب، ثم getAuditRows_ المستدعاة بعدها مباشرة
+ * تعيد قراءة الأوراق الأربع نفسها بالكامل من جديد لغرض تصفية السجل فقط.
+ *
+ * ⚠️ خطر warm isolate (صُحّح في هذه المرحلة): Apps Script يُبقي المتغيرات
+ * العامة حيّة بين التنفيذات داخل نفس الـisolate الدافئ، وقد يخدم تنفيذات
+ * متزامنة من isolates متعددة. الاعتماد السابق على TTL زمني (4 ثوانٍ) كان
+ * يعني أن كتابة نفّذها isolate A لا تُبطل نسخة isolate B المخزَّنة، فيمكن
+ * لقائمة أن تعود بحالة ما قبل الكتابة. الآن الذاكرة تُمسح صراحةً عند بداية
+ * كل طلب (beginRequest_ المستدعاة من requireSession_ ومن نقاط الدخول
+ * العامة)، فلا يمكن لأي إدخال أن يعبر حدود الطلب الواحد إطلاقًا — لا اعتماد
+ * على وقت ولا على ترتيب isolates.
  */
 const _TABLE_CACHE_ = {};
-const _TABLE_CACHE_TTL_MS_ = 4000;
 
 /**
- * عدّادات قراءة/كتابة على مستوى تنفيذ الطلب الواحد (لا تُخزَّن بين
- * الطلبات) — تُستخدم فقط لقياس تكلفة كل عملية عبر perfTime_ أدناه، ولا
- * تُسجَّل أي بيانات حساسة معها (عدد فقط، لا محتوى الصفوف). "قراءة" هنا
- * تعني قراءة ورقة كاملة فعليًا من Sheets API (تُستثنى إعادة القراءة من
- * الذاكرة المؤقتة _TABLE_CACHE_ لأنها لا تُكلّف شيئًا فعليًا).
+ * حالة الطلب الجاري: معرّف تتبّع قصير (traceId) لا يحمل أي بيانات
+ * مستخدم، ولحظة البدء، وعدّادات القراءة/الكتابة الفعلية. تُستخدم لقياس
+ * الأداء من الخادم وإرجاعه للعميل ضمن `_meta` — بلا أي كلمة مرور أو رمز
+ * أو حقل حساس إطلاقًا (أرقام واسم عملية فقط).
  */
-const _PERF_ = {reads: 0, writes: 0};
+const _REQ_ = {traceId: '', label: '', startedAt: 0, reads: 0, writes: 0, depth: 0};
+const _PERF_ = _REQ_;
+
+/**
+ * تبدأ طلبًا جديدًا: تمسح ذاكرة الجداول المؤقتة (حدّ صارم لا يعبره أي
+ * إدخال بين طلبين)، وتصفّر العدّادات، وتولّد traceId جديدًا.
+ * تُستدعى مرة واحدة لكل نقطة دخول عامة — الاستدعاءات المتداخلة (endpoint
+ * مُجمَّع يستدعي منطقًا داخليًا) لا تُعيد التصفير بفضل عدّاد العمق.
+ */
+function beginRequest_(label) {
+  if (_REQ_.depth > 0) { _REQ_.depth++; return _REQ_.traceId; }
+  Object.keys(_TABLE_CACHE_).forEach(name => { delete _TABLE_CACHE_[name]; });
+  _REQ_.traceId = Utilities.getUuid().slice(0, 8);
+  _REQ_.label = String(label || '');
+  _REQ_.startedAt = Date.now();
+  _REQ_.reads = 0;
+  _REQ_.writes = 0;
+  _REQ_.depth = 1;
+  return _REQ_.traceId;
+}
+
+/** ينهي الطلب الجاري (يوازن عدّاد العمق فقط) — لا يمسح شيئًا. */
+function endRequest_() {
+  _REQ_.depth = Math.max(0, _REQ_.depth - 1);
+}
+
+/**
+ * بيانات قياس الطلب الجاري كما تُرفَق بالاستجابة: معرّف التتبّع، زمن
+ * الخادم بالمللي ثانية، وعدد قراءات/كتابات الأوراق الفعلية. لا تحتوي أي
+ * قيمة مُدخَلة من المستخدم ولا أي حقل من الحقول الحساسة.
+ */
+function requestMeta_() {
+  return {
+    traceId: _REQ_.traceId,
+    op: _REQ_.label,
+    serverMs: _REQ_.startedAt ? Date.now() - _REQ_.startedAt : 0,
+    reads: _REQ_.reads,
+    writes: _REQ_.writes
+  };
+}
+
+/** يُرفق `_meta` بأي استجابة كائنية (لا يلمس المصفوفات ولا القيم الأولية). */
+function withMeta_(result) {
+  if (result && typeof result === 'object' && !Array.isArray(result)) {
+    result._meta = requestMeta_();
+  }
+  return result;
+}
 
 function perfSnapshot_() {
-  return {reads: _PERF_.reads, writes: _PERF_.writes};
+  return {reads: _REQ_.reads, writes: _REQ_.writes};
 }
 
 /**
@@ -53,8 +104,8 @@ function perfTime_(label, fn) {
 
 function readTable_(name) {
   const cached = _TABLE_CACHE_[name];
-  if (cached && (Date.now() - cached.at) < _TABLE_CACHE_TTL_MS_) return cached.value;
-  _PERF_.reads++;
+  if (cached) return cached.value;
+  _REQ_.reads++;
   const sheet = sheet_(name);
   const values = sheet.getDataRange().getValues();
   let result;
@@ -69,7 +120,7 @@ function readTable_(name) {
     });
     result = {headers: headers, rows: rows};
   }
-  _TABLE_CACHE_[name] = {value: result, at: Date.now()};
+  _TABLE_CACHE_[name] = {value: result};
   return result;
 }
 
@@ -106,7 +157,7 @@ function safeCell_(value) {
 
 function appendObjects_(sheetName, objects) {
   if (!objects.length) return;
-  _PERF_.writes++;
+  _REQ_.writes++;
   const sheet = sheet_(sheetName);
   const headers = HEADERS[sheetName];
   const rows = objects.map(object =>
@@ -116,17 +167,50 @@ function appendObjects_(sheetName, objects) {
   invalidateTableCache_(sheetName);
 }
 
+/**
+ * بحث بالمعرّف **يرفض الغموض صراحةً**: إن وُجد أكثر من صف يحمل المعرّف
+ * نفسه (بيانات تاريخية نتجت عن إعادة ضبط عدّادات Script Properties بعد
+ * نسخ المشروع — راجع nextIds_/diagnoseIdSequences_ أدناه) لا يختار الصف
+ * الأول بصمت كما كان يفعل سابقًا، بل يوقف العملية بتقرير عربي واضح يسمّي
+ * الورقة والمعرّف وعدد الصفوف المتطابقة.
+ *
+ * لماذا الرفض لا الاختيار الصامت: العطل الحيّ المرصود بتاريخ 2026/08/01
+ * كان طلبَي انضمام يحملان APP-000001 (أحدهما "مقبول" والآخر "قيد
+ * المراجعة")، فكانت reviewAssociationApplication تعثر على الصف المقبول
+ * أولًا وتردّ "سبق البتّ في هذا الطلب" — رسالة صحيحة شكلًا ومضلِّلة
+ * تمامًا في السياق. الرفض الصريح يجعل سبب المشكلة ظاهرًا بدل إخفائه.
+ */
 function findById_(sheetName, idHeader, id) {
-  return readTable_(sheetName).rows.find(row => String(row[idHeader]) === String(id)) || null;
+  const matches = findAllById_(sheetName, idHeader, id);
+  if (matches.length > 1) throw new Error(duplicateIdMessage_(sheetName, idHeader, id, matches.length));
+  return matches[0] || null;
+}
+
+/** كل الصفوف المطابقة للمعرّف (بلا رفض) — للتشخيص ولمن يحتاج معالجة التكرار بنفسه. */
+function findAllById_(sheetName, idHeader, id) {
+  return readTable_(sheetName).rows.filter(row => String(row[idHeader]) === String(id));
+}
+
+function duplicateIdMessage_(sheetName, idHeader, id, count) {
+  return 'تعذّر إتمام العملية: المعرّف «' + id + '» مكرَّر في ورقة «' + sheetName + '» (' + count +
+    ' صفوف تحمل نفس «' + idHeader + '»). هذا خلل في سلامة البيانات يجب تصحيحه يدويًا قبل المتابعة — ' +
+    'شغّل diagnoseIdSequences_ من محرر Apps Script لتقرير كامل بالمعرّفات المكرَّرة.';
 }
 
 function updateById_(sheetName, idHeader, id, changes) {
-  _PERF_.writes++;
+  _REQ_.writes++;
   const sheet = sheet_(sheetName);
   const values = sheet.getDataRange().getValues();
   const map = {};
   values[0].forEach((header, index) => map[String(header)] = index);
-  const rowIndex = values.findIndex((row, index) => index > 0 && String(row[map[idHeader]]) === String(id));
+  const matchingRows = [];
+  values.forEach((row, index) => {
+    if (index > 0 && String(row[map[idHeader]]) === String(id)) matchingRows.push(index);
+  });
+  // الكتابة على معرّف مكرَّر أخطر من القراءة منه: قد تُعدّل صفًا وتترك
+  // توأمه بحالة مخالفة. تُرفض دائمًا بنفس تقرير findById_ الواضح.
+  if (matchingRows.length > 1) throw new Error(duplicateIdMessage_(sheetName, idHeader, id, matchingRows.length));
+  const rowIndex = matchingRows.length ? matchingRows[0] : -1;
   if (rowIndex < 1) throw new Error('السجل غير موجود: ' + id);
   Object.keys(changes).forEach(header => {
     if (map[header] !== undefined) sheet.getRange(rowIndex + 1, map[header] + 1).setValue(safeCell_(changes[header]));
@@ -140,7 +224,7 @@ function updateById_(sheetName, idHeader, id, changes) {
  * بثلاثية (المرحلة، النشاط الرئيسي، النشاط الفرعي) لا برقم منفصل.
  */
 function updateRowByMatch_(sheetName, matchHeaders, changes) {
-  _PERF_.writes++;
+  _REQ_.writes++;
   const sheet = sheet_(sheetName);
   const values = sheet.getDataRange().getValues();
   const map = {};

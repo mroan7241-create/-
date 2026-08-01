@@ -226,7 +226,7 @@ function runScenario(count) {
   metrics.save = save.ms;
   const newBeneficiaryId = save.result.id;
 
-  S.saveDevice(admin.token, { name: 'ثلاجة قياس', type: 'أجهزة منزلية', associationId: assoc.id, beneficiaryId: newBeneficiaryId });
+  S.saveDevice(admin.token, { name: 'ثلاجة قياس', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: newBeneficiaryId });
 
   resetPerCallCache();
   const assign = timeIt(() => S.assignDelegate(token, newBeneficiaryId, delegate.id));

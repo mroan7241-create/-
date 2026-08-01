@@ -248,7 +248,7 @@ section('2) استجابات الحفظ لا تُعيد getBootstrapData كام�
   assert('saveBeneficiary تُعيد summary مصغَّرًا (بلا مصفوفات كاملة)', !!saveResult.summary && typeof saveResult.summary.beneficiaries === 'number');
   assert('حجم استجابة الحفظ الجزئية أصغر بكثير من Bootstrap كامل', JSON.stringify(saveResult).length < 2000);
 
-  const device = S.saveDevice(admin.token, { name: 'ثلاجة', type: 'أجهزة منزلية', associationId: assocA.id });
+  const device = S.saveDevice(admin.token, { name: 'ثلاجة', type: 'ثلاجة', associationId: assocA.id });
   assert('saveDevice لا تُعيد data كاملة', device.data === undefined);
   assert('saveDevice تُعيد record فقط', !!device.record);
 
@@ -276,7 +276,7 @@ section('3) إبطال الذاكرة المؤقتة (Bootstrap) فور أي ك�
   assert('طلب Bootstrap ثانٍ فوري بلا تعديل يعيد نفس القيم من الذاكرة المؤقتة', JSON.stringify(before) === JSON.stringify(cachedAgain));
 
   const cache = S.CacheService.getScriptCache();
-  S.saveDevice(admin.token, { name: 'جهاز جديد', type: 'أجهزة منزلية', associationId: '' });
+  S.saveDevice(admin.token, { name: 'جهاز جديد', type: 'ثلاجة', associationId: '' });
   assert('clearDashboardCache تُبطل مفتاح bootstrap:ADMIN فور الكتابة، قبل أي طلب Bootstrap تالٍ', cache.get('bootstrap:ADMIN') === null);
 
   const afterWrite = S.getBootstrapData(admin.token);

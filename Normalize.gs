@@ -143,17 +143,21 @@ function getAuditRows_(limit, associationId) {
 function listAuditLog(token, options) {
   return perfTime_('listAuditLog', () => {
     const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
-    options = options || {};
-    const associationId = user.role === 'ASSOCIATION' ? user.associationId
-      : (options.associationId ? cleanId_(options.associationId) : null);
-    let items = auditRowsFiltered_(associationId);
-    items = applySearch_(items, options.search, ['user', 'action', 'section', 'recordId', 'notes']);
-    if (options.filter) items = items.filter(item => item.section === options.filter);
-    // options.recordId: يُستخدم لسجل عمليات سجل مرتبط بسجل واحد بعينه (مثل
-    // جهاز محدَّد) — نفس عزل الجمعية أعلاه يبقى ساريًا قبل هذا الفلتر.
-    if (options.recordId) items = items.filter(item => item.recordId === cleanId_(options.recordId));
-    return Object.assign({ok: true}, paginate_(items, options));
+    return withMeta_(listAuditLog_(user, options));
   });
+}
+
+function listAuditLog_(user, options) {
+  options = options || {};
+  const associationId = user.role === 'ASSOCIATION' ? user.associationId
+    : (options.associationId ? cleanId_(options.associationId) : null);
+  let items = auditRowsFiltered_(associationId);
+  items = applySearch_(items, options.search, ['user', 'action', 'section', 'recordId', 'notes']);
+  if (options.filter) items = items.filter(item => item.section === options.filter);
+  // options.recordId: يُستخدم لسجل عمليات سجل مرتبط بسجل واحد بعينه (مثل
+  // جهاز محدَّد) — نفس عزل الجمعية أعلاه يبقى ساريًا قبل هذا الفلتر.
+  if (options.recordId) items = items.filter(item => item.recordId === cleanId_(options.recordId));
+  return Object.assign({ok: true}, paginate_(items, options));
 }
 
 // الأحداث التشغيلية المسموح أن يراها المندوب نفسه في سجله — تستثني عمدًا

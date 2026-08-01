@@ -42,6 +42,11 @@ function bootstrapCacheKey_(user) {
 
 function getBootstrapData(token, forceFresh) {
   const user = requireSession_(token);
+  return withMeta_(getBootstrapDataFor_(user, forceFresh));
+}
+
+/** النسخة الداخلية (مستخدم متحقَّق منه) — يستدعيها getBootstrapData وgetPortalBundle معًا. */
+function getBootstrapDataFor_(user, forceFresh) {
   assertActorEnabled_(user.role, user.associationId);
   const cache = CacheService.getScriptCache();
   const cacheKey = bootstrapCacheKey_(user);
@@ -71,6 +76,46 @@ function getBootstrapData(token, forceFresh) {
 
 function getDashboardData(token) {
   return getBootstrapData(token);
+}
+
+/** الصفحات المُرقَّمة التي يمكن ضمّها إلى حزمة البوابة، ودالتها الداخلية والأدوار المسموح لها. */
+const PORTAL_PAGE_LOADERS_ = Object.freeze({
+  beneficiaries: {roles: ['ADMIN', 'ASSOCIATION'], load: (user, options) => listBeneficiaries_(user, options)},
+  devices: {roles: ['ADMIN', 'ASSOCIATION'], load: (user, options) => listDevices_(user, options)},
+  delegates: {roles: ['ADMIN', 'ASSOCIATION'], load: (user, options) => listDelegates_(user, options)},
+  associations: {roles: ['ADMIN'], load: (user, options) => listAssociations_(user, options)},
+  audit: {roles: ['ADMIN', 'ASSOCIATION'], load: (user, options) => listAuditLog_(user, options)},
+  applications: {roles: ['ADMIN'], load: (user, options) => listApplications_(user, options)}
+});
+
+/**
+ * endpoint مُجمَّع: يعيد في **جولة واحدة** ما كان يتطلب ثلاث جولات
+ * متسلسلة عبر google.script.run (bootstrap ← المصادر المرجعية ← الصفحة
+ * المُرقَّمة الأولى). كل جولة في Apps Script تحمل تكلفة ثابتة كبيرة
+ * (نقل HtmlService + إعادة تهيئة التنفيذ) مستقلة تمامًا عن حجم البيانات،
+ * وهي السبب الرئيسي في زمن الدخول 7–10 ثوانٍ المرصود حيًّا 2026/08/01.
+ *
+ * مكسب إضافي غير مرئي: الثلاثة تُنفَّذ الآن داخل نطاق طلب واحد، فتُقرأ كل
+ * ورقة **مرة واحدة فقط** بدل مرة لكل جولة (ذاكرة _TABLE_CACHE_ المحصورة
+ * بالطلب). الصلاحيات مفروضة لكل قسم على حدة عبر PORTAL_PAGE_LOADERS_ —
+ * الضمّ لا يوسّع صلاحية أي دور إطلاقًا، وطلب قسم غير مسموح يُهمَل بصمت
+ * بدل إسقاط الحزمة كلها.
+ */
+function getPortalBundle(token, page, options) {
+  return perfTime_('getPortalBundle:' + String(page || '-'), () => {
+    const user = requireSession_(token);
+    const bundle = {
+      ok: true,
+      bootstrap: getBootstrapDataFor_(user, false),
+      referenceData: getReferenceData()
+    };
+    const loader = PORTAL_PAGE_LOADERS_[String(page || '')];
+    if (loader && loader.roles.indexOf(user.role) >= 0) {
+      bundle.page = String(page);
+      bundle.pageData = loader.load(user, options || {});
+    }
+    return withMeta_(bundle);
+  });
 }
 
 /**

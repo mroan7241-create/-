@@ -9,32 +9,40 @@ const DEVICE_MANUAL_STATUSES_ = Object.freeze(['بالمستودع', 'مخصص',
 function listDevices(token, options) {
   return perfTime_('listDevices', () => {
     const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
-    options = options || {};
-    let rows = readTable_(APP.sheets.devices).rows;
-    if (user.role === 'ASSOCIATION') rows = rows.filter(row => String(row['رقم الجمعية']) === user.associationId);
-    else if (options.associationId) rows = rows.filter(row => String(row['رقم الجمعية']) === cleanId_(options.associationId));
-    let items = rows.map(normalizeDevice_);
-    items = applySearch_(items, options.search, ['name', 'id', 'type', 'beneficiaryId']);
-    if (options.filter) items = items.filter(item => item.status === options.filter);
-    items = applySort_(items, options.sortBy, options.sortDir);
-    return Object.assign({ok: true}, paginate_(items, options));
+    return withMeta_(listDevices_(user, options));
   });
+}
+
+function listDevices_(user, options) {
+  options = options || {};
+  let rows = readTable_(APP.sheets.devices).rows;
+  if (user.role === 'ASSOCIATION') rows = rows.filter(row => String(row['رقم الجمعية']) === user.associationId);
+  else if (options.associationId) rows = rows.filter(row => String(row['رقم الجمعية']) === cleanId_(options.associationId));
+  let items = rows.map(normalizeDevice_);
+  items = applySearch_(items, options.search, ['name', 'id', 'type', 'beneficiaryId']);
+  if (options.filter) items = items.filter(item => item.status === options.filter);
+  items = applySort_(items, options.sortBy, options.sortDir);
+  return Object.assign({ok: true}, paginate_(items, options));
 }
 
 /** قائمة جمعيات مُرقَّمة (ADMIN فقط — الجمعية ترى بياناتها الخاصة فقط عبر association في Bootstrap). */
 function listAssociations(token, options) {
   return perfTime_('listAssociations', () => {
-    requireSession_(token, ['ADMIN']);
-    options = options || {};
-    const beneficiaries = readTable_(APP.sheets.beneficiaries).rows;
-    const devices = readTable_(APP.sheets.devices).rows;
-    const delegates = readTable_(APP.sheets.delegates).rows;
-    let items = readTable_(APP.sheets.associations).rows.map(row => normalizeAssociation_(row, beneficiaries, devices, delegates));
-    items = applySearch_(items, options.search, ['name', 'id', 'email', 'phone', 'region', 'city']);
-    if (options.filter) items = items.filter(item => item.status === options.filter);
-    items = applySort_(items, options.sortBy, options.sortDir);
-    return Object.assign({ok: true}, paginate_(items, options));
+    const user = requireSession_(token, ['ADMIN']);
+    return withMeta_(listAssociations_(user, options));
   });
+}
+
+function listAssociations_(user, options) {
+  options = options || {};
+  const beneficiaries = readTable_(APP.sheets.beneficiaries).rows;
+  const devices = readTable_(APP.sheets.devices).rows;
+  const delegates = readTable_(APP.sheets.delegates).rows;
+  let items = readTable_(APP.sheets.associations).rows.map(row => normalizeAssociation_(row, beneficiaries, devices, delegates));
+  items = applySearch_(items, options.search, ['name', 'id', 'email', 'phone', 'region', 'city']);
+  if (options.filter) items = items.filter(item => item.status === options.filter);
+  items = applySort_(items, options.sortBy, options.sortDir);
+  return Object.assign({ok: true}, paginate_(items, options));
 }
 
 function saveDevice(token, payload) {
@@ -80,7 +88,7 @@ function saveDevice(token, payload) {
 
   const values = {
     'اسم الجهاز': requiredText_(payload.name, 'اسم الجهاز', 100),
-    'النوع': validateDeviceType_(payload.type),
+    'النوع': validateDeviceType_(payload.type, existing ? String(existing['النوع'] || '') : ''),
     'رقم الجمعية': associationId,
     'رقم المستفيد': beneficiaryId,
     'حالة الجهاز': status,
@@ -148,10 +156,15 @@ function getDeviceDetail(token, deviceId) {
 function saveAssociation(token, payload) {
   const user = requireSession_(token, ['ADMIN']);
   payload = payload || {};
-  const place = validateRegionCity_(payload.region, payload.city);
+  // القيم المخزَّنة حاليًا لهذه الجمعية بالذات (عند التعديل فقط) — تمرير
+  // القيم التاريخية حتى لا يمنع تصنيف/منطقة قديمة تعديلَ حقل آخر.
+  const existingAssociation = payload.id ? findById_(APP.sheets.associations, 'رقم الجمعية', cleanId_(payload.id)) : null;
+  const previousPlace = existingAssociation
+    ? {region: String(existingAssociation['المنطقة'] || ''), city: String(existingAssociation['المدينة'] || '')} : null;
+  const place = validateRegionCity_(payload.region, payload.city, previousPlace);
   const values = {
     'اسم الجمعية': requiredText_(payload.name, 'اسم الجمعية', 150),
-    'التصنيف': validateAssociationCategory_(payload.category),
+    'التصنيف': validateAssociationCategory_(payload.category, existingAssociation ? String(existingAssociation['التصنيف'] || '') : ''),
     'المنطقة': place.region,
     'المدينة': place.city,
     'أرقام التواصل': normalizePhone_(payload.phone),
@@ -160,7 +173,7 @@ function saveAssociation(token, payload) {
   };
   if (payload.id) {
     const id = cleanId_(payload.id);
-    const before = findById_(APP.sheets.associations, 'رقم الجمعية', id);
+    const before = existingAssociation;
     if (!before) throw new Error('الجمعية غير موجودة');
     updateById_(APP.sheets.associations, 'رقم الجمعية', id, values);
     // إيقاف الجمعية يقطع جلسات حسابها ومناديبها فورًا.
