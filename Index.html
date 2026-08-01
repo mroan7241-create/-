@@ -25,7 +25,7 @@
       --gold-700:#B07C12; --gold-600:#C9901A; --gold-500:#E2A62E;
       --gold-400:#EEBE5E; --gold-200:#F7E3B6; --gold-100:#FDF4E2;
       /* الحياد */
-      --ink:#2A1520; --ink-soft:#5A4650; --muted:#867078;
+      --ink:#2A1520; --ink-soft:#5A4650; --ink-faint:#8A7680; --muted:#867078;
       --paper:#FFFFFF; --surface:#FDFAF9; --canvas:#F6F1EF;
       --line:#EDE1E4; --line-strong:#E0CDD3;
       /* الحالات — مشتقة لتنسجم مع العنابي */
@@ -64,7 +64,12 @@
        الشريك في صف مستقل تحت خط فاصل هادئ — لا دمج ولا خلفية خلف أي شعار. */
     .lockup{display:inline-flex;flex-direction:column;align-items:flex-start;gap:11px;max-width:100%}
     .lockup-mark{display:flex;align-items:center;gap:11px}
-    .lockup-logo{height:46px;width:auto;object-fit:contain;display:block;background:none}
+    /* الشعارات: حجم أكبر ووضوح أعلى دون أي تشويه للنِّسب.
+       image-rendering + backface-visibility يمنعان الضبابية الناتجة عن
+       تحجيم الصور النقطية داخل عناصر متحرّكة/مترجمة في بعض المتصفحات.
+       لا خلفية ولا ظل ولا قصّ على أي شعار — النسبة محفوظة بـobject-fit. */
+    .lockup-logo{height:54px;width:auto;object-fit:contain;display:block;background:none;
+      backface-visibility:hidden;-webkit-backface-visibility:hidden}
     .lockup-fallback{width:42px;height:46px;flex:none;display:grid;place-items:center;color:var(--zad-700)}
     .lockup-fallback svg{width:100%;height:100%;display:block}
     .lockup-text strong{display:block;font-family:var(--font-display);font-weight:800;font-size:17px;color:var(--zad-800);line-height:1.25}
@@ -75,7 +80,8 @@
     /* عرض ثنائي أفقي: شعار الزاد ثم خط فاصل رفيع ثم شعار الشريك، بلا أي نص */
     .lockup-duo{flex-direction:row;align-items:center;gap:14px}
     .lockup-duo-divider{width:1px;align-self:stretch;min-height:34px;background:var(--line-strong);flex:none}
-    .lockup-duo .lockup-partner-logo{height:40px;width:auto;object-fit:contain;display:block;background:none}
+    .lockup-duo .lockup-partner-logo{height:48px;width:auto;object-fit:contain;display:block;background:none;
+      backface-visibility:hidden;-webkit-backface-visibility:hidden}
     .lockup-duo.on-dark .lockup-duo-divider{background:rgba(255,255,255,.28)}
 
     /* ---------- Buttons ---------- */
@@ -130,13 +136,100 @@
     .login{min-height:100vh;display:grid;grid-template-columns:minmax(380px,540px) 1fr;background:var(--surface)}
     .login-panel{padding:clamp(26px,5vw,68px);display:flex;flex-direction:column;justify-content:center;background:var(--paper);position:relative;z-index:1}
     .login-panel .lockup{margin-bottom:clamp(30px,5vh,44px)}
-    .login-panel .lockup-logo{height:clamp(58px,7vw,84px)}
-    .login-panel .lockup-partner-logo{height:clamp(50px,6vw,72px)}
-    .login-panel .lockup-duo-divider{min-height:56px}
+    .login-panel .lockup-logo{height:clamp(72px,8vw,104px)}
+    .login-panel .lockup-partner-logo{height:clamp(62px,7vw,90px)}
+    .login-panel .lockup-duo-divider{min-height:68px}
     .login-divider{width:64px;height:3px;border-radius:2px;margin:0 0 clamp(28px,5vh,44px);
       background:linear-gradient(90deg,var(--gold-600),var(--gold-400))}
     .login-panel h1{font-size:clamp(28px,3.4vw,42px);color:var(--zad-800);margin-bottom:12px;letter-spacing:-.01em}
     .login-lede{color:var(--ink-soft);font-size:15.5px;margin:0 0 28px;max-width:44ch}
+    /* ============================================================
+       اللوحة التنفيذية للأنشطة — نظام بصري خاص بالزاد لا قالب جاهز.
+       المبدأ: تدرّج قراءة من الشريط الكلي ← مسار المراحل ← البطاقة.
+       الألوان من هوية الزاد فقط (عنابي/طوبي/ذهبي + محايدات رملية)،
+       بظلال خفيفة جدًا وحدود رفيعة بدل الصناديق الثقيلة.
+       ============================================================ */
+    .exec{background:var(--paper);border:1px solid var(--line);border-radius:var(--r-xl);
+      padding:24px 26px;margin-bottom:18px;box-shadow:var(--sh-1);position:relative;overflow:hidden}
+    .exec::before{content:"";position:absolute;inset-inline-start:0;inset-block:0;width:4px;background:var(--zad-gradient)}
+    .exec-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+    .exec-head h2{font-size:20px;color:var(--zad-800);margin:0 0 4px;letter-spacing:-.2px}
+    .exec-head p{margin:0;color:var(--ink-soft);font-size:13px}
+
+    /* شريط التوزيع: عرض كل شريحة متناسب مع عدد أنشطتها */
+    .flow-bar{display:flex;height:14px;border-radius:var(--r-pill);overflow:hidden;background:var(--canvas);gap:2px}
+    .flow-seg{display:block;min-width:6px}
+    .flow-seg.is-done{background:var(--ok)}
+    .flow-seg.is-live{background:var(--zad-700)}
+    .flow-seg.is-late{background:var(--gold-500)}
+    .flow-seg.is-next{background:var(--line-strong)}
+    .flow-keys{display:flex;flex-wrap:wrap;gap:10px 22px;margin-top:16px}
+    .flow-key{display:flex;align-items:baseline;gap:7px;font-size:13px;color:var(--ink-soft)}
+    .flow-key strong{font-size:19px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--ink)}
+    .flow-key small{color:var(--ink-faint)}
+    .flow-dot{width:20px;height:20px;border-radius:var(--r-pill);display:inline-flex;align-items:center;
+      justify-content:center;font-size:11px;font-weight:700;flex:none;align-self:center}
+    .flow-key.is-done .flow-dot{background:var(--ok-bg);color:var(--ok)}
+    .flow-key.is-live .flow-dot{background:var(--zad-100);color:var(--zad-700)}
+    .flow-key.is-late .flow-dot{background:var(--gold-100);color:var(--gold-700)}
+    .flow-key.is-next .flow-dot{background:var(--neutral-bg);color:var(--neutral)}
+
+    /* مسار المراحل: خط زمني رأسي بعُقَد */
+    .tl{list-style:none;margin:0;padding:0;position:relative}
+    .tl::before{content:"";position:absolute;inset-inline-start:11px;top:12px;bottom:12px;width:2px;background:var(--line)}
+    .tl-item{position:relative;padding-inline-start:38px;padding-block:11px}
+    .tl-node{position:absolute;inset-inline-start:0;top:12px;width:24px;height:24px;border-radius:var(--r-pill);
+      display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;
+      background:var(--paper);border:2px solid var(--line-strong);color:var(--ink-faint)}
+    .tl-item.is-done .tl-node{border-color:var(--ok);color:var(--ok);background:var(--ok-bg)}
+    .tl-item.is-live .tl-node{border-color:var(--zad-700);color:var(--zad-700);background:var(--zad-100)}
+    .tl-item.is-late .tl-node{border-color:var(--gold-500);color:var(--gold-700);background:var(--gold-100)}
+    .tl-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:8px}
+    .tl-head strong{font-size:14px;color:var(--zad-800)}
+    .tl-meter{height:6px;border-radius:var(--r-pill);background:var(--canvas);overflow:hidden}
+    .tl-meter span{display:block;height:100%;background:var(--zad-gradient);border-radius:var(--r-pill)}
+    .tl-pct{font-size:12px;color:var(--ink-soft);font-variant-numeric:tabular-nums;margin-top:5px;display:inline-block}
+    .late-days{font-size:12.5px;font-weight:700;color:var(--gold-700);white-space:nowrap}
+
+    /* بطاقات الأنشطة، مجمَّعة تحت نشاطها الرئيسي */
+    .exec-body{margin-top:6px}
+    .act-group{margin-bottom:26px}
+    .act-group-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+      flex-wrap:wrap;padding-bottom:10px;margin-bottom:14px;border-bottom:1px solid var(--line)}
+    .act-group-head h3{font-size:14.5px;color:var(--zad-800);margin:0;font-weight:700}
+    .act-group-count{font-size:12.5px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+    .act-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:14px}
+    .act-card{background:var(--paper);border:1px solid var(--line);border-radius:var(--r-lg);
+      padding:16px 17px;box-shadow:var(--sh-1);display:flex;flex-direction:column;gap:12px;
+      border-inline-start:3px solid var(--line-strong)}
+    .act-card.is-done{border-inline-start-color:var(--ok)}
+    .act-card.is-live{border-inline-start-color:var(--zad-700)}
+    .act-card.is-late{border-inline-start-color:var(--gold-500)}
+    .act-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+    .act-top h4{margin:0 0 3px;font-size:14px;color:var(--ink);line-height:1.5}
+    .act-path{margin:0;font-size:11.5px;color:var(--ink-faint)}
+    .act-meter{height:6px;border-radius:var(--r-pill);background:var(--canvas);overflow:hidden}
+    .act-meter span{display:block;height:100%;background:var(--zad-gradient);border-radius:var(--r-pill)}
+    .act-facts{display:flex;gap:18px}
+    .act-facts .fact{display:flex;flex-direction:column;gap:2px}
+    .act-facts small{font-size:11px;color:var(--ink-faint)}
+    .act-facts strong{font-size:13px;color:var(--ink);font-variant-numeric:tabular-nums}
+    .act-foot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:11px;
+      border-top:1px solid var(--line);font-size:12px}
+    .due{color:var(--ink-soft)}
+    .due.is-late{color:var(--gold-700);font-weight:700}
+    .due.is-done{color:var(--ok)}
+    .act-proof{color:var(--zad-700);font-weight:700;text-decoration:none;margin-inline-start:auto}
+    .act-proof:hover{text-decoration:underline}
+    .act-proof.is-missing{color:var(--ink-faint);font-weight:400}
+
+    @media (max-width:640px){
+      .exec{padding:18px 16px;border-radius:var(--r-lg)}
+      .exec-head h2{font-size:17px}
+      .act-grid{grid-template-columns:1fr}
+      .flow-keys{gap:8px 16px}
+    }
+
     .segmented{display:flex;background:var(--canvas);padding:5px;border-radius:var(--r-md);margin-bottom:22px;gap:4px}
     .segmented button{flex:1;min-height:42px;border-radius:10px;color:var(--muted);font-weight:700;font-size:13.5px;transition:.18s}
     .segmented button[aria-selected="true"]{background:var(--paper);color:var(--zad-800);box-shadow:var(--sh-2)}
@@ -315,6 +408,8 @@
     .dg-top{background:var(--zad-gradient);color:#fff;padding:20px 18px 30px;border-radius:0 0 var(--r-xl) var(--r-xl);position:relative;overflow:hidden}
     .dg-top::after{content:"";position:absolute;inset-inline-start:-70px;top:-90px;width:210px;height:210px;border-radius:50%;border:36px solid rgba(226,166,46,.14)}
     .dg-top .lockup{margin-bottom:20px;position:relative;z-index:1}
+    .dg-top .lockup-logo{height:58px}
+    .dg-top .lockup-partner-logo{height:50px}
     .dg-top h2{font-size:20px;margin-bottom:3px;position:relative;z-index:1}
     .dg-top>p{margin:0 0 18px;color:rgba(255,255,255,.75);font-size:13px;position:relative;z-index:1}
     .dg-stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;position:relative;z-index:1}
@@ -418,9 +513,9 @@
       .modal-foot .btn{flex:1}
       .toasts{inset-inline:12px;bottom:calc(12px + env(safe-area-inset-bottom));max-width:none}
       .lockup-logo,.lockup-partner-logo{height:38px}
-      .login-panel .lockup-logo{height:52px}
-      .login-panel .lockup-partner-logo{height:46px}
-      .login-panel .lockup-duo-divider{min-height:40px}
+      .login-panel .lockup-logo{height:66px}
+      .login-panel .lockup-partner-logo{height:58px}
+      .login-panel .lockup-duo-divider{min-height:52px}
     }
   </style>
 </head>
@@ -2899,6 +2994,133 @@
         + '<button class="btn btn-link" data-act="go" data-value="activities">كل الأنشطة ←</button></div>' + upcomingHtml + '</section>';
     }
 
+    /* ============================================================
+       متابعة الأنشطة — لوحة تنفيذية لا جدولًا تقليديًا.
+       ثلاث طبقات مقروءة من بعيد إلى قريب:
+         1) شريط تقدّم المشروع: توزيع الأنشطة على الحالات الأربع دفعة
+            واحدة، بعرض متناسب مع العدد (يُقرأ قبل أي رقم).
+         2) مسار المراحل: خط زمني رأسي بعُقَد، كل مرحلة بنسبتها وحالتها.
+         3) بطاقات الأنشطة: مجمَّعة تحت نشاطها الرئيسي، تعرض المسؤول
+            والموعد والمدة المتبقية/التأخير والشاهد وآخر تحديث.
+       لا تعتمد أي حالة على اللون وحده: لكل حالة شارة نصية ورمز.
+       ============================================================ */
+
+    var ACTIVITY_STATE_META = {
+      'مكتمل': {key: 'done', glyph: '✓', label: 'مكتمل'},
+      'جارٍ': {key: 'live', glyph: '◉', label: 'جارٍ'},
+      'متأخر': {key: 'late', glyph: '!', label: 'متأخر'},
+      'لم يبدأ': {key: 'next', glyph: '○', label: 'قادم'}
+    };
+    var ACTIVITY_STATE_ORDER = ['مكتمل', 'جارٍ', 'متأخر', 'لم يبدأ'];
+
+    function activityStateMeta(status) {
+      return ACTIVITY_STATE_META[status] || {key: 'next', glyph: '○', label: status || 'غير محدد'};
+    }
+
+    /** شريط أفقي واحد يوزّع كل الأنشطة على حالاتها — أعرض شريحة = أكبر كتلة عمل. */
+    function activityFlowBar(all) {
+      var total = all.length || 1;
+      var segments = ACTIVITY_STATE_ORDER.map(function (status) {
+        var count = all.filter(function (x) { return x.status === status; }).length;
+        return {status: status, count: count, share: Math.round(count / total * 100)};
+      }).filter(function (seg) { return seg.count > 0; });
+
+      var bars = segments.map(function (seg) {
+        var meta = activityStateMeta(seg.status);
+        return '<span class="flow-seg is-' + meta.key + '" style="flex:' + seg.count + '"'
+          + ' title="' + esc(meta.label + ': ' + seg.count) + '"><span class="sr-only">'
+          + esc(meta.label + ' ' + seg.count) + '</span></span>';
+      }).join('');
+
+      var legend = segments.map(function (seg) {
+        var meta = activityStateMeta(seg.status);
+        return '<div class="flow-key is-' + meta.key + '">'
+          + '<span class="flow-dot" aria-hidden="true">' + meta.glyph + '</span>'
+          + '<strong>' + fmt(seg.count) + '</strong><span>' + esc(meta.label) + '</span>'
+          + '<small>' + fmt(seg.share) + '٪</small></div>';
+      }).join('');
+
+      return '<div class="flow"><div class="flow-bar" role="img" aria-label="توزيع الأنشطة على الحالات">'
+        + bars + '</div><div class="flow-keys">' + legend + '</div></div>';
+    }
+
+    /** خط زمني رأسي للمراحل — عُقدة لكل مرحلة بحالتها ونسبتها. */
+    function activityTimeline(stages) {
+      if (!stages.length) {
+        return emptyState({glyph: '◇', title: 'لا توجد مراحل بعد', body: 'ستظهر المراحل هنا فور إضافة أول نشاط.'});
+      }
+      return '<ol class="tl">' + stages.map(function (stage) {
+        var meta = activityStateMeta(stage.status);
+        return '<li class="tl-item is-' + meta.key + '">'
+          + '<span class="tl-node" aria-hidden="true">' + meta.glyph + '</span>'
+          + '<div class="tl-body"><div class="tl-head">'
+          + '<strong>' + esc(stage.name || 'مرحلة غير مسماة') + '</strong>'
+          + statusChip(stage.status) + '</div>'
+          + '<div class="tl-meter"><span style="width:' + pct(stage.progress) + '%"></span></div>'
+          + '<span class="tl-pct">' + fmt(pct(stage.progress)) + '٪</span>'
+          + '</div></li>';
+      }).join('') + '</ol>';
+    }
+
+    /** الموعد والمدة المتبقية أو مقدار التأخير — نص صريح لا لون فقط. */
+    function activityDueLine(item) {
+      if (item.status === 'مكتمل') {
+        return '<span class="due is-done">اكتمل' + (item.endDate ? ' · ' + esc(item.endDate) : '') + '</span>';
+      }
+      if (item.delayDays > 0) {
+        return '<span class="due is-late">متأخر ' + fmt(item.delayDays) + ' يومًا'
+          + (item.endDate ? ' · كان ' + esc(item.endDate) : '') + '</span>';
+      }
+      if (item.remainingDays > 0) {
+        return '<span class="due">يتبقّى ' + fmt(item.remainingDays) + ' يومًا'
+          + (item.endDate ? ' · حتى ' + esc(item.endDate) : '') + '</span>';
+      }
+      return '<span class="due">' + (item.endDate ? 'الموعد ' + esc(item.endDate) : 'بلا موعد محدد') + '</span>';
+    }
+
+    function activityCard(item, isAdmin) {
+      var meta = activityStateMeta(item.status);
+      return '<article class="act-card is-' + meta.key + '">'
+        + '<header class="act-top"><div>'
+        + '<h4>' + esc(item.subActivity || item.mainActivity) + '</h4>'
+        + '<p class="act-path">' + esc(item.stage) + ' › ' + esc(item.mainActivity) + '</p></div>'
+        + statusChip(item.status) + '</header>'
+        + '<div class="act-meter" role="img" aria-label="نسبة الإنجاز ' + fmt(pct(item.progress)) + ' بالمئة">'
+        + '<span style="width:' + pct(item.progress) + '%"></span></div>'
+        + '<div class="act-facts">'
+        + '<span class="fact"><small>الإنجاز</small><strong>' + fmt(pct(item.progress)) + '٪</strong></span>'
+        + '<span class="fact"><small>المسؤول</small><strong>' + esc(item.owner || 'غير محدد') + '</strong></span>'
+        + '</div>'
+        + '<div class="act-foot">' + activityDueLine(item)
+        + (item.evidenceUrl
+          ? '<a class="act-proof" href="' + esc(item.evidenceUrl) + '" target="_blank" rel="noopener noreferrer">الشاهد ↗</a>'
+          : '<span class="act-proof is-missing">لا شاهد مرفوع</span>')
+        + (isAdmin ? '<button class="btn btn-link btn-sm" data-act="edit-activity"'
+          + ' data-stage="' + esc(item.stage) + '" data-main="' + esc(item.mainActivity) + '"'
+          + ' data-sub="' + esc(item.subActivity) + '">تعديل</button>' : '')
+        + '</div></article>';
+    }
+
+    /** تجميع البطاقات تحت نشاطها الرئيسي — يحفظ التسلسل الإداري بدل قائمة مسطحة. */
+    function activityGroups(activities, isAdmin) {
+      var order = [];
+      var groups = {};
+      activities.forEach(function (item) {
+        var key = item.stage + ' › ' + item.mainActivity;
+        if (!groups[key]) { groups[key] = []; order.push(key); }
+        groups[key].push(item);
+      });
+      return order.map(function (key) {
+        var items = groups[key];
+        var doneCount = items.filter(function (x) { return x.status === 'مكتمل'; }).length;
+        return '<section class="act-group">'
+          + '<header class="act-group-head"><h3>' + esc(key) + '</h3>'
+          + '<span class="act-group-count">' + fmt(doneCount) + ' من ' + fmt(items.length) + ' مكتمل</span></header>'
+          + '<div class="act-grid">' + items.map(function (x) { return activityCard(x, isAdmin); }).join('') + '</div>'
+          + '</section>';
+      }).join('');
+    }
+
     function renderActivities() {
       var isAdmin = state.data.role === 'ADMIN';
       var bundle = state.lazy.activities;
@@ -2910,18 +3132,6 @@
           body: isAdmin ? 'أضف أول نشاط رئيسي أو فرعي لبدء متابعة مراحل المشروع.' : 'لم تُضَف أنشطة بعد.',
           action: isAdmin ? 'new-activity' : '', actionLabel: '＋ نشاط'});
       }
-      var late = all.filter(function (x) { return x.status === 'متأخر'; });
-      var stagesHtml = stages.length ? stages.map(function (s) {
-        return '<div style="padding:12px 0;border-bottom:1px solid var(--line)">'
-          + '<div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:8px">'
-          + '<div><strong>' + esc(s.name || 'مرحلة غير مسماة') + '</strong> ' + statusChip(s.status) + '</div></div>'
-          + bar(s.progress) + '</div>';
-      }).join('') : emptyState({glyph: '◇', title: 'لا توجد مراحل', body: ''});
-
-      var lateHtml = late.length ? late.map(function (x) {
-        return '<div class="alert critical"><strong>' + esc(x.subActivity || x.mainActivity) + '</strong>'
-          + '<small>' + esc(x.owner || 'بلا مسؤول') + ' · متأخر ' + fmt(x.delayDays) + ' يومًا</small></div>';
-      }).join('') : emptyState({glyph: '✓', title: 'لا أنشطة متأخرة', body: 'الجدول الزمني منضبط حاليًا.'});
 
       var activeTab = state.activityTab || '';
       var tabsHtml = '<div class="segmented" role="tablist" aria-label="تصفية الأنشطة">'
@@ -2931,34 +3141,39 @@
         }).join('') + '</div>';
       var activities = activeTab ? all.filter(function (x) { return x.status === activeTab; }) : all;
 
-      var rows = activities.length ? activities.map(function (x) {
-        return '<tr><td>' + esc(x.stage) + '</td><td>' + esc(x.mainActivity) + '</td>'
-          + '<td>' + esc(x.subActivity) + '</td><td>' + esc(x.owner) + '</td>'
-          + '<td class="muted">' + esc(x.endDate || '—') + '</td><td>' + fmt(x.progress) + '٪</td>'
-          + '<td>' + statusChip(x.status) + '</td>'
-          + '<td>' + (x.evidenceUrl
-            ? '<a href="' + esc(x.evidenceUrl) + '" target="_blank" rel="noopener noreferrer">فتح ↗</a>'
-            : '<span class="muted">—</span>') + '</td>'
-          + (isAdmin ? '<td><button class="btn btn-link" data-act="edit-activity" '
-            + 'data-stage="' + esc(x.stage) + '" data-main="' + esc(x.mainActivity) + '" data-sub="' + esc(x.subActivity) + '">'
-            + 'تعديل</button></td>' : '') + '</tr>';
-      }).join('') : '<tr><td colspan="' + (isAdmin ? 9 : 8) + '"><div class="empty" style="padding:24px 0">'
-        + '<p>لا توجد أنشطة مطابقة لهذه التصفية.</p></div></td></tr>';
+      var latest = all.map(function (x) { return x.endDate || ''; }).filter(Boolean).sort().pop() || '—';
+      var body = activities.length
+        ? activityGroups(activities, isAdmin)
+        : emptyState({glyph: '⌕', title: 'لا توجد أنشطة مطابقة لهذه التصفية',
+          body: 'أعد التصفية إلى «الكل» لعرض جميع الأنشطة.'});
 
-      return '<section class="cols">'
-        + '<div class="panel"><div class="panel-head"><div><h3>مراحل المشروع</h3>'
-        + '<p>المسار التنفيذي المجمّع</p></div></div>' + stagesHtml + '</div>'
-        + '<div class="panel"><div class="panel-head"><div><h3>الأنشطة المتأخرة</h3>'
-        + '<p>مرتّبة حسب الحاجة للتدخل</p></div></div>' + lateHtml + '</div></section>'
-        + '<section class="panel"><div class="panel-head"><div><h3>جميع الأنشطة</h3>'
-        + '<p>تفاصيل التنفيذ والشواهد</p></div>'
-        + (isAdmin ? '<button class="btn btn-primary btn-sm" data-act="new-activity">＋ نشاط</button>' : '') + '</div>'
-        + tabsHtml
-        + '<div class="table-wrap"><table class="data"><thead><tr>'
-        + '<th>المرحلة</th><th>النشاط الرئيسي</th><th>النشاط الفرعي</th><th>المسؤول</th>'
-        + '<th>النهاية</th><th>الإنجاز</th><th>الحالة</th><th>الشاهد</th>'
-        + (isAdmin ? '<th></th>' : '') + '</tr></thead><tbody>'
-        + rows + '</tbody></table></div></section>';
+      return '<section class="exec">'
+        + '<header class="exec-head"><div><h2>المسار التنفيذي للمشروع</h2>'
+        + '<p>' + fmt(all.length) + ' نشاطًا موزّعة على ' + fmt(stages.length) + ' مراحل · آخر موعد مسجّل ' + esc(latest) + '</p></div>'
+        + (isAdmin ? '<button class="btn btn-primary btn-sm" data-act="new-activity">＋ نشاط</button>' : '')
+        + '</header>'
+        + activityFlowBar(all)
+        + '</section>'
+        + '<section class="cols exec-cols">'
+        + '<div class="panel"><div class="panel-head"><div><h3>مسار المراحل</h3>'
+        + '<p>تسلسل التنفيذ ونسبة كل مرحلة</p></div></div>' + activityTimeline(stages) + '</div>'
+        + '<div class="panel"><div class="panel-head"><div><h3>يحتاج تدخّلًا</h3>'
+        + '<p>الأنشطة المتأخرة مرتّبة بالأكثر تأخيرًا</p></div></div>' + renderLateActivities(all) + '</div>'
+        + '</section>'
+        + '<section class="exec-body">' + tabsHtml + body + '</section>';
+    }
+
+    function renderLateActivities(all) {
+      var late = all.filter(function (x) { return x.status === 'متأخر'; })
+        .sort(function (a, b) { return (b.delayDays || 0) - (a.delayDays || 0); });
+      if (!late.length) {
+        return emptyState({glyph: '✓', title: 'لا أنشطة متأخرة', body: 'الجدول الزمني منضبط حاليًا.'});
+      }
+      return '<div class="rows">' + late.slice(0, 6).map(function (x) {
+        return '<div class="row-item"><div><strong>' + esc(x.subActivity || x.mainActivity) + '</strong>'
+          + '<small>' + esc(x.owner || 'بلا مسؤول') + ' · ' + esc(x.stage) + '</small></div>'
+          + '<span class="late-days">متأخر ' + fmt(x.delayDays) + ' يومًا</span></div>';
+      }).join('') + '</div>';
     }
 
     function findActivity(stage, mainActivity, subActivity) {

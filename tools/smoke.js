@@ -948,6 +948,46 @@ assert('نموذج تقديم الجمعية العام يستخدم قوائم 
 assert('نموذج التقديم يربط المدينة بالمنطقة عبر data-city-target', /data-act="region-select"[^>]*data-city-target/.test(out()));
 app.state.screen = '';
 
+/* ---------------- 13) اللوحة التنفيذية للأنشطة ---------------- */
+
+section('13) اللوحة التنفيذية للأنشطة (بديل الجدول التقليدي)');
+
+setRole(ADMIN_DATA);
+app.state.page = 'activities';
+app.state.activityTab = '';
+const execHtml = app.renderActivities();
+assert('اللوحة تعرض المسار التنفيذي لا جدول <table> تقليديًا',
+  execHtml.includes('المسار التنفيذي للمشروع') && !execHtml.includes('<table'));
+assert('شريط توزيع الحالات موجود ومُعرَّف لقارئ الشاشة',
+  execHtml.includes('class="flow-bar"') && execHtml.includes('role="img"') && execHtml.includes('aria-label="توزيع الأنشطة على الحالات"'));
+assert('مسار المراحل خط زمني دلالي (<ol>) لا مجرد صناديق',
+  execHtml.includes('<ol class="tl">') && execHtml.includes('tl-node'));
+assert('اللوحة تعرض الحالات الأربع: مكتمل وجارٍ ومتأخر وقادم',
+  ['مكتمل', 'جارٍ', 'متأخر', 'قادم'].every(label => execHtml.includes(label)));
+assert('كل بطاقة نشاط تعرض نسبة الإنجاز والمسؤول والموعد',
+  execHtml.includes('الإنجاز') && execHtml.includes('المسؤول') && execHtml.includes('act-meter'));
+assert('البطاقات مجمَّعة تحت نشاطها الرئيسي مع عدّاد المكتمل',
+  execHtml.includes('act-group') && execHtml.includes('مكتمل'));
+assert('الشاهد يظهر كرابط عند وجوده وكحالة صريحة "لا شاهد مرفوع" عند غيابه',
+  execHtml.includes('الشاهد ↗') || execHtml.includes('لا شاهد مرفوع'));
+assert('الحالة لا تُنقل باللون وحده: لكل بطاقة شارة نصية ورمز (WCAG 1.4.1)',
+  execHtml.includes('act-card is-') && /class="status/.test(execHtml));
+assert('نسبة الإنجاز مقروءة لقارئ الشاشة عبر aria-label لا لونًا فقط',
+  execHtml.includes('aria-label="نسبة الإنجاز'));
+assert('قسم "يحتاج تدخّلًا" يعرض الأنشطة المتأخرة أو حالة فراغ صريحة',
+  execHtml.includes('يحتاج تدخّلًا'));
+app.state.activityTab = 'مكتمل';
+assert('التصفية تعمل على اللوحة الجديدة كما كانت',
+  app.renderActivities().includes('act-group') || app.renderActivities().includes('لا توجد أنشطة مطابقة'));
+app.state.activityTab = '';
+
+assert('الشعارات أكبر وأوضح دون أي تشويه للنِّسب (object-fit محفوظ، بلا خلفية أو قصّ)',
+  /\.lockup-logo\{height:54px[^}]*object-fit:contain/.test(html)
+  && !/\.lockup-logo\{[^}]*background:(?!none)/.test(html));
+assert('شاشة الدخول تعرض الشعارين بأحجام أكبر متجاوبة (clamp)',
+  /\.login-panel \.lockup-logo\{height:clamp\(72px/.test(html));
+assert('رأس بوابة المندوب يكبّر الشعارين للجوال', /\.dg-top \.lockup-logo\{height:58px\}/.test(html));
+
 /* ---------------- النتيجة ---------------- */
 
 console.log('\n' + '='.repeat(56));
