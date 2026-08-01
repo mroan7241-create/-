@@ -1108,6 +1108,12 @@
         + '<h2 style="margin:0 0 6px;color:var(--zad-800)">يجب تغيير كلمة المرور المؤقتة</h2>'
         + '<p class="hint" style="margin:0 0 20px">هذا حساب جمعية بكلمة مرور مؤقتة (أُنشئت حديثًا أو أُعيد تعيينها). '
         + 'لا يمكن المتابعة إلى النظام قبل اختيار كلمة مرور جديدة خاصة بك.</p>'
+        // تصريح مسبق بما سيحدث فعليًا: تغيير كلمة المرور يُبطل كل الجلسات
+        // القائمة (بما فيها هذه) عمدًا لأسباب أمنية، فيعود المستخدم لشاشة
+        // الدخول. إخفاء ذلك خلف زر مكتوب عليه "المتابعة" كان يبدو خللًا.
+        + '<p class="hint" style="margin:-10px 0 20px"><strong>ما سيحدث بعد الحفظ:</strong> '
+        + 'سيُطلب منك تسجيل الدخول من جديد بكلمة المرور الجديدة — هذا مقصود، '
+        + 'لأن تغيير كلمة المرور يُنهي كل الجلسات المفتوحة على أي جهاز آخر أيضًا.</p>'
         + '<form id="forcePasswordForm" data-act="submit-force-password" novalidate>'
         + '<div class="field"><label for="fp_current">كلمة المرور المؤقتة الحالية</label>'
         + '<input class="control" id="fp_current" name="current" type="password" dir="ltr" autocomplete="current-password" required></div>'
@@ -1116,7 +1122,7 @@
         + '<div class="field"><label for="fp_confirm">تأكيد كلمة المرور الجديدة</label>'
         + '<input class="control" id="fp_confirm" name="confirm" type="password" dir="ltr" minlength="10" autocomplete="new-password" required></div>'
         + '<span class="hint">١٠ خانات على الأقل، وتضم حروفًا وأرقامًا، ومختلفة عن كلمة المرور الحالية والسابقة.</span>'
-        + '<button class="btn btn-primary btn-block" type="submit" style="margin-top:16px">تغيير كلمة المرور والمتابعة</button>'
+        + '<button class="btn btn-primary btn-block" type="submit" style="margin-top:16px">حفظ كلمة المرور وتسجيل الدخول من جديد</button>'
         + '</form>'
         + '<button type="button" class="btn btn-ghost btn-block" data-act="logout" style="margin-top:10px">تسجيل الخروج بدل ذلك</button>'
         + '</section>'

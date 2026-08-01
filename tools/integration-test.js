@@ -263,9 +263,20 @@ const failResult = S.updateDeliveryStatus(delegateToken, beneficiary.id, 'لم �
 assert('تسجيل تعذّر التسليم ينجح', failResult.ok);
 assert('حالة التسليم تصبح "تعذر التسليم" دون المساس بحالة الجهاز', failResult.record.deliveryStatus === 'تعذر التسليم'
   && String(S.findById_('الأجهزة', 'رقم الجهاز', device.id)['حالة الجهاز']) === 'مع المندوب');
-const retry = S.assignDelegate(assocToken, beneficiary.id, delegateResult.id);
-assert('إعادة تعيين المندوب بعد التعذّر (إعادة محاولة) تنجح وتعيد الحالة لـ"خرج مع المندوب"',
+// المسار الصحيح الآن: إجراء «إعادة المحاولة» الصريح من المندوب نفسه،
+// بدل المسار الالتفافي الذي كان الحل الوحيد (دخول الجمعية إلى "تغيير
+// المندوب" وإعادة حفظ المندوب نفسه) — رُصد حيًّا 2026/08/01.
+const retry = S.retryDelivery(delegateToken, beneficiary.id, 'op-journey-retry');
+assert('إعادة المحاولة الصريحة من المندوب تنجح وتعيد الحالة لـ"خرج مع المندوب"',
   retry.ok && retry.record.deliveryStatus === 'خرج مع المندوب');
+assert('إعادة المحاولة لم تغيّر المندوب ولا الجهاز', retry.record.delegateId === delegateResult.id
+  && String(S.findById_('الأجهزة', 'رقم الجهاز', device.id)['حالة الجهاز']) === 'مع المندوب');
+assert('سجل المحاولات يحفظ المحاولة المتعذّرة بسببها بعد الاستئناف',
+  (retry.record.attempts || []).some(a => a.status === 'تعذر التسليم' && a.reason === 'لم يتم التواصل'));
+// المسار الالتفافي القديم ما زال مسموحًا للجمعية (تغيير مندوب فعلي)،
+// لكنه لم يعد الطريقة الوحيدة لاستئناف مهمة متعذّرة.
+assert('الجمعية ما زالت تستطيع تغيير المندوب فعليًا عند الحاجة (لم يُكسَر المسار القديم)',
+  S.assignDelegate(assocToken, beneficiary.id, delegateResult.id).ok === true);
 
 section('11) إثبات التسليم');
 throws('confirmDelivery يرفض بلا صورة إثبات', () => S.confirmDelivery(delegateToken, { beneficiaryId: beneficiary.id, confirmed: true }), 'صورة إثبات');
@@ -337,6 +348,146 @@ throws('كلمة المرور القديمة للجمعية لم تعد تعمل
   () => S.loginUser_('full-journey@example.org', newPassword), 'بيانات الدخول غير صحيحة');
 const afterReset = S.loginUser_('full-journey@example.org', resetResult.temporaryPassword);
 assert('كلمة المرور المؤقتة الجديدة تعمل، وتُفرَض إعادة تغييرها من جديد', afterReset.ok && afterReset.mustChangePassword === true);
+
+/* ================================================================
+   15) الرحلات الأربع المطلوبة، كل واحدة مستقلة من بيئة نظيفة
+   ================================================================ */
+
+section('15) الرحلات الأربع الكاملة (بيئة مستقلة لكل رحلة)');
+
+/** جلسة إدارة داخل بيئة نظيفة — نفس نمط بقية الملف (أوراق مُهيّأة + جلسة مباشرة). */
+function seedAdmin(J) {
+  seedSheets(J);
+  return adminSession(J);
+}
+const PROOF_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+// الرحلة 1: تقديم جمعية ← قبول ورفض.
+{
+  const J = buildSandbox();
+  const boot = seedAdmin(J);
+  const applied = J.submitAssociationApplication({
+    name: 'جمعية الرحلة الأولى', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
+    contactName: 'مسؤول', phone: '0551110001', email: 'j1@example.org'
+  });
+  assert('رحلة 1: التقديم العام ينجح بلا جلسة', applied.ok && /^APP-/.test(applied.id));
+  const accepted = J.reviewAssociationApplication(boot.token, applied.id, 'accept', '', 'j1-accept');
+  assert('رحلة 1: القبول يُنشئ جمعية وحسابًا بكلمة مرور مؤقتة',
+    accepted.ok && /^ASC-/.test(accepted.associationId) && !!accepted.temporaryPassword);
+  const login1 = J.loginUser_('j1@example.org', accepted.temporaryPassword);
+  assert('رحلة 1: الحساب الجديد يعمل ويُفرَض عليه تغيير كلمة المرور', login1.ok && login1.mustChangePassword === true);
+
+  const rejectedApp = J.submitAssociationApplication({
+    name: 'جمعية مرفوضة', category: 'جمعية خيرية', region: 'الرياض', city: 'الخرج',
+    contactName: 'مسؤول', phone: '0551110002', email: 'j1r@example.org'
+  });
+  throws('رحلة 1: الرفض يتطلب سببًا', () => J.reviewAssociationApplication(boot.token, rejectedApp.id, 'reject', '  ', 'j1-rej-a'), 'مطلوب');
+  const rejected = J.reviewAssociationApplication(boot.token, rejectedApp.id, 'reject', 'بيانات ناقصة', 'j1-rej');
+  assert('رحلة 1: الرفض يُسجَّل بسببه ولا يُنشئ حسابًا',
+    rejected.record.status === 'مرفوض' && rejected.record.rejectionReason === 'بيانات ناقصة'
+    && !J.findUserByEmail_('j1r@example.org'));
+  assert('رحلة 1: الطلب المرفوض لا يمنع تقديم طلب جديد بنفس البريد لاحقًا', (() => {
+    const again = J.submitAssociationApplication({
+      name: 'جمعية معاد تقديمها', category: 'جمعية خيرية', region: 'الرياض', city: 'الخرج',
+      contactName: 'مسؤول', phone: '0551110002', email: 'j1r@example.org'
+    });
+    return again.ok === true;
+  })());
+}
+
+// الرحلة 2: دخول الجمعية ← إضافة مستفيد ومندوب واستيراد.
+{
+  const J = buildSandbox();
+  const boot = seedAdmin(J);
+  const assoc = J.saveAssociation(boot.token, {name: 'جمعية الرحلة الثانية', category: 'جمعية خيرية',
+    region: 'الرياض', city: 'الرياض', phone: '0552220001', email: 'j2@example.org', password: 'ZadJourney2026x'});
+  // الحساب المُنشأ من الإدارة يبدأ بكلمة مرور مؤقتة مُلزِمة بالتغيير —
+  // نمرّ بالمسار الحقيقي كاملًا كما يفعل المستخدم.
+  const firstLogin2 = J.loginUser_('j2@example.org', 'ZadJourney2026x');
+  assert('رحلة 2: الدخول الأول يُلزِم بتغيير كلمة المرور المؤقتة', firstLogin2.mustChangePassword === true);
+  J.changePassword(firstLogin2.token, 'ZadJourney2026x', 'ZadJourneyNew2026');
+  const assocLogin = J.loginUser_('j2@example.org', 'ZadJourneyNew2026');
+  const t = assocLogin.token;
+  const ben = J.saveBeneficiary(t, {name: 'مستفيد الرحلة 2', phone: '0552220002', region: 'الرياض',
+    city: 'الرياض', address: 'حي', familyCount: 3, socialStatus: 'أرملة', needs: ['ثلاجة']});
+  assert('رحلة 2: الجمعية تضيف مستفيدًا وتراه فورًا في قائمتها المُرقَّمة', (() => {
+    const listed = J.listBeneficiaries(t, {}).items;
+    return listed.some(x => x.id === ben.id);
+  })());
+  const del = J.saveDelegate(t, {name: 'مندوب الرحلة 2', phone: '0552220003'});
+  assert('رحلة 2: الجمعية تضيف مندوبًا وتحصل على رمز دخوله مرة واحدة', del.ok && !!del.accessCode);
+  const imported = J.importBeneficiaries(t, [
+    {name: 'مستورد أ', phone: '0552220004', region: 'الرياض', city: 'الخرج', address: 'حي', familyCount: 2, socialStatus: 'أرملة'},
+    {name: 'مستورد ب', phone: '0552220005', region: 'الرياض', city: 'الخرج', address: 'حي', familyCount: 5, socialStatus: 'يتيم'}
+  ], true);
+  assert('رحلة 2: الاستيراد الجماعي يضيف الصفوف الصحيحة', imported.ok === true && imported.imported === 2);
+  assert('رحلة 2: القائمة تعكس الإجمالي الصحيح بعد الاستيراد', J.listBeneficiaries(t, {}).total === 3);
+  assert('رحلة 2: مدينة خارج المنطقة تُرفض بالقائمة المعتمدة ولا يُكتب أي صف', (() => {
+    const totalBefore = J.listBeneficiaries(t, {}).total;
+    const bad = J.importBeneficiaries(t, [
+      {name: 'مستورد خاطئ', phone: '0552220006', region: 'الرياض', city: 'جدة', address: 'حي', familyCount: 2, socialStatus: 'أرملة'}
+    ], true);
+    return bad.ok === false && bad.errorCount === 1 && J.listBeneficiaries(t, {}).total === totalBefore;
+  })());
+}
+
+// الرحلة 3: الإدارة ← إضافة وتخصيص جهاز.
+{
+  const J = buildSandbox();
+  const boot = seedAdmin(J);
+  const assoc = J.saveAssociation(boot.token, {name: 'جمعية الرحلة الثالثة', category: 'جمعية خيرية',
+    region: 'الرياض', city: 'الرياض', phone: '0553330001', email: 'j3@example.org', password: 'ZadJourney2026x'});
+  const ben = J.saveBeneficiary(boot.token, {name: 'مستفيد الرحلة 3', phone: '0553330002', region: 'الرياض',
+    city: 'الرياض', address: 'حي', familyCount: 3, socialStatus: 'أرملة', needs: ['ثلاجة'], associationId: assoc.id});
+  const dev = J.saveDevice(boot.token, {name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id});
+  assert('رحلة 3: الجهاز الجديد يبدأ "بالمستودع"', dev.record.status === 'بالمستودع');
+  const assigned = J.saveDevice(boot.token, {id: dev.id, name: 'ثلاجة', type: 'ثلاجة',
+    associationId: assoc.id, beneficiaryId: ben.id});
+  assert('رحلة 3: تخصيص الجهاز لمستفيد ينقله إلى "مخصص"', assigned.record.status === 'مخصص');
+  throws('رحلة 3: نوع جهاز خارج القائمة المعتمدة يُرفض',
+    () => J.saveDevice(boot.token, {name: 'جهاز', type: 'نوع مخترَع', associationId: assoc.id}), 'غير معروف');
+  throws('رحلة 3: لا يمكن ضبط "مع المندوب" يدويًا (تُحدَّث عبر تعيين المندوب فقط)',
+    () => J.saveDevice(boot.token, {id: dev.id, name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id,
+      beneficiaryId: ben.id, status: 'مع المندوب'}), 'يدويًا');
+}
+
+// الرحلة 4: المندوب ← تعذّر ← إعادة محاولة ← تسليم موثّق (في المحاكاة فقط).
+{
+  const J = buildSandbox();
+  const boot = seedAdmin(J);
+  const assoc = J.saveAssociation(boot.token, {name: 'جمعية الرحلة الرابعة', category: 'جمعية خيرية',
+    region: 'الرياض', city: 'الرياض', phone: '0554440001', email: 'j4@example.org', password: 'ZadJourney2026x'});
+  const ben = J.saveBeneficiary(boot.token, {name: 'مستفيد الرحلة 4', phone: '0554440002', region: 'الرياض',
+    city: 'الرياض', address: 'حي', familyCount: 3, socialStatus: 'أرملة', needs: ['ثلاجة'], associationId: assoc.id});
+  const del = J.saveDelegate(boot.token, {name: 'مندوب الرحلة 4', phone: '0554440003', associationId: assoc.id});
+  J.saveDevice(boot.token, {name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: ben.id});
+  J.assignDelegate(boot.token, ben.id, del.id);
+  const dLogin = J.loginDelegate_(del.accessCode);
+  const dt = dLogin.token;
+
+  const fail = J.updateDeliveryStatus(dt, ben.id, 'لا يرد', 'اتصلت مرتين', 'j4-fail');
+  assert('رحلة 4: التعذّر يُسجَّل وتبقى الأجهزة مع المندوب في الاستجابة نفسها',
+    fail.record.deliveryStatus === 'تعذر التسليم'
+    && fail.record.devices.length === 1 && fail.record.devices[0].status === 'مع المندوب');
+  throws('رحلة 4: لا تسليم قبل إعادة المحاولة', () => J.confirmDelivery(dt, {beneficiaryId: ben.id,
+    confirmed: true, proofDataUrl: PROOF_PNG, opId: 'j4-early'}), 'انتقال غير مسموح');
+  const resumed = J.retryDelivery(dt, ben.id, 'j4-retry');
+  assert('رحلة 4: إعادة المحاولة تستأنف المهمة بضغطة واحدة', resumed.record.deliveryStatus === 'خرج مع المندوب');
+  const done = J.confirmDelivery(dt, {beneficiaryId: ben.id, confirmed: true, proofDataUrl: PROOF_PNG, opId: 'j4-done'});
+  assert('رحلة 4: التسليم يُوثَّق بالصورة (محاكاة فقط، بلا رفع فعلي)', done.record.deliveryStatus === 'تم التسليم');
+  assert('رحلة 4: سجل المحاولات يحمل المحاولتين معًا بترتيبهما',
+    (done.record.attempts || []).length === 2);
+  // تأكيد ثانٍ بـopId جديد يُرفض: لم تعد هناك أجهزة "مع المندوب" بعد
+  // نجاح التسليم (انتقلت كلها إلى "تم التسليم")، وهو أول حاجز يعترضه.
+  throws('رحلة 4: لا تسليم مزدوج لنفس المستفيد', () => J.confirmDelivery(dt, {beneficiaryId: ben.id,
+    confirmed: true, proofDataUrl: PROOF_PNG, opId: 'j4-double'}), 'لا توجد أجهزة');
+  assert('رحلة 4: إعادة إرسال نفس التأكيد بنفس opId تُعيد النتيجة الأصلية لا خطأً مربكًا', (() => {
+    const again = J.confirmDelivery(dt, {beneficiaryId: ben.id, confirmed: true, proofDataUrl: PROOF_PNG, opId: 'j4-done'});
+    return again.ok === true && again.record.deliveryStatus === 'تم التسليم';
+  })());
+  assert('رحلة 4: لا تعارض حالات بعد الرحلة كاملة',
+    J.diagnoseStateIntegrity_(grantToken_(J)).issueCount === 0);
+}
 
 /* -------- النتيجة -------- */
 
