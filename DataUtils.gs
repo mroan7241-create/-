@@ -29,30 +29,29 @@ const _TABLE_CACHE_ = {};
  * الأداء من الخادم وإرجاعه للعميل ضمن `_meta` — بلا أي كلمة مرور أو رمز
  * أو حقل حساس إطلاقًا (أرقام واسم عملية فقط).
  */
-const _REQ_ = {traceId: '', label: '', startedAt: 0, reads: 0, writes: 0, depth: 0};
+const _REQ_ = {traceId: '', label: '', startedAt: 0, reads: 0, writes: 0};
 const _PERF_ = _REQ_;
 
 /**
  * تبدأ طلبًا جديدًا: تمسح ذاكرة الجداول المؤقتة (حدّ صارم لا يعبره أي
  * إدخال بين طلبين)، وتصفّر العدّادات، وتولّد traceId جديدًا.
- * تُستدعى مرة واحدة لكل نقطة دخول عامة — الاستدعاءات المتداخلة (endpoint
- * مُجمَّع يستدعي منطقًا داخليًا) لا تُعيد التصفير بفضل عدّاد العمق.
+ *
+ * تُستدعى **مرة واحدة بالضبط** لكل نقطة دخول عامة، ولا يوجد أي تداخل:
+ * كل endpoint مُجمَّع يستدعي النسخ الداخلية (`listBeneficiaries_`،
+ * `getBootstrapDataFor_` …) التي تأخذ المستخدم المُتحقَّق منه ولا تمرّ
+ * بـrequireSession_ من جديد. عمدًا بلا عدّاد عمق: عدّاد كهذا يجب أن
+ * يُوازَن بدقة في كل مسار (بما فيه مسارات الاستثناءات)، وأي اختلال واحد
+ * يُجمّد المسح إلى الأبد داخل warm isolate — وهو بالضبط نوع العطل الذي
+ * يفترض هذا التصميم منعه.
  */
 function beginRequest_(label) {
-  if (_REQ_.depth > 0) { _REQ_.depth++; return _REQ_.traceId; }
   Object.keys(_TABLE_CACHE_).forEach(name => { delete _TABLE_CACHE_[name]; });
   _REQ_.traceId = Utilities.getUuid().slice(0, 8);
   _REQ_.label = String(label || '');
   _REQ_.startedAt = Date.now();
   _REQ_.reads = 0;
   _REQ_.writes = 0;
-  _REQ_.depth = 1;
   return _REQ_.traceId;
-}
-
-/** ينهي الطلب الجاري (يوازن عدّاد العمق فقط) — لا يمسح شيئًا. */
-function endRequest_() {
-  _REQ_.depth = Math.max(0, _REQ_.depth - 1);
 }
 
 /**

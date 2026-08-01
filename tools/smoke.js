@@ -63,7 +63,10 @@ class El {
 }
 
 const registry = {};
-['root', 'modalRoot', 'toasts'].forEach(id => { registry[id] = new El('div'); });
+// عناصر بوابة التسليم تُسجَّل كعناصر حقيقية في هذا الـDOM المبسّط حتى
+// تُختبر منطق التفعيل/التعطيل فعليًا (updateDeliveryGate) لا شكل النص فقط.
+['root', 'modalRoot', 'toasts', 'deliverySubmit', 'deliveryGateHint', 'deliveryConfirm']
+  .forEach(id => { registry[id] = new El(id === 'deliveryConfirm' ? 'input' : (id === 'deliverySubmit' ? 'button' : 'div')); });
 
 const listeners = {};
 const document = {
@@ -726,9 +729,25 @@ section('10) حقلا المنطقة والمدينة المترابطان');
 
 setRole(ASSOCIATION_DATA);
 app.state.referenceData = null;
-assert('قبل تشغيل الترحيل: حقلا نص حرّ كما كانا',
-  app.regionCityFields('الرياض', 'الرياض', 'f').includes('name="region"')
-  && app.regionCityFields('الرياض', 'الرياض', 'f').includes('<input'));
+// تغيير مقصود: القوائم المعتمدة صارت مضمَّنة في الخادم وجاهزة دائمًا،
+// فتعذُّر تحميلها خللٌ فعلي يستحق رسالة صريحة وزر إعادة محاولة — لا
+// سقوطًا صامتًا إلى حقل نصي حر يُدخِل بيانات غير موحَّدة بلا علم أحد.
+app.state.referenceLoading = true;
+app.state.referenceError = '';
+assert('أثناء تحميل القوائم: حالة تحميل صريحة بلا حقل نص حر ولا زر إعادة محاولة مبكر', (() => {
+  const html = app.regionCityFields('الرياض', 'الرياض', 'f');
+  return html.includes('ref-fallback') && html.includes('جارٍ تحميل')
+    && !html.includes('reload-reference') && !html.includes('<input');
+})());
+
+app.state.referenceLoading = false;
+app.state.referenceError = 'تعذّر الاتصال بالخادم.';
+assert('تعذّر تحميل القوائم: رسالة صريحة وزر إعادة محاولة بدل حقل نص حر صامت', (() => {
+  const html = app.regionCityFields('الرياض', 'الرياض', 'f');
+  return html.includes('ref-fallback') && html.includes('reload-reference')
+    && html.includes('role="alert"') && html.includes('تعذّر الاتصال بالخادم')
+    && !html.includes('<input');
+})());
 
 const mockRef = {
   ready: true,
@@ -759,7 +778,16 @@ app.state.referenceData = mockRef;
 const categoryField = app.associationCategoryField('جمعية خيرية');
 assert('تصنيف الجمعية يصبح قائمة معتمدة بعد الترحيل', categoryField.includes('<select') && categoryField.includes('جمعية خيرية'));
 app.state.referenceData = null;
-assert('تصنيف الجمعية نص حرّ قبل الترحيل', app.associationCategoryField('').includes('<input'));
+app.state.referenceLoading = false;
+app.state.referenceError = 'تعذّر الاتصال بالخادم.';
+assert('تعذّر تحميل القوائم: حقل التصنيف يعرض حالة الخطأ وزر إعادة المحاولة (لا نص حر)', (() => {
+  const html = app.associationCategoryField('');
+  return html.includes('ref-fallback') && html.includes('reload-reference') && !html.includes('<input');
+})());
+assert('تعذّر تحميل القوائم: حقل نوع الجهاز كذلك لا يسقط لنص حر', (() => {
+  const html = app.deviceTypeField('');
+  return html.includes('ref-fallback') && html.includes('reload-reference') && !html.includes('<input');
+})());
 
 /* ---------------- 11) الهوية البصرية والجوال والوصول (المرحلة السابعة) ---------------- */
 
@@ -798,6 +826,127 @@ assert('prefers-reduced-motion محترم عبر تعطيل مدة الحركا�
 
 assert('النوافذ المنبثقة تحمل role="dialog" وaria-modal="true"', /role="dialog" aria-modal="true"/.test(appCode));
 assert('حقول الدخول تحمل autocomplete مناسب (username/current-password/one-time-code)', /autocomplete="username"/.test(appCode) && /autocomplete="current-password"/.test(appCode) && /autocomplete="one-time-code"/.test(appCode));
+
+/* ---------------- 12) انحدارات مؤكَّدة من الاختبار الحي 2026/08/01 ---------------- */
+
+section('12) انحدارات مؤكَّدة من الاختبار الحي 2026/08/01');
+
+// (3) إضافة أول مستفيد من بوابة الجمعية كانت تُظهر نجاحًا ثم تُبقي
+// القائمة فارغة حتى تسجيل خروج ودخول: renderBeneficiaries تقرأ
+// bundle.total بينما upsertEntity كانت تزيد items فقط.
+setRole(ASSOCIATION_DATA);
+app.state.page = 'beneficiaries';
+app.state.data.beneficiaries = [];
+app.state.lazy.beneficiaries = {loading: false, items: [], total: 0, page: 1, totalPages: 1, pageSize: 25};
+assert('قبل الإضافة: القائمة تعرض حالة "لم يُضف أي مستفيد بعد"', app.renderBeneficiaries().includes('لم يُضف أي مستفيد بعد'));
+app.upsertEntity('beneficiaries', {id: 'BEN-NEW-1', name: 'مستفيد جديد', city: 'الرياض', region: 'الرياض',
+  deliveryStatus: 'لم يبدأ', status: 'جديد', needs: [], familyCount: 4});
+assert('بعد الإضافة مباشرة: العدّاد الكلي زاد (لا يبقى صفرًا)', app.state.lazy.beneficiaries.total === 1);
+assert('بعد الإضافة مباشرة: القائمة تعرض المستفيد الجديد بلا إعادة تحميل ولا خروج ودخول', (() => {
+  const html = app.renderBeneficiaries();
+  return html.includes('مستفيد جديد') && !html.includes('لم يُضف أي مستفيد بعد');
+})());
+app.upsertEntity('beneficiaries', {id: 'BEN-NEW-1', name: 'مستفيد جديد معدَّل', city: 'الرياض', region: 'الرياض',
+  deliveryStatus: 'لم يبدأ', status: 'جديد', needs: [], familyCount: 5});
+assert('تعديل سجل قائم لا يزيد العدّاد (الزيادة عند الإدراج الجديد فقط)', app.state.lazy.beneficiaries.total === 1);
+assert('removeEntity يُنقص العدّاد ويحذف العنصر معًا', (() => {
+  app.removeEntity('beneficiaries', 'BEN-NEW-1');
+  return app.state.lazy.beneficiaries.total === 0 && app.state.lazy.beneficiaries.items.length === 0;
+})());
+
+// (4) لوحة الجمعية كانت تعرض "آخر العمليات" مرتين بنفس المحتوى.
+setRole(ASSOCIATION_DATA);
+app.state.page = 'dashboard';
+assert('لوحة الجمعية لا تكرّر قسم "آخر العمليات" مرتين', (() => {
+  const html = app.renderDashboard();
+  return (html.match(/آخر العمليات/g) || []).length === 1;
+})());
+assert('الجانب في لوحة الجمعية صار "حالة التشغيل" بمؤشرات قابلة للنقر لا تكرارًا للسجل',
+  app.renderDashboard().includes('حالة التشغيل'));
+
+// (9) بعد تعذّر التسليم كانت الأجهزة تختفي من بطاقة المندوب وتظهر
+// "لا توجد أجهزة مخصصة" ويتعطّل التأكيد، بلا زر إعادة محاولة.
+const FAILED_TASK = JSON.parse(JSON.stringify(DELEGATE_DATA));
+FAILED_TASK.beneficiaries[0].deliveryStatus = 'تعذر التسليم';
+FAILED_TASK.beneficiaries[0].attempts = [
+  {id: 'DLV-000009', status: 'تعذر التسليم', reason: 'لا يرد', at: '2026/08/01 09:10', devices: ['DEV-000001'], hasProof: false}
+];
+setRole(FAILED_TASK);
+const failedCardHtml = app.renderDelegateList();
+assert('بعد التعذّر: الأجهزة ما زالت ظاهرة في البطاقة (لا "لا توجد أجهزة مخصصة")',
+  failedCardHtml.includes('DEV-000001') && !failedCardHtml.includes('لا توجد أجهزة مخصصة'));
+assert('بعد التعذّر: يظهر زر «إعادة المحاولة» صريحًا', failedCardHtml.includes('dg-retry') && failedCardHtml.includes('إعادة المحاولة'));
+assert('بعد التعذّر: سبب آخر محاولة وتاريخها ظاهران (سجل المحاولات لا يُمحى)',
+  failedCardHtml.includes('لا يرد') && failedCardHtml.includes('2026/08/01 09:10'));
+assert('بعد التعذّر: زر التأكيد معطَّل مع سبب مكتوب يوجّه لإعادة المحاولة أولًا',
+  /a-deliver[^>]*disabled[^>]*إعادة المحاولة/.test(failedCardHtml));
+assert('بعد التعذّر: البطاقة توضّح نصًا أن الأجهزة ما زالت مع المندوب',
+  failedCardHtml.includes('الأجهزة ما زالت معك'));
+
+// نفس المهمة بعد إعادة المحاولة: تعود قابلة للتأكيد فورًا.
+const RESUMED_TASK = JSON.parse(JSON.stringify(FAILED_TASK));
+RESUMED_TASK.beneficiaries[0].deliveryStatus = 'خرج مع المندوب';
+setRole(RESUMED_TASK);
+const resumedHtml = app.renderDelegateList();
+assert('بعد إعادة المحاولة: زر التأكيد يعود مفعّلًا وزر التعذّر يعود مكان زر الإعادة',
+  !/a-deliver[^>]*disabled/.test(resumedHtml) && resumedHtml.includes('dg-status') && !resumedHtml.includes('dg-retry'));
+
+// (11) زر "تم التسليم" كان مفعّلًا قبل إرفاق الصورة والموافقة على التعهد.
+setRole(DELEGATE_DATA);
+app.state.proofData = '';
+app.deliveryModal('BEN-000001');
+assert('نافذة التسليم: الزر يبدأ معطَّلًا قبل الصورة والتعهد',
+  /id="deliverySubmit"[^>]*disabled/.test(registry.modalRoot.innerHTML));
+assert('نافذة التسليم: سبب التعطيل مكتوب صراحةً قبل الضغط لا بعده', (() => {
+  registry.deliveryConfirm.checked = false;
+  app.state.proofData = '';
+  app.updateDeliveryGate();
+  const hint = registry.deliveryGateHint;
+  return hint.textContent.includes('إرفاق صورة الإثبات') && hint.textContent.includes('الموافقة على التعهد');
+})());
+assert('نافذة التسليم: الزر مربوط بسبب التعطيل عبر aria-describedby',
+  /aria-describedby="deliveryGateHint"/.test(registry.modalRoot.innerHTML));
+assert('نافذة التسليم: صورة بلا تعهد تُبقي الزر معطَّلًا', (() => {
+  app.state.proofData = 'data:image/png;base64,AAAA';
+  registry.deliveryConfirm.checked = false;
+  app.updateDeliveryGate();
+  return registry.deliverySubmit.disabled === true
+    && registry.deliveryGateHint.textContent.includes('الموافقة على التعهد');
+})());
+assert('نافذة التسليم: تعهد بلا صورة يُبقي الزر معطَّلًا', (() => {
+  app.state.proofData = '';
+  registry.deliveryConfirm.checked = true;
+  app.updateDeliveryGate();
+  return registry.deliverySubmit.disabled === true
+    && registry.deliveryGateHint.textContent.includes('إرفاق صورة الإثبات');
+})());
+assert('نافذة التسليم: استيفاء الشرطين معًا يفعّل الزر', (() => {
+  app.state.proofData = 'data:image/png;base64,AAAA';
+  registry.deliveryConfirm.checked = true;
+  app.updateDeliveryGate();
+  return registry.deliverySubmit.disabled === false;
+})());
+assert('نافذة التسليم: إلغاء التعهد وحده يُعيد تعطيل الزر فورًا', (() => {
+  registry.deliveryConfirm.checked = false;
+  app.updateDeliveryGate();
+  return registry.deliverySubmit.disabled === true;
+})());
+app.state.proofData = '';
+
+// (5/6/7) القوائم المترابطة في نموذج تقديم الجمعية العام (بلا جلسة).
+app.state.referenceData = {ready: true, source: 'builtin',
+  regions: ['الرياض', 'مكة المكرمة'],
+  citiesByRegion: {'الرياض': ['الرياض', 'الخرج'], 'مكة المكرمة': ['جدة']},
+  deviceTypes: ['ثلاجة'], socialStatuses: ['أرملة'], associationCategories: ['جمعية أهلية']};
+app.state.screen = 'apply';
+app.renderApplyForm();
+assert('نموذج تقديم الجمعية العام يستخدم قوائم منسدلة للتصنيف والمنطقة والمدينة (لا حقول نصية)', (() => {
+  const html = out();
+  return html.includes('name="category"') && html.includes('name="region"') && html.includes('name="city"')
+    && !/<input[^>]*name="region"/.test(html) && !/<input[^>]*name="category"/.test(html);
+})());
+assert('نموذج التقديم يربط المدينة بالمنطقة عبر data-city-target', /data-act="region-select"[^>]*data-city-target/.test(out()));
+app.state.screen = '';
 
 /* ---------------- النتيجة ---------------- */
 

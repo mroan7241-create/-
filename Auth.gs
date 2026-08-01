@@ -20,13 +20,9 @@ function login(payload) {
   // Bootstrap الذي يليها داخل نطاق الطلب نفسه فيستفيد من ذاكرة الجداول
   // المؤقتة بدل إعادة قراءة الأوراق مرتين في دخول واحد.
   beginRequest_('login:' + (type === 'delegate' ? 'delegate' : 'user'));
-  try {
-    return withMeta_(perfTime_('login:' + (type === 'delegate' ? 'delegate' : 'user'), () =>
-      type === 'delegate' ? loginDelegate_(payload.code) : loginUser_(payload.email, payload.password)
-    ));
-  } finally {
-    endRequest_();
-  }
+  return withMeta_(perfTime_('login:' + (type === 'delegate' ? 'delegate' : 'user'), () =>
+    type === 'delegate' ? loginDelegate_(payload.code) : loginUser_(payload.email, payload.password)
+  ));
 }
 
 function loginUser_(email, password) {
@@ -58,7 +54,12 @@ function loginUser_(email, password) {
   if (mustChangePassword) {
     return {ok: true, token: session.token, user: session.user, mustChangePassword: true};
   }
-  return {ok: true, token: session.token, user: session.user, bootstrap: getBootstrapData(session.token)};
+  // النسخة الداخلية عمدًا: استدعاء getBootstrapData العامة هنا كان
+  // سيُعيد بدء الطلب (requireSession_ ← beginRequest_) في منتصف الدخول
+  // فيمسح ذاكرة الجداول ويُعيد قراءة الأوراق نفسها مرة ثانية بلا داعٍ.
+  return {ok: true, token: session.token, user: session.user,
+    bootstrap: getBootstrapDataFor_(session.user, false),
+    referenceData: getReferenceData()};
 }
 
 function loginDelegate_(code) {
@@ -83,7 +84,10 @@ function loginDelegate_(code) {
   });
   updateById_(APP.sheets.delegates, 'رقم المندوب', delegate['رقم المندوب'], {'آخر دخول': now_()});
   audit_(session.user, 'تسجيل دخول', 'المصادقة', delegate['رقم المندوب'], '');
-  return {ok: true, token: session.token, user: session.user, bootstrap: getBootstrapData(session.token)};
+  // النسخة الداخلية لنفس سبب loginUser_ أعلاه (لا إعادة بدء طلب في منتصف الدخول).
+  return {ok: true, token: session.token, user: session.user,
+    bootstrap: getBootstrapDataFor_(session.user, false),
+    referenceData: getReferenceData()};
 }
 
 function logout(token) {
@@ -140,7 +144,7 @@ function requireSession_(token, roles, opts) {
   // بوابة الجلسة هي نقطة الدخول الموحَّدة لكل دالة خادم محروسة، فهي
   // الموضع الطبيعي لبدء "الطلب": مسح ذاكرة الجداول المؤقتة حتى لا يعبر
   // أي إدخال حدود الطلب داخل warm isolate، وتصفير عدّادات القياس، وتوليد
-  // traceId. الاستدعاءات المتداخلة (endpoint مُجمَّع) لا تُعيد التصفير.
+  // traceId. لا تداخل: كل endpoint مُجمَّع يستدعي النسخ الداخلية (_).
   beginRequest_('session');
   token = String(token || '');
   if (!/^[A-Za-z0-9_-]{32,}$/.test(token)) throw new Error('انتهت الجلسة. يرجى تسجيل الدخول مجددًا');

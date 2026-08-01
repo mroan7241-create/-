@@ -13,11 +13,7 @@ function applicationsSheetReady_() {
 
 function submitAssociationApplication(payload) {
   beginRequest_('submitAssociationApplication');
-  try {
-    return withMeta_(submitAssociationApplication_(payload));
-  } finally {
-    endRequest_();
-  }
+  return withMeta_(submitAssociationApplication_(payload));
 }
 
 function submitAssociationApplication_(payload) {

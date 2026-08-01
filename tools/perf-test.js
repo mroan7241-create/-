@@ -273,7 +273,18 @@ section('3) إبطال الذاكرة المؤقتة (Bootstrap) فور أي ك�
 
   const before = S.getBootstrapData(admin.token);
   const cachedAgain = S.getBootstrapData(admin.token);
-  assert('طلب Bootstrap ثانٍ فوري بلا تعديل يعيد نفس القيم من الذاكرة المؤقتة', JSON.stringify(before) === JSON.stringify(cachedAgain));
+  // `_meta` (traceId/serverMs) يختلف بين طلبين عمدًا — هو قياس الطلب لا
+  // بياناته. المقارنة تستثنيه وتتحقق منه على حدة أدناه.
+  const withoutMeta = payload => { const copy = Object.assign({}, payload); delete copy._meta; return JSON.stringify(copy); };
+  assert('طلب Bootstrap ثانٍ فوري بلا تعديل يعيد نفس القيم من الذاكرة المؤقتة', withoutMeta(before) === withoutMeta(cachedAgain));
+  assert('كل طلب يحمل traceId مستقلًا (تتبّع فعلي لا قيمة ثابتة)',
+    before._meta && cachedAgain._meta && before._meta.traceId !== cachedAgain._meta.traceId);
+  assert('الطلب الثاني المخدوم من الذاكرة المؤقتة لا يقرأ أي ورقة إطلاقًا', cachedAgain._meta.reads === 0);
+  assert('قياس الطلب لا يحمل أي حقل حساس (رمز/كلمة مرور)', (() => {
+    const serialized = JSON.stringify(before._meta);
+    return serialized.indexOf('token') === -1 && serialized.indexOf('password') === -1
+      && serialized.indexOf('كلمة المرور') === -1;
+  })());
 
   const cache = S.CacheService.getScriptCache();
   S.saveDevice(admin.token, { name: 'جهاز جديد', type: 'ثلاجة', associationId: '' });

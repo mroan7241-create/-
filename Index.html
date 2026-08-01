@@ -338,7 +338,29 @@
     .a-state{background:var(--neutral-bg);color:var(--neutral);grid-column:span 1}
     .a-state[disabled],.a-deliver[disabled]{opacity:.5;cursor:not-allowed}
     .a-deliver{background:var(--zad-700);color:#fff;grid-column:span 2;box-shadow:0 6px 16px rgba(142,27,69,.22)}
+    .a-retry{background:var(--gold-100);color:var(--gold-700);border:1px solid var(--gold-200);grid-column:span 1}
     .dg-card-done{opacity:.75}
+
+    /* بطاقة مهمة متعذّرة: حدّ جانبي هادئ يميّزها بلا لون صارخ، مع سطر
+       آخر محاولة وسببها — التمييز لا يعتمد على اللون وحده (WCAG 1.4.1):
+       تظهر معه شارة الحالة النصية وسطر توضيحي صريح. */
+    .dg-card.is-failed{border-inline-start:4px solid var(--gold-500);background:linear-gradient(90deg,var(--gold-100) 0%,var(--paper) 22%)}
+    .dg-attempt{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;font-size:12.5px;margin:10px 0 0;color:var(--ink-soft)}
+    .dg-attempt-label{font-weight:700;color:var(--gold-700)}
+    .dg-note{font-size:12.5px;color:var(--ink-soft);margin:8px 0 0;line-height:1.7}
+    .gate-hint{font-size:12.5px;color:var(--ink-soft);margin:10px 0 0;line-height:1.7}
+    .gate-hint.is-ready{color:var(--ok)}
+
+    /* حالة تعذّر تحميل القوائم المعتمدة داخل نموذج — رسالة صريحة وزر
+       إعادة محاولة، بديلًا عن السقوط الصامت إلى حقل نصي حر. */
+    .ref-fallback{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--gold-100);
+      border:1px solid var(--gold-200);border-radius:var(--r-md);padding:12px 14px;font-size:13px;line-height:1.7}
+
+    /* صفوف "حالة التشغيل" في لوحة الجمعية — بديل تكرار "آخر العمليات" */
+    .focus-row{cursor:pointer}
+    .focus-row:hover,.focus-row:focus-visible{background:var(--zad-100)}
+    .focus-count{font-weight:800;font-size:17px;color:var(--zad-700);font-variant-numeric:tabular-nums}
+    .focus-count.is-critical{color:var(--bad)}
 
     /* ---------- Proof upload ---------- */
     .drop{border:2px dashed var(--line-strong);border-radius:var(--r-lg);padding:22px;text-align:center;background:var(--surface)}
@@ -512,6 +534,11 @@
       proofData: '',
       pendingRows: [],
       referenceData: null,
+      referenceLoading: false,
+      referenceError: '',
+      // شاشة عامة معروضة خارج البوابة (حاليًا: 'apply' لنموذج تقديم
+      // الجمعيات) — تُبقي render() على الشاشة الصحيحة عند إعادة الرسم.
+      screen: '',
       activityTab: '',
       delegateRoute: null,
       activeTrigger: null,
@@ -794,12 +821,18 @@
      * (تعديل داخل المكان) حتى تبقى المرجعية في state.data كما هي.
      */
     function upsertRecord(list, record) {
-      if (!list || !record || !record.id) return list;
+      if (!list || !record || !record.id) return {list: list, inserted: false};
       for (var i = 0; i < list.length; i++) {
-        if (list[i].id === record.id) { list[i] = record; return list; }
+        if (list[i].id === record.id) {
+          // دمج لا استبدال: الاستجابة الجزئية قد لا تحمل كل الحقول التي
+          // أضافتها حزمة البوابة للسجل (مثل devices/attempts في بطاقة
+          // المندوب). الاستبدال الكامل كان يمحوها فتظهر البطاقة بلا أجهزة.
+          list[i] = Object.assign({}, list[i], record);
+          return {list: list, inserted: false};
+        }
       }
       list.unshift(record);
-      return list;
+      return {list: list, inserted: true};
     }
 
     /**
@@ -809,9 +842,46 @@
      * بدونها تبقى القائمة المعروضة تُظهر حالة قديمة بعد أي حفظ/تفعيل/تعطيل
      * حتى لو أُعيد الرسم، لأن upsertRecord يستبدل مرجع الكائن لا يُعدِّله.
      */
+    /**
+     * تحديث سجل واحد في مصدرَي الحقيقة معًا، **مع عدّاد الصفحة المُرقَّمة**.
+     *
+     * العطل الحيّ الذي يعالجه (2026/08/01): إضافة أول مستفيد من بوابة
+     * الجمعية كانت تُظهر إشعار نجاح ثم تُبقي القائمة فارغة حتى تسجيل خروج
+     * ودخول جديد. السبب أن renderBeneficiaries تقرّر عرض حالة "لا يوجد"
+     * من `bundle.total` بينما upsertEntity كانت تُدرج العنصر في
+     * `bundle.items` فقط وتترك `total` على صفر — فيبقى الشرط `!bundle.total`
+     * صادقًا ويُعرَض الفراغ رغم وجود العنصر فعليًا في الذاكرة.
+     * الآن يُزاد `total` (وعدد الصفحات) عند الإدراج الجديد فقط، لا عند
+     * تحديث سجل قائم.
+     */
     function upsertEntity(key, record) {
       upsertRecord(state.data[key], record);
-      if (state.lazy[key] && state.lazy[key].items) upsertRecord(state.lazy[key].items, record);
+      var bundle = state.lazy[key];
+      if (bundle && bundle.items) {
+        var outcome = upsertRecord(bundle.items, record);
+        if (outcome.inserted) {
+          bundle.total = (bundle.total || 0) + 1;
+          var size = bundle.pageSize || 25;
+          bundle.totalPages = Math.max(1, Math.ceil(bundle.total / size));
+        }
+      }
+    }
+
+    /** يحذف سجلًا من الحالة المحلية ومن الصفحة المُرقَّمة، ويُنقص العدّاد بالمثل. */
+    function removeEntity(key, id) {
+      if (state.data[key]) {
+        state.data[key] = state.data[key].filter(function (x) { return x.id !== id; });
+      }
+      var bundle = state.lazy[key];
+      if (bundle && bundle.items) {
+        var before = bundle.items.length;
+        bundle.items = bundle.items.filter(function (x) { return x.id !== id; });
+        if (bundle.items.length < before) {
+          bundle.total = Math.max(0, (bundle.total || 1) - 1);
+          var size = bundle.pageSize || 25;
+          bundle.totalPages = Math.max(1, Math.ceil(bundle.total / size));
+        }
+      }
     }
 
     /** يدمج ملخّصًا جزئيًا (من استجابة حفظ) فوق state.data.summary الحالي بدل استبداله بالكامل. */
@@ -922,6 +992,7 @@
         }
         state.data = result.bootstrap;
         state.page = 'dashboard';
+        if (result.referenceData) state.referenceData = result.referenceData;
         render();
         if (state.data.role === 'ADMIN') fetchActivitiesBundle();
         toast('مرحبًا بك، ' + (result.user && result.user.name ? result.user.name : ''), 'success');
@@ -981,6 +1052,16 @@
      * تراجعه لاحقًا من صفحة "طلبات الانضمام" فتقبله أو ترفضه.
      */
     function renderApplyForm() {
+      // نحفظ ما كُتب قبل أي إعادة رسم (وصول القوائم المعتمدة مثلًا) ثم
+      // نُعيده بعدها — إعادة الرسم لا يجوز أن تُضيّع إدخال المستخدم.
+      var keep = {};
+      var current = $('#applyForm');
+      if (current) {
+        ['name', 'category', 'region', 'city', 'contactName', 'phone', 'email', 'notes'].forEach(function (key) {
+          var field = current.elements[key];
+          if (field) keep[key] = field.value;
+        });
+      }
       $('#root').innerHTML = '<main class="login">'
         + '<section class="login-panel">' + lockup({partner: true})
         + '<h1>طلب انضمام جمعية جديدة</h1>'
@@ -1004,8 +1085,21 @@
         + '<h2>شراكة موثّقة</h2>'
         + '<p>كل طلب يُراجَع يدويًا قبل إنشاء حساب الجمعية، لضمان دقة البيانات وسلامة الشراكة.</p>'
         + '</div></aside></main>';
+      var restored = $('#applyForm');
+      if (restored) {
+        Object.keys(keep).forEach(function (key) {
+          var field = restored.elements[key];
+          if (field && keep[key]) field.value = keep[key];
+        });
+        // إعادة تعبئة المدن التابعة للمنطقة المستعادة قبل ضبط قيمتها.
+        var regionField = restored.elements.region;
+        if (regionField && regionField.tagName === 'SELECT' && regionField.value) {
+          onRegionChange(regionField);
+          if (keep.city && restored.elements.city) restored.elements.city.value = keep.city;
+        }
+      }
       var first = $('#applyForm .control');
-      if (first) first.focus();
+      if (first && !Object.keys(keep).length) first.focus();
     }
 
     function submitApplication(form) {
@@ -1019,6 +1113,7 @@
       };
       busy(true);
       api('submitAssociationApplication', payload).then(function (result) {
+        state.screen = '';
         renderLogin();
         toast(result.message || 'تم استلام طلب الانضمام.', 'success');
       }, reportError).finally(function () { busy(false); });
@@ -1036,6 +1131,10 @@
     }
 
     function render() {
+      // شاشة عامة معروضة حاليًا (تقديم جمعية) لا تملك state.data إطلاقًا —
+      // إعادة الرسم بعد وصول القوائم المعتمدة يجب أن تُبقيها ظاهرة، لا أن
+      // تُعيد المستخدم إلى شاشة الدخول وتُضيّع ما كتبه.
+      if (state.screen === 'apply') { renderApplyForm(); return; }
       if (!state.data) { renderLogin(); return; }
       if (state.data.role === 'DELEGATE') { renderDelegate(); return; }
 
@@ -1216,9 +1315,12 @@
       }
       var activitySections = isAdmin ? renderDashboardActivitySections() : '';
 
-      var sideTitle = isAdmin ? 'التنبيهات الإدارية' : 'آخر العمليات';
-      var sideHint = isAdmin ? 'عناصر تستلزم متابعة أو تدخّلًا' : 'أحدث التغييرات على سجلات جمعيتك';
-      var sideBody = isAdmin ? renderAlerts() : renderAuditRows(6);
+      // الجانب: تنبيهات للإدارة، ولمحة تشغيلية للجمعية. لا يُكرَّر هنا
+      // قسم "آخر العمليات" الذي يظهر أسفل اللوحة كاملًا — كان يُعرَض
+      // مرتين بنفس المحتوى تمامًا في بوابة الجمعية (رُصد حيًّا 2026/08/01).
+      var sideTitle = isAdmin ? 'التنبيهات الإدارية' : 'حالة التشغيل';
+      var sideHint = isAdmin ? 'عناصر تستلزم متابعة أو تدخّلًا' : 'مؤشرات تحتاج انتباهك الآن';
+      var sideBody = isAdmin ? renderAlerts() : renderAssociationFocus();
 
       var welcome = state.data.association ? state.data.association.name : 'فريق إدارة المشروع';
       var todayLabel = '';
@@ -1240,6 +1342,42 @@
         + '<p>سجل حيّ ومؤرّخ لأحدث الإجراءات</p></div>'
         + '<button class="btn btn-link" data-act="go" data-value="audit">عرض الكل ←</button></div>'
         + renderAuditRows(7) + '</section>';
+    }
+
+    /**
+     * لوحة "حالة التشغيل" الخاصة ببوابة الجمعية — بديل مفيد عن تكرار
+     * "آخر العمليات" مرتين. تُحسب من نفس بيانات البوابة المحمَّلة أصلًا
+     * (بلا أي طلب إضافي)، وكل بند قابل للنقر ينقل إلى مصدره مع فلتره.
+     */
+    function renderAssociationFocus() {
+      var beneficiaries = state.data.beneficiaries || [];
+      var devices = state.data.devices || [];
+      var focus = [
+        {label: 'بانتظار تعيين مندوب', page: 'beneficiaries', filter: 'لم يبدأ',
+          count: beneficiaries.filter(function (b) { return !b.delegateId && b.deliveryStatus !== 'تم التسليم'; }).length,
+          hint: 'مستفيدون جاهزون لم يُعيَّن لهم مندوب بعد'},
+        {label: 'تعذّر التسليم', page: 'beneficiaries', filter: 'تعذر التسليم', tone: 'critical',
+          count: beneficiaries.filter(function (b) { return b.deliveryStatus === 'تعذر التسليم'; }).length,
+          hint: 'يحتاج إعادة محاولة أو مراجعة العنوان'},
+        {label: 'أجهزة بالمستودع', page: 'devices', filter: 'بالمستودع',
+          count: devices.filter(function (d) { return d.status === 'بالمستودع'; }).length,
+          hint: 'جاهزة للتخصيص لمستفيد'},
+        {label: 'أجهزة مع المندوب', page: 'devices', filter: 'مع المندوب',
+          count: devices.filter(function (d) { return d.status === 'مع المندوب'; }).length,
+          hint: 'خرجت ولم يُوثَّق تسليمها بعد'}
+      ].filter(function (item) { return item.count > 0; });
+
+      if (!focus.length) {
+        return emptyState({glyph: '✓', title: 'لا شيء عالق',
+          body: 'كل المستفيدين والأجهزة في مسارهم الطبيعي — لا بند يستلزم تدخّلك الآن.'});
+      }
+      return '<div class="rows">' + focus.map(function (item) {
+        return '<div class="row-item focus-row" role="button" tabindex="0" data-act="go" data-value="' + esc(item.page) + '"'
+          + ' data-filter="' + esc(item.filter) + '">'
+          + '<div><strong>' + esc(item.label) + '</strong><small>' + esc(item.hint) + '</small></div>'
+          + '<span class="focus-count' + (item.tone === 'critical' ? ' is-critical' : '') + '">' + fmt(item.count) + '</span>'
+          + '</div>';
+      }).join('') + '</div>';
     }
 
     var ALERT_SECTION_PAGE = {
@@ -1459,22 +1597,42 @@
       return (ref && ref.ready && ref.socialStatuses.length) ? ref.socialStatuses : SOCIAL_STATUSES;
     }
 
-    /** قبل الترحيل: حقل نص حر كما كان. بعده: قائمة تصنيفات معتمدة. */
+    /**
+     * حالة تعذّر تحميل القوائم المعتمدة: رسالة صريحة وزر إعادة محاولة
+     * داخل النموذج نفسه — لا سقوط صامت إلى حقل نصي حر. الخادم يوفّر
+     * القوائم المضمَّنة دائمًا، فوصولنا إلى هنا يعني خللًا فعليًا في
+     * الاتصال يستحق إبلاغ المستخدم به بدل تمرير بيانات غير موحَّدة.
+     */
+    function referenceUnavailableField(label, span) {
+      return '<div class="field' + (span ? ' span-2' : '') + '">'
+        + '<label>' + esc(label) + '</label>'
+        + '<div class="ref-fallback" role="alert">'
+        + '<span>' + esc(state.referenceLoading ? 'جارٍ تحميل القوائم المعتمدة…'
+          : (state.referenceError || 'تعذّر تحميل القوائم المعتمدة.')) + '</span>'
+        + (state.referenceLoading ? ''
+          : '<button type="button" class="btn btn-ghost btn-sm" data-act="reload-reference">إعادة المحاولة</button>')
+        + '</div></div>';
+    }
+
+    function referenceReady() {
+      var ref = state.referenceData;
+      return !!(ref && ref.ready && ref.regions && ref.regions.length);
+    }
+
     function associationCategoryField(value) {
       var ref = state.referenceData;
       if (!ref || !ref.ready || !ref.associationCategories.length) {
-        return textField('category', 'التصنيف', value, {max: 80, hint: 'مثال: جمعية أهلية'});
+        return referenceUnavailableField('التصنيف');
       }
       return '<div class="field"><label for="f_category">التصنيف</label>'
         + '<select class="control" id="f_category" name="category">'
         + optionList(ref.associationCategories, value, '— اختر —') + '</select></div>';
     }
 
-    /** قبل الترحيل: حقل نص حر كما كان. بعده: قائمة أنواع أجهزة معتمدة. */
     function deviceTypeField(value) {
       var ref = state.referenceData;
       if (!ref || !ref.ready || !ref.deviceTypes.length) {
-        return textField('type', 'النوع', value, {required: true, max: 80, hint: 'مثال: أجهزة كهربائية منزلية'});
+        return referenceUnavailableField('نوع الجهاز');
       }
       return '<div class="field"><label for="f_type">النوع</label>'
         + '<select class="control" id="f_type" name="type" required>'
@@ -1484,9 +1642,8 @@
     function regionCityFields(regionValue, cityValue, idPrefix) {
       idPrefix = idPrefix || 'f';
       var ref = state.referenceData;
-      if (!ref || !ref.ready || !ref.regions.length) {
-        return textField('region', 'المنطقة', regionValue, {required: true, max: 80})
-          + textField('city', 'المدينة', cityValue, {required: true, max: 80});
+      if (!referenceReady()) {
+        return referenceUnavailableField('المنطقة والمدينة', true);
       }
       var cityId = idPrefix + '_city';
       var cities = ref.citiesByRegion[regionValue] || [];
@@ -3150,6 +3307,21 @@
       }).join('') || '<span class="tag plain">لا توجد أجهزة مخصصة</span>';
     }
 
+    /** سطر موجز لآخر محاولة تسليم متعذّرة — يبقي سببها وتاريخها ظاهرين بدل ضياعهما. */
+    function lastFailedAttemptLine(item) {
+      var attempts = item.attempts || [];
+      for (var i = 0; i < attempts.length; i++) {
+        if (attempts[i].status === 'تعذر التسليم') {
+          return '<p class="dg-attempt"><span class="dg-attempt-label">آخر محاولة متعذّرة</span>'
+            + '<span>' + esc(attempts[i].reason || '—') + '</span>'
+            + '<span class="muted">' + esc(attempts[i].at || '') + '</span>'
+            + (attempts.length > 1 ? '<span class="muted">· ' + fmt(attempts.length) + ' محاولات</span>' : '')
+            + '</p>';
+        }
+      }
+      return '';
+    }
+
     function renderDelegateList() {
       var list = state.data.beneficiaries || [];
       if (!list.length) {
@@ -3158,18 +3330,34 @@
       }
       return list.map(function (item) {
         var devices = deviceTagsFor(item);
-        var canDeliver = (item.devices || []).length > 0;
+        // الأجهزة الجاهزة للتسليم هي التي خرجت فعليًا مع المندوب. بعد
+        // تسجيل "تعذّر التسليم" تبقى كما هي تمامًا — لا تختفي ولا تتغيّر
+        // حالتها — لذلك يبقى زر التأكيد متاحًا بعد إعادة المحاولة.
+        var dispatched = (item.devices || []).filter(function (d) { return d.status === 'مع المندوب'; });
+        var failed = item.deliveryStatus === 'تعذر التسليم';
+        var canDeliver = dispatched.length > 0 && !failed;
+        var deliverTitle = dispatched.length === 0
+          ? 'لا توجد أجهزة خرجت مع المندوب لهذا المستفيد'
+          : 'سجِّل «إعادة المحاولة» أولًا لاستئناف التسليم بعد التعذّر';
 
-        return '<article class="dg-card"><div class="card-head"><div>'
+        // بعد التعذّر: إجراء صريح واحد لاستئناف المهمة، بدل المسار
+        // الالتفافي الذي كان الحل الوحيد (تغيير المندوب من بوابة الجمعية).
+        var retryBtn = failed
+          ? '<button class="a-retry" data-act="dg-retry" data-id="' + esc(item.id) + '">↻ إعادة المحاولة</button>'
+          : '<button class="a-state" data-act="dg-status" data-id="' + esc(item.id) + '">تعذّر</button>';
+
+        return '<article class="dg-card' + (failed ? ' is-failed' : '') + '"><div class="card-head"><div>'
           + '<h3>' + esc(item.name) + '</h3><p class="muted">' + esc(item.city) + '</p></div>'
           + statusChip(item.deliveryStatus) + '</div>'
           + '<p class="dg-addr"><span aria-hidden="true">◉</span><span>' + beneficiaryAddressLine(item) + '</span></p>'
           + '<div class="tags">' + devices + '</div>'
+          + lastFailedAttemptLine(item)
+          + (failed ? '<p class="dg-note">الأجهزة ما زالت معك ولم تتغيّر. اضغط «إعادة المحاولة» لاستئناف التسليم.</p>' : '')
           + '<div class="dg-acts">'
           + beneficiaryContactActions(item)
-          + '<button class="a-state" data-act="dg-status" data-id="' + esc(item.id) + '">تعذّر</button>'
+          + retryBtn
           + '<button class="a-deliver" data-act="dg-deliver" data-id="' + esc(item.id) + '"'
-          + (canDeliver ? '' : ' disabled title="لا توجد أجهزة مخصصة"') + '>تأكيد التسليم</button>'
+          + (canDeliver ? '' : ' disabled title="' + esc(deliverTitle) + '"') + '>تأكيد التسليم</button>'
           + '</div></article>';
       }).join('');
     }
@@ -3207,13 +3395,33 @@
       var reason = $('#failedReason');
       var notes = $('#failedNotes');
       if (!reason) return;
+      var opKey = 'delivery-status:' + id;
       busy(true);
-      api('updateDeliveryStatus', state.token, id, reason.value, notes ? notes.value : '')
+      api('updateDeliveryStatus', state.token, id, reason.value, notes ? notes.value : '', opIdFor(opKey))
         .then(function (result) {
+          clearOpId(opKey);
           upsertEntity('beneficiaries', result.record);
           closeModal();
           renderDelegate();
-          toast('تم تحديث حالة المستفيد.', 'success');
+          toast('سُجِّل تعذّر التسليم. الأجهزة ما زالت معك — استخدم «إعادة المحاولة» عند الاستئناف.', 'success');
+        }, reportError).finally(function () { busy(false); });
+    }
+
+    /**
+     * «إعادة المحاولة» بعد التعذّر: إجراء واحد صريح على الخادم يُعيد حالة
+     * التسليم إلى «خرج مع المندوب» دون المساس بالأجهزة ولا بالمندوب ولا
+     * بسجل المحاولات السابق. يحلّ محل المسار الالتفافي المربك الذي كان
+     * الحل الوحيد عمليًا (دخول الجمعية إلى «تغيير المندوب» وإعادة حفظه).
+     */
+    function retryDelivery(id) {
+      var opKey = 'retry-delivery:' + id;
+      busy(true);
+      api('retryDelivery', state.token, id, opIdFor(opKey))
+        .then(function (result) {
+          clearOpId(opKey);
+          upsertEntity('beneficiaries', result.record);
+          renderDelegate();
+          toast('استُؤنفت المهمة. يمكنك الآن توثيق التسليم.', 'success');
         }, reportError).finally(function () { busy(false); });
     }
 
@@ -3234,11 +3442,38 @@
         + 'capture="environment">'
         + '<p class="muted" style="margin:8px 0 0" id="proofHint">JPG أو PNG أو WEBP — بحد أقصى ٦ ميجابايت.</p>'
         + '<img id="proofPreview" class="proof-img hidden" alt="معاينة إثبات التسليم"></div>'
-        + '<label class="pledge"><input id="deliveryConfirm" type="checkbox">'
-        + '<span>أؤكّد أنني سلّمت الأجهزة المذكورة أعلاه إلى المستفيد، وأن الصورة المرفقة إثبات صحيح للتسليم.</span></label>';
+        + '<label class="pledge"><input id="deliveryConfirm" type="checkbox" data-act="delivery-gate">'
+        + '<span>أؤكّد أنني سلّمت الأجهزة المذكورة أعلاه إلى المستفيد، وأن الصورة المرفقة إثبات صحيح للتسليم.</span></label>'
+        // سبب التعطيل مكتوب دائمًا ومربوط بالزر عبر aria-describedby — لا
+        // يُكتشف الشرط بعد الضغط كما كان (رُصد حيًّا 2026/08/01)، بل قبله.
+        + '<p class="gate-hint" id="deliveryGateHint" role="status" aria-live="polite"></p>';
       openModal('توثيق التسليم', body,
         '<button class="btn btn-ghost" data-act="close-modal">إلغاء</button>'
-        + '<button class="btn btn-primary" data-act="dg-save-delivery" data-id="' + esc(id) + '">تم التسليم</button>');
+        + '<button class="btn btn-primary" id="deliverySubmit" aria-describedby="deliveryGateHint" disabled'
+        + ' data-act="dg-save-delivery" data-id="' + esc(id) + '">تم التسليم</button>');
+      updateDeliveryGate();
+    }
+
+    /**
+     * يفعّل زر «تم التسليم» فقط عند اكتمال الشرطين معًا (صورة صحيحة
+     * مُرفَقة + الموافقة على التعهد)، ويكتب سبب التعطيل نصًا بجانب الزر.
+     * التحقق الحقيقي يبقى في الخادم (توقيع بايتات الصورة وحجمها ونوعها،
+     * وconfirmed===true) — هذا التعطيل تحسين تجربة لا بديل عن الحراسة.
+     */
+    function updateDeliveryGate() {
+      var button = $('#deliverySubmit');
+      var hint = $('#deliveryGateHint');
+      if (!button) return;
+      var hasProof = !!state.proofData;
+      var pledged = !!($('#deliveryConfirm') && $('#deliveryConfirm').checked);
+      var missing = [];
+      if (!hasProof) missing.push('إرفاق صورة الإثبات');
+      if (!pledged) missing.push('الموافقة على التعهد');
+      button.disabled = missing.length > 0;
+      if (hint) {
+        hint.textContent = missing.length ? 'لتفعيل الزر: ' + missing.join(' و') + '.' : 'كل الشروط مكتملة — يمكنك التوثيق الآن.';
+        hint.className = 'gate-hint' + (missing.length ? '' : ' is-ready');
+      }
     }
 
     function handleProofFile(input) {
@@ -3261,6 +3496,7 @@
         var hint = $('#proofHint');
         if (img) { img.src = state.proofData; img.classList.remove('hidden'); }
         if (hint) hint.textContent = 'تم إرفاق الصورة. راجعها قبل التأكيد.';
+        updateDeliveryGate();
       };
       reader.onerror = function () { toast('تعذر قراءة الصورة.', 'error'); };
       reader.readAsDataURL(file);
@@ -3282,7 +3518,7 @@
         state.proofData = '';
         // المستفيد المسلَّم يخرج من قائمة "مهامي الحالية" (لم يعد ضمن
         // النشطين في بوابة المندوب) — لا يكفي تحديث حقوله فقط.
-        state.data.beneficiaries = (state.data.beneficiaries || []).filter(function (b) { return b.id !== id; });
+        removeEntity('beneficiaries', id);
         if (state.data.summary) {
           state.data.summary.remaining = Math.max(0, (state.data.summary.remaining || 0) - 1);
           state.data.summary.deliveredToday = (state.data.summary.deliveredToday || 0) + 1;
@@ -3369,12 +3605,11 @@
       if (!state.token) { renderLogin(); return; }
       $('#root').innerHTML = '<main class="boot"><div><div class="spin"></div>'
         + '<strong>جارٍ استعادة الجلسة…</strong></div></main>';
-      api('getBootstrapData', state.token).then(function (data) {
-        state.data = data;
-        state.user = data.user || {role: data.role, name: 'المستخدم'};
+      // جولة واحدة بدل ثلاث: بيانات البوابة + المصادر المرجعية معًا.
+      api('getPortalBundle', state.token, '', {}).then(function (bundle) {
+        adoptPortalBundle(bundle);
         render();
         if (state.data.role === 'ADMIN') fetchActivitiesBundle();
-        loadReferenceDataOnce();
       }, function (error) {
         // الجلسة صالحة لكن الخادم يرفضها لأنها مُلزَمة بتغيير كلمة مرور
         // مؤقتة أولًا — لا تُسقِط التوكن، اعرض شاشة التغيير الإلزامي.
@@ -3390,15 +3625,52 @@
     }
 
     /**
-     * تُجلب مرة واحدة لكل جلسة وتُخزَّن في الذاكرة — لا تُعاد مع كل تنقّل.
-     * الفشل صامت ومقصود: قبل تشغيل الترحيل لا يوجد جدول مرجعي بعد،
-     * فتستمر النماذج بحقول النص الحرة كما كانت دون أي رسالة خطأ للمستخدم.
+     * يستوعب حزمة البوابة المُجمَّعة (getPortalBundle): بيانات البوابة +
+     * المصادر المرجعية + صفحة القسم المطلوب — كلها من جولة واحدة.
      */
-    function loadReferenceDataOnce() {
-      if (state.referenceData) return;
+    function adoptPortalBundle(bundle) {
+      if (!bundle) return;
+      if (bundle.bootstrap) {
+        state.data = bundle.bootstrap;
+        state.user = bundle.bootstrap.user || {role: bundle.bootstrap.role, name: 'المستخدم'};
+      }
+      if (bundle.referenceData) {
+        state.referenceData = bundle.referenceData;
+        state.referenceError = '';
+      }
+      if (bundle.page && bundle.pageData) {
+        state.lazy[bundle.page] = Object.assign({loading: false}, bundle.pageData);
+      }
+    }
+
+    /**
+     * تُجلب مرة واحدة لكل جلسة وتُخزَّن في الذاكرة — لا تُعاد مع كل تنقّل.
+     * الفشل لم يعد صامتًا: القوائم المعتمدة صارت مضمَّنة في الخادم وجاهزة
+     * دائمًا، فإخفاق تحميلها يعني خللًا حقيقيًا يستحق رسالة وزر إعادة
+     * محاولة في النماذج، لا سقوطًا صامتًا إلى حقول نصية حرة.
+     */
+    function loadReferenceDataOnce(force) {
+      if (state.referenceData && !force) return;
+      state.referenceLoading = true;
+      // إعادة الرسم فقط إن كانت هناك شاشة حيّة تعتمد على هذه القوائم —
+      // لا تُقاطع استعادة جلسة قيد التنفيذ ولا تستبدل شاشة الإقلاع.
+      var refresh = function () {
+        if (state.screen === 'apply' || state.data) render();
+      };
       api('getReferenceData', state.token).then(function (data) {
-        if (data && data.ready) state.referenceData = data;
-      }, function () { /* تجاهل متعمّد — سقوط آمن للنص الحر */ });
+        state.referenceLoading = false;
+        if (data && data.ready) {
+          state.referenceData = data;
+          state.referenceError = '';
+        } else {
+          state.referenceError = 'تعذّر تحميل القوائم المعتمدة (المناطق والمدن والتصنيفات).';
+        }
+        refresh();
+      }, function (error) {
+        state.referenceLoading = false;
+        state.referenceError = (error && error.message) || 'تعذّر تحميل القوائم المعتمدة.';
+        refresh();
+      });
     }
 
     function doLogout(callServer) {
@@ -3450,7 +3722,7 @@
        ============================================================ */
 
     var CLICK_ACTIONS = {
-      'go': function (el) { goTo(el.getAttribute('data-value')); },
+      'go': function (el) { goTo(el.getAttribute('data-value'), el.getAttribute('data-filter') || ''); },
       'assoc-scope': function (el) { goToAssociationScope(el.getAttribute('data-page'), el.getAttribute('data-id')); },
       'download-import-template': downloadImportTemplate,
       'download-import-template-xlsx': downloadImportTemplateXlsx,
@@ -3466,8 +3738,9 @@
         goTo(page, filter);
       },
       'login-type': function (el) { state.loginType = el.getAttribute('data-value'); renderLogin(); },
-      'show-apply': function () { loadReferenceDataOnce(); renderApplyForm(); },
-      'back-to-login': renderLogin,
+      'show-apply': function () { state.screen = 'apply'; loadReferenceDataOnce(); renderApplyForm(); },
+      'reload-reference': function () { loadReferenceDataOnce(true); },
+      'back-to-login': function () { state.screen = ''; renderLogin(); },
       'view-application': function (el) { viewApplication(el.getAttribute('data-id')); },
       'accept-application': function (el) { decideApplication(el.getAttribute('data-id'), 'accept'); },
       'reject-application': function (el) { rejectApplicationModal(el.getAttribute('data-id')); },
@@ -3529,6 +3802,7 @@
       'dg-status': function (el) { delegateStatusModal(el.getAttribute('data-id')); },
       'dg-save-status': function (el) { saveDelegateStatus(el.getAttribute('data-id')); },
       'dg-deliver': function (el) { deliveryModal(el.getAttribute('data-id')); },
+      'dg-retry': function (el) { retryDelivery(el.getAttribute('data-id')); },
       'dg-save-delivery': function (el) { saveDelivery(el.getAttribute('data-id')); },
       'audit-prev-page': function () { fetchLazyPage('audit', 'listAuditLog', (state.lazy.audit.page || 1) - 1); },
       'audit-next-page': function () { fetchLazyPage('audit', 'listAuditLog', (state.lazy.audit.page || 1) + 1); },
@@ -3654,6 +3928,7 @@
       }
       if (action === 'bulk-file') { handleBulkFile(el); return; }
       if (action === 'proof-file') { handleProofFile(el); return; }
+      if (action === 'delivery-gate') { updateDeliveryGate(); return; }
       if (action === 'region-select') { onRegionChange(el); }
     });
 
@@ -3697,6 +3972,10 @@
 
     window.__zadReady = true;
     restoreSession();
+    // القوائم المعتمدة متاحة للزوّار بلا جلسة (نموذج تقديم الجمعيات
+    // العام يحتاجها)، وتُجلب مرة واحدة فقط عند الإقلاع فتكون جاهزة قبل
+    // أن يفتح الزائر النموذج بدل أن يراه بحقول نصية ثم يتغيّر تحته.
+    if (!state.token) loadReferenceDataOnce();
   </script>
 </body>
 </html>

@@ -289,7 +289,9 @@ function confirmDelivery_(user, beneficiaryId, payload) {
   }
   audit_(user, 'تأكيد تسليم', 'التسليمات', beneficiaryId, 'عدد الأجهزة: ' + devices.length);
   clearDashboardCache();
-  return {ok: true, record: normalizeBeneficiary_(findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId))};
+  // نفس شكل الاستجابة الموحَّد لكل تعديل في بوابة المندوب: السجل +
+  // أجهزته + سجل محاولاته كاملًا (المحاولة الناجحة الأخيرة مضافة إليه).
+  return {ok: true, record: delegateTaskPayload_(beneficiaryId)};
 }
 
 /**

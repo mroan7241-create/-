@@ -984,6 +984,12 @@ throws('بعد 5 محاولات فاشلة، حتى الرمز الصحيح نف
 section('22) توليد المعرّفات الآمن بعد نسخ المشروع (nextIds_ وdiagnoseIdSequences_)');
 
 /** يبني بيئة معزولة جديدة (Properties/Cache/Sheets خاصة بها) لكل سيناريو، حتى لا تتداخل مع حالة الأقسام السابقة. */
+/**
+ * صورة PNG صالحة فعليًا (1x1) — توقيع البايتات الحقيقي مطلوب لأن
+ * saveProofImage_ تفحص magic bytes ولا تصدّق نوع MIME المُعلَن وحده.
+ */
+const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
 function buildIdScenarioSandbox_() {
   const props = {}; const cache = {};
   const mockSs3 = buildMockSpreadsheet();
@@ -991,7 +997,15 @@ function buildIdScenarioSandbox_() {
     Utilities: sandbox.Utilities,
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = String(v); }, deleteProperty: k => { delete props[k]; } }) },
     CacheService: { getScriptCache: () => ({ get: k => (k in cache ? cache[k] : null), put: (k, v) => { cache[k] = v; }, remove: k => { delete cache[k]; } }) },
-    SpreadsheetApp: { getActiveSpreadsheet: () => mockSs3 }
+    SpreadsheetApp: { getActiveSpreadsheet: () => mockSs3 },
+    // مجلد إثباتات وهمي داخل المحاكاة فقط — لا رفع فعلي لأي صورة ولا
+    // أي اتصال بـDrive الحقيقي في أي اختبار.
+    DriveApp: {
+      createFolder: () => ({ getId: () => 'FOLDER-TEST', getUrl: () => 'https://drive.example/test',
+        createFile: () => ({ getUrl: () => 'https://drive.example/proof.png' }) }),
+      getFolderById: () => ({ getName: () => 'شواهد', getUrl: () => 'https://drive.example/test',
+        createFile: () => ({ getUrl: () => 'https://drive.example/proof.png' }) })
+    }
   });
   sb.globalThis = sb;
   vm.createContext(sb);
@@ -1057,6 +1071,160 @@ function buildIdScenarioSandbox_() {
 {
   const scenario = buildIdScenarioSandbox_();
   assert('بادئة بلا أي معرّفات موجودة في ورقتها تبدأ من 000001 كسابقًا (لا كسر في السلوك المعتاد)', scenario.S.nextId_('MND') === 'MND-000001');
+}
+
+/* -------- 23) انحدارات مؤكَّدة من الاختبار الحي 2026/08/01 (خادم) -------- */
+
+section('23) انحدارات مؤكَّدة من الاختبار الحي 2026/08/01 (خادم)');
+
+// (1) طلبان بنفس المعرّف: القرار يُرفض بتقرير واضح بدل رسالة "سبق البتّ"
+// المضلِّلة الناتجة عن اختيار أول صف مطابق بصمت.
+{
+  const scenario = buildIdScenarioSandbox_();
+  const appsSheet = scenario.mockSs.getSheetByName('طلبات انضمام الجمعيات');
+  appsSheet.appendRow(['APP-000001', 'جمعية أ', 'جمعية خيرية', 'الرياض', 'الرياض', '0501111111', 'dup1@example.org', 'محمد', '', 'مقبول', '', 'ASC-000001', '2026/07/20', '2026/07/21', 'USR-ADMIN']);
+  appsSheet.appendRow(['APP-000001', 'جمعية ب', 'جمعية خيرية', 'جدة', 'جدة', '0502222222', 'dup2@example.org', 'سعيد', '', 'قيد المراجعة', '', '', '2026/07/30', '', '']);
+  const admin = scenario.S.createSession_({id: 'USR-ADMIN-DUP', name: 'مدير', role: 'ADMIN', associationId: ''});
+  let message = '';
+  try { scenario.S.reviewAssociationApplication(admin.token, 'APP-000001', 'accept', '', 'op-dup-1'); }
+  catch (error) { message = error.message; }
+  assert('قرار على معرّف مكرَّر يُرفض برسالة تسمّي الورقة والمعرّف وعدد الصفوف (لا "سبق البتّ" المضلِّلة)',
+    message.indexOf('مكرَّر') >= 0 && message.indexOf('APP-000001') >= 0
+    && message.indexOf('طلبات انضمام الجمعيات') >= 0 && message.indexOf('سبق البتّ') === -1);
+  assert('رسالة الرفض تُرشد إلى أداة التشخيص الصحيحة', message.indexOf('diagnoseIdSequences_') >= 0);
+  assert('الرفض قبل أي كتابة: لا جمعية أُنشئت من الطلب المكرَّر',
+    scenario.S.readTable_('الجمعيات').rows.length === 0);
+}
+
+// (16) قرار قبول/رفض الطلب ذرّي وغير قابل للتكرار.
+{
+  const scenario = buildIdScenarioSandbox_();
+  const appsSheet = scenario.mockSs.getSheetByName('طلبات انضمام الجمعيات');
+  appsSheet.appendRow(['APP-000010', 'جمعية القرار', 'جمعية خيرية', 'الرياض', 'الرياض', '0503333333', 'decide@example.org', 'خالد', '', 'قيد المراجعة', '', '', '2026/07/30', '', '']);
+  const admin = scenario.S.createSession_({id: 'USR-ADMIN-DEC', name: 'مدير', role: 'ADMIN', associationId: ''});
+
+  const first = scenario.S.reviewAssociationApplication(admin.token, 'APP-000010', 'accept', '', 'op-accept-1');
+  assert('القبول ينجح ويُنشئ جمعية واحدة', first.ok === true && /^ASC-/.test(first.associationId));
+  const repeat = scenario.S.reviewAssociationApplication(admin.token, 'APP-000010', 'accept', '', 'op-accept-1');
+  assert('إعادة الإرسال بنفس opId (نقر مكرر/انقطاع اتصال) تُعيد النتيجة الأصلية حرفيًا',
+    repeat.associationId === first.associationId && repeat.temporaryPassword === first.temporaryPassword);
+  assert('لم تُنشأ جمعية ثانية إطلاقًا رغم تكرار الطلب', scenario.S.readTable_('الجمعيات').rows.length === 1);
+  assert('لم يُنشأ حساب دخول ثانٍ لنفس الجمعية', scenario.S.readTable_('المستخدمون').rows.length === 1);
+  throws('محاولة قبول ثانية بـopId مختلف تُرفض صراحةً (الحالة لم تعد قيد المراجعة)',
+    () => scenario.S.reviewAssociationApplication(admin.token, 'APP-000010', 'accept', '', 'op-accept-2'), 'سبق البتّ');
+
+  appsSheet.appendRow(['APP-000011', 'جمعية الرفض', 'جمعية خيرية', 'جدة', 'جدة', '0504444444', 'rej@example.org', 'سارة', '', 'قيد المراجعة', '', '', '2026/07/30', '', '']);
+  scenario.S.invalidateTableCache_('طلبات انضمام الجمعيات');
+  const rejected = scenario.S.reviewAssociationApplication(admin.token, 'APP-000011', 'reject', 'بيانات ناقصة', 'op-reject-1');
+  const rejectedAgain = scenario.S.reviewAssociationApplication(admin.token, 'APP-000011', 'reject', 'بيانات ناقصة', 'op-reject-1');
+  assert('الرفض صار محميًا من التكرار أيضًا (كان بلا idempotency ولا قفل)',
+    rejected.ok === true && rejectedAgain.ok === true && rejectedAgain.record.status === 'مرفوض');
+  assert('الرفض لا يُنشئ أي جمعية أو حساب', scenario.S.readTable_('الجمعيات').rows.length === 1);
+}
+
+// (9) دورة التعذّر ← إعادة المحاولة ← التسليم، وسجل المحاولات التراكمي.
+{
+  const scenario = buildIdScenarioSandbox_();
+  const S3 = scenario.S;
+  const admin = S3.createSession_({id: 'USR-ADMIN-RETRY', name: 'مدير', role: 'ADMIN', associationId: ''});
+  const assoc = S3.saveAssociation(admin.token, {name: 'جمعية التعذّر', category: 'جمعية خيرية',
+    region: 'الرياض', city: 'الرياض', phone: '0505550001', email: 'retry@example.org', password: 'ZadRetry2026x'});
+  const ben = S3.saveBeneficiary(admin.token, {name: 'مستفيد التعذّر', phone: '0505550002', region: 'الرياض',
+    city: 'الرياض', address: 'حي النرجس', familyCount: 4, socialStatus: 'أرملة', needs: [],
+    associationId: assoc.id});
+  const delegate = S3.saveDelegate(admin.token, {name: 'مندوب التعذّر', phone: '0505550003', associationId: assoc.id});
+  const device = S3.saveDevice(admin.token, {name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: ben.id});
+  S3.assignDelegate(admin.token, ben.id, delegate.id);
+  const delegateSession = S3.createSession_({id: delegate.id, name: 'مندوب التعذّر', role: 'DELEGATE', associationId: assoc.id});
+
+  const failed = S3.updateDeliveryStatus(delegateSession.token, ben.id, 'لا يرد', 'لم يفتح الباب', 'op-fail-1');
+  assert('استجابة التعذّر تُعيد الأجهزة مع السجل (لا record وحده يمحو devices من بطاقة المندوب)',
+    Array.isArray(failed.record.devices) && failed.record.devices.length === 1 && failed.record.devices[0].id === device.id);
+  assert('الأجهزة تبقى "مع المندوب" بعد التعذّر — لا ترجع للمستودع ولا تُفصل عن المستفيد',
+    failed.record.devices[0].status === 'مع المندوب');
+  assert('استجابة التعذّر تتضمن سجل المحاولات التراكمي بسببه وتاريخه',
+    Array.isArray(failed.record.attempts) && failed.record.attempts.length === 1
+    && failed.record.attempts[0].status === 'تعذر التسليم' && failed.record.attempts[0].reason === 'لا يرد');
+  throws('تأكيد التسليم مرفوض ما دامت الحالة "تعذر التسليم" (يجب إعادة المحاولة أولًا)',
+    () => S3.confirmDelivery(delegateSession.token, {beneficiaryId: ben.id, confirmed: true,
+      proofDataUrl: 'data:image/png;base64,' + PNG_B64, opId: 'op-early-deliver'}), 'انتقال غير مسموح');
+
+  const resumed = S3.retryDelivery(delegateSession.token, ben.id, 'op-retry-1');
+  assert('إعادة المحاولة تُعيد الحالة إلى "خرج مع المندوب"', resumed.record.deliveryStatus === 'خرج مع المندوب');
+  assert('إعادة المحاولة لا تلمس الأجهزة إطلاقًا (نفس الجهاز بنفس الحالة)',
+    resumed.record.devices.length === 1 && resumed.record.devices[0].id === device.id
+    && resumed.record.devices[0].status === 'مع المندوب');
+  assert('إعادة المحاولة لا تُغيّر المندوب المعيَّن', resumed.record.delegateId === delegate.id);
+  assert('سجل المحاولة المتعذّرة السابق محفوظ ولم يُمحَ بعد إعادة المحاولة',
+    resumed.record.attempts.length === 1 && resumed.record.attempts[0].reason === 'لا يرد');
+  const retryAgain = S3.retryDelivery(delegateSession.token, ben.id, 'op-retry-1');
+  assert('إعادة إرسال نفس إعادة المحاولة (نقر مكرر) لا تُنفَّذ مرتين', retryAgain.record.deliveryStatus === 'خرج مع المندوب');
+
+  const delivered = S3.confirmDelivery(delegateSession.token, {beneficiaryId: ben.id, confirmed: true,
+    proofDataUrl: 'data:image/png;base64,' + PNG_B64, opId: 'op-deliver-1'});
+  assert('التسليم ينجح بعد إعادة المحاولة', delivered.ok === true && delivered.record.deliveryStatus === 'تم التسليم');
+  assert('سجل المحاولات بعد التسليم يحوي المحاولتين معًا (التاريخ تراكمي لا حالة واحدة)',
+    delivered.record.attempts.length === 2
+    && delivered.record.attempts.some(a => a.status === 'تعذر التسليم')
+    && delivered.record.attempts.some(a => a.status === 'تم التسليم'));
+  throws('إعادة المحاولة بعد اكتمال التسليم مرفوضة صراحةً',
+    () => S3.retryDelivery(delegateSession.token, ben.id, 'op-retry-after-done'), 'إعادة المحاولة متاحة فقط');
+
+  // عزل: مندوب آخر لا يستطيع إعادة محاولة مهمة ليست له.
+  const other = S3.saveDelegate(admin.token, {name: 'مندوب آخر', phone: '0505550009', associationId: assoc.id});
+  const otherSession = S3.createSession_({id: other.id, name: 'مندوب آخر', role: 'DELEGATE', associationId: assoc.id});
+  throws('مندوب آخر لا يستطيع إعادة محاولة مهمة ليست مسندة إليه',
+    () => S3.retryDelivery(otherSession.token, ben.id, 'op-retry-foreign'), 'غير متاح لك');
+}
+
+// (2) حزمة البوابة المُجمَّعة: جولة واحدة، وصلاحيات محفوظة لكل قسم.
+{
+  const scenario = buildIdScenarioSandbox_();
+  const S4 = scenario.S;
+  const admin = S4.createSession_({id: 'USR-ADMIN-BUNDLE', name: 'مدير', role: 'ADMIN', associationId: ''});
+  const assoc = S4.saveAssociation(admin.token, {name: 'جمعية الحزمة', category: 'جمعية خيرية',
+    region: 'الرياض', city: 'الرياض', phone: '0506660001', email: 'bundle@example.org', password: 'ZadBundle2026x'});
+  S4.saveBeneficiary(admin.token, {name: 'مستفيد الحزمة', phone: '0506660002', region: 'الرياض', city: 'الرياض',
+    address: 'حي', familyCount: 3, socialStatus: 'أرملة', needs: [], associationId: assoc.id});
+
+  const bundle = S4.getPortalBundle(admin.token, 'beneficiaries', {page: 1, pageSize: 25});
+  assert('الحزمة تُعيد بيانات البوابة والمصادر المرجعية والصفحة الأولى معًا في استدعاء واحد',
+    bundle.ok === true && bundle.bootstrap && bundle.bootstrap.role === 'ADMIN'
+    && bundle.referenceData && bundle.referenceData.ready === true
+    && bundle.page === 'beneficiaries' && bundle.pageData && bundle.pageData.total === 1);
+  assert('الحزمة تحمل قياس الأداء (traceId/serverMs/reads) بلا أي حقل حساس', (() => {
+    const meta = bundle._meta;
+    const serialized = JSON.stringify(meta);
+    return meta && typeof meta.traceId === 'string' && meta.traceId.length > 0
+      && typeof meta.serverMs === 'number' && typeof meta.reads === 'number'
+      && serialized.indexOf('token') === -1 && serialized.indexOf('password') === -1;
+  })());
+
+  const assocSession = S4.createSession_({id: 'USR-ASSOC-BUNDLE', name: 'جمعية', role: 'ASSOCIATION', associationId: assoc.id});
+  const assocBundle = S4.getPortalBundle(assocSession.token, 'associations', {});
+  assert('الحزمة لا توسّع صلاحية أي دور: طلب الجمعية قسمًا إداريًا (associations) يُهمَل بلا بيانات',
+    assocBundle.ok === true && assocBundle.page === undefined && assocBundle.pageData === undefined);
+  const assocOwn = S4.getPortalBundle(assocSession.token, 'beneficiaries', {});
+  assert('الجمعية تحصل على قسمها المسموح ضمن الحزمة نفسها',
+    assocOwn.page === 'beneficiaries' && assocOwn.pageData.total === 1);
+
+  throws('الحزمة تتطلب جلسة صالحة كأي دالة محروسة', () => S4.getPortalBundle('', 'beneficiaries', {}), 'انتهت الجلسة');
+}
+
+// نطاق الطلب: ذاكرة الجداول لا تعبر حدود الطلب (لا staleness عبر warm isolate).
+{
+  const scenario = buildIdScenarioSandbox_();
+  const S5 = scenario.S;
+  const admin = S5.createSession_({id: 'USR-ADMIN-SCOPE', name: 'مدير', role: 'ADMIN', associationId: ''});
+  S5.saveAssociation(admin.token, {name: 'جمعية النطاق', category: 'جمعية خيرية', region: 'الرياض',
+    city: 'الرياض', phone: '0507770001', email: 'scope@example.org', password: 'ZadScope2026x'});
+  const before = S5.listAssociations(admin.token, {}).total;
+  // كتابة مباشرة في الورقة تُحاكي تنفيذًا آخر (isolate آخر) كتب بيانات
+  // دون المرور بذاكرة هذا التنفيذ — الطلب التالي يجب أن يراها فورًا.
+  scenario.mockSs.getSheetByName('الجمعيات').appendRow(['ASC-EXTERNAL', 'جمعية خارجية', 'جمعية خيرية',
+    'الرياض', 'الرياض', '0507770009', 'external@example.org', 'نشطة', '2026/08/01 10:00']);
+  const after = S5.listAssociations(admin.token, {}).total;
+  assert('طلب جديد يرى كتابة نفّذها تنفيذ آخر فورًا (لا نافذة تقادم زمنية)', after === before + 1);
 }
 
 /* -------- النتيجة -------- */
