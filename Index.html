@@ -3415,24 +3415,49 @@
       }, {enableHighAccuracy: true, timeout: 10000});
     }
 
+    /** نفس شرط قائمة المهام: أجهزة خرجت فعليًا مع المندوب، وحالة ليست متعذّرة ولا مكتملة. */
+    function routeStationCanDeliver(item) {
+      if (item.deliveryStatus === 'تم التسليم' || item.deliveryStatus === 'تعذر التسليم') return false;
+      return (item.devices || []).some(function (d) { return d.status === 'مع المندوب'; });
+    }
+    function routeStationBlockReason(item) {
+      if (item.deliveryStatus === 'تم التسليم') return 'تم تسليمه بالفعل';
+      if (item.deliveryStatus === 'تعذر التسليم') return 'سجِّل «إعادة المحاولة» أولًا لاستئناف التسليم بعد التعذّر';
+      return 'لا توجد أجهزة خرجت مع المندوب لهذا المستفيد';
+    }
+
     function renderDelegateRoute() {
       var all = state.data.beneficiaries || [];
+      // ثلاث حالات فراغ مختلفة تمامًا لا واحدة: "لا مهام أصلًا" ≠ "مهام
+      // بلا إحداثيات فلا مسار ممكن" ≠ "مسار لم يُحسب بعد". كل واحدة
+      // توجّه المندوب إلى الإجراء الصحيح بدل رسالة عامة واحدة.
       if (!all.length) {
         return '<div class="dg-card">' + emptyState({glyph: '✓', title: 'أنجزت جميع مهامك',
-          body: 'لا يوجد مستفيدون متبقّون في قائمتك حاليًا.'}) + '</div>';
+          body: 'لا يوجد مستفيدون متبقّون في قائمتك حاليًا، فلا حاجة لمسار اليوم.'}) + '</div>';
       }
       var withoutCoords = all.filter(function (b) { return b.lat == null || b.lng == null; });
+      if (withoutCoords.length === all.length) {
+        return '<div class="dg-card">' + emptyState({glyph: '◇',
+          title: 'لا يمكن ترتيب مسار اليوم بعد',
+          body: 'لا يحمل أي من مستفيديك (' + fmt(all.length) + ') إحداثيات مسجَّلة، والترتيب بالمسافة يحتاجها. '
+            + 'استخدم «قائمة المهام» والعنوان النصي للوصول إليهم، واطلب من الجمعية تسجيل مواقعهم على الخريطة لتفعيل المسار.',
+          action: 'dg-tab-list', actionLabel: 'الانتقال إلى قائمة المهام'}) + '</div>';
+      }
       var intro = '<div class="dg-card"><p>يرتّب هذا المسار المستفيدين الأقرب لموقعك الحالي أولًا فأولًا، اعتمادًا '
         + 'على إحداثيات مسجَّلة في ملفاتهم فقط. <strong>مسافة تقريبية بخط مستقيم فقط</strong> — ليست مسارًا مروريًا '
         + 'فعليًا ولا توجيهًا عبر الطرق، فقط ترتيب أقرب-فأقرب مبني على الإحداثيات.</p>'
         + '<button class="btn btn-primary btn-sm" data-act="delegate-locate">📍 ترتيب المسار من موقعي الحالي</button></div>';
 
       if (!state.delegateRoute) {
+        var ready = all.length - withoutCoords.length;
+        var pending = emptyState({glyph: '📍', title: 'المسار جاهز للترتيب',
+          body: fmt(ready) + ' من ' + fmt(all.length) + ' مستفيدًا يحملون إحداثيات ويمكن ترتيبهم بالمسافة. '
+            + 'اضغط الزر أعلاه للسماح بالوصول لموقعك مرة واحدة وترتيبهم الأقرب فالأقرب.'});
         var noCoordsNote = withoutCoords.length
           ? emptyState({glyph: '◇', title: fmt(withoutCoords.length) + ' مستفيدًا بلا إحداثيات',
               body: 'لن يدخلوا في الترتيب التلقائي — استخدم العنوان النصي من قائمة المهام للوصول إليهم.'})
           : '';
-        return intro + noCoordsNote;
+        return intro + pending + noCoordsNote;
       }
 
       // موقع/عنوان/اسم كل محطة يبقيان كما حُسب بهما المسار (entry.item) —
@@ -3456,9 +3481,11 @@
           + '<div class="tags">' + deviceTagsFor(item) + '</div>'
           + '<div class="dg-acts">'
           + beneficiaryContactActions(item)
-          + '<button class="a-state" data-act="dg-status" data-id="' + esc(item.id) + '"' + (delivered ? ' disabled' : '') + '>تعذّر</button>'
+          + (item.deliveryStatus === 'تعذر التسليم'
+            ? '<button class="a-retry" data-act="dg-retry" data-id="' + esc(item.id) + '">↻ إعادة المحاولة</button>'
+            : '<button class="a-state" data-act="dg-status" data-id="' + esc(item.id) + '"' + (delivered ? ' disabled' : '') + '>تعذّر</button>')
           + '<button class="a-deliver" data-act="dg-deliver" data-id="' + esc(item.id) + '"'
-          + ((item.devices || []).length && !delivered ? '' : ' disabled title="' + (delivered ? 'تم تسليمه بالفعل' : 'لا توجد أجهزة مخصصة') + '"')
+          + (routeStationCanDeliver(item) ? '' : ' disabled title="' + esc(routeStationBlockReason(item)) + '"')
           + '>تأكيد التسليم</button>'
           + '</div></article>';
       }).join('');
@@ -4018,6 +4045,7 @@
       'save-settings': saveAssociationSettings,
       'save-password': savePassword,
       'dg-tab': function (el) { state.delegatePage = el.getAttribute('data-value'); renderDelegate(); },
+      'dg-tab-list': function () { state.delegatePage = 'list'; renderDelegate(); },
       'dg-settings': delegateSettings,
       'dg-status': function (el) { delegateStatusModal(el.getAttribute('data-id')); },
       'dg-save-status': function (el) { saveDelegateStatus(el.getAttribute('data-id')); },

@@ -95,10 +95,21 @@ function perfTime_(label, fn) {
   try {
     console.log(JSON.stringify({
       perf: label, ms: Date.now() - startedAt,
-      reads: after.reads - before.reads, writes: after.writes - before.writes
+      reads: perfDelta_(before.reads, after.reads),
+      writes: perfDelta_(before.writes, after.writes)
     }));
   } catch (ignore) { /* التسجيل تحسين تشخيصي، لا يوقف الطلب أبدًا */ }
   return result;
+}
+
+/**
+ * فرق العدّادات مع مراعاة أن requireSession_ (داخل الدالة المُقاسة نفسها)
+ * تُصفّر عدّادات الطلب عند بدايته. حين يحدث ذلك يصبح "بعد" أصغر من
+ * "قبل" فينتج فرق سالب لا معنى له؛ في تلك الحالة الرقم الصحيح هو
+ * العدّاد المطلق، لأن هذه الدالة **هي** الطلب كله.
+ */
+function perfDelta_(before, after) {
+  return after >= before ? after - before : after;
 }
 
 function readTable_(name) {

@@ -581,7 +581,25 @@ assert('تبويب السجل يعمل', out().includes('نورة السالم')
 app.state.delegatePage = 'route';
 app.state.delegateRoute = null;
 app.renderDelegate();
+// حالة فراغ خاصة بالمسار: كل المستفيدين بلا إحداثيات فلا ترتيب ممكن
+// أصلًا — مختلفة تمامًا عن "أنجزت مهامك" ومختلفة عن "المسار لم يُحسب بعد".
+assert('كل المستفيدين بلا إحداثيات: حالة فراغ خاصة بالمسار توضّح السبب والبديل',
+  out().includes('لا يمكن ترتيب مسار اليوم بعد') && out().includes('العنوان النصي'));
+assert('حالة الفراغ هذه تختلف صراحةً عن حالة "أنجزت جميع مهامك"', !out().includes('أنجزت جميع مهامك'));
+assert('وتقدّم إجراءً مباشرًا للانتقال إلى قائمة المهام', out().includes('dg-tab-list'));
+
+// مستفيد واحد بإحداثيات وآخر بدونها: المسار ممكن، والحالة الوسيطة
+// (لم يُحسب بعد) تعرض زر الترتيب مع بيان كم مستفيدًا يمكن ترتيبه.
+const ROUTE_MIXED = JSON.parse(JSON.stringify(DELEGATE_DATA));
+ROUTE_MIXED.beneficiaries[0].lat = 24.71;
+ROUTE_MIXED.beneficiaries[0].lng = 46.61;
+ROUTE_MIXED.beneficiaries.push(Object.assign({}, DELEGATE_DATA.beneficiaries[0], {id: 'BEN-NOGEO', name: 'مستفيد بلا موقع'}));
+setRole(ROUTE_MIXED);
+app.state.delegatePage = 'route';
+app.state.delegateRoute = null;
+app.renderDelegate();
 assert('تبويب مسار اليوم يعرض زر تحديد الموقع', out().includes('delegate-locate'));
+assert('الحالة الوسيطة توضّح كم مستفيدًا جاهزًا للترتيب قبل حسابه', out().includes('المسار جاهز للترتيب'));
 assert('مستفيد بلا إحداثيات يظهر في قائمة منفصلة قبل حساب المسار', out().includes('بلا إحداثيات'));
 
 assert('haversineKm تُعيد صفرًا لنفس النقطة', app.haversineKm(24.7, 46.6, 24.7, 46.6) === 0);
@@ -591,7 +609,7 @@ assert('haversineKm تحسب مسافة واقعية تقريبًا بين ال�
 
 app.state.delegateRoute = {
   origin: {lat: 24.7, lng: 46.6},
-  ordered: [{item: Object.assign({}, DELEGATE_DATA.beneficiaries[0], {lat: 24.71, lng: 46.61}), distanceKm: 1.4}]
+  ordered: [{item: Object.assign({}, ROUTE_MIXED.beneficiaries[0], {lat: 24.71, lng: 46.61}), distanceKm: 1.4}]
 };
 app.renderDelegate();
 assert('مسار محسوب يعرض ترتيب المستفيد والمسافة التقريبية', out().includes('بعد تقريبي بخط مستقيم: 1.4 كم'));

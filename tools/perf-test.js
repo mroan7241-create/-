@@ -280,6 +280,9 @@ section('3) إبطال الذاكرة المؤقتة (Bootstrap) فور أي ك�
   assert('كل طلب يحمل traceId مستقلًا (تتبّع فعلي لا قيمة ثابتة)',
     before._meta && cachedAgain._meta && before._meta.traceId !== cachedAgain._meta.traceId);
   assert('الطلب الثاني المخدوم من الذاكرة المؤقتة لا يقرأ أي ورقة إطلاقًا', cachedAgain._meta.reads === 0);
+  assert('عدّادات perfTime_ لا تُنتج قيمًا سالبة أبدًا حين يُصفَّر الطلب داخلها', (() => {
+    return S.perfDelta_(0, 5) === 5 && S.perfDelta_(9, 3) === 3 && S.perfDelta_(2, 2) === 0;
+  })());
   assert('قياس الطلب لا يحمل أي حقل حساس (رمز/كلمة مرور)', (() => {
     const serialized = JSON.stringify(before._meta);
     return serialized.indexOf('token') === -1 && serialized.indexOf('password') === -1

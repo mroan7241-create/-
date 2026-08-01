@@ -666,6 +666,59 @@ section('12) عدم وجود رمز موافقة أو سرّ ثابت مكتوب
   }));
 }
 
+/* ================================================================
+   13) الأسطح الجديدة في هذه المرحلة: الحزمة المُجمَّعة وإعادة المحاولة
+   ================================================================ */
+
+section('13) حراسة الأسطح الجديدة (getPortalBundle / retryDelivery / القياس)');
+{
+  const S = buildSandbox();
+  const { associationAId, associationBId } = seedFullEnvironment(S);
+  const userA = S.createSession_({ id: 'USR-SEC-A', name: 'جمعية أ', role: 'ASSOCIATION', associationId: associationAId });
+  const userB = S.createSession_({ id: 'USR-SEC-B', name: 'جمعية ب', role: 'ASSOCIATION', associationId: associationBId });
+
+  throws('getPortalBundle ترفض الرمز الفارغ', () => S.getPortalBundle('', 'beneficiaries', {}), 'انتهت الجلسة');
+  throws('getPortalBundle ترفض الرمز المزوَّر', () => S.getPortalBundle('forged-token-1234567890123456', 'beneficiaries', {}), 'انتهت الجلسة');
+
+  const beneficiaryA = S.saveBeneficiary(userA.token, {
+    name: 'مستفيد الحزمة أ', region: 'الرياض', city: 'الرياض', address: 'حي',
+    phone: '0501239001', familyCount: 2, socialStatus: 'أرملة', needs: ['ثلاجة']
+  });
+
+  // العزل الأفقي داخل الحزمة نفسها: لا تُستخدم الحزمة كباب خلفي لبيانات جمعية أخرى.
+  const bundleB = S.getPortalBundle(userB.token, 'beneficiaries', {associationId: associationAId, page: 1, pageSize: 50});
+  assert('جمعية ب لا ترى مستفيدي جمعية أ عبر الحزمة حتى بتمرير associationId صراحةً',
+    (bundleB.pageData.items || []).every(item => item.id !== beneficiaryA.id));
+  assert('حمولة الحزمة لجمعية ب لا تحمل أي معرّف يخص جمعية أ',
+    JSON.stringify(bundleB).indexOf(associationAId) === -1);
+
+  const bundleAdminOnly = S.getPortalBundle(userB.token, 'applications', {});
+  assert('قسم إداري (طلبات الانضمام) لا يُخدَم لجمعية عبر الحزمة إطلاقًا',
+    bundleAdminOnly.pageData === undefined && bundleAdminOnly.page === undefined);
+
+  // قياس الأداء لا يُسرِّب شيئًا.
+  assert('كائن القياس _meta لا يحمل رمز جلسة ولا كلمة مرور ولا تجزئة ولا ملحًا', (() => {
+    const meta = JSON.stringify(bundleB._meta || {});
+    return meta.indexOf(userB.token) === -1
+      && !/كلمة المرور|الملح|رمز الدخول|hash|salt|password|token/i.test(meta);
+  })());
+  assert('_meta يقتصر على حقول قياس معروفة فقط', (() => {
+    const keys = Object.keys(bundleB._meta || {}).sort().join(',');
+    return keys === 'op,reads,serverMs,traceId,writes';
+  })());
+
+  // إعادة المحاولة: محروسة بالأدوار وبالملكية معًا.
+  throws('retryDelivery ترفض الرمز الفارغ', () => S.retryDelivery('', 'BEN-000001'), 'انتهت الجلسة');
+  throws('جمعية ب لا تستطيع إعادة محاولة تسليم مستفيد جمعية أ (IDOR)',
+    () => S.retryDelivery(userB.token, beneficiaryA.id), 'صلاحية');
+
+  // رسالة تكرار المعرّف لا تكشف بيانات صفوف، فقط الورقة والعدد.
+  assert('رسالة رفض المعرّف المكرَّر لا تكشف أي محتوى صف (اسم/جوال/بريد)', (() => {
+    const message = S.duplicateIdMessage_('المستفيدون', 'رقم المستفيد', 'BEN-000001', 2);
+    return message.indexOf('BEN-000001') >= 0 && !/@|05\d{8}/.test(message);
+  })());
+}
+
 /* -------- النتيجة -------- */
 
 console.log('\n' + '='.repeat(56));
