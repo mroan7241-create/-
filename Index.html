@@ -233,6 +233,46 @@
     .segmented{display:flex;background:var(--canvas);padding:5px;border-radius:var(--r-md);margin-bottom:22px;gap:4px}
     .segmented button{flex:1;min-height:42px;border-radius:10px;color:var(--muted);font-weight:700;font-size:13.5px;transition:.18s}
     .segmented button[aria-selected="true"]{background:var(--paper);color:var(--zad-800);box-shadow:var(--sh-2)}
+
+    /* -------- نموذج تقديم الجمعية: مؤشر المراحل -------- */
+    .apply-steps{display:flex;gap:6px;margin-bottom:26px;counter-reset:apstep}
+    .apply-steps .apstep{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;font-size:12px;color:var(--muted);font-weight:700;text-align:center}
+    .apply-steps .apstep b{counter-increment:apstep;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:var(--canvas);color:var(--ink-soft);font-size:13px;border:1px solid var(--line-strong)}
+    .apply-steps .apstep.done b{background:var(--zad-700);color:#fff;border-color:var(--zad-700)}
+    .apply-steps .apstep.current b{background:var(--gold-500);color:#3B2A05;border-color:var(--gold-500)}
+    .apply-steps .apstep.current{color:var(--zad-800)}
+    .apply-fieldset{border:0;padding:0;margin:0;display:grid;grid-template-columns:repeat(2,1fr);gap:14px 16px}
+    @media (max-width:640px){.apply-fieldset{grid-template-columns:1fr}}
+    .apply-fieldset legend{display:none}
+
+    /* -------- بناء البريد الإلكتروني (اسم + نطاق) -------- */
+    .email-builder{display:flex;align-items:center;gap:6px;direction:ltr}
+    .email-builder input{flex:1;min-width:0}
+    .email-builder span{color:var(--muted);font-weight:700}
+    .email-builder select{flex:0 0 150px}
+
+    /* -------- أسئلة القبول: نعم/لا سهلة اللمس -------- */
+    .yesno-q{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);padding:14px 16px;margin-bottom:10px}
+    .yesno-q legend{font-size:13.5px;font-weight:700;color:var(--ink);padding:0 0 10px;float:right;width:100%}
+    .yesno-toggle{display:flex;gap:8px;clear:both}
+    .yesno-toggle input{position:absolute;opacity:0;width:1px;height:1px}
+    .yesno-toggle label{flex:1;min-height:44px;display:flex;align-items:center;justify-content:center;border-radius:var(--r-sm);border:1px solid var(--line-strong);font-weight:700;font-size:13.5px;color:var(--ink-soft);cursor:pointer;transition:.15s}
+    .yesno-toggle input:checked+label{background:var(--zad-700);color:#fff;border-color:var(--zad-700)}
+    .yesno-toggle input.no-opt:checked+label{background:var(--canvas);color:var(--ink-soft);border-color:var(--line-strong);font-weight:600}
+    .yesno-toggle input:focus-visible+label{outline:2px solid var(--zad-700);outline-offset:2px}
+
+    /* -------- ملخص المراجعة النهائية -------- */
+    .review-list{display:grid;grid-template-columns:repeat(2,1fr);gap:10px 18px;margin:10px 0 18px;padding:0;list-style:none}
+    @media (max-width:640px){.review-list{grid-template-columns:1fr}}
+    .review-list li{font-size:13px;border-bottom:1px dashed var(--line);padding-bottom:8px}
+    .review-list li b{display:block;color:var(--ink-soft);font-weight:700;font-size:11.5px;margin-bottom:2px}
+    .review-answers{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 16px}
+    .review-answers .tag.no{background:var(--canvas);color:var(--ink-soft)}
+
+    /* -------- شارات صلاحية الترخيص وملف المرفق -------- */
+    .badge{display:inline-flex;align-items:center;gap:5px;border-radius:var(--r-pill);padding:3px 10px;font-size:11px;font-weight:700}
+    .badge-ok{background:#E7F5EC;color:#1E7B45}
+    .badge-warn{background:#FBEAEA;color:#A32B2B}
     .login-art{position:relative;overflow:hidden;display:grid;place-items:center;padding:60px;background:var(--zad-gradient)}
     .login-art::before,.login-art::after{content:"";position:absolute;border-radius:50%;border:1px solid rgba(255,255,255,.16)}
     .login-art::before{width:min(60vw,620px);aspect-ratio:1}
@@ -644,7 +684,12 @@
       sortDir: 'asc',
       // أقسام "ثقيلة" لم تعد ضمن Bootstrap — تُجلب فقط عند فتح صفحتها.
       // null = لم تُجلَب بعد؛ كائن {loading,...} بعد أول طلب.
-      lazy: {audit: null, activities: null, applications: null, beneficiaries: null, associations: null, devices: null, delegates: null}
+      lazy: {audit: null, activities: null, applications: null, beneficiaries: null, associations: null, devices: null, delegates: null},
+      // نموذج تقديم الجمعية (3 مراحل، بلا جلسة): step فقط في الذاكرة،
+      // أما clientRequestId فيُحفظ أيضًا في localStorage (safeSession)
+      // كي ينجو من إعادة تحميل الصفحة أثناء انتظار طويل غير مؤكَّد —
+      // إعادة الإرسال بنفس المعرّف تُعامَل كإعادة محاولة آمنة لا كطلب جديد.
+      apply: {step: 1, clientRequestId: '', licenseData: '', licenseMeta: null}
     };
 
     /**
@@ -1157,72 +1202,339 @@
      * نموذج عام (بلا تسجيل دخول) لتقديم طلب انضمام جمعية جديدة. الإدارة
      * تراجعه لاحقًا من صفحة "طلبات الانضمام" فتقبله أو ترفضه.
      */
-    function renderApplyForm() {
-      // نحفظ ما كُتب قبل أي إعادة رسم (وصول القوائم المعتمدة مثلًا) ثم
-      // نُعيده بعدها — إعادة الرسم لا يجوز أن تُضيّع إدخال المستخدم.
-      var keep = {};
-      var current = $('#applyForm');
-      if (current) {
-        ['name', 'category', 'region', 'city', 'contactName', 'phone', 'email', 'notes'].forEach(function (key) {
-          var field = current.elements[key];
-          if (field) keep[key] = field.value;
-        });
+    var EMAIL_DOMAINS = ['gmail.com', 'hotmail.com', 'outlook.com', 'yahoo.com'];
+    var APPLY_STEP_LABELS = ['بيانات الجمعية', 'أسئلة القبول', 'المرفق والإقرار'];
+
+    function genRequestId() {
+      if (window.crypto && crypto.randomUUID) return crypto.randomUUID().replace(/-/g, '');
+      return 'req' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
+    }
+
+    /**
+     * clientRequestId يُحفظ في sessionStorage (لا الذاكرة وحدها) كي ينجو
+     * من إعادة تحميل الصفحة أثناء انتظار طويل غير مؤكَّد (السيناريو الحي
+     * المرصود: ~370 ثانية). طالما لم يُرسَل طلب ناجح بهذا المعرّف بعد،
+     * إعادة استخدامه آمنة تمامًا — الخادم يعاملها كإعادة محاولة idempotent.
+     */
+    function ensureApplyRequestId() {
+      var stored = safeSession('get', 'zad_apply_reqid');
+      state.apply.clientRequestId = stored || genRequestId();
+      if (!stored) safeSession('set', 'zad_apply_reqid', state.apply.clientRequestId);
+    }
+
+    function clearApplyRequestId() {
+      safeSession('remove', 'zad_apply_reqid');
+      state.apply = {step: 1, clientRequestId: '', licenseData: '', licenseMeta: null};
+    }
+
+    function applyStepsHtml() {
+      return '<div class="apply-steps">' + APPLY_STEP_LABELS.map(function (label, index) {
+        var n = index + 1;
+        var cls = n < state.apply.step ? 'done' : (n === state.apply.step ? 'current' : '');
+        return '<div class="apstep ' + cls + '"><b aria-hidden="true">' + (n < state.apply.step ? '✓' : n) + '</b>'
+          + '<span>' + esc(label) + '</span></div>';
+      }).join('') + '</div>';
+    }
+
+    function applyStepOneHtml(hidden) {
+      var ref = state.referenceData;
+      var sectorField = (ref && ref.ready && ref.associationSectors && ref.associationSectors.length)
+        ? '<div class="field"><label for="f_sector">مجال عمل الجمعية</label>'
+          + '<select class="control" id="f_sector" name="sector" required>' + optionList(ref.associationSectors, '', '— اختر —') + '</select></div>'
+        : referenceUnavailableField('مجال عمل الجمعية');
+      return '<fieldset class="apply-fieldset"' + (hidden ? ' style="display:none"' : '') + '>'
+        + '<legend>بيانات الجمعية</legend>'
+        + textField('name', 'اسم الجمعية', '', {required: true, max: 150, span: true})
+        + textField('licenseNumber', 'رقم الترخيص', '', {required: true, max: 60})
+        + '<div class="field"><label for="f_licenseExpiryDate">تاريخ انتهاء الترخيص</label>'
+        + '<input class="control" id="f_licenseExpiryDate" name="licenseExpiryDate" type="date" required></div>'
+        + regionCityFields('', '', 'f')
+        + sectorField
+        + textField('contactName', 'اسم مسؤول التواصل', '', {required: true, max: 100})
+        + textField('phone', 'رقم الجوال', '', {required: true, ltr: true, hint: 'صيغة سعودية: 05XXXXXXXX'})
+        + '<div class="field span-2"><label for="f_emailLocal">البريد الإلكتروني</label>'
+        + '<div class="email-builder"><input class="control" id="f_emailLocal" name="emailLocal" required '
+        + 'placeholder="اسم المستخدم" autocomplete="off"><span aria-hidden="true">@</span>'
+        + '<select class="control" id="f_emailDomain" name="emailDomain" data-act="email-domain">'
+        + optionList(EMAIL_DOMAINS, '', '— اختر النطاق —') + '<option value="__other__">نطاق آخر…</option></select></div>'
+        + '<input class="control hidden" id="f_emailDomainOther" name="emailDomainOther" placeholder="example.com" dir="ltr" style="margin-top:8px">'
+        + '<span class="hint">يمكنك لصق البريد كاملًا في الحقل الأول وسنقسمه تلقائيًا.</span></div>'
+        + textField('notes', 'ملاحظات إضافية (اختياري)', '', {span: true})
+        + '<div class="hidden" aria-hidden="true"><label for="f_website">اترك هذا الحقل فارغًا</label>'
+        + '<input id="f_website" name="website" tabindex="-1" autocomplete="off"></div>'
+        + '</fieldset>';
+    }
+
+    function applyStepTwoHtml(hidden) {
+      var ref = state.referenceData;
+      var questions = (ref && ref.applicationQuestions) || [];
+      if (!questions.length) {
+        return '<fieldset class="apply-fieldset"' + (hidden ? ' style="display:none"' : '') + '>'
+          + referenceUnavailableField('أسئلة القبول') + '</fieldset>';
       }
+      var body = questions.map(function (q, index) {
+        var name = 'q' + index;
+        return '<fieldset class="yesno-q" role="radiogroup" aria-labelledby="' + name + '_lbl">'
+          + '<legend id="' + name + '_lbl">' + esc(index + 1) + '. ' + esc(q.label) + '</legend>'
+          + '<div class="yesno-toggle">'
+          + '<input type="radio" id="' + name + '_y" name="' + name + '" value="نعم" required>'
+          + '<label for="' + name + '_y">نعم</label>'
+          + '<input type="radio" class="no-opt" id="' + name + '_n" name="' + name + '" value="لا">'
+          + '<label for="' + name + '_n">لا</label></div></fieldset>';
+      }).join('');
+      return '<fieldset class="apply-fieldset" style="display:block' + (hidden ? ';display:none' : '') + '">'
+        + '<legend>أسئلة القبول</legend><div class="span-2" style="grid-column:1/-1">' + body + '</div></fieldset>';
+    }
+
+    function applyStepThreeHtml(hidden) {
+      var ref = state.referenceData;
+      var pledgeText = (ref && ref.pledgeText) || 'أقر بصحة البيانات، واستعداد الجمعية لتقديم ما يثبتها عند الطلب، والالتزام بضوابط المشروع.';
+      var hasFile = !!state.apply.licenseData;
+      return '<fieldset class="apply-fieldset"' + (hidden ? ' style="display:none"' : '') + '>'
+        + '<legend>المرفق والإقرار</legend>'
+        + '<div class="field span-2"><label>صورة الترخيص الساري (JPG أو PNG أو WEBP، حتى 8 ميجابايت)</label>'
+        + '<div class="drop"><label class="btn btn-primary" for="licenseFile">' + (hasFile ? 'استبدال الملف' : 'اختيار صورة الترخيص') + '</label>'
+        + '<input id="licenseFile" type="file" data-act="license-file" accept="image/jpeg,image/png,image/webp">'
+        + '<p class="muted" style="margin:8px 0 0" id="licenseFileHint">'
+        + (hasFile ? 'تم إرفاق: ' + esc(state.apply.licenseMeta && state.apply.licenseMeta.name || '') : 'لم يُرفَق ملف بعد.') + '</p>'
+        + '<img id="licenseFilePreview" class="proof-img' + (hasFile ? '' : ' hidden') + '" alt="معاينة صورة الترخيص" src="' + (hasFile ? esc(state.apply.licenseData) : '') + '"></div></div>'
+        + '<label class="pledge span-2"><input id="f_pledgeAccepted" type="checkbox" name="pledgeAccepted" data-act="pledge-gate" required>'
+        + '<span>' + esc(pledgeText) + '</span></label>'
+        + '<div class="span-2" id="applyReview"></div>'
+        + '</fieldset>';
+    }
+
+    function applyReviewHtml() {
+      var form = $('#applyForm');
+      if (!form) return '';
+      var v = captureApplyForm();
+      var ref = state.referenceData;
+      var questions = (ref && ref.applicationQuestions) || [];
+      var domain = v.emailDomain === '__other__' ? (v.emailDomainOther || '') : (v.emailDomain || '');
+      var email = (v.emailLocal || '') + (domain ? '@' + domain : '');
+      var rows = [
+        ['اسم الجمعية', v.name], ['رقم الترخيص', v.licenseNumber], ['تاريخ الانتهاء', v.licenseExpiryDate],
+        ['المنطقة/المدينة', (v.region || '') + ' · ' + (v.city || '')], ['مجال العمل', v.sector],
+        ['المسؤول', v.contactName], ['الجوال', v.phone], ['البريد الإلكتروني', email]
+      ];
+      var list = '<ul class="review-list">' + rows.map(function (r) {
+        return '<li><b>' + esc(r[0]) + '</b>' + esc(r[1] || '—') + '</li>';
+      }).join('') + '</ul>';
+      var answers = '<div class="review-answers">' + questions.map(function (q, index) {
+        var val = v['q' + index] || '';
+        return '<span class="tag' + (val === 'لا' ? ' no' : '') + '">' + esc(q.label) + ': ' + esc(val || '—') + '</span>';
+      }).join('') + '</div>';
+      return '<h4 style="margin:6px 0 4px;color:var(--zad-800)">مراجعة أخيرة قبل الإرسال</h4>' + list + answers;
+    }
+
+    /** يلتقط قيم كل حقول النموذج الحالية (بما فيها الأزرار الشعاعية والمربعات) بلا اعتماد على قائمة أسماء ثابتة. */
+    function captureApplyForm() {
+      var form = $('#applyForm');
+      var out = {};
+      if (!form) return out;
+      Array.prototype.forEach.call(form.elements, function (el) {
+        if (!el.name || el.type === 'file') return;
+        if (el.type === 'radio' || el.type === 'checkbox') { if (el.checked) out[el.name] = el.value || 'on'; }
+        else out[el.name] = el.value;
+      });
+      return out;
+    }
+
+    function restoreApplyForm(values) {
+      var form = $('#applyForm');
+      if (!form) return;
+      Object.keys(values).forEach(function (name) {
+        var el = form.elements[name];
+        if (!el) return;
+        if (el.type === 'checkbox') { el.checked = values[name] === (el.value || 'on'); return; }
+        if (el.type === 'radio' || (el.length !== undefined && el[0] && el[0].type === 'radio')) {
+          var nodes = el.length !== undefined ? el : [el];
+          Array.prototype.forEach.call(nodes, function (radio) { radio.checked = radio.value === values[name]; });
+          return;
+        }
+        el.value = values[name];
+      });
+      var regionField = form.elements.region;
+      if (regionField && regionField.value) {
+        onRegionChange(regionField);
+        if (values.city && form.elements.city) form.elements.city.value = values.city;
+      }
+      toggleEmailOtherDomain();
+    }
+
+    function toggleEmailOtherDomain() {
+      var form = $('#applyForm');
+      if (!form || !form.elements.emailDomain) return;
+      var other = form.elements.emailDomainOther;
+      if (!other) return;
+      other.classList.toggle('hidden', form.elements.emailDomain.value !== '__other__');
+    }
+
+    function renderApplyForm() {
+      var keep = captureApplyForm();
+      ensureApplyRequestId();
+      var step = state.apply.step;
       $('#root').innerHTML = '<main class="login">'
         + '<section class="login-panel">' + lockup({partner: true})
         + '<h1>طلب انضمام جمعية جديدة</h1>'
-        + '<p class="login-lede">عبّئ بيانات جمعيتك وسيتم التواصل معكم بعد مراجعة الطلب من إدارة المشروع.</p>'
+        + '<p class="login-lede">عبّئ بيانات جمعيتك على ثلاث مراحل قصيرة، وسيتم التواصل معكم بعد مراجعة الطلب من إدارة المشروع.</p>'
+        + applyStepsHtml()
         + '<form id="applyForm" class="form-grid" data-act="submit-application" novalidate>'
-        + textField('name', 'اسم الجمعية', '', {required: true, max: 150, span: true})
-        + associationCategoryField('')
-        + regionCityFields('', '', 'ap')
-        + textField('contactName', 'اسم المسؤول', '', {required: true, max: 100})
-        + textField('phone', 'رقم التواصل', '', {required: true, ltr: true})
-        + '<div class="field span-2"><label for="f_email">البريد الإلكتروني</label>'
-        + '<input class="control" id="f_email" name="email" type="email" dir="ltr" required></div>'
-        + '<div class="field span-2"><label for="f_notes">ملاحظات إضافية (اختياري)</label>'
-        + '<textarea class="control" id="f_notes" name="notes" maxlength="500"></textarea></div>'
-        + '<div class="span-2" style="display:flex;gap:10px;flex-wrap:wrap">'
-        + '<button class="btn btn-primary" type="submit">إرسال الطلب</button>'
-        + '<button type="button" class="btn btn-ghost" data-act="back-to-login">رجوع لتسجيل الدخول</button>'
+        + applyStepOneHtml(step !== 1)
+        + applyStepTwoHtml(step !== 2)
+        + applyStepThreeHtml(step !== 3)
+        + '<div class="span-2" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">'
+        + (step > 1 ? '<button type="button" class="btn btn-ghost" data-act="apply-prev">السابق</button>' : '<button type="button" class="btn btn-ghost" data-act="back-to-login">رجوع لتسجيل الدخول</button>')
+        + (step < 3 ? '<button type="button" class="btn btn-primary" data-act="apply-next">التالي</button>'
+          : '<button class="btn btn-primary" type="submit" id="applySubmitBtn">إرسال الطلب</button>')
         + '</div></form></section>'
         + '<aside class="login-art"><div class="art-card">'
         + '<div class="art-seal" aria-hidden="true">' + ZAD_SEAL_SVG + '</div>'
         + '<h2>شراكة موثّقة</h2>'
         + '<p>كل طلب يُراجَع يدويًا قبل إنشاء حساب الجمعية، لضمان دقة البيانات وسلامة الشراكة.</p>'
         + '</div></aside></main>';
-      var restored = $('#applyForm');
-      if (restored) {
-        Object.keys(keep).forEach(function (key) {
-          var field = restored.elements[key];
-          if (field && keep[key]) field.value = keep[key];
-        });
-        // إعادة تعبئة المدن التابعة للمنطقة المستعادة قبل ضبط قيمتها.
-        var regionField = restored.elements.region;
-        if (regionField && regionField.tagName === 'SELECT' && regionField.value) {
-          onRegionChange(regionField);
-          if (keep.city && restored.elements.city) restored.elements.city.value = keep.city;
-        }
+      restoreApplyForm(keep);
+      if (step === 3) {
+        var reviewBox = $('#applyReview');
+        if (reviewBox) reviewBox.innerHTML = applyReviewHtml();
+        updatePledgeGate();
       }
       var first = $('#applyForm .control');
       if (first && !Object.keys(keep).length) first.focus();
     }
 
+    function updatePledgeGate() {
+      var btn = $('#applySubmitBtn');
+      if (!btn) return;
+      var pledge = $('#f_pledgeAccepted');
+      btn.disabled = !(pledge && pledge.checked) || !state.apply.licenseData;
+    }
+
+    function applyStepNext() {
+      var form = $('#applyForm');
+      if (!form || !form.reportValidity()) return;
+      // تحقّق ذكي إضافي (غير موجود في required العادي): تعارض تاريخ
+      // انتهاء الترخيص مع الإجابة "الترخيص ساري؟" — يُنبَّه هنا مبكرًا،
+      // والخادم يفرضه أيضًا مهما فعلت الواجهة.
+      if (state.apply.step === 1) {
+        var expiry = form.elements.licenseExpiryDate && form.elements.licenseExpiryDate.value;
+        if (expiry && new Date(expiry) < new Date(new Date().toDateString())) {
+          toast('تنبيه: تاريخ انتهاء الترخيص المُدخَل في الماضي — تحقق منه قبل المتابعة.', 'warn');
+        }
+      }
+      state.apply.step = Math.min(3, state.apply.step + 1);
+      renderApplyForm();
+    }
+
+    function applyStepPrev() {
+      state.apply.step = Math.max(1, state.apply.step - 1);
+      renderApplyForm();
+    }
+
+    function handleLicenseFile(input) {
+      var file = input.files && input.files[0];
+      if (!file) return;
+      if (file.size > 8 * 1024 * 1024) {
+        toast('حجم ملف الترخيص يتجاوز ٨ ميجابايت.', 'error');
+        input.value = '';
+        return;
+      }
+      if (['image/jpeg', 'image/png', 'image/webp'].indexOf(file.type) < 0) {
+        toast('صيغة الملف غير مدعومة. استخدم JPG أو PNG أو WEBP.', 'error');
+        input.value = '';
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function () {
+        state.apply.licenseData = reader.result;
+        state.apply.licenseMeta = {name: file.name, size: file.size, type: file.type};
+        var img = $('#licenseFilePreview');
+        var hint = $('#licenseFileHint');
+        if (img) { img.src = state.apply.licenseData; img.classList.remove('hidden'); }
+        if (hint) hint.textContent = 'تم إرفاق: ' + file.name;
+        updatePledgeGate();
+      };
+      reader.onerror = function () { toast('تعذّر قراءة ملف الترخيص.', 'error'); };
+      reader.readAsDataURL(file);
+    }
+
+    /**
+     * يجمع اسم المستخدم والنطاق في بريد كامل — الخادم يُطبّق التحقق
+     * النهائي دائمًا (requiredEmail_) بصرف النظر عمّا فعلته الواجهة.
+     * يدعم أيضًا لصق بريد كامل في حقل اسم المستخدم: إن احتوى على "@"
+     * يُقسَّم تلقائيًا إلى الاسم والنطاق (مع اختيار النطاق من القائمة
+     * إن كان معروفًا، أو "نطاق آخر" تلقائيًا إن لم يكن).
+     */
+    function splitPastedEmail(localField) {
+      var raw = localField.value;
+      var at = raw.indexOf('@');
+      if (at < 0) return;
+      var local = raw.slice(0, at);
+      var domain = raw.slice(at + 1).trim().toLowerCase();
+      localField.value = local;
+      var form = $('#applyForm');
+      if (!form) return;
+      var domainField = form.elements.emailDomain;
+      var otherField = form.elements.emailDomainOther;
+      if (!domainField) return;
+      if (domain && EMAIL_DOMAINS.indexOf(domain) >= 0) {
+        domainField.value = domain;
+      } else if (domain) {
+        domainField.value = '__other__';
+        if (otherField) otherField.value = domain;
+      }
+      toggleEmailOtherDomain();
+    }
+
     function submitApplication(form) {
       if (!form.reportValidity()) return;
+      if (!state.apply.licenseData) { toast('أرفق صورة الترخيص أولًا.', 'error'); return; }
       var data = new FormData(form);
+      var ref = state.referenceData;
+      var questions = (ref && ref.applicationQuestions) || [];
+      var answers = {};
+      questions.forEach(function (q, index) { answers[q.key] = data.get('q' + index) === 'نعم'; });
+      var domain = data.get('emailDomain') === '__other__' ? data.get('emailDomainOther') : data.get('emailDomain');
       var payload = {
-        name: data.get('name'), category: data.get('category'),
-        region: data.get('region'), city: data.get('city'),
-        contactName: data.get('contactName'), phone: data.get('phone'),
-        email: data.get('email'), notes: data.get('notes')
+        name: data.get('name'), licenseNumber: data.get('licenseNumber'),
+        licenseExpiryDate: data.get('licenseExpiryDate'), region: data.get('region'), city: data.get('city'),
+        sector: data.get('sector'), contactName: data.get('contactName'), phone: data.get('phone'),
+        email: (data.get('emailLocal') || '') + '@' + (domain || ''), notes: data.get('notes'),
+        website: data.get('website'), answers: answers,
+        licenseFileDataUrl: state.apply.licenseData,
+        pledgeAccepted: !!data.get('pledgeAccepted'),
+        clientRequestId: state.apply.clientRequestId
       };
       busy(true);
       api('submitAssociationApplication', payload).then(function (result) {
+        clearApplyRequestId();
         state.screen = '';
         renderLogin();
         toast(result.message || 'تم استلام طلب الانضمام.', 'success');
-      }, reportError).finally(function () { busy(false); });
+      }, function (error) {
+        // مهلة زمنية = نتيجة غير مؤكَّدة، لا فشل مؤكَّد: نستعلم عن نتيجة
+        // نفس clientRequestId فورًا بدل ترك المستخدم في شكّ، ولا نحذف
+        // المعرّف من التخزين إلا حين نتأكّد من النتيجة الفعلية.
+        if (error && error.timeout) { checkApplyStatusAfterTimeout(); return; }
+        reportError(error);
+      }).finally(function () { busy(false); });
+    }
+
+    function checkApplyStatusAfterTimeout() {
+      var reqId = state.apply.clientRequestId;
+      toast('استغرق الإرسال وقتًا أطول من المتوقع — جارٍ التحقق من نتيجته الفعلية…', 'warn');
+      api('getApplicationStatus', reqId).then(function (status) {
+        if (status.found) {
+          clearApplyRequestId();
+          state.screen = '';
+          renderLogin();
+          toast('تم استلام طلبكم فعليًا (رقم الطلب: ' + status.id + '). لا حاجة لإعادة الإرسال.', 'success');
+        } else {
+          toast('لم يصل الطلب إلى الخادم بعد. اضغط "إرسال الطلب" لإعادة المحاولة بأمان — لن يتكرر الطلب.', 'warn');
+        }
+      }, function () {
+        toast('تعذّر التحقق من نتيجة الطلب الآن. اضغط "إرسال الطلب" لإعادة المحاولة بأمان — لن يتكرر الطلب.', 'warn');
+      });
     }
 
     /* ============================================================
@@ -3991,9 +4303,11 @@
         goTo(page, filter);
       },
       'login-type': function (el) { state.loginType = el.getAttribute('data-value'); renderLogin(); },
-      'show-apply': function () { state.screen = 'apply'; loadReferenceDataOnce(); renderApplyForm(); },
+      'show-apply': function () { state.screen = 'apply'; state.apply.step = 1; loadReferenceDataOnce(); renderApplyForm(); },
       'reload-reference': function () { loadReferenceDataOnce(true); },
       'back-to-login': function () { state.screen = ''; renderLogin(); },
+      'apply-next': applyStepNext,
+      'apply-prev': applyStepPrev,
       'view-application': function (el) { viewApplication(el.getAttribute('data-id')); },
       'accept-application': function (el) { decideApplication(el.getAttribute('data-id'), 'accept'); },
       'reject-application': function (el) { rejectApplicationModal(el.getAttribute('data-id')); },
@@ -4125,7 +4439,7 @@
       if (!el) return;
       var action = el.getAttribute('data-act');
       if (action === 'backdrop' || action === 'set-search' || action === 'set-filter'
-        || action === 'bulk-file' || action === 'proof-file') return;
+        || action === 'bulk-file' || action === 'proof-file' || action === 'license-file') return;
       if (action === 'call-fallback') { handleCallFallback(el.getAttribute('data-phone')); return; }
       var handler = CLICK_ACTIONS[action];
       if (!handler) return;
@@ -4143,6 +4457,7 @@
         updateLocationCoordsHint();
         return;
       }
+      if (el && el.id === 'f_emailLocal') { splitPastedEmail(el); return; }
       if (!el.getAttribute || el.getAttribute('data-act') !== 'set-search') return;
       var value = el.value;
       window.clearTimeout(searchTimer);
@@ -4183,7 +4498,10 @@
       if (action === 'bulk-file') { handleBulkFile(el); return; }
       if (action === 'proof-file') { handleProofFile(el); return; }
       if (action === 'delivery-gate') { updateDeliveryGate(); return; }
-      if (action === 'region-select') { onRegionChange(el); }
+      if (action === 'region-select') { onRegionChange(el); return; }
+      if (action === 'license-file') { handleLicenseFile(el); return; }
+      if (action === 'email-domain') { toggleEmailOtherDomain(); return; }
+      if (action === 'pledge-gate') { updatePledgeGate(); return; }
     });
 
     /** يعيد تعبئة قائمة المدن فور اختيار المنطقة، ويقفلها إن لم تُختر منطقة بعد. */

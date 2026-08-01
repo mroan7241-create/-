@@ -325,6 +325,8 @@ function builtinReferenceData_() {
     socialStatuses: REFERENCE_SEED_SOCIAL_STATUSES.slice(),
     associationCategories: REFERENCE_SEED_ASSOCIATION_CATEGORIES.slice(),
     associationSectors: REFERENCE_SEED_ASSOCIATION_SECTORS.slice(),
+    applicationQuestions: APPLICATION_QUESTIONS.map(q => ({key: q.key, label: q.label})),
+    pledgeText: APPLICATION_PLEDGE_TEXT,
     ready: true, source: 'builtin'
   };
   Object.keys(REFERENCE_SEED_REGIONS_CITIES).forEach(region => {
@@ -356,7 +358,10 @@ function getReferenceData(token) {
     .sort((a, b) => safeNumber_(a['الترتيب']) - safeNumber_(b['الترتيب']));
 
   const result = {regions: [], citiesByRegion: {}, deviceTypes: [], socialStatuses: [],
-    associationCategories: [], associationSectors: [], ready: true, source: 'sheet'};
+    associationCategories: [], associationSectors: [],
+    applicationQuestions: APPLICATION_QUESTIONS.map(q => ({key: q.key, label: q.label})),
+    pledgeText: APPLICATION_PLEDGE_TEXT,
+    ready: true, source: 'sheet'};
   rows.forEach(row => {
     const type = String(row['النوع']);
     const value = String(row['القيمة']);

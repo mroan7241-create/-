@@ -227,7 +227,7 @@ app.renderLogin();
 assert('يظهر رابط تقديم طلب انضمام جمعية في شاشة الدخول', out().includes('show-apply'));
 app.renderApplyForm();
 assert('ترسم نموذج طلب الانضمام العام', out().includes('submit-application'));
-assert('نموذج الطلب يطلب اسم الجمعية والبريد', out().includes('name="name"') && out().includes('name="email"'));
+assert('نموذج الطلب يطلب اسم الجمعية والبريد (بريد مبني من اسم مستخدم ونطاق)', out().includes('name="name"') && out().includes('name="emailLocal"') && out().includes('name="emailDomain"'));
 app.renderLogin();
 
 /* ---------------- 2) لوحة الإدارة ---------------- */
@@ -955,15 +955,34 @@ app.state.proofData = '';
 app.state.referenceData = {ready: true, source: 'builtin',
   regions: ['الرياض', 'مكة المكرمة'],
   citiesByRegion: {'الرياض': ['الرياض', 'الخرج'], 'مكة المكرمة': ['جدة']},
-  deviceTypes: ['ثلاجة'], socialStatuses: ['أرملة'], associationCategories: ['جمعية أهلية']};
+  deviceTypes: ['ثلاجة'], socialStatuses: ['أرملة'], associationCategories: ['جمعية أهلية'],
+  associationSectors: ['رعاية الأيتام', 'أخرى'],
+  applicationQuestions: [{key: 'الترخيص ساري', label: 'هل الترخيص ساري؟'}, {key: 'المشروع ضمن نطاق الجمعية', label: 'هل المشروع ضمن نطاق عمل الجمعية؟'}],
+  pledgeText: 'أقر بصحة البيانات.'};
 app.state.screen = 'apply';
+app.state.apply.step = 1;
 app.renderApplyForm();
-assert('نموذج تقديم الجمعية العام يستخدم قوائم منسدلة للتصنيف والمنطقة والمدينة (لا حقول نصية)', (() => {
+assert('نموذج تقديم الجمعية العام (مرحلة 1) يستخدم قوائم منسدلة للمنطقة والمدينة ومجال العمل (لا حقول نصية)', (() => {
   const html = out();
-  return html.includes('name="category"') && html.includes('name="region"') && html.includes('name="city"')
-    && !/<input[^>]*name="region"/.test(html) && !/<input[^>]*name="category"/.test(html);
+  return html.includes('name="region"') && html.includes('name="city"') && html.includes('name="sector"')
+    && !/<input[^>]*name="region"/.test(html) && !/<input[^>]*name="sector"/.test(html);
 })());
 assert('نموذج التقديم يربط المدينة بالمنطقة عبر data-city-target', /data-act="region-select"[^>]*data-city-target/.test(out()));
+assert('نموذج التقديم يعرض مؤشر المراحل الثلاث', out().includes('class="apply-steps"'));
+assert('نموذج التقديم يتضمن حقل honeypot مخفيًا عن المستخدم الحقيقي', /name="website"/.test(out()) && /class="hidden"[^>]*aria-hidden="true"/.test(out()));
+app.state.apply.step = 2;
+app.renderApplyForm();
+assert('نموذج التقديم (مرحلة 2) يعرض أسئلة نعم/لا بأزرار لمس لا مربعات اختيار ملتبسة', (() => {
+  const html = out();
+  return html.includes('class="yesno-toggle"') && html.includes('type="radio"') && !html.includes('type="checkbox" name="q0"');
+})());
+app.state.apply.step = 3;
+app.renderApplyForm();
+assert('نموذج التقديم (مرحلة 3) يطلب ملف الترخيص والإقرار الإلزامي', (() => {
+  const html = out();
+  return html.includes('data-act="license-file"') && html.includes('name="pledgeAccepted"') && html.includes('أقر بصحة البيانات');
+})());
+app.state.apply.step = 1;
 app.state.screen = '';
 
 /* ---------------- 13) اللوحة التنفيذية للأنشطة ---------------- */
