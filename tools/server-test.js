@@ -974,6 +974,86 @@ for (let i = 0; i < 5; i++) {
 }
 throws('بعد 5 محاولات فاشلة، حتى الرمز الصحيح نفسه يُرفض (القفل التلقائي)', () => S2.preflightRelease_(token2), 'محاولات فاشلة');
 
+/* -------- 22) توليد المعرّفات الآمن بعد نسخ المشروع (nextIds_ وdiagnoseIdSequences_) -------- */
+
+section('22) توليد المعرّفات الآمن بعد نسخ المشروع (nextIds_ وdiagnoseIdSequences_)');
+
+/** يبني بيئة معزولة جديدة (Properties/Cache/Sheets خاصة بها) لكل سيناريو، حتى لا تتداخل مع حالة الأقسام السابقة. */
+function buildIdScenarioSandbox_() {
+  const props = {}; const cache = {};
+  const mockSs3 = buildMockSpreadsheet();
+  const sb = Object.assign({}, sandbox, {
+    Utilities: sandbox.Utilities,
+    PropertiesService: { getScriptProperties: () => ({ getProperty: k => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = String(v); }, deleteProperty: k => { delete props[k]; } }) },
+    CacheService: { getScriptCache: () => ({ get: k => (k in cache ? cache[k] : null), put: (k, v) => { cache[k] = v; }, remove: k => { delete cache[k]; } }) },
+    SpreadsheetApp: { getActiveSpreadsheet: () => mockSs3 }
+  });
+  sb.globalThis = sb;
+  vm.createContext(sb);
+  vm.runInContext(source, sb, { filename: 'Code.gs(idSequences)' });
+  Object.keys(ALL_HEADERS).forEach(name => sb.ensureSheet_(mockSs3, name, ALL_HEADERS[name]));
+  return {S: sb, props: props, mockSs: mockSs3};
+}
+
+// --- سيناريو أ: نسخ مشروع جديد (Make a copy) — Script Properties فارغة تمامًا، لكن ورقة الجمعيات تحتفظ ببيانات قديمة، وبترتيب صفوف لا يطابق ترتيب الأرقام (كما وصفه التقرير الحي: ASC-000002 بتاريخ أقدم من ASC-000001) ---
+{
+  const scenario = buildIdScenarioSandbox_();
+  const sheet = scenario.mockSs.getSheetByName('الجمعيات');
+  sheet.appendRow(['ASC-000002', 'جمعية سابقة 2', 'جمعية خيرية', 'الرياض', 'الرياض', '0500000000', 'a2@example.org', 'نشط', '2026/07/29']);
+  sheet.appendRow(['ASC-000001', 'جمعية سابقة 1', 'جمعية خيرية', 'الرياض', 'الرياض', '0500000001', 'a1@example.org', 'نشط', '2026/07/31']);
+  assert('Script Properties فارغة فعليًا قبل أي توليد (محاكاة نسخ مشروع جديد)', scenario.props.SEQ_ASC === undefined);
+  const nextAsc = scenario.S.nextId_('ASC');
+  assert('nextId_ لا يعيد استخدام ASC-000001 أو ASC-000002 الموجودين فعليًا رغم عدّاد فارغ', nextAsc !== 'ASC-000001' && nextAsc !== 'ASC-000002');
+  assert('nextId_ يحسب أعلى رقم فعلي من الورقة نفسها بصرف النظر عن ترتيب الصفوف أو التاريخ', nextAsc === 'ASC-000003');
+}
+
+// --- سيناريو ب: طلبان بنفس رقم APP-000001 (تكرار فعلي موجود مسبقًا في الورقة) — diagnoseIdSequences_ يكتشفه، وnextId_ اللاحق لا يصطدم بأي منهما ---
+{
+  const scenario = buildIdScenarioSandbox_();
+  const appsSheet = scenario.mockSs.getSheetByName('طلبات انضمام الجمعيات');
+  appsSheet.appendRow(['APP-000001', 'جمعية أ', 'جمعية خيرية', 'الرياض', 'الرياض', '0501111111', 'x1@example.org', 'محمد', '', 'مقبول', '', 'ASC-000001', '2026/07/20', '2026/07/21', 'USR-ADMIN']);
+  appsSheet.appendRow(['APP-000001', 'جمعية ب', 'جمعية خيرية', 'جدة', 'جدة', '0502222222', 'x2@example.org', 'سعيد', '', 'قيد المراجعة', '', '', '2026/07/30', '', '']);
+
+  const token = grantToken_(scenario.S, logs);
+  const diag = scenario.S.diagnoseIdSequences_(token);
+  const appRow = diag.prefixes.find(p => p.prefix === 'APP');
+  assert('diagnoseIdSequences_ يكتشف تكرار APP-000001 فعليًا', appRow.duplicateCount === 1 && appRow.duplicateIds.indexOf('APP-000001') >= 0);
+  assert('diagnoseIdSequences_ يعيد قيمة SEQ المخزَّنة وأعلى رقم فعلي والقيمة الآمنة التالية لكل بادئة', typeof appRow.storedSeq === 'number' && appRow.highestExisting === 1 && appRow.nextSafeValue === 'APP-000002');
+  assert('diagnoseIdSequences_ قراءة فقط — لا يعدّل أي صف موجود', appsSheet.getLastRow() === 3);
+
+  const nextApp = scenario.S.nextId_('APP');
+  assert('nextId_ بعد اكتشاف التكرار يولّد معرّفًا آمنًا لا يصطدم بأي من الصفين المكررين', nextApp === 'APP-000002');
+}
+
+// --- سيناريو ج: التوليد الجماعي (استيراد دفعة) بعد نسخ مشروع — لا تكرار بين الدفعة الجديدة والمعرّفات القديمة في الورقة ---
+{
+  const scenario = buildIdScenarioSandbox_();
+  const benSheet = scenario.mockSs.getSheetByName('المستفيدون');
+  benSheet.appendRow(['BEN-000005', 'ASC-000001', 'مستفيد قديم', 'الرياض', 'الرياض', '', '0500000000', '', '4', 'لا', 'متوسط', '', '', 'جديد', 'لم يبدأ', '', '', '2026/07/01', '', '', '', '', '', '', '']);
+  const batch = scenario.S.nextIds_('BEN', 4);
+  assert('التوليد الجماعي يبدأ بعد أعلى رقم فعلي موجود في الورقة (BEN-000005) لا من صفر', batch[0] === 'BEN-000006');
+  assert('التوليد الجماعي يعيد دفعة متسلسلة بلا تكرار داخلي', new Set(batch).size === batch.length && batch.join(',') === 'BEN-000006,BEN-000007,BEN-000008,BEN-000009');
+  const afterBatch = scenario.S.nextId_('BEN');
+  assert('الاستدعاء التالي بعد الدفعة يكمل من حيث انتهت دون رجوع', afterBatch === 'BEN-000010');
+}
+
+// --- سيناريو د: تزامن (نداءات متتابعة سريعة) بعد نسخ مشروع — كل نداء يُعاد فحص الورقة داخل نفس القفل فلا يتكرر شيء ---
+{
+  const scenario = buildIdScenarioSandbox_();
+  const devSheet = scenario.mockSs.getSheetByName('الأجهزة');
+  devSheet.appendRow(['DEV-000003', 'جهاز قديم', 'ثلاجة', 'ASC-000001', '', 'بالمستودع', '2026/07/01', '', '']);
+  const generated = [];
+  for (let i = 0; i < 6; i++) generated.push(scenario.S.nextId_('DEV'));
+  assert('استدعاءات متتابعة بعد نسخ المشروع لا تُنتج أي معرّف مكرر، وتبدأ بعد أعلى رقم موجود فعليًا',
+    new Set(generated).size === generated.length && generated[0] === 'DEV-000004' && generated[5] === 'DEV-000009');
+}
+
+// --- سيناريو هـ: بادئة بلا أي بيانات سابقة في الورقة — تتصرف كسابقًا (تبدأ من 000001) ---
+{
+  const scenario = buildIdScenarioSandbox_();
+  assert('بادئة بلا أي معرّفات موجودة في ورقتها تبدأ من 000001 كسابقًا (لا كسر في السلوك المعتاد)', scenario.S.nextId_('MND') === 'MND-000001');
+}
+
 /* -------- النتيجة -------- */
 
 console.log('\n' + '='.repeat(56));

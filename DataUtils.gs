@@ -156,6 +156,53 @@ function updateRowByMatch_(sheetName, matchHeaders, changes) {
   return true;
 }
 
+/**
+ * مصدر كل بادئة معرّف: الورقة والعمود اللذان يحملان المعرّفات الفعلية
+ * المُصدَرة بهذه البادئة. يُستخدم لحساب "أعلى رقم مستخدم فعليًا" في
+ * nextIds_ وdiagnoseIdSequences_ — بدل الثقة العمياء بعدّاد Script
+ * Properties وحده، الذي يُعاد للصفر عند نسخ المشروع (Make a copy) بينما
+ * تحتفظ الأوراق نفسها ببياناتها القديمة كاملة، فينتج تكرار معرّفات خطير.
+ */
+const ID_PREFIX_SOURCES_ = Object.freeze({
+  APP: {sheet: 'طلبات انضمام الجمعيات', column: 'رقم الطلب'},
+  ASC: {sheet: 'الجمعيات', column: 'رقم الجمعية'},
+  BEN: {sheet: 'المستفيدون', column: 'رقم المستفيد'},
+  DEV: {sheet: 'الأجهزة', column: 'رقم الجهاز'},
+  MND: {sheet: 'المناديب', column: 'رقم المندوب'},
+  DLV: {sheet: 'التسليمات', column: 'رقم التسليم'},
+  USR: {sheet: 'المستخدمون', column: 'رقم المستخدم'},
+  REF: {sheet: 'البيانات المرجعية', column: 'المعرف'}
+});
+
+/** يعيد كل قيم عمود المعرّف الفعلية (نصًا، غير فارغة) لبادئة معيّنة من ورقتها المصدر، أو [] إن كانت البادئة/الورقة/العمود غير موجودة. */
+function existingIdsForPrefix_(prefix) {
+  const source = ID_PREFIX_SOURCES_[prefix];
+  if (!source) return [];
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss ? ss.getSheetByName(source.sheet) : null;
+  if (!sheet) return [];
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return [];
+  const headers = values[0].map(String);
+  const colIndex = headers.indexOf(source.column);
+  if (colIndex === -1) return [];
+  return values.slice(1).map(row => String(row[colIndex] || '').trim()).filter(Boolean);
+}
+
+/** أعلى رقم تسلسلي فعليًا موجود في ورقة المصدر لهذه البادئة (0 إن لم يوجد أي معرّف مطابق للنمط). */
+function highestExistingSeq_(prefix) {
+  const re = new RegExp('^' + prefix + '-(\\d{6,})$');
+  let max = 0;
+  existingIdsForPrefix_(prefix).forEach(id => {
+    const match = re.exec(id);
+    if (match) {
+      const n = Number(match[1]);
+      if (n > max) max = n;
+    }
+  });
+  return max;
+}
+
 function nextId_(prefix) {
   return nextIds_(prefix, 1)[0];
 }
@@ -168,7 +215,13 @@ function nextIds_(prefix, count) {
   try {
     const props = PropertiesService.getScriptProperties();
     const key = 'SEQ_' + prefix;
-    const current = Number(props.getProperty(key) || 0);
+    const storedSeq = Number(props.getProperty(key) || 0);
+    // لا نثق بعدّاد Script Properties وحده: عند نسخ المشروع (Make a copy)
+    // يُعاد هذا العدّاد للصفر بينما تحتفظ الأوراق ببياناتها القديمة كاملة،
+    // فقد يعيد استخدام معرّف موجود فعليًا. نأخذ الأكبر بين العدّاد وأعلى
+    // رقم فعلي موجود في الورقة نفسها، دائمًا داخل القفل نفسه لمنع التزامن.
+    const actualMax = highestExistingSeq_(prefix);
+    const current = Math.max(storedSeq, actualMax);
     props.setProperty(key, String(current + count));
     return Array.from({length: count}, (_, index) =>
       prefix + '-' + Utilities.formatString('%06d', current + index + 1)
@@ -176,6 +229,38 @@ function nextIds_(prefix, count) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * تشخيص قراءة فقط (لا يكتب أي شيء) لحالة كل عدّاد معرّفات: القيمة
+ * المخزَّنة في Script Properties، أعلى رقم فعلي في ورقة المصدر، عدد
+ * المعرّفات المكررة فعليًا إن وُجدت، والقيمة الآمنة التالية لكل بادئة.
+ * محمية برمز وصول الصيانة مثل بقية دوال diagnose*_ في المشروع.
+ */
+function diagnoseIdSequences_(token) {
+  requireMaintenanceAccess_(token);
+  const props = PropertiesService.getScriptProperties();
+  const prefixes = Object.keys(ID_PREFIX_SOURCES_).map(prefix => {
+    const source = ID_PREFIX_SOURCES_[prefix];
+    const storedSeq = Number(props.getProperty('SEQ_' + prefix) || 0);
+    const ids = existingIdsForPrefix_(prefix);
+    const counts = {};
+    ids.forEach(id => { counts[id] = (counts[id] || 0) + 1; });
+    const duplicateIds = Object.keys(counts).filter(id => counts[id] > 1);
+    const highestExisting = highestExistingSeq_(prefix);
+    const safeNext = Math.max(storedSeq, highestExisting) + 1;
+    return {
+      prefix: prefix,
+      sheet: source.sheet,
+      column: source.column,
+      storedSeq: storedSeq,
+      highestExisting: highestExisting,
+      nextSafeValue: prefix + '-' + Utilities.formatString('%06d', safeNext),
+      duplicateCount: duplicateIds.length,
+      duplicateIds: duplicateIds
+    };
+  });
+  return {ok: true, generatedAt: formatDateTime_(new Date()), prefixes: prefixes};
 }
 
 /**
