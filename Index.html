@@ -2649,6 +2649,15 @@
     }
 
     /** تُجلب مُرقَّمة عند فتح الصفحة (listApplications) — لا ضمن Bootstrap. */
+    /** شارة صلاحية الترخيص — مقارنة نصية آمنة بصيغة yyyy/MM/dd الموحَّدة في النظام، بلا أي اعتماد على تحليل Date هش. */
+    function licenseBadge(licenseExpiry) {
+      if (!licenseExpiry) return '';
+      var today = new Date();
+      var todayStr = today.getFullYear() + '/' + String(today.getMonth() + 1).padStart(2, '0') + '/' + String(today.getDate()).padStart(2, '0');
+      var expired = licenseExpiry < todayStr;
+      return '<span class="badge ' + (expired ? 'badge-warn' : 'badge-ok') + '">' + (expired ? 'الترخيص منتهٍ' : 'الترخيص ساري') + '</span>';
+    }
+
     function renderApplications() {
       var bundle = state.lazy.applications || {};
       var items = bundle.items || [];
@@ -2660,12 +2669,16 @@
       var filters = optionList(APPLICATION_STATUSES, state.filter, 'كل الحالات');
       var body = items.length ? '<div class="cards">' + items.map(function (a) {
         return '<article class="card"><div class="card-head"><div><h3>' + esc(a.name) + '</h3>'
-          + '<p>' + esc(a.category || '—') + ' · ' + esc(a.city) + '</p></div>' + statusChip(a.status) + '</div>'
+          + '<p>' + esc(a.sector || a.category || '—') + ' · ' + esc(a.region) + ' · ' + esc(a.city) + '</p></div>' + statusChip(a.status) + '</div>'
           + '<div class="metas">'
+          + '<div class="meta"><small>رقم الترخيص</small><strong class="mono">' + esc(a.licenseNumber || '—') + '</strong></div>'
+          + '<div class="meta"><small>انتهاء الترخيص</small><strong>' + esc(a.licenseExpiry || '—') + ' ' + licenseBadge(a.licenseExpiry) + '</strong></div>'
           + '<div class="meta"><small>المسؤول</small><strong>' + esc(a.contactName) + '</strong></div>'
+          + '<div class="meta"><small>نتيجة أسئلة القبول</small><strong>' + esc(a.score || '—') + '</strong></div>'
           + '<div class="meta"><small>التاريخ</small><strong>' + esc(a.submittedAt) + '</strong></div></div>'
           + '<div class="card-actions">'
           + '<button class="btn btn-ghost btn-sm" data-act="view-application" data-id="' + esc(a.id) + '">التفاصيل</button>'
+          + (a.hasLicenseFile ? '<button class="btn btn-ghost btn-sm" data-act="view-license" data-id="' + esc(a.id) + '">عرض الترخيص</button>' : '')
           + (a.status === 'قيد المراجعة'
             ? '<button class="btn btn-primary btn-sm" data-act="accept-application" data-id="' + esc(a.id) + '">قبول</button>'
               + '<button class="btn btn-soft btn-sm" data-act="reject-application" data-id="' + esc(a.id) + '">رفض</button>'
@@ -2674,31 +2687,49 @@
       }).join('') + '</div>'
         : emptyState({glyph: '⌕', title: 'لا نتائج مطابقة', body: 'جرّب تصفية أو كلمة بحث أخرى.'});
 
-      return toolbar({placeholder: 'ابحث باسم الجمعية أو البريد أو الجوال…', filters: filters,
+      return toolbar({placeholder: 'ابحث باسم الجمعية أو البريد أو الجوال أو رقم الترخيص…', filters: filters,
         count: fmt(bundle.total || 0) + ' طلبًا'}) + body + pagerControls('applications', bundle);
     }
 
     function viewApplication(id) {
       var a = findApplication(id);
       if (!a) { toast('تعذر العثور على الطلب.', 'error'); return; }
+      var answers = '<div class="review-answers">' + (a.answers || []).map(function (ans) {
+        return '<span class="tag' + (ans.value === 'لا' ? ' no' : '') + '">' + esc(ans.label) + ': ' + esc(ans.value || '—') + '</span>';
+      }).join('') + '</div>';
       var body = '<div class="card-head"><div><h3>' + esc(a.name) + '</h3>'
         + '<p class="mono">' + esc(a.id) + '</p></div>' + statusChip(a.status) + '</div>'
         + '<div class="metas">'
-        + '<div class="meta"><small>التصنيف</small><strong>' + esc(a.category || '—') + '</strong></div>'
+        + '<div class="meta"><small>مجال العمل</small><strong>' + esc(a.sector || a.category || '—') + '</strong></div>'
         + '<div class="meta"><small>الموقع</small><strong>' + esc(a.region) + ' · ' + esc(a.city) + '</strong></div>'
+        + '<div class="meta"><small>رقم الترخيص</small><strong class="mono">' + esc(a.licenseNumber || '—') + '</strong></div>'
+        + '<div class="meta"><small>انتهاء الترخيص</small><strong>' + esc(a.licenseExpiry || '—') + ' ' + licenseBadge(a.licenseExpiry) + '</strong></div>'
         + '<div class="meta"><small>المسؤول</small><strong>' + esc(a.contactName) + '</strong></div>'
         + '<div class="meta"><small>التواصل</small><strong dir="ltr" class="mono">' + esc(a.phone) + '</strong></div>'
         + '<div class="meta"><small>البريد</small><strong dir="ltr" class="mono">' + esc(a.email) + '</strong></div>'
-        + '<div class="meta"><small>تاريخ التقديم</small><strong>' + esc(a.submittedAt) + '</strong></div></div>'
+        + '<div class="meta"><small>نتيجة أسئلة القبول</small><strong>' + esc(a.score || '—') + '</strong></div>'
+        + '<div class="meta"><small>تاريخ التقديم</small><strong>' + esc(a.submittedAt) + '</strong></div>'
+        + '<div class="meta"><small>الإقرار</small><strong>' + (a.pledgeAccepted ? 'تمّت الموافقة — ' + esc(a.pledgedAt) : 'غير موافَق عليه') + '</strong></div></div>'
+        + '<h4 style="margin:18px 0 8px;color:var(--zad-800)">إجابات أسئلة القبول</h4>' + answers
         + (a.notes ? '<h4 style="margin:18px 0 8px;color:var(--zad-800)">ملاحظات مقدّم الطلب</h4><p>' + esc(a.notes) + '</p>' : '')
         + (a.status === 'مرفوض' ? '<h4 style="margin:18px 0 8px;color:var(--zad-800)">سبب الرفض</h4><p>' + esc(a.rejectionReason) + '</p>' : '')
         + (a.status === 'مقبول' ? '<p class="hint">تم إنشاء الجمعية برقم ' + esc(a.resultingAssociationId) + '</p>' : '');
-      var footer = a.status === 'قيد المراجعة'
-        ? '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>'
-          + '<button class="btn btn-soft" data-act="reject-application" data-id="' + esc(a.id) + '">رفض</button>'
-          + '<button class="btn btn-primary" data-act="accept-application" data-id="' + esc(a.id) + '">قبول وإنشاء الجمعية</button>'
-        : '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>';
+      var footer = (a.hasLicenseFile ? '<button class="btn btn-ghost" data-act="view-license" data-id="' + esc(a.id) + '">عرض صورة الترخيص</button>' : '')
+        + (a.status === 'قيد المراجعة'
+          ? '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>'
+            + '<button class="btn btn-soft" data-act="reject-application" data-id="' + esc(a.id) + '">رفض</button>'
+            + '<button class="btn btn-primary" data-act="accept-application" data-id="' + esc(a.id) + '">قبول وإنشاء الجمعية</button>'
+          : '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>');
       openModal('طلب انضمام جمعية', body, footer);
+    }
+
+    /** يجلب صورة الترخيص فقط عند الضغط الصريح (لا تحميل تلقائي) — كل عرض يُسجَّل في سجل العمليات على الخادم. */
+    function viewLicenseFile(id) {
+      busy(true);
+      api('getApplicationLicenseFile', state.token, id).then(function (result) {
+        openModal('صورة الترخيص', '<img src="' + esc(result.dataUrl) + '" alt="صورة الترخيص المرفقة" style="max-width:100%;border-radius:var(--r-md);display:block;margin:0 auto">',
+          '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>');
+      }, reportError).finally(function () { busy(false); });
     }
 
     function rejectApplicationModal(id) {
@@ -4309,6 +4340,7 @@
       'apply-next': applyStepNext,
       'apply-prev': applyStepPrev,
       'view-application': function (el) { viewApplication(el.getAttribute('data-id')); },
+      'view-license': function (el) { viewLicenseFile(el.getAttribute('data-id')); },
       'accept-application': function (el) { decideApplication(el.getAttribute('data-id'), 'accept'); },
       'reject-application': function (el) { rejectApplicationModal(el.getAttribute('data-id')); },
       'save-reject-application': function (el) { decideApplication(el.getAttribute('data-id'), 'reject'); },
