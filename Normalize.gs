@@ -7,6 +7,7 @@ function normalizeBeneficiary_(row) {
     name: String(row['الاسم'] || ''),
     region: String(row['المنطقة'] || ''),
     city: String(row['المدينة'] || ''),
+    district: String(row['الحي'] || ''),
     address: String(row['العنوان'] || ''),
     phone: displayPhone_(row['رقم الجوال']),
     phone2: displayPhone_(row['رقم جوال إضافي']),
@@ -26,7 +27,11 @@ function normalizeBeneficiary_(row) {
     lng: row['خط الطول'] !== undefined && row['خط الطول'] !== '' ? safeNumber_(row['خط الطول']) : null,
     landmark: String(row['علامة مميزة'] || ''),
     locationSource: String(row['مصدر الموقع'] || ''),
-    locationUpdatedAt: formatDateTime_(parseDate_(row['تاريخ تحديث الموقع']))
+    locationUpdatedAt: formatDateTime_(parseDate_(row['تاريخ تحديث الموقع'])),
+    // مشتقة من وجود الإحداثيات فعليًا (beneficiaryLocationConfirmed_)، لا
+    // عمود منفصل ولا اختيار يدوي — الواجهة تعرضها كشارة حالة فقط، والخادم
+    // هو من يفرضها فعليًا عند الإحالة (انظر assignDelegate في Beneficiaries.gs).
+    locationConfirmed: beneficiaryLocationConfirmed_(row)
   };
 }
 

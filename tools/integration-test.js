@@ -151,7 +151,7 @@ const ALL_HEADERS = {
   'إعدادات المشروع': ['المفتاح', 'القيمة', 'الوصف'],
   'المستخدمون': ['رقم المستخدم', 'الاسم', 'البريد الإلكتروني', 'كلمة المرور المشفرة', 'الملح', 'الدور', 'رقم الجمعية', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول', 'يجب تغيير كلمة المرور', 'كلمة مرور سابقة مشفرة', 'ملح سابق'],
   'الجمعيات': ['رقم الجمعية', 'اسم الجمعية', 'التصنيف', 'المنطقة', 'المدينة', 'أرقام التواصل', 'البريد الإلكتروني', 'الحالة', 'تاريخ الإنشاء'],
-  'المستفيدون': ['رقم المستفيد', 'رقم الجمعية', 'الاسم', 'المنطقة', 'المدينة', 'العنوان', 'رقم الجوال', 'رقم جوال إضافي', 'عدد الأفراد', 'ضمان اجتماعي', 'الحالة الاجتماعية', 'مبلغ الدخل', 'الاحتياج', 'حالة المستفيد', 'حالة التسليم', 'رقم المندوب', 'الملاحظات', 'تاريخ الإنشاء', 'تاريخ التسليم', 'آخر تحديث', 'خط العرض', 'خط الطول', 'علامة مميزة', 'مصدر الموقع', 'تاريخ تحديث الموقع'],
+  'المستفيدون': ['رقم المستفيد', 'رقم الجمعية', 'الاسم', 'المنطقة', 'المدينة', 'العنوان', 'رقم الجوال', 'رقم جوال إضافي', 'عدد الأفراد', 'ضمان اجتماعي', 'الحالة الاجتماعية', 'مبلغ الدخل', 'الاحتياج', 'حالة المستفيد', 'حالة التسليم', 'رقم المندوب', 'الملاحظات', 'تاريخ الإنشاء', 'تاريخ التسليم', 'آخر تحديث', 'خط العرض', 'خط الطول', 'علامة مميزة', 'مصدر الموقع', 'تاريخ تحديث الموقع', 'الحي'],
   'الأجهزة': ['رقم الجهاز', 'اسم الجهاز', 'النوع', 'رقم الجمعية', 'رقم المستفيد', 'حالة الجهاز', 'تاريخ الإضافة', 'تاريخ التسليم', 'ملاحظات'],
   'المناديب': ['رقم المندوب', 'رقم الجمعية', 'اسم المندوب', 'رقم الجوال', 'رمز الدخول المشفر', 'الملح', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول'],
   'التسليمات': ['رقم التسليم', 'رقم المستفيد', 'رقم المندوب', 'أرقام الأجهزة', 'الحالة', 'سبب التعذر', 'الملاحظات', 'رابط الإثبات', 'تاريخ ووقت التسليم', 'تاريخ الإنشاء'],
@@ -220,7 +220,7 @@ assert('إضافة المندوب تنجح وتُصدر رمز دخول', delega
 
 section('5) إضافة مستفيد فرديًا');
 const beneficiary = S.saveBeneficiary(assocToken, {
-  name: 'مستفيد الرحلة الكاملة', region: 'الرياض', city: 'الرياض', address: 'حي الملقا',
+  name: 'مستفيد الرحلة الكاملة', region: 'الرياض', city: 'الرياض', address: 'حي الملقا', district: 'الملقا',
   phone: '0501110003', familyCount: 3, socialStatus: 'أرملة', needs: ['ثلاجة'],
   landmark: 'بجانب المسجد', lat: '24.75', lng: '46.65', locationSource: 'خريطة'
 });
@@ -229,12 +229,12 @@ assert('إضافة المستفيد الفردي تنجح مع بيانات ال
 
 section('6) استيراد مستفيدين بالجملة');
 const importResult = S.importBeneficiaries(assocToken, [
-  { name: 'مستفيد مستورَد أول', region: 'الرياض', city: 'الرياض', address: 'حي الروضة', phone: '0501110004', familyCount: 2, socialStatus: 'يتيم', needs: ['غسالة'] },
-  { name: 'مستفيد مستورَد ثانٍ', region: 'الرياض', city: 'الرياض', address: 'حي النخيل', phone: '0501110005', familyCount: 1, socialStatus: 'أخرى', needs: [] }
+  { name: 'مستفيد مستورَد أول', region: 'الرياض', city: 'الرياض', address: 'حي الروضة', district: 'الروضة', phone: '0501110004', familyCount: 2, socialStatus: 'يتيم', needs: ['غسالة'] },
+  { name: 'مستفيد مستورَد ثانٍ', region: 'الرياض', city: 'الرياض', address: 'حي النخيل', district: 'النخيل', phone: '0501110005', familyCount: 1, socialStatus: 'أخرى', needs: [] }
 ], true);
 assert('الاستيراد الجماعي ينجح لصفَّين صحيحين', importResult.ok && importResult.imported === 2);
 throws('الاستيراد الجماعي بلا تعهّد صريح يُرفض', () => S.importBeneficiaries(assocToken, [
-  { name: 'صف بلا تعهّد', region: 'الرياض', city: 'الرياض', address: 'حي', phone: '0501110006', familyCount: 1, socialStatus: 'أخرى', needs: [] }
+  { name: 'صف بلا تعهّد', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار', phone: '0501110006', familyCount: 1, socialStatus: 'أخرى', needs: [] }
 ], false), 'التعهد');
 
 section('7) تخصيص جهاز للمستفيد');
@@ -320,7 +320,7 @@ const otherToken = S.loginUser_('isolated@example.org', 'OtherPass789').token;
 
 assert('الجمعية الأخرى لا ترى مستفيد الرحلة الأولى في قائمتها', !S.listBeneficiaries(otherToken, {}).items.some(b => b.id === beneficiary.id));
 throws('الجمعية الأخرى لا تستطيع تعديل مستفيد الجمعية الأولى مباشرة عبر API',
-  () => S.saveBeneficiary(otherToken, { id: beneficiary.id, name: 'تعديل متطفل', region: 'الرياض', city: 'الرياض', address: 'حي', phone: '0501110003', familyCount: 1, socialStatus: 'أرملة', needs: [] }),
+  () => S.saveBeneficiary(otherToken, { id: beneficiary.id, name: 'تعديل متطفل', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار', phone: '0501110003', familyCount: 1, socialStatus: 'أرملة', needs: [] }),
   'ليس لديك صلاحية');
 throws('الجمعية الأخرى لا تستطيع تعيين مندوبها لمستفيد الجمعية الأولى',
   () => S.assignDelegate(otherToken, beneficiary.id, delegateResult.id), 'ليس لديك صلاحية');
@@ -407,7 +407,7 @@ const PROOF_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC
   const assocLogin = J.loginUser_('j2@example.org', 'ZadJourneyNew2026');
   const t = assocLogin.token;
   const ben = J.saveBeneficiary(t, {name: 'مستفيد الرحلة 2', phone: '0552220002', region: 'الرياض',
-    city: 'الرياض', address: 'حي', familyCount: 3, socialStatus: 'أرملة', needs: ['ثلاجة']});
+    city: 'الرياض', address: 'حي', district: 'حي الاختبار', familyCount: 3, socialStatus: 'أرملة', needs: ['ثلاجة']});
   assert('رحلة 2: الجمعية تضيف مستفيدًا وتراه فورًا في قائمتها المُرقَّمة', (() => {
     const listed = J.listBeneficiaries(t, {}).items;
     return listed.some(x => x.id === ben.id);
@@ -415,15 +415,15 @@ const PROOF_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC
   const del = J.saveDelegate(t, {name: 'مندوب الرحلة 2', phone: '0552220003'});
   assert('رحلة 2: الجمعية تضيف مندوبًا وتحصل على رمز دخوله مرة واحدة', del.ok && !!del.accessCode);
   const imported = J.importBeneficiaries(t, [
-    {name: 'مستورد أ', phone: '0552220004', region: 'الرياض', city: 'الخرج', address: 'حي', familyCount: 2, socialStatus: 'أرملة'},
-    {name: 'مستورد ب', phone: '0552220005', region: 'الرياض', city: 'الخرج', address: 'حي', familyCount: 5, socialStatus: 'يتيم'}
+    {name: 'مستورد أ', phone: '0552220004', region: 'الرياض', city: 'الخرج', address: 'حي', district: 'حي الاختبار', familyCount: 2, socialStatus: 'أرملة'},
+    {name: 'مستورد ب', phone: '0552220005', region: 'الرياض', city: 'الخرج', address: 'حي', district: 'حي الاختبار', familyCount: 5, socialStatus: 'يتيم'}
   ], true);
   assert('رحلة 2: الاستيراد الجماعي يضيف الصفوف الصحيحة', imported.ok === true && imported.imported === 2);
   assert('رحلة 2: القائمة تعكس الإجمالي الصحيح بعد الاستيراد', J.listBeneficiaries(t, {}).total === 3);
   assert('رحلة 2: مدينة خارج المنطقة تُرفض بالقائمة المعتمدة ولا يُكتب أي صف', (() => {
     const totalBefore = J.listBeneficiaries(t, {}).total;
     const bad = J.importBeneficiaries(t, [
-      {name: 'مستورد خاطئ', phone: '0552220006', region: 'الرياض', city: 'جدة', address: 'حي', familyCount: 2, socialStatus: 'أرملة'}
+      {name: 'مستورد خاطئ', phone: '0552220006', region: 'الرياض', city: 'جدة', address: 'حي', district: 'حي الاختبار', familyCount: 2, socialStatus: 'أرملة'}
     ], true);
     return bad.ok === false && bad.errorCount === 1 && J.listBeneficiaries(t, {}).total === totalBefore;
   })());
@@ -436,7 +436,7 @@ const PROOF_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC
   const assoc = J.saveAssociation(boot.token, {name: 'جمعية الرحلة الثالثة', category: 'جمعية خيرية',
     region: 'الرياض', city: 'الرياض', phone: '0553330001', email: 'j3@example.org', password: 'ZadJourney2026x'});
   const ben = J.saveBeneficiary(boot.token, {name: 'مستفيد الرحلة 3', phone: '0553330002', region: 'الرياض',
-    city: 'الرياض', address: 'حي', familyCount: 3, socialStatus: 'أرملة', needs: ['ثلاجة'], associationId: assoc.id});
+    city: 'الرياض', address: 'حي', district: 'حي الاختبار', familyCount: 3, socialStatus: 'أرملة', needs: ['ثلاجة'], associationId: assoc.id});
   const dev = J.saveDevice(boot.token, {name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id});
   assert('رحلة 3: الجهاز الجديد يبدأ "بالمستودع"', dev.record.status === 'بالمستودع');
   const assigned = J.saveDevice(boot.token, {id: dev.id, name: 'ثلاجة', type: 'ثلاجة',
@@ -456,7 +456,8 @@ const PROOF_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC
   const assoc = J.saveAssociation(boot.token, {name: 'جمعية الرحلة الرابعة', category: 'جمعية خيرية',
     region: 'الرياض', city: 'الرياض', phone: '0554440001', email: 'j4@example.org', password: 'ZadJourney2026x'});
   const ben = J.saveBeneficiary(boot.token, {name: 'مستفيد الرحلة 4', phone: '0554440002', region: 'الرياض',
-    city: 'الرياض', address: 'حي', familyCount: 3, socialStatus: 'أرملة', needs: ['ثلاجة'], associationId: assoc.id});
+    city: 'الرياض', address: 'حي', district: 'حي الاختبار', familyCount: 3, socialStatus: 'أرملة', needs: ['ثلاجة'], associationId: assoc.id,
+    lat: '24.7', lng: '46.6'});
   const del = J.saveDelegate(boot.token, {name: 'مندوب الرحلة 4', phone: '0554440003', associationId: assoc.id});
   J.saveDevice(boot.token, {name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: ben.id});
   J.assignDelegate(boot.token, ben.id, del.id);

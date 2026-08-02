@@ -150,7 +150,7 @@ const ALL_HEADERS = {
   'إعدادات المشروع': ['المفتاح', 'القيمة', 'الوصف'],
   'المستخدمون': ['رقم المستخدم', 'الاسم', 'البريد الإلكتروني', 'كلمة المرور المشفرة', 'الملح', 'الدور', 'رقم الجمعية', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول'],
   'الجمعيات': ['رقم الجمعية', 'اسم الجمعية', 'التصنيف', 'المنطقة', 'المدينة', 'أرقام التواصل', 'البريد الإلكتروني', 'الحالة', 'تاريخ الإنشاء'],
-  'المستفيدون': ['رقم المستفيد', 'رقم الجمعية', 'الاسم', 'المنطقة', 'المدينة', 'العنوان', 'رقم الجوال', 'رقم جوال إضافي', 'عدد الأفراد', 'ضمان اجتماعي', 'الحالة الاجتماعية', 'مبلغ الدخل', 'الاحتياج', 'حالة المستفيد', 'حالة التسليم', 'رقم المندوب', 'الملاحظات', 'تاريخ الإنشاء', 'تاريخ التسليم', 'آخر تحديث', 'خط العرض', 'خط الطول', 'علامة مميزة', 'مصدر الموقع', 'تاريخ تحديث الموقع'],
+  'المستفيدون': ['رقم المستفيد', 'رقم الجمعية', 'الاسم', 'المنطقة', 'المدينة', 'العنوان', 'رقم الجوال', 'رقم جوال إضافي', 'عدد الأفراد', 'ضمان اجتماعي', 'الحالة الاجتماعية', 'مبلغ الدخل', 'الاحتياج', 'حالة المستفيد', 'حالة التسليم', 'رقم المندوب', 'الملاحظات', 'تاريخ الإنشاء', 'تاريخ التسليم', 'آخر تحديث', 'خط العرض', 'خط الطول', 'علامة مميزة', 'مصدر الموقع', 'تاريخ تحديث الموقع', 'الحي'],
   'الأجهزة': ['رقم الجهاز', 'اسم الجهاز', 'النوع', 'رقم الجمعية', 'رقم المستفيد', 'حالة الجهاز', 'تاريخ الإضافة', 'تاريخ التسليم', 'ملاحظات'],
   'المناديب': ['رقم المندوب', 'رقم الجمعية', 'اسم المندوب', 'رقم الجوال', 'رمز الدخول المشفر', 'الملح', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول'],
   'التسليمات': ['رقم التسليم', 'رقم المستفيد', 'رقم المندوب', 'أرقام الأجهزة', 'الحالة', 'سبب التعذر', 'الملاحظات', 'رابط الإثبات', 'تاريخ ووقت التسليم', 'تاريخ الإنشاء'],
@@ -455,7 +455,7 @@ section('6) تقديم الجمعية + حفظ المستفيد + الاستير
 
   assert('saveBeneficiary ينجح بحالة اجتماعية معتمدة', (() => {
     const b = S.saveBeneficiary(assocSession.token, {
-      name: 'مستفيد مرجعي', region: 'الرياض', city: 'الخرج', address: 'حي',
+      name: 'مستفيد مرجعي', region: 'الرياض', city: 'الخرج', address: 'حي', district: 'حي الاختبار',
       phone: '0500000051', familyCount: 2, socialStatus: 'يتيم', needs: ['ثلاجة']
     });
     return b.ok && b.record.socialStatus === 'يتيم';
@@ -463,13 +463,13 @@ section('6) تقديم الجمعية + حفظ المستفيد + الاستير
 
   throws('saveBeneficiary يرفض حالة اجتماعية غير معروفة بعد الترحيل',
     () => S.saveBeneficiary(assocSession.token, {
-      name: 'مستفيد آخر', region: 'الرياض', city: 'الخرج', address: 'حي',
+      name: 'مستفيد آخر', region: 'الرياض', city: 'الخرج', address: 'حي', district: 'حي الاختبار',
       phone: '0500000052', familyCount: 1, socialStatus: 'حالة مخترعة', needs: []
     }), 'غير معروفة');
 
   assert('importBeneficiaries يستورد صفًا بحالة اجتماعية معتمدة بنجاح', (() => {
     const result = S.importBeneficiaries(assocSession.token, [{
-      name: 'مستورد مرجعي', region: 'الرياض', city: 'الخرج', address: 'حي',
+      name: 'مستورد مرجعي', region: 'الرياض', city: 'الخرج', address: 'حي', district: 'حي الاختبار',
       phone: '0500000053', familyCount: 3, socialStatus: 'متزوج/متزوجة', needs: []
     }], true);
     return result.ok && result.imported === 1;
@@ -477,8 +477,8 @@ section('6) تقديم الجمعية + حفظ المستفيد + الاستير
 
   assert('importBeneficiaries يرفض صفًا بحالة اجتماعية غير معروفة كخطأ سطر واضح (لا يفشل الاستيراد كله بلا توضيح)', (() => {
     const result = S.importBeneficiaries(assocSession.token, [
-      { name: 'صف سليم', region: 'الرياض', city: 'الخرج', address: 'حي', phone: '0500000054', familyCount: 1, socialStatus: 'أخرى', needs: [] },
-      { name: 'صف فاسد', region: 'الرياض', city: 'الخرج', address: 'حي', phone: '0500000055', familyCount: 1, socialStatus: 'حالة غير موجودة', needs: [] }
+      { name: 'صف سليم', region: 'الرياض', city: 'الخرج', address: 'حي', district: 'حي الاختبار', phone: '0500000054', familyCount: 1, socialStatus: 'أخرى', needs: [] },
+      { name: 'صف فاسد', region: 'الرياض', city: 'الخرج', address: 'حي', district: 'حي الاختبار', phone: '0500000055', familyCount: 1, socialStatus: 'حالة غير موجودة', needs: [] }
     ], true);
     return result.ok === false && result.errorCount === 1 && result.validCount === 1
       && result.errors[0].message.includes('غير معروفة');
@@ -511,7 +511,7 @@ section('7) حفظ الصفر الأول في رقم الجوال');
 
   const assocSession = S.createSession_({ id: 'USR-ASSOC-PH', name: 'جمعية الهاتف', role: 'ASSOCIATION', associationId: assoc.id });
   const beneficiary = S.saveBeneficiary(assocSession.token, {
-    name: 'مستفيد الهاتف', region: 'الرياض', city: 'الرياض', address: 'حي',
+    name: 'مستفيد الهاتف', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
     phone: '0501234567', phone2: '0559876543', familyCount: 1, socialStatus: 'أرملة', needs: []
   });
   assert('رقم الجوال الأساسي محفوظ بصفره الأول في السجل الخام على الشيت',
@@ -582,7 +582,7 @@ section('9) عزل صلاحيات الجمعيات (بلا تراجع بعد إ�
   });
   const sessionA = S.createSession_({ id: 'USR-A', name: 'جمعية أ', role: 'ASSOCIATION', associationId: assocA.id });
   const beneficiaryA = S.saveBeneficiary(sessionA.token, {
-    name: 'مستفيد أ', region: 'الرياض', city: 'الرياض', address: 'حي',
+    name: 'مستفيد أ', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
     phone: '0500000062', familyCount: 1, socialStatus: 'أرملة', needs: []
   });
 
@@ -595,7 +595,7 @@ section('9) عزل صلاحيات الجمعيات (بلا تراجع بعد إ�
   throws('جمعية ب لا تستطيع تعديل مستفيد جمعية أ (محاولة تمرير id مباشرة)', () => {
     const sessionB = S.createSession_({ id: 'USR-B2', name: 'جمعية ب', role: 'ASSOCIATION', associationId: assocB.id });
     S.saveBeneficiary(sessionB.token, {
-      id: beneficiaryA.id, name: 'تعديل متطفل', region: 'الرياض', city: 'الرياض', address: 'حي',
+      id: beneficiaryA.id, name: 'تعديل متطفل', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
       phone: '0500000063', familyCount: 1, socialStatus: 'أرملة', needs: []
     });
   }, 'ليس لديك صلاحية');

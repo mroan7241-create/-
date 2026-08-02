@@ -29,7 +29,23 @@ function listBeneficiaries_(user, options) {
   }
   let items = rows.map(normalizeBeneficiary_);
   items = applySearch_(items, options.search, ['name', 'id', 'phone', 'region', 'city']);
-  if (options.filter) items = items.filter(item => item.status === options.filter || item.deliveryStatus === options.filter);
+  // فلترتان اصطناعيتان لا تقابلان قيمة عمود مخزَّنة فعليًا (بل حالة
+  // مشتقة)، تُستخدمان من مؤشرات لوحة الإدارة/الجمعية القابلة للنقر:
+  // - "بانتظار تحديد الموقع": بلا إحداثيات مؤكَّدة بعد (انظر locationConfirmed).
+  // - "جاهز للإحالة": الموقع مؤكَّد + توجد أجهزة "مخصص" له + لم يُخرَج بعد —
+  //   أي كل ما يلزم لتعيين مندوب متوفر الآن فعلًا.
+  if (options.filter === 'بانتظار تحديد الموقع') {
+    items = items.filter(item => !item.locationConfirmed);
+  } else if (options.filter === 'جاهز للإحالة') {
+    const allocatedBeneficiaryIds = new Set(
+      readTable_(APP.sheets.devices).rows
+        .filter(device => String(device['حالة الجهاز']) === 'مخصص')
+        .map(device => String(device['رقم المستفيد']))
+    );
+    items = items.filter(item => item.locationConfirmed && item.deliveryStatus === 'لم يبدأ' && allocatedBeneficiaryIds.has(item.id));
+  } else if (options.filter) {
+    items = items.filter(item => item.status === options.filter || item.deliveryStatus === options.filter);
+  }
   items = applySort_(items, options.sortBy, options.sortDir);
   return Object.assign({ok: true}, paginate_(items, options));
 }
@@ -120,7 +136,8 @@ function saveBeneficiary(token, payload) {
     'الاسم': requiredText_(payload.name, 'اسم المستفيد', 120),
     'المنطقة': place.region,
     'المدينة': place.city,
-    'العنوان': requiredText_(payload.address, 'العنوان', 250),
+    'الحي': requiredText_(payload.district, 'الحي', 120),
+    'العنوان': requiredText_(payload.address, 'العنوان الوصفي (الشارع وأقرب معلم)', 250),
     'رقم الجوال': phone,
     'رقم جوال إضافي': payload.phone2 ? normalizePhone_(payload.phone2) : '',
     'عدد الأفراد': boundedNumber_(payload.familyCount, 1, 99, 'عدد الأفراد'),
@@ -211,6 +228,7 @@ function importBeneficiaries(token, rows, acceptedPledge) {
         'الاسم': requiredText_(row.name, 'الاسم', 120),
         'المنطقة': place.region,
         'المدينة': place.city,
+        'الحي': requiredText_(row.district, 'الحي', 120),
         'العنوان': requiredText_(row.address, 'العنوان', 250),
         'رقم الجوال': phone,
         'رقم جوال إضافي': row.phone2 ? normalizePhone_(row.phone2) : '',
@@ -296,7 +314,11 @@ function inspectBeneficiaryExcel(token, payload) {
     // "خط العرض" و"خط الطول" عمودان اختياريان بالكامل — ملفات قديمة لا
     // تحتويهما تبقى مقبولة تمامًا كما كانت دائمًا؛ لذا هما خارج قائمة
     // "expected" الإلزامية، ويُتعامل معهما فقط إن وُجدا في صف العناوين.
-    const expected = ['الاسم', 'المنطقة', 'المدينة', 'العنوان', 'الجوال', 'عدد الأفراد', 'الضمان الاجتماعي', 'الحالة الاجتماعية', 'الدخل', 'الاحتياج', 'الملاحظات'];
+    // "الحي" إلزامي هنا أيضًا (schemaVersion 4) — نفس قاعدة saveBeneficiary
+    // بالضبط: "الحي وحده الحد الأدنى لحفظ الطلب"، ولا يُستثنى الاستيراد
+    // الجماعي من هذا الشرط، فملف Excel بلا هذا العمود يُرفض من الفحص
+    // الأولي بوضوح بدل أن يُنتج سجلات ناقصة بصمت.
+    const expected = ['الاسم', 'المنطقة', 'المدينة', 'الحي', 'العنوان', 'الجوال', 'عدد الأفراد', 'الضمان الاجتماعي', 'الحالة الاجتماعية', 'الدخل', 'الاحتياج', 'الملاحظات'];
     const headers = values[0].map(value => String(value).trim());
     const missing = expected.filter(header => headers.indexOf(header) < 0);
     if (missing.length) throw new Error('أعمدة مفقودة: ' + missing.join('، '));
@@ -304,7 +326,7 @@ function inspectBeneficiaryExcel(token, payload) {
     // بعض تطبيقات GPS/الخرائط) — عمودان اختياريان بالكامل في الحالتين.
     // "العلامة المميزة" اختيارية أيضًا (وصف موقع حر، كـ"بجانب المسجد").
     const keyMap = {
-      'الاسم': 'name', 'المنطقة': 'region', 'المدينة': 'city', 'العنوان': 'address',
+      'الاسم': 'name', 'المنطقة': 'region', 'المدينة': 'city', 'الحي': 'district', 'العنوان': 'address',
       'الجوال': 'phone', 'عدد الأفراد': 'familyCount', 'الضمان الاجتماعي': 'socialSecurity',
       'الحالة الاجتماعية': 'socialStatus', 'الدخل': 'income', 'الاحتياج': 'needs', 'الملاحظات': 'notes',
       'خط العرض': 'lat', 'خط الطول': 'lng', 'Latitude': 'lat', 'Longitude': 'lng', 'Lat': 'lat', 'Lng': 'lng',
@@ -327,6 +349,7 @@ function inspectBeneficiaryExcel(token, payload) {
       try {
         requiredText_(row.name, 'الاسم', 120);
         validateRegionCity_(row.region, row.city);
+        requiredText_(row.district, 'الحي', 120);
         requiredText_(row.address, 'العنوان', 250);
         const phone = normalizePhone_(row.phone);
         boundedNumber_(row.familyCount, 1, 99, 'عدد الأفراد');
@@ -377,6 +400,11 @@ function assignDelegate(token, beneficiaryId, delegateId) {
   if (!beneficiary || !delegate || String(delegate['الحالة']) !== 'نشط') throw new Error('المستفيد أو المندوب غير صالح');
   if (String(beneficiary['رقم الجمعية']) !== String(delegate['رقم الجمعية'])) throw new Error('يجب أن يتبع المندوب والمستفيد الجمعية نفسها');
   if (user.role === 'ASSOCIATION' && String(beneficiary['رقم الجمعية']) !== user.associationId) throw new Error('ليس لديك صلاحية');
+  // لا إحالة قبل تأكيد موقع المستفيد على الخريطة — "الحي" وحده حد أدنى
+  // لحفظ الطلب فقط، لا يكفي لإخراج المهمة لمندوب ميداني فعليًا.
+  if (!beneficiaryLocationConfirmed_(beneficiary)) {
+    throw new Error('لا يمكن إحالة هذا المستفيد قبل تأكيد موقعه على الخريطة — استكمل الموقع أولًا');
+  }
 
   // يجب أن يتحقق كل شيء قبل أي كتابة: لا كتابة جزئية عند رفض العملية.
   const currentDeliveryStatus = String(beneficiary['حالة التسليم'] || 'لم يبدأ');
@@ -396,6 +424,9 @@ function assignDelegate(token, beneficiaryId, delegateId) {
     invalidateTableCache_(APP.sheets.devices);
     const latestBeneficiary = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId);
     if (!latestBeneficiary) throw new Error('المستفيد غير موجود');
+    if (!beneficiaryLocationConfirmed_(latestBeneficiary)) {
+      throw new Error('لا يمكن إحالة هذا المستفيد قبل تأكيد موقعه على الخريطة — استكمل الموقع أولًا');
+    }
     assertDeliveryTransition_(String(latestBeneficiary['حالة التسليم'] || 'لم يبدأ'), 'خرج مع المندوب');
     const latestDevices = devicesForBeneficiary_(beneficiaryId).filter(d => ['مخصص', 'مع المندوب'].indexOf(d.status) >= 0);
     if (!latestDevices.length) throw new Error('لا توجد أجهزة مخصَّصة لهذا المستفيد بعد؛ خصِّص جهازًا أولًا قبل تعيين مندوب');
@@ -425,6 +456,71 @@ function assignDelegate(token, beneficiaryId, delegateId) {
   const updatedDevices = devicesForBeneficiary_(beneficiaryId);
   const summary = computeCoreSummary_(user.role === 'ASSOCIATION' ? user.associationId : null);
   return {ok: true, record: record, devices: updatedDevices, summary: summary};
+  });
+}
+
+/**
+ * يمنع تعديل موقع مستفيد عبر updateBeneficiaryLocation خارج نطاق الصلاحية:
+ * - ASSOCIATION: مستفيدو جمعيته فقط.
+ * - DELEGATE: المستفيدون المُسندون إليه هو تحديدًا فقط، ولا شيء غير ذلك —
+ *   لا يستطيع لمس موقع مستفيد لدى مندوب آخر حتى لو كان في جمعيته نفسها.
+ * - سجل تم تسليمه بالفعل: حالة نهائية محمية من أي تعديل موقع لاحق.
+ */
+function assertLocationUpdatePermission_(user, beneficiary) {
+  if (user.role === 'ASSOCIATION' && String(beneficiary['رقم الجمعية']) !== user.associationId) {
+    throw new Error('ليس لديك صلاحية لتعديل موقع هذا المستفيد');
+  }
+  if (user.role === 'DELEGATE' && String(beneficiary['رقم المندوب']) !== user.id) {
+    throw new Error('ليس لديك صلاحية — هذا المستفيد ليس ضمن مهامك الحالية');
+  }
+  if (String(beneficiary['حالة التسليم']) === 'تم التسليم') {
+    throw new Error('لا يمكن تعديل موقع مستفيد تم تسليمه بالفعل');
+  }
+}
+
+/**
+ * استكمال موقع مستفيد بعد حفظه بلا إحداثيات (أو تصحيحه لاحقًا) — مسار
+ * كتابة ضيّق مخصَّص لحقول الموقع فقط (لا يلمس الاسم/الجوال/الاحتياج ولا
+ * أي حقل آخر مهما أُرسل في payload). يفتح هذا المسار للمندوب أيضًا
+ * (خلافًا لـ saveBeneficiary المقصور على ADMIN/ASSOCIATION) لكن بنطاق
+ * محدود جدًا يفرضه assertLocationUpdatePermission_، ويُسجَّل في سجل
+ * العمليات دائمًا (بند ٧/٨ من متطلبات إعادة ضبط منطق الموقع).
+ */
+function updateBeneficiaryLocation(token, beneficiaryId, payload) {
+  return perfTime_('updateBeneficiaryLocation', () => {
+    const user = requireSession_(token, ['ADMIN', 'ASSOCIATION', 'DELEGATE']);
+    beneficiaryId = cleanId_(beneficiaryId);
+    payload = payload || {};
+    const beneficiary = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId);
+    if (!beneficiary) throw new Error('المستفيد غير موجود');
+    assertLocationUpdatePermission_(user, beneficiary);
+    const coordinates = optionalCoordinate_(payload.lat, payload.lng);
+    if (coordinates.lat === '') throw new Error('أدخل إحداثيات صحيحة لتأكيد الموقع');
+    const lock = LockService.getScriptLock();
+    lock.waitLock(15000);
+    let latest;
+    try {
+      // إعادة القراءة والتحقق تحت القفل: قد يتغيّر إسناد المندوب أو تُقفَل
+      // حالة التسليم أثناء الانتظار على القفل نفسه.
+      invalidateTableCache_(APP.sheets.beneficiaries);
+      latest = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId);
+      if (!latest) throw new Error('المستفيد غير موجود');
+      assertLocationUpdatePermission_(user, latest);
+      updateById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId, {
+        'خط العرض': coordinates.lat,
+        'خط الطول': coordinates.lng,
+        'علامة مميزة': payload.landmark !== undefined ? cleanText_(payload.landmark, 200) : String(latest['علامة مميزة'] || ''),
+        'مصدر الموقع': validateLocationSource_(payload.locationSource, true),
+        'تاريخ تحديث الموقع': now_(),
+        'آخر تحديث': now_()
+      });
+    } finally {
+      lock.releaseLock();
+    }
+    audit_(user, 'استكمال موقع مستفيد', 'المستفيدون', beneficiaryId, user.role === 'DELEGATE' ? 'بواسطة المندوب: ' + user.id : '');
+    clearDashboardCache();
+    const record = normalizeBeneficiary_(findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId));
+    return {ok: true, record: record};
   });
 }
 

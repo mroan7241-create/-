@@ -183,6 +183,23 @@ function validateLocationSource_(value, hasCoordinates) {
   return LOCATION_SOURCES.indexOf(cleaned) >= 0 ? cleaned : 'يدوي';
 }
 
+/**
+ * حالة "تأكيد الموقع" المشتقة — لا تُخزَّن كعمود منفصل ولا تُختار من
+ * قائمة يدوية، بل تُستنتج مباشرة من وجود إحداثيات صالحة على السجل
+ * (كلا العمودين "خط العرض"/"خط الطول" معًا، بفضل optionalCoordinate_
+ * التي تضمن أن يوجدا معًا أو يغيبا معًا). تُستخدم خادميًا لمنع الإحالة
+ * إلى مندوب أو الإخراج للتسليم قبل تأكيد الموقع (سجل توزيع الأجهزة لا
+ * يقبل ذلك)، وتُستخدم أيضًا لبناء مؤشر "بانتظار تحديد الموقع" في الواجهة
+ * ولوحة الإدارة دون أي عمود أو قراءة إضافية.
+ */
+function beneficiaryLocationConfirmed_(row) {
+  const lat = row['خط العرض'];
+  const lng = row['خط الطول'];
+  const latEmpty = lat === '' || lat === null || lat === undefined;
+  const lngEmpty = lng === '' || lng === null || lng === undefined;
+  return !latEmpty && !lngEmpty;
+}
+
 function normalizeNeeds_(needs) {
   const list = Array.isArray(needs) ? needs : splitList_(needs);
   return list.map(item => cleanText_(item, 80)).filter(Boolean).slice(0, 20).join('، ');

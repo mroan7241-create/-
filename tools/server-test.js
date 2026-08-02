@@ -474,7 +474,7 @@ const ALL_HEADERS = {
   'إعدادات المشروع': ['المفتاح', 'القيمة', 'الوصف'],
   'المستخدمون': ['رقم المستخدم', 'الاسم', 'البريد الإلكتروني', 'كلمة المرور المشفرة', 'الملح', 'الدور', 'رقم الجمعية', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول', 'يجب تغيير كلمة المرور', 'كلمة مرور سابقة مشفرة', 'ملح سابق'],
   'الجمعيات': ['رقم الجمعية', 'اسم الجمعية', 'التصنيف', 'المنطقة', 'المدينة', 'أرقام التواصل', 'البريد الإلكتروني', 'الحالة', 'تاريخ الإنشاء'],
-  'المستفيدون': ['رقم المستفيد', 'رقم الجمعية', 'الاسم', 'المنطقة', 'المدينة', 'العنوان', 'رقم الجوال', 'رقم جوال إضافي', 'عدد الأفراد', 'ضمان اجتماعي', 'الحالة الاجتماعية', 'مبلغ الدخل', 'الاحتياج', 'حالة المستفيد', 'حالة التسليم', 'رقم المندوب', 'الملاحظات', 'تاريخ الإنشاء', 'تاريخ التسليم', 'آخر تحديث', 'خط العرض', 'خط الطول', 'علامة مميزة', 'مصدر الموقع', 'تاريخ تحديث الموقع'],
+  'المستفيدون': ['رقم المستفيد', 'رقم الجمعية', 'الاسم', 'المنطقة', 'المدينة', 'العنوان', 'رقم الجوال', 'رقم جوال إضافي', 'عدد الأفراد', 'ضمان اجتماعي', 'الحالة الاجتماعية', 'مبلغ الدخل', 'الاحتياج', 'حالة المستفيد', 'حالة التسليم', 'رقم المندوب', 'الملاحظات', 'تاريخ الإنشاء', 'تاريخ التسليم', 'آخر تحديث', 'خط العرض', 'خط الطول', 'علامة مميزة', 'مصدر الموقع', 'تاريخ تحديث الموقع', 'الحي'],
   'الأجهزة': ['رقم الجهاز', 'اسم الجهاز', 'النوع', 'رقم الجمعية', 'رقم المستفيد', 'حالة الجهاز', 'تاريخ الإضافة', 'تاريخ التسليم', 'ملاحظات'],
   'المناديب': ['رقم المندوب', 'رقم الجمعية', 'اسم المندوب', 'رقم الجوال', 'رمز الدخول المشفر', 'الملح', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول'],
   'التسليمات': ['رقم التسليم', 'رقم المستفيد', 'رقم المندوب', 'أرقام الأجهزة', 'الحالة', 'سبب التعذر', 'الملاحظات', 'رابط الإثبات', 'تاريخ ووقت التسليم', 'تاريخ الإنشاء'],
@@ -609,7 +609,7 @@ section('15ب) إبطال ذاكرة Bootstrap المؤقتة (جيل مشترك
   const before = S2.getBootstrapData(assocSession.token);
   const beforeCount = before.summary.beneficiaries;
   S2.saveBeneficiary(assocSession.token, {
-    name: 'مستفيد لاختبار إبطال الذاكرة المؤقتة', region: 'الرياض', city: 'الرياض', address: 'حي',
+    name: 'مستفيد لاختبار إبطال الذاكرة المؤقتة', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
     phone: '0501119999', familyCount: 1, socialStatus: 'أرملة', needs: []
   });
   const after = S2.getBootstrapData(assocSession.token);
@@ -623,7 +623,7 @@ section('16) موقع المستفيد الجغرافي: حفظ وقراءة ف�
 
 const savedBeneficiary = S2.saveBeneficiary(adminSession.token, {
   associationId: accepted.associationId, name: 'مستفيد باختبار الموقع',
-  region: 'الرياض', city: 'الرياض', address: 'حي النخيل', phone: '0501112233',
+  region: 'الرياض', city: 'الرياض', address: 'حي النخيل', district: 'النخيل', phone: '0501112233',
   familyCount: 3, socialStatus: 'أرملة', needs: ['ثلاجة'],
   lat: '24.7136', lng: '46.6753'
 });
@@ -634,7 +634,7 @@ assert('الإحداثيات تُقرأ بعد الحفظ كأرقام صحيح�
 
 const savedWithoutCoords = S2.saveBeneficiary(adminSession.token, {
   associationId: accepted.associationId, name: 'مستفيد بلا إحداثيات',
-  region: 'الرياض', city: 'الرياض', address: 'حي آخر', phone: '0501112244',
+  region: 'الرياض', city: 'الرياض', address: 'حي آخر', district: 'آخر', phone: '0501112244',
   familyCount: 2, socialStatus: 'أرملة', needs: ['غسالة']
 });
 const savedRowNoCoords = S2.findById_('المستفيدون', 'رقم المستفيد', savedWithoutCoords.id);
@@ -647,20 +647,20 @@ assert('saveBeneficiary يضبط مصدر الموقع الافتراضي "يد�
 
 throws('saveBeneficiary يرفض إحداثيات خارج النطاق العالمي المسموح', () => S2.saveBeneficiary(adminSession.token, {
   associationId: accepted.associationId, name: 'مستفيد بإحداثيات فاسدة',
-  region: 'الرياض', city: 'الرياض', address: 'حي', phone: '0501112255',
+  region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار', phone: '0501112255',
   familyCount: 1, socialStatus: 'أرملة', needs: [], lat: '95', lng: '46.6'
 }), 'بين -90 و90');
 
 const savedWithSource = S2.saveBeneficiary(adminSession.token, {
   associationId: accepted.associationId, name: 'مستفيد بمصدر موقع محدد',
-  region: 'الرياض', city: 'الرياض', address: 'حي', phone: '0501112266',
+  region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار', phone: '0501112266',
   familyCount: 1, socialStatus: 'أرملة', needs: [], lat: '24.7', lng: '46.6', locationSource: 'خريطة'
 });
 assert('saveBeneficiary يحفظ مصدر الموقع المُرسَل صراحة إن كان معتمدًا', savedWithSource.record.locationSource === 'خريطة');
 
 const reSavedSameCoords = S2.saveBeneficiary(adminSession.token, {
   id: savedWithSource.id, associationId: accepted.associationId, name: 'مستفيد بمصدر موقع محدد',
-  region: 'الرياض', city: 'الرياض', address: 'حي مختلف', phone: '0501112266',
+  region: 'الرياض', city: 'الرياض', address: 'حي مختلف', district: 'حي مختلف', phone: '0501112266',
   familyCount: 1, socialStatus: 'أرملة', needs: [], lat: '24.7', lng: '46.6', locationSource: 'يدوي'
 });
 assert('إعادة حفظ بنفس الإحداثيات (تعديل حقل آخر فقط) لا يُعيد ضبط مصدر/تاريخ الموقع',
@@ -673,12 +673,12 @@ section('17) دعم الإحداثيات في الاستيراد الجماعي'
 const importWithCoords = S2.importBeneficiaries(adminSession.token, [
   {
     associationId: accepted.associationId, name: 'مستفيد استيراد بإحداثيات', region: 'الرياض', city: 'الرياض',
-    address: 'حي الملقا', phone: '0501113001', familyCount: 2, socialStatus: 'أرملة', needs: ['ثلاجة'],
+    address: 'حي الملقا', district: 'الملقا', phone: '0501113001', familyCount: 2, socialStatus: 'أرملة', needs: ['ثلاجة'],
     lat: '24.75', lng: '46.65'
   },
   {
     associationId: accepted.associationId, name: 'مستفيد استيراد بلا إحداثيات (ملف قديم)', region: 'الرياض', city: 'الرياض',
-    address: 'حي الروضة', phone: '0501113002', familyCount: 1, socialStatus: 'أرملة', needs: ['غسالة']
+    address: 'حي الروضة', district: 'الروضة', phone: '0501113002', familyCount: 1, socialStatus: 'أرملة', needs: ['غسالة']
   }
 ], true);
 assert('importBeneficiaries ينجح لصفّين، أحدهما بإحداثيات والآخر بلا إحداثيات', importWithCoords.ok && importWithCoords.imported === 2);
@@ -698,7 +698,7 @@ assert('الصف المستورَد بلا إحداثيات: مصدر الموق
 const importRejected = S2.importBeneficiaries(adminSession.token, [
   {
     associationId: accepted.associationId, name: 'مستفيد بإحداثيات فاسدة في الاستيراد', region: 'الرياض', city: 'الرياض',
-    address: 'حي', phone: '0501113003', familyCount: 1, socialStatus: 'أرملة', needs: [],
+    address: 'حي', district: 'حي الاختبار', phone: '0501113003', familyCount: 1, socialStatus: 'أرملة', needs: [],
     lat: '999', lng: '46.6'
   }
 ], true);
@@ -708,7 +708,7 @@ assert('صف بإحداثيات خارج النطاق يُرفض برسالة و
 const importPartialCoords = S2.importBeneficiaries(adminSession.token, [
   {
     associationId: accepted.associationId, name: 'مستفيد بإحداثية واحدة فقط', region: 'الرياض', city: 'الرياض',
-    address: 'حي', phone: '0501113004', familyCount: 1, socialStatus: 'أرملة', needs: [], lat: '24.7'
+    address: 'حي', district: 'حي الاختبار', phone: '0501113004', familyCount: 1, socialStatus: 'أرملة', needs: [], lat: '24.7'
   }
 ], true);
 assert('صف بإحداثية واحدة فقط (دون الأخرى) يُرفض صراحة بدل إسقاطها بصمت',
@@ -736,7 +736,7 @@ assert('inspectBeneficiaryExcel يتحقق من صحة الإحداثيات لك
 section('18) منع التكرار في المستفيدين والاستيراد');
 
 const dupBase = {
-  associationId: accepted.associationId, region: 'الرياض', city: 'الرياض', address: 'حي التعاون',
+  associationId: accepted.associationId, region: 'الرياض', city: 'الرياض', address: 'حي التعاون', district: 'التعاون',
   familyCount: 3, socialStatus: 'أرملة', needs: []
 };
 
@@ -804,7 +804,7 @@ try {
   // جمعية أخرى هذا التكرار إطلاقًا (لا كشف بيانات جمعية أخرى)، فتنجح الإضافة.
   const otherSave = S2.saveBeneficiary(otherAssocSession.token, {
     name: 'مستفيد لدى جمعية أخرى', phone: '0509990001', region: 'الرياض', city: 'الرياض',
-    address: 'حي', familyCount: 2, socialStatus: 'أرملة', needs: []
+    address: 'حي', district: 'حي الاختبار', familyCount: 2, socialStatus: 'أرملة', needs: []
   });
   dupImportNoLeak = otherSave;
 } catch (error) { dupImportNoLeak = {ok: false, error: error.message}; }
@@ -903,7 +903,8 @@ section('20) تفاصيل الجهاز وسجل عمليات المندوب');
 
 const detailBeneficiary = S2.saveBeneficiary(adminSession.token, {
   associationId: accepted.associationId, name: 'مستفيد تفاصيل الجهاز', region: 'الرياض', city: 'الرياض',
-  address: 'حي', phone: '0509990030', familyCount: 2, socialStatus: 'أرملة', needs: []
+  address: 'حي', district: 'حي الاختبار', phone: '0509990030', familyCount: 2, socialStatus: 'أرملة', needs: [],
+  lat: '24.7', lng: '46.6'
 });
 const detailDevice = S2.saveDevice(adminSession.token, {
   name: 'ثلاجة اختبار التفاصيل', type: 'ثلاجة', associationId: accepted.associationId,
@@ -1143,8 +1144,8 @@ section('23) انحدارات مؤكَّدة من الاختبار الحي 2026
   const assoc = S3.saveAssociation(admin.token, {name: 'جمعية التعذّر', category: 'جمعية خيرية',
     region: 'الرياض', city: 'الرياض', phone: '0505550001', email: 'retry@example.org', password: 'ZadRetry2026x'});
   const ben = S3.saveBeneficiary(admin.token, {name: 'مستفيد التعذّر', phone: '0505550002', region: 'الرياض',
-    city: 'الرياض', address: 'حي النرجس', familyCount: 4, socialStatus: 'أرملة', needs: [],
-    associationId: assoc.id});
+    city: 'الرياض', address: 'حي النرجس', district: 'النرجس', familyCount: 4, socialStatus: 'أرملة', needs: [],
+    associationId: assoc.id, lat: '24.7', lng: '46.6'});
   const delegate = S3.saveDelegate(admin.token, {name: 'مندوب التعذّر', phone: '0505550003', associationId: assoc.id});
   const device = S3.saveDevice(admin.token, {name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: ben.id});
   S3.assignDelegate(admin.token, ben.id, delegate.id);
@@ -1198,7 +1199,7 @@ section('23) انحدارات مؤكَّدة من الاختبار الحي 2026
   const assoc = S4.saveAssociation(admin.token, {name: 'جمعية الحزمة', category: 'جمعية خيرية',
     region: 'الرياض', city: 'الرياض', phone: '0506660001', email: 'bundle@example.org', password: 'ZadBundle2026x'});
   S4.saveBeneficiary(admin.token, {name: 'مستفيد الحزمة', phone: '0506660002', region: 'الرياض', city: 'الرياض',
-    address: 'حي', familyCount: 3, socialStatus: 'أرملة', needs: [], associationId: assoc.id});
+    address: 'حي', district: 'حي الاختبار', familyCount: 3, socialStatus: 'أرملة', needs: [], associationId: assoc.id});
 
   const bundle = S4.getPortalBundle(admin.token, 'beneficiaries', {page: 1, pageSize: 25});
   assert('الحزمة تُعيد بيانات البوابة والمصادر المرجعية والصفحة الأولى معًا في استدعاء واحد',
