@@ -252,6 +252,11 @@ const shim = '<script>' + listShimHelpers
 const seeder = '<script>(function(){'
   + 'var role=(location.hash||"#admin").slice(1);'
   + 'if(role==="login"){'
+  // القوائم المعتمدة (المنطقة/المدينة/إلخ) متاحة للزوّار بلا جلسة في التطبيق
+  // الفعلي؛ يجب تعبئتها هنا أيضًا قبل renderApplyForm وإلا بقيت حقول
+  // نموذج التقديم عالقة على "جار تحميل القوائم المعتمدة..." في المعاينة
+  // فقط (فجوة أداة معاينة، لا عطلًا في الإنتاج).
+  + 'window.state.referenceData=window.__PREVIEW_REFERENCE_DATA;'
   + 'var loginType=new URLSearchParams(location.search).get("type");'
   + 'if(loginType)window.state.loginType=loginType;'
   + 'if(new URLSearchParams(location.search).get("open")==="apply"){window.renderApplyForm();return;}'
