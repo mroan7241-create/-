@@ -219,7 +219,12 @@ const shim = '<script>' + listShimHelpers + 'window.google={script:{run:(functio
   + 'if(!d){fail(new Error("الجهاز غير موجود"));return}'
   + 'var ben=(window.__FIXTURE.beneficiaries||[]).find(function(b){return b.id===d.beneficiaryId});'
   + 'ok({ok:true,device:d,associationName:"جمعية البر بالرياض",beneficiaryName:ben?ben.name:"",delegateId:"",delegateName:ben&&ben.delegateId?"سعد ماجد القحطاني":"",assignedAt:d.createdAt,dispatchedAt:"",log:[]})'
-  + '},60)}'
+  + '},60)},'
+  + 'getReferenceData:function(){setTimeout(function(){ok(window.__PREVIEW_REFERENCE_DATA)},30)},'
+  + 'listBeneficiaryDeliveryAttempts:function(token,id){setTimeout(function(){ok({ok:true,attempts:['
+  + '{id:"DLV-000501",status:"تم التسليم",reason:"",notes:"",delegateName:"سعد ماجد القحطاني",hasProof:true,at:"2026/07/21 11:20"}'
+  + ']})},60)},'
+  + 'getDeliveryProofImage:function(){setTimeout(function(){ok({ok:true,dataUrl:window.__PREVIEW_PROOF_IMAGE})},60)}'
   + '};'
   + 'return handler}())}};</script>';
 
@@ -237,12 +242,45 @@ const seeder = '<script>(function(){'
   + 'window.state.token="preview-token-0000000000000000000000000000000000";'
   + 'window.state.data=window.__FIXTURE;'
   + 'window.state.user=window.__FIXTURE.user;'
+  + 'window.state.referenceData=window.__PREVIEW_REFERENCE_DATA;'
   + 'var page=new URLSearchParams(location.search).get("page");'
   + 'if(page)window.state.page=page;'
   + 'window.render();'
+  + 'var open=new URLSearchParams(location.search).get("open");'
+  + 'var openId=new URLSearchParams(location.search).get("id");'
+  + 'if(open==="beneficiary-form")window.beneficiaryForm(openId||"");'
+  + 'if(open==="view-beneficiary"&&openId)window.viewBeneficiary(openId);'
+  + 'if(open==="view-delegate-log"){window.openModal("سجل عمليات المندوب: سعد ماجد القحطاني",'
+  + 'window.delegateLogTimeline(window.__FIXTURE.audit||[]),'
+  + '\'<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>\')}'
   + '}());</script>';
 
-const dataBlock = '<script>window.__PREVIEW_DATA=' + JSON.stringify(FIXTURES) + ';</script>';
+// أدنى بيانات مرجعية واقعية كافية لعرض حقول المنطقة/المدينة والتصنيفات
+// في المعاينة دون رسالة "تعذّر تحميل القوائم المعتمدة" (كانت getReferenceData
+// غير مُحاكاة إطلاقًا سابقًا، فيفشل استدعاؤها بخطأ JS خام يظهر للمستخدم).
+const PREVIEW_REFERENCE_DATA = {
+  ready: true, source: 'preview',
+  regions: ['الرياض', 'مكة المكرمة', 'الشرقية', 'القصيم', 'عسير', 'المدينة المنورة'],
+  citiesByRegion: {
+    'الرياض': ['الرياض', 'الخرج', 'الدوادمي'],
+    'مكة المكرمة': ['جدة', 'مكة المكرمة', 'الطائف'],
+    'الشرقية': ['الدمام', 'الخبر', 'الأحساء'],
+    'القصيم': ['بريدة', 'عنيزة'],
+    'عسير': ['أبها', 'خميس مشيط'],
+    'المدينة المنورة': ['المدينة المنورة', 'ينبع']
+  },
+  deviceTypes: ['ثلاجة', 'غسالة', 'فرن', 'مكيف', 'فريزر', 'سخان'],
+  socialStatuses: ['أرملة', 'يتيم', 'مطلق/مطلقة', 'متزوج/متزوجة', 'أخرى'],
+  associationCategories: ['جمعية خيرية', 'جمعية أهلية', 'جمعية بر'],
+  associationSectors: ['تنمية اجتماعية', 'رعاية أسرية', 'إغاثة وتنمية'],
+  applicationQuestions: [], pledgeText: ''
+};
+// صورة PNG حقيقية 1×1 (شفافة) — تكفي معاينة نافذة "صورة إثبات التسليم" بصريًا.
+const PREVIEW_PROOF_IMAGE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+const dataBlock = '<script>window.__PREVIEW_DATA=' + JSON.stringify(FIXTURES)
+  + ';window.__PREVIEW_REFERENCE_DATA=' + JSON.stringify(PREVIEW_REFERENCE_DATA)
+  + ';window.__PREVIEW_PROOF_IMAGE=' + JSON.stringify(PREVIEW_PROOF_IMAGE) + ';</script>';
 
 // يُحقن الوهمي قبل كتلة التطبيق، والبذرة بعدها مباشرة قبل </body>
 const lastScriptOpen = html.lastIndexOf('<script>');
