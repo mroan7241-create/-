@@ -3227,9 +3227,10 @@
         + textField('name', 'اسم الجهاز', d.name, {required: true, max: 100})
         + deviceTypeField(d.type)
         + '<div class="field"><label for="f_assoc">الجمعية</label>'
-        + '<select class="control" id="f_assoc" name="associationId">' + associationOptions + '</select></div>'
+        + '<select class="control" id="f_assoc" name="associationId"' + (d.beneficiaryId ? ' disabled' : '') + '>' + associationOptions + '</select>'
+        + '<span class="hint">تُشتَق تلقائيًا من جمعية المستفيد عند اختياره أدناه — لا يمكن أن يتبع الجهاز جمعية مختلفة عن مستفيده.</span></div>'
         + '<div class="field"><label for="f_ben">المستفيد</label>'
-        + '<select class="control" id="f_ben" name="beneficiaryId">' + beneficiaryOptions + '</select></div>'
+        + '<select class="control" id="f_ben" name="beneficiaryId" data-act="device-beneficiary-select">' + beneficiaryOptions + '</select></div>'
         + '<div class="field span-2"><label for="f_status">حالة الجهاز</label>'
         + '<select class="control" id="f_status" name="status">' + optionList(DEVICE_FILTERS, d.status || 'بالمستودع')
         + '</select></div>'
@@ -4692,10 +4693,30 @@
       if (action === 'proof-file') { handleProofFile(el); return; }
       if (action === 'delivery-gate') { updateDeliveryGate(); return; }
       if (action === 'region-select') { onRegionChange(el); return; }
+      if (action === 'device-beneficiary-select') { syncDeviceAssociationField(el); return; }
       if (action === 'license-file') { handleLicenseFile(el); return; }
       if (action === 'email-domain') { toggleEmailOtherDomain(); return; }
       if (action === 'pledge-gate') { updatePledgeGate(); return; }
     });
+
+    /**
+     * جهاز مرتبط بمستفيد يتبع جمعية ذلك المستفيد دائمًا (يفرضه الخادم
+     * فعليًا في saveDevice بصرف النظر عن هذا الحقل) — هذه المزامنة
+     * تعكس القاعدة في الواجهة فقط بدل ترك حقلين قد يتعارضان ظاهريًا:
+     * تُقفَل قائمة الجمعية وتُضبَط تلقائيًا عند اختيار مستفيد، وتُعاد
+     * حرة عند إلغاء الاختيار ("— غير مخصص —").
+     */
+    function syncDeviceAssociationField(beneficiarySelect) {
+      var assocSelect = document.getElementById('f_assoc');
+      if (!assocSelect) return;
+      var beneficiary = findBeneficiary(beneficiarySelect.value);
+      if (beneficiary) {
+        assocSelect.value = beneficiary.associationId;
+        assocSelect.disabled = true;
+      } else {
+        assocSelect.disabled = false;
+      }
+    }
 
     /** يعيد تعبئة قائمة المدن فور اختيار المنطقة، ويقفلها إن لم تُختر منطقة بعد. */
     function onRegionChange(regionSelect) {

@@ -53,11 +53,19 @@ function saveDevice(token, payload) {
   if (payload.id && !existing) throw new Error('الجهاز غير موجود');
 
   const beneficiaryId = cleanId_(payload.beneficiaryId);
-  const associationId = cleanId_(payload.associationId);
+  let associationId = cleanId_(payload.associationId);
   const beneficiary = beneficiaryId ? findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId) : null;
   if (beneficiaryId && !beneficiary) throw new Error('المستفيد المحدَّد غير موجود');
-  if (beneficiaryId && associationId && String(beneficiary['رقم الجمعية']) !== associationId) {
-    throw new Error('يجب أن ينتمي المستفيد لجمعية الجهاز نفسها');
+  if (beneficiaryId) {
+    // جهاز مرتبط بمستفيد يتبع جمعية ذلك المستفيد دائمًا — يُشتَق هنا
+    // خادميًا بصرف النظر عمّا أُرسل من العميل، فلا يبقى أي مسار (فراغ
+    // الحقل، أو تعارض بين حقلين مستقلَّين في النموذج نفسه) يمكن أن ينتج
+    // عنه جهاز بجمعية فارغة أو مختلفة عن جمعية مستفيده الفعلية — هذا
+    // بالضبط ما كانت diagnoseStateIntegrity_ ترصده لاحقًا تحت
+    // DEVICE_ASSOCIATION_MISMATCH بدل مُنِع كتابته من الأصل.
+    associationId = String(beneficiary['رقم الجمعية']);
+  } else if (associationId && !findById_(APP.sheets.associations, 'رقم الجمعية', associationId)) {
+    throw new Error('اختر جمعية صحيحة');
   }
 
   const currentStatus = existing ? String(existing['حالة الجهاز']) : '';

@@ -1450,6 +1450,41 @@ section('26) لوحة التحكم: عزل الجمعيات وعدم زيادة 
     readsAfterSecondNav === 0 && readsAfterThirdNav === 0);
 }
 
+/* -------- 27) تدقيق ترابط الجهاز/المستفيد/الجمعية (تدقيق دورة العمل الكاملة) -------- */
+
+section('27) الجهاز يتبع جمعية مستفيده دائمًا — لا يبقى فارغًا ولا مختلفًا');
+
+const otherApp = S2.submitAssociationApplication(applicationFixture({
+  name: 'جمعية تدقيق الأجهزة', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
+  contactName: 'مسؤول التدقيق', phone: '0511119999', email: 'audit-devices@example.org', licenseNumber: 'LIC-AUDITDEV'
+}));
+const otherAssocForAudit = S2.reviewAssociationApplication(adminSession.token, otherApp.id, 'accept', '');
+
+const auditBeneficiary = S2.saveBeneficiary(adminSession.token, {
+  associationId: accepted.associationId, name: 'مستفيد تدقيق الأجهزة', region: 'الرياض', city: 'الرياض',
+  address: 'حي', district: 'حي الاختبار', phone: '0509991111', familyCount: 2, socialStatus: 'أرملة', needs: []
+});
+
+const deviceNoAssoc = S2.saveDevice(adminSession.token, {
+  name: 'جهاز بلا جمعية مُرسَلة', type: 'ثلاجة', associationId: '', beneficiaryId: auditBeneficiary.id
+});
+assert('جهاز مرتبط بمستفيد لكن بلا associationId مُرسَل من العميل: يُشتَق تلقائيًا من جمعية المستفيد (لا يبقى فارغًا)',
+  deviceNoAssoc.record.associationId === accepted.associationId);
+
+const deviceWrongAssoc = S2.saveDevice(adminSession.token, {
+  name: 'جهاز بجمعية مختلفة مُرسَلة خطأً', type: 'ثلاجة', associationId: otherAssocForAudit.associationId, beneficiaryId: auditBeneficiary.id
+});
+assert('جهاز مرتبط بمستفيد مع associationId مختلف مُرسَل من العميل: يُصحَّح خادميًا لجمعية المستفيد الحقيقية — لا يبقى بجمعية أخرى أبدًا',
+  deviceWrongAssoc.record.associationId === accepted.associationId && deviceWrongAssoc.record.associationId !== otherAssocForAudit.associationId);
+
+throws('جهاز بلا مستفيد وبمعرّف جمعية غير موجود أصلًا يُرفض بوضوح',
+  () => S2.saveDevice(adminSession.token, {name: 'جهاز بجمعية وهمية', type: 'ثلاجة', associationId: 'ASC-999999', beneficiaryId: ''}),
+  'اختر جمعية صحيحة');
+
+const deviceCentral = S2.saveDevice(adminSession.token, {name: 'جهاز بالمستودع المركزي', type: 'ثلاجة', associationId: '', beneficiaryId: ''});
+assert('جهاز بلا مستفيد وبلا جمعية (مستودع مركزي) يبقى مسموحًا كما كان — التغيير يخص الجهاز المرتبط بمستفيد فقط',
+  deviceCentral.ok === true && deviceCentral.record.associationId === '');
+
 /* -------- النتيجة -------- */
 
 console.log('\n' + '='.repeat(56));
