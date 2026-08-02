@@ -755,6 +755,20 @@ assert('phoneLocal يعيد صفرًا بادئًا لبيانات قديمة ن
 assert('phoneLocal يطبّع الصيغة الدولية إلى المحلية', app.phoneLocal('966550791650') === '0550791650');
 assert('phoneLocal يترك الصيغة المحلية الصحيحة كما هي', app.phoneLocal('0550791650') === '0550791650');
 
+// سجل عمليات المندوب داخل النافذة المنبثقة: خط زمني بديل عن جدول عريض
+// (كان يترك مساحة فارغة واضحة أسفله على الجوال بأعمدة قصيرة/فارغة).
+const logItems = [
+  { action: 'تعيين مندوب', section: 'المستفيدون', notes: 'المندوب: MND-000001', at: '2026/07/20 09:00' },
+  { action: 'تأكيد تسليم', section: 'التسليمات', notes: '', at: '2026/07/21 10:15' }
+];
+const logHtml = app.delegateLogTimeline(logItems);
+assert('سجل عمليات المندوب يُعرض كخط زمني (ol.tl) لا جدول عريض', logHtml.includes('<ol class="tl') && !logHtml.includes('<table'));
+assert('كل عملية تعرض نوعها وقسمها ووقتها', logHtml.includes('تعيين مندوب') && logHtml.includes('المستفيدون') && logHtml.includes('2026/07/20 09:00'));
+assert('الملاحظة تُعرض فقط عند وجودها فعليًا', logHtml.includes('المندوب: MND-000001') && (logHtml.match(/log-tl-note/g) || []).length === 1);
+assert('لا عنصر فارغ أو رمز "—" لملاحظة غير موجودة (لا عنصر غير فعّال أسفل السجل)', !logHtml.includes('>—<'));
+assert('سجل عمليات فارغ يعرض حالة فراغ صريحة بدل جدول أو خط زمني فارغ',
+  app.delegateLogTimeline([]).includes('لا توجد عمليات مسجَّلة'));
+
 /* ---------------- 9) قراءة CSV ---------------- */
 
 section('9) استيراد CSV');

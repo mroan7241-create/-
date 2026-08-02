@@ -46,8 +46,8 @@
     }
 
     *,*::before,*::after{box-sizing:border-box}
-    html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
-    body{margin:0;background:var(--canvas);color:var(--ink);font-family:var(--font);font-size:15px;line-height:1.7;min-height:100vh;-webkit-font-smoothing:antialiased}
+    html{scroll-behavior:smooth;-webkit-text-size-adjust:100%;overflow-x:hidden}
+    body{margin:0;background:var(--canvas);color:var(--ink);font-family:var(--font);font-size:15px;line-height:1.7;min-height:100vh;-webkit-font-smoothing:antialiased;overflow-x:hidden}
     h1,h2,h3,h4{font-family:var(--font-display);line-height:1.3;margin:0}
     button,input,select,textarea{font:inherit;color:inherit}
     button{cursor:pointer;border:0;background:none}
@@ -108,7 +108,10 @@
     .field>label{font-size:12.5px;font-weight:700;color:var(--ink-soft)}
     .field .hint{font-size:11.5px;color:var(--muted)}
     .field .err{font-size:11.5px;color:var(--bad);font-weight:700}
-    .control{width:100%;min-height:46px;border:1px solid var(--line-strong);background:var(--paper);border-radius:var(--r-md);padding:11px 14px;outline:0;transition:border-color .15s,box-shadow .15s}
+    /* scroll-margin يضمن أن التمرير التلقائي عند التركيز (يحدث فعليًا
+       عند ظهور لوحة مفاتيح الجوال) لا يترك الحقل النشط أو زر الحفظ
+       مختبئًا خلف رأس النافذة الثابت أو حافة الشاشة السفلية. */
+    .control{width:100%;min-height:46px;border:1px solid var(--line-strong);background:var(--paper);border-radius:var(--r-md);padding:11px 14px;outline:0;transition:border-color .15s,box-shadow .15s;scroll-margin-block:70px}
     .control:hover{border-color:var(--zad-300)}
     .control:focus{border-color:var(--zad-700);box-shadow:var(--focus)}
     .control[disabled]{background:var(--canvas);color:var(--muted)}
@@ -126,7 +129,7 @@
     .choice:has(input:checked){background:var(--zad-100);border-color:var(--zad-600);color:var(--zad-800);font-weight:700}
 
     .location-picker{border:1px solid var(--line);border-radius:var(--r-md);padding:12px;background:var(--canvas)}
-    .location-map{height:240px;border-radius:var(--r-md);margin-top:8px;background:var(--surface);border:1px solid var(--line-strong)}
+    .location-map{height:clamp(200px,42vh,300px);max-width:100%;border-radius:var(--r-md);margin-top:8px;background:var(--surface);border:1px solid var(--line-strong);touch-action:pan-x pan-y}
     .location-acts{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
     .location-manual{margin-top:8px;font-size:13px}
     .location-manual summary{cursor:pointer;color:var(--zad-700);font-weight:600}
@@ -189,6 +192,10 @@
     .tl-meter{height:6px;border-radius:var(--r-pill);background:var(--canvas);overflow:hidden}
     .tl-meter span{display:block;height:100%;background:var(--zad-gradient);border-radius:var(--r-pill)}
     .tl-pct{font-size:12px;color:var(--ink-soft);font-variant-numeric:tabular-nums;margin-top:5px;display:inline-block}
+    /* خط زمني عام لسجل عمليات (بلا مقياس تقدّم) — يُستخدم لسجل عمليات المندوب داخل نافذة الجوال بديلًا عن جدول عريض. */
+    .log-tl-item .tl-node{font-size:9px;border-color:var(--zad-300);color:var(--zad-700);background:var(--zad-100)}
+    .log-tl-note{margin:4px 0;font-size:13px;line-height:1.6}
+    .log-tl-at{font-size:12px;display:block;margin-top:2px}
     .late-days{font-size:12.5px;font-weight:700;color:var(--gold-700);white-space:nowrap}
 
     /* بطاقات الأنشطة، مجمَّعة تحت نشاطها الرئيسي */
@@ -446,11 +453,15 @@
     /* ---------- Modal ---------- */
     .backdrop{position:fixed;inset:0;background:rgba(35,10,22,.55);backdrop-filter:blur(3px);z-index:70;display:grid;place-items:center;padding:18px;animation:fade .18s}
     @keyframes fade{from{opacity:0}}
-    .modal{background:var(--paper);width:min(760px,100%);max-height:92vh;display:flex;flex-direction:column;border-radius:var(--r-xl);box-shadow:var(--sh-4);animation:pop .22s cubic-bezier(.2,.8,.3,1)}
+    .modal{background:var(--paper);width:min(760px,100%);max-height:92vh;display:flex;flex-direction:column;border-radius:var(--r-xl);box-shadow:var(--sh-4);animation:pop .22s cubic-bezier(.2,.8,.3,1);overscroll-behavior:contain}
     @keyframes pop{from{transform:translateY(14px) scale(.98);opacity:0}}
     .modal-head{padding:20px 24px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:14px;flex:none}
     .modal-head h3{font-size:18px;color:var(--zad-800)}
-    .modal-body{padding:22px 24px;overflow-y:auto;flex:1}
+    /* min-height:0 ضروري هنا: بدونه لا يفرض Flexbox حدًّا لارتفاع هذا
+       الابن flex:1، فيتمدد المحتوى الطويل (كنموذج المستفيد مع الخريطة)
+       بارتفاعه الطبيعي الكامل بدل التمرير الداخلي المقصود، فيبدو
+       المحتوى متجاوزًا حدود النافذة على الجوال تحديدًا (خلل Flexbox شائع). */
+    .modal-body{padding:22px 24px;overflow-y:auto;flex:1;min-height:0;-webkit-overflow-scrolling:touch}
     .modal-foot{padding:16px 24px;border-top:1px solid var(--line);display:flex;gap:9px;justify-content:flex-end;flex-wrap:wrap;flex:none;background:var(--surface);border-radius:0 0 var(--r-xl) var(--r-xl)}
     .x-btn{width:38px;height:38px;flex:none;border-radius:50%;background:var(--canvas);color:var(--ink-soft);display:grid;place-items:center;font-size:19px;line-height:1}
     .x-btn:hover{background:var(--zad-100);color:var(--zad-800)}
@@ -588,6 +599,22 @@
       .login-panel .lockup-logo{height:66px}
       .login-panel .lockup-partner-logo{height:58px}
       .login-panel .lockup-duo-divider{min-height:52px}
+
+      /* أهداف لمس أكبر (44 بكسل على الأقل) على الجوال تحديدًا — أزرار
+         "التفاصيل"/"تعيين مندوب" الصغيرة وزر إغلاق النافذة الدائري كانا
+         أصغر من الحدّ المُوصى به (38px)؛ سطح المكتب يبقى مضغوطًا كما كان. */
+      .btn-sm{min-height:44px}
+      .x-btn{width:44px;height:44px}
+      /* حافة علوية آمنة لكل رأس ثابت/مثبَّت يلامس الحافة العلوية فعليًا
+         (لا نافذة منبثقة مرتكزة أسفل الشاشة — تلك تُعالَج أدناه بحشوة
+         الرأس الداخلي فقط دفاعًا احتياطيًا). */
+      .topbar{padding-top:calc(10px + env(safe-area-inset-top))}
+      .dg-top{padding-top:calc(20px + env(safe-area-inset-top))}
+      .modal-head{padding-top:calc(20px + env(safe-area-inset-top))}
+      /* الخريطة داخل نموذج الإضافة على الجوال: عناصر التحكم (تكبير/تصغير)
+         تحتاج مساحة لمس كافية أيضًا — Leaflet يُنشئها ديناميكيًا فتُستهدَف
+         هنا بمحدِّد عام لا بصف مضاف يدويًا. */
+      .location-map .leaflet-control-zoom a{width:36px;height:36px;line-height:36px}
     }
   </style>
 </head>
@@ -3377,17 +3404,30 @@
     function viewDelegateLog(id, name) {
       busy(true);
       api('listDelegateAuditLog', state.token, id, {pageSize: 100}).then(function (result) {
-        var items = result.items || [];
-        var body = !items.length
-          ? '<p class="muted">لا توجد عمليات مسجَّلة لهذا المندوب بعد.</p>'
-          : '<div class="table-wrap"><table class="data"><thead><tr><th>العملية</th><th>القسم</th>'
-            + '<th>الملاحظات</th><th>التاريخ والوقت</th></tr></thead><tbody>'
-            + items.map(function (row) {
-              return '<tr><td>' + esc(row.action) + '</td><td>' + esc(row.section) + '</td>'
-                + '<td>' + esc(row.notes || '—') + '</td><td class="muted">' + esc(row.at) + '</td></tr>';
-            }).join('') + '</tbody></table></div>';
-        openModal('سجل عمليات المندوب: ' + name, body, '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>');
+        openModal('سجل عمليات المندوب: ' + name, delegateLogTimeline(result.items || []),
+          '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>');
       }, reportError).finally(function () { busy(false); });
+    }
+
+    /**
+     * خط زمني بديل عن جدول عريض داخل نافذة جوال ضيّقة (كان يترك مساحة
+     * فارغة واضحة أسفله لأعمدة قصيرة أو فارغة كثيرًا كالملاحظات) — كل
+     * عملية: نوعها، القسم، الملاحظة إن وُجدت فقط (لا خلية "—" فارغة)،
+     * والوقت. بلا أي جدول أو تمرير أفقي.
+     */
+    function delegateLogTimeline(items) {
+      if (!items.length) {
+        return emptyState({glyph: '≡', title: 'لا توجد عمليات مسجَّلة', body: 'ستظهر هنا كل عملية تخص هذا المندوب فور حدوثها.'});
+      }
+      return '<ol class="tl log-tl">' + items.map(function (row) {
+        return '<li class="tl-item log-tl-item">'
+          + '<span class="tl-node" aria-hidden="true">●</span>'
+          + '<div class="tl-body"><div class="tl-head"><strong>' + esc(row.action) + '</strong>'
+          + '<span class="status neutral">' + esc(row.section) + '</span></div>'
+          + (row.notes ? '<p class="muted log-tl-note">' + esc(row.notes) + '</p>' : '')
+          + '<span class="muted log-tl-at">' + esc(row.at) + '</span>'
+          + '</div></li>';
+      }).join('') + '</ol>';
     }
 
     function delegateForm() {
@@ -4680,6 +4720,22 @@
     document.addEventListener('keydown', function (event) {
       if (event.key === 'Escape' && $('#modalRoot').innerHTML) { dismissModalIfConfirmed(); return; }
       if (event.key === 'Tab' && $('#modalRoot').innerHTML) trapModalFocus(event);
+    });
+
+    /**
+     * عند ظهور لوحة مفاتيح الجوال، بعض المتصفحات (خصوصًا Android Chrome
+     * داخل نافذة منبثقة طويلة قابلة للتمرير) لا تُبقي الحقل النشط ظاهرًا
+     * تلقائيًا فوق اللوحة. هذا معالج مفوَّض بسيط يُعيد الحقل إلى منتصف
+     * المساحة المرئية المتبقية فور التركيز عليه — لا يفعل شيئًا خارج
+     * النوافذ المنبثقة، ولا يتدخل إن كان العنصر ظاهرًا بالفعل.
+     */
+    document.addEventListener('focusin', function (event) {
+      var el = event.target;
+      if (!el || !el.classList || !el.classList.contains('control')) return;
+      if (!el.closest || !el.closest('.modal-body')) return;
+      window.setTimeout(function () {
+        if (typeof el.scrollIntoView === 'function') el.scrollIntoView({block: 'center', behavior: 'smooth'});
+      }, 250);
     });
 
     // يُسجَّل التغيير فقط داخل نافذة مفتوحة فعليًا — نوافذ العرض فقط (بلا
