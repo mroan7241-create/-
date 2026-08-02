@@ -22,6 +22,27 @@ const FIXTURES = {
       devicesWarehouse: 940, devicesAllocated: 612, devicesDelivered: 1608,
       deliveryRate: 64, activityRate: 45, completedActivities: 9, totalActivities: 20
     },
+    dashboardModules: {
+      beneficiaries: {
+        total: 1284, new: 96, underReview: 140, approved: 210, awaitingDevices: 178,
+        delivering: 152, delivered: 468, stalled: 40,
+        deliveryRate: {value: 39, numerator: 468, denominator: 1201}
+      },
+      devices: {
+        total: 3160, warehouse: 940, allocated: 612, withDelegate: 210, delivered: 1608,
+        damaged: 28, conflicts: 6
+      },
+      associations: {
+        total: 12, active: 10, inactive: 2, pendingApplications: 3, acceptedApplications: 7,
+        rejectedApplications: 2, needsFollowUp: 2,
+        progressRate: {value: 51, numerator: 1608, denominator: 3160}
+      },
+      activities: {
+        total: 20, completed: 9, inProgress: 6, upcoming: 3, late: 2, missingEvidence: 3,
+        progressRate: {value: 45, numerator: 9, denominator: 20},
+        nextDeadline: {label: 'توزيع الدفعة الثالثة على جمعيات المنطقة الشرقية', daysLeft: 9}
+      }
+    },
     beneficiaries: [
       ben('BEN-000101', 'فاطمة عبدالله العتيبي', 'الرياض', 'الرياض', 'حي النرجس، شارع الأمير سلطان', 6, true, 'أرملة', 2400, ['ثلاجة', 'غسالة'], 'معتمد', 'جاري التجهيز', 'MND-000001'),
       ben('BEN-000102', 'نورة سالم القحطاني', 'مكة المكرمة', 'جدة', 'حي الصفا، طريق الملك', 4, true, 'مطلق/مطلقة', 1800, ['ثلاجة', 'مكيف', 'فرن'], 'بانتظار الأجهزة', 'لم يبدأ', ''),
@@ -64,9 +85,13 @@ const FIXTURES = {
       { name: 'الأثر', progress: 0, status: 'قيد التنفيذ' }
     ],
     alerts: [
-      { level: 'critical', title: 'نشاط متأخر', message: 'ترسية العقود — متأخر 18 يومًا', section: 'الأنشطة' },
-      { level: 'high', title: 'نشاط مكتمل دون شاهد', message: 'استقبال كشوفات الجمعيات', section: 'الشواهد' },
-      { level: 'high', title: 'جمعية تحتاج متابعة', message: 'جمعية عطاء بأبها — لم يسلَّم أي جهاز', section: 'الجمعيات' }
+      { level: 'critical', title: 'نشاط متأخر', message: 'ترسية العقود — متأخر 18 يومًا', section: 'الأنشطة', page: 'activities' },
+      { level: 'critical', title: 'تعارض حالة أجهزة', message: '6 أجهزة بحالة "تم التسليم" لا تطابق حالة المستفيد المرتبط', section: 'الأجهزة', page: 'devices', filter: 'تم التسليم' },
+      { level: 'high', title: 'طلبات انضمام بانتظار المراجعة', message: '3 طلبات جمعية جديدة قيد المراجعة', section: 'طلبات الانضمام', page: 'applications', filter: 'قيد المراجعة' },
+      { level: 'high', title: 'نشاط مكتمل دون شاهد', message: 'استقبال كشوفات الجمعيات', section: 'الشواهد', page: 'activities' },
+      { level: 'high', title: 'جمعية تحتاج متابعة', message: 'جمعية عطاء بأبها — لم يسلَّم أي جهاز', section: 'الجمعيات', page: 'associations' },
+      { level: 'medium', title: 'مستفيدون بلا مندوب', message: '52 مستفيدًا بانتظار تعيين مندوب', section: 'المستفيدون', page: 'beneficiaries', filter: 'لم يبدأ' },
+      { level: 'high', title: 'تسليمات متعثرة', message: '40 تسليمًا يحتاج إعادة محاولة', section: 'المستفيدون', page: 'beneficiaries', filter: 'تعذر التسليم' }
     ],
     audit: auditRows()
   }
