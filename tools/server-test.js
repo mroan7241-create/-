@@ -1016,9 +1016,9 @@ function buildIdScenarioSandbox_() {
     // أي اتصال بـDrive الحقيقي في أي اختبار.
     DriveApp: {
       createFolder: () => ({ getId: () => 'FOLDER-TEST', getUrl: () => 'https://drive.example/test',
-        createFile: () => ({ getUrl: () => 'https://drive.example/proof.png' }) }),
+        createFile: () => ({ getId: () => 'FILE-TEST', getUrl: () => 'https://drive.example/proof.png' }) }),
       getFolderById: () => ({ getName: () => 'شواهد', getUrl: () => 'https://drive.example/test',
-        createFile: () => ({ getUrl: () => 'https://drive.example/proof.png' }) })
+        createFile: () => ({ getId: () => 'FILE-TEST', getUrl: () => 'https://drive.example/proof.png' }) })
     }
   });
   sb.globalThis = sb;

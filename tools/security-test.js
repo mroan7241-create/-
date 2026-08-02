@@ -99,6 +99,7 @@ function buildSandbox() {
         return Array.from(crypto.createHash('sha256').update(String(text)).digest());
       },
       base64EncodeWebSafe: bytes => Buffer.from(bytes).toString('base64url'),
+      base64Encode: bytes => Buffer.from(bytes).toString('base64'),
       base64Decode: b64 => Array.from(Buffer.from(b64, 'base64')),
       formatString: (pattern, value) => String(value).padStart(6, '0'),
       formatDate: (date, _tz, pattern) => {
@@ -724,6 +725,87 @@ section('13) حراسة الأسطح الجديدة (getPortalBundle / retryDeli
     const message = S.duplicateIdMessage_('المستفيدون', 'رقم المستفيد', 'BEN-000001', 2);
     return message.indexOf('BEN-000001') >= 0 && !/@|05\d{8}/.test(message);
   })());
+}
+
+/* ================================================================
+   14) تأمين الوصول لصورة إثبات التسليم (المرحلة الثانية عشرة)
+   ================================================================ */
+
+section('14) تأمين الوصول لصورة إثبات التسليم');
+{
+  const S = buildSandbox();
+  const { associationAId, associationBId } = seedFullEnvironment(S);
+  const userA = S.createSession_({ id: 'USR-PROOF-A', name: 'جمعية أ', role: 'ASSOCIATION', associationId: associationAId });
+  const userB = S.createSession_({ id: 'USR-PROOF-B', name: 'جمعية ب', role: 'ASSOCIATION', associationId: associationBId });
+  const admin = adminSession(S);
+
+  const beneficiaryA = S.saveBeneficiary(userA.token, {
+    name: 'مستفيد إثبات أ', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
+    phone: '0501119001', familyCount: 2, socialStatus: 'أرملة', needs: ['ثلاجة'], lat: '24.7', lng: '46.6'
+  });
+  const delegateA = S.saveDelegate(userA.token, { name: 'مندوب إثبات أ', phone: '0501119002' });
+  const otherDelegateA = S.saveDelegate(userA.token, { name: 'مندوب آخر لدى أ', phone: '0501119003' });
+  S.saveDevice(admin.token, { name: 'ثلاجة إثبات', type: 'ثلاجة', associationId: associationAId, beneficiaryId: beneficiaryA.id });
+  S.assignDelegate(userA.token, beneficiaryA.id, delegateA.id);
+
+  const delegateSessionA = S.createSession_({ id: delegateA.id, name: 'مندوب إثبات أ', role: 'DELEGATE', associationId: associationAId });
+  const otherDelegateSessionA = S.createSession_({ id: otherDelegateA.id, name: 'مندوب آخر لدى أ', role: 'DELEGATE', associationId: associationAId });
+
+  const REAL_PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  const delivered = S.confirmDelivery(delegateSessionA.token, {
+    beneficiaryId: beneficiaryA.id, confirmed: true, proofDataUrl: 'data:image/png;base64,' + REAL_PNG_B64
+  });
+  assert('تأكيد التسليم بصورة إثبات صحيحة ينجح', delivered.ok === true);
+  const deliveryRow = S.readTable_('التسليمات').rows.find(row => String(row['رقم المستفيد']) === beneficiaryA.id);
+  const deliveryId = String(deliveryRow['رقم التسليم']);
+
+  assert('العمود "رابط الإثبات" يخزّن معرّف ملف Drive خامًا لا رابطًا كاملًا بعد هذا التعديل',
+    String(deliveryRow['رابط الإثبات']).indexOf('http') === -1 && String(deliveryRow['رابط الإثبات']).indexOf('/') === -1);
+
+  const adminView = S.getDeliveryProofImage(admin.token, deliveryId);
+  assert('الإدارة تستطيع عرض إثبات أي تسليم', adminView.ok === true && adminView.dataUrl.indexOf('data:image/png;base64,') === 0);
+
+  const assocAView = S.getDeliveryProofImage(userA.token, deliveryId);
+  assert('الجمعية صاحبة المستفيد تستطيع عرض إثبات تسليمه', assocAView.ok === true && assocAView.dataUrl.indexOf('data:image/png;base64,') === 0);
+
+  throws('جمعية أخرى لا تستطيع عرض إثبات تسليم ليس لمستفيديها (IDOR)',
+    () => S.getDeliveryProofImage(userB.token, deliveryId), 'ليس لديك صلاحية');
+
+  const delegateView = S.getDeliveryProofImage(delegateSessionA.token, deliveryId);
+  assert('المندوب الذي نفَّذ التسليم يستطيع عرض إثباته الخاص', delegateView.ok === true && delegateView.dataUrl.indexOf('data:image/png;base64,') === 0);
+
+  throws('مندوب آخر لدى نفس الجمعية لا يستطيع عرض إثبات تسليم لم يُنفِّذه هو',
+    () => S.getDeliveryProofImage(otherDelegateSessionA.token, deliveryId), 'ليس لديك صلاحية');
+
+  throws('استدعاء غير مصادَق (رمز فارغ) يُرفض', () => S.getDeliveryProofImage('', deliveryId), 'انتهت الجلسة');
+  throws('طلب صورة إثبات لتسليم غير موجود يُرفض برسالة واضحة', () => S.getDeliveryProofImage(admin.token, 'DLV-999999'), 'غير موجود');
+
+  assert('عرض صورة الإثبات يُسجَّل في سجل العمليات', (() => {
+    const rows = S.readTable_('سجل العمليات').rows;
+    return rows.some(row => String(row['العملية']) === 'عرض صورة إثبات تسليم' && String(row['رقم السجل']) === deliveryId);
+  })());
+
+  // توافق خلفي: سجلات أقدم كانت saveProofImage_ تُخزِّن فيها رابط Drive
+  // كاملًا (قبل هذا التعديل) — يجب أن تبقى قابلة للعرض دون أي ترحيل أو
+  // إعادة كتابة فعلية لقيمة الخلية.
+  const legacyFileId = String(deliveryRow['رابط الإثبات']);
+  assert('driveFileIdFromProofValue_ تستخرج المعرّف من قيمة خام كما هي', S.driveFileIdFromProofValue_(legacyFileId) === legacyFileId);
+  assert('driveFileIdFromProofValue_ تستخرج المعرّف من رابط Drive قديم كامل (توافق خلفي بلا ترحيل بيانات)',
+    S.driveFileIdFromProofValue_('https://drive.example/file/' + legacyFileId) === legacyFileId);
+
+  // لا رابط Drive خام (ولا حتى المعرّف الخام) يُسرَّب ضمن أي قائمة/حزمة/بطاقة مهمة.
+  const taskPayload = S.delegateTaskPayload_(beneficiaryA.id);
+  assert('delegateTaskPayload_ (بطاقة مهمة المندوب) لا تحمل معرّف/رابط ملف الإثبات إطلاقًا',
+    JSON.stringify(taskPayload).indexOf(legacyFileId) === -1);
+  const listing = S.listBeneficiaries_(S.createSession_({ id: 'USR-PROOF-CHK', name: 'فحص', role: 'ADMIN', associationId: '' }), {});
+  assert('listBeneficiaries_ لا تحمل معرّف/رابط ملف الإثبات في أي عنصر',
+    JSON.stringify(listing).indexOf(legacyFileId) === -1);
+
+  const attemptsForAdmin = S.listBeneficiaryDeliveryAttempts(admin.token, beneficiaryA.id);
+  assert('listBeneficiaryDeliveryAttempts تُعيد hasProof منطقيًا فقط، لا المعرّف أو الرابط نفسه',
+    attemptsForAdmin.attempts.some(a => a.hasProof === true) && JSON.stringify(attemptsForAdmin).indexOf(legacyFileId) === -1);
+  throws('جمعية أخرى لا تستطيع طلب سجل محاولات تسليم مستفيد ليس لها',
+    () => S.listBeneficiaryDeliveryAttempts(userB.token, beneficiaryA.id), 'صلاحية');
 }
 
 /* -------- النتيجة -------- */

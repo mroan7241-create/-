@@ -144,6 +144,7 @@ function deliveryAttemptsFor_(beneficiaryId) {
     .filter(row => String(row['رقم المستفيد']) === String(beneficiaryId))
     .map(row => ({
       id: String(row['رقم التسليم']),
+      delegateId: String(row['رقم المندوب'] || ''),
       status: String(row['الحالة']),
       reason: String(row['سبب التعذر'] || ''),
       notes: String(row['الملاحظات'] || ''),
@@ -257,7 +258,7 @@ function confirmDelivery_(user, beneficiaryId, payload) {
   // يقبل جهازًا لا يزال "بالمستودع" أو "مخصص" ولم يخرج بعد.
   const devices = dispatchedDevicesForBeneficiary_(beneficiaryId);
   if (!devices.length) throw new Error('لا توجد أجهزة "خرجت مع المندوب" لهذا المستفيد بعد؛ تحقق من تعيين المندوب أولًا');
-  const proofUrl = saveProofImage_(payload.proofDataUrl, beneficiaryId);
+  const proof = saveProofImage_(payload.proofDataUrl);
   const deliveredAt = now_();
   const deliveryId = nextId_('DLV');
   const lock = LockService.getScriptLock();
@@ -286,7 +287,7 @@ function confirmDelivery_(user, beneficiaryId, payload) {
       'رقم التسليم': deliveryId, 'رقم المستفيد': beneficiaryId, 'رقم المندوب': user.id,
       'أرقام الأجهزة': latestDevices.map(x => x.id).join(', '), 'الحالة': 'تم التسليم',
       'سبب التعذر': '', 'الملاحظات': cleanText_(payload.notes, 500),
-      'رابط الإثبات': proofUrl, 'تاريخ ووقت التسليم': deliveredAt, 'تاريخ الإنشاء': deliveredAt
+      'رابط الإثبات': proof.fileId, 'تاريخ ووقت التسليم': deliveredAt, 'تاريخ الإنشاء': deliveredAt
     });
   } finally {
     lock.releaseLock();
@@ -319,7 +320,18 @@ function verifyImageMagicBytes_(bytes, kind) {
   return false;
 }
 
-function saveProofImage_(dataUrl, beneficiaryId) {
+/**
+ * لا يُستدعى getUrl() ولا setSharing() على الملف الناتج إطلاقًا — يبقى
+ * خاصًا بمالك المشروع فقط (نفس مبدأ saveLicenseFile_ في Applications.gs
+ * تمامًا). يعيد المعرّف فقط لا رابطًا: العمود "رابط الإثبات" في ورقة
+ * "التسليمات" يخزّن من الآن فصاعدًا معرّف الملف الخام حصرًا، لا رابط Drive
+ * كاملًا كما كان — القراءة الآمنة اللاحقة (getDeliveryProofImage) هي
+ * المسار الوحيد لعرض الصورة، عبر driveFileIdFromProofValue_ التي تتعامل
+ * أيضًا مع صفوف قديمة قد تحمل رابطًا كاملًا (بلا أي إعادة كتابة لها).
+ * اسم الملف عشوائي بالكامل (UUID) — لا يحمل رقم المستفيد ولا أي بيانات
+ * تعريفية، فلا حاجة له بعد أن صار الربط عبر معرّف الملف المخزَّن فقط.
+ */
+function saveProofImage_(dataUrl) {
   const match = String(dataUrl || '').match(/^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/);
   if (!match) throw new Error('أرفق صورة إثبات بصيغة JPG أو PNG أو WEBP');
   const bytes = Utilities.base64Decode(match[2]);
@@ -329,9 +341,10 @@ function saveProofImage_(dataUrl, beneficiaryId) {
   }
   const mime = 'image/' + match[1];
   const ext = match[1] === 'jpeg' ? 'jpg' : match[1];
+  const filename = Utilities.getUuid() + '.' + ext;
   const folder = proofFolder_();
-  const filename = beneficiaryId + '-' + Utilities.formatDate(new Date(), APP.timezone, 'yyyyMMdd-HHmmss') + '.' + ext;
-  return folder.createFile(Utilities.newBlob(bytes, mime, filename)).getUrl();
+  const file = folder.createFile(Utilities.newBlob(bytes, mime, filename));
+  return {fileId: file.getId(), fileName: filename, fileType: mime, fileSize: bytes.length};
 }
 
 function proofFolder_() {
@@ -344,5 +357,101 @@ function proofFolder_() {
   props.setProperty('PROOF_FOLDER_ID', folder.getId());
   updateSetting_('مجلد شواهد التسليم', folder.getUrl());
   return folder;
+}
+
+/**
+ * يستخرج معرّف ملف Drive من قيمة عمود "رابط الإثبات" مهما كانت صيغتها:
+ * - سجلات جديدة (بعد هذا التعديل): معرّف خام مباشرة (بلا أي رابط).
+ * - سجلات قديمة سبقت هذا التعديل: كانت saveProofImage_ تُعيد getUrl()
+ *   ويُخزَّن رابط Drive كاملًا — يُستخرَج المعرّف منه للقراءة فقط، دون أي
+ *   كتابة أو ترحيل فعلي لقيمة الخلية المخزَّنة (ممنوع تعديل بيانات قائمة
+ *   دون موافقة صريحة). يغطي الاستخراج صيغتَي Drive الفعليتين
+ *   (open?id={id} و /file/d/{id}/view)، مع احتياط أخير بآخر جزء من
+ *   المسار لأي شكل رابط آخر غير متوقَّع.
+ */
+function driveFileIdFromProofValue_(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.indexOf('/') === -1 && raw.indexOf('?') === -1) return raw;
+  const idParam = raw.match(/[?&]id=([-\w]+)/);
+  if (idParam) return idParam[1];
+  const pathId = raw.match(/\/d\/([-\w]+)/);
+  if (pathId) return pathId[1];
+  const segments = raw.split(/[/?]/).filter(Boolean);
+  return segments.length ? segments[segments.length - 1] : '';
+}
+
+/**
+ * صورة إثبات تسليم واحدة — وصول محروس بالجلسة والدور وملكية الجمعية/
+ * ارتباط المندوب معًا، على غرار getApplicationLicenseFile في
+ * Applications.gs تمامًا:
+ * - ADMIN: أي تسليم.
+ * - ASSOCIATION: فقط تسليمات مستفيديها (نفس عزل الجمعية المعتاد في المشروع).
+ * - DELEGATE: فقط تسليمات نفّذها هو شخصيًا (قراءة فقط — لا صلاحية أخرى
+ *   يمنحها هذا المسار).
+ * لا يُستدعى إلا صراحةً عند فتح تفاصيل مستفيد/تسليم (تحميل كسول) — لا
+ * علاقة له بأي قائمة أو لوحة تحكم، ولا يُعاد أي رابط Drive خام في أي
+ * استجابة أخرى في المشروع إطلاقًا؛ فقط data URL هنا بعد كل التحقق أعلاه.
+ */
+function getDeliveryProofImage(token, deliveryId) {
+  const user = requireSession_(token, ['ADMIN', 'ASSOCIATION', 'DELEGATE']);
+  return withMeta_(perfTime_('getDeliveryProofImage', () => {
+    deliveryId = cleanId_(deliveryId);
+    const delivery = findById_(APP.sheets.deliveries, 'رقم التسليم', deliveryId);
+    if (!delivery) throw new Error('سجل التسليم غير موجود');
+    if (user.role === 'DELEGATE' && String(delivery['رقم المندوب']) !== user.id) {
+      throw new Error('ليس لديك صلاحية لعرض هذا الإثبات');
+    }
+    if (user.role === 'ASSOCIATION') {
+      const beneficiaryId = String(delivery['رقم المستفيد'] || '');
+      const beneficiary = beneficiaryId ? findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId) : null;
+      if (!beneficiary || String(beneficiary['رقم الجمعية']) !== user.associationId) {
+        throw new Error('ليس لديك صلاحية لعرض هذا الإثبات');
+      }
+    }
+    const fileId = driveFileIdFromProofValue_(delivery['رابط الإثبات']);
+    if (!fileId) throw new Error('لا توجد صورة إثبات مرفقة بهذا التسليم');
+    let file;
+    try {
+      file = DriveApp.getFileById(fileId);
+    } catch (error) {
+      throw new Error('تعذّر الوصول إلى صورة الإثبات — قد تكون محذوفة');
+    }
+    const blob = file.getBlob();
+    const base64 = Utilities.base64Encode(blob.getBytes());
+    audit_(user, 'عرض صورة إثبات تسليم', 'التسليمات', deliveryId, '');
+    return {ok: true, dataUrl: 'data:' + blob.getContentType() + ';base64,' + base64};
+  }));
+}
+
+/**
+ * سجل محاولات تسليم مستفيد واحد للإدارة/الجمعية — نفس deliveryAttemptsFor_
+ * المُستخدَمة داخليًا لبطاقة المندوب، لكن مكشوفة هنا خلف تحقق صلاحية
+ * صريح؛ تُستدعى فقط عند فتح تفاصيل المستفيد (تحميل كسول)، لا ضمن
+ * getBootstrapData ولا أي قائمة، ولا تحمل أي رابط Drive خام — hasProof
+ * مؤشر منطقي فقط، والصورة نفسها تُطلَب لاحقًا عبر getDeliveryProofImage
+ * صراحةً بعد ضغط المستخدم.
+ */
+function listBeneficiaryDeliveryAttempts(token, beneficiaryId) {
+  const user = requireSession_(token, ['ADMIN', 'ASSOCIATION', 'DELEGATE']);
+  return withMeta_(perfTime_('listBeneficiaryDeliveryAttempts', () => {
+    beneficiaryId = cleanId_(beneficiaryId);
+    const beneficiary = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId);
+    if (!beneficiary) throw new Error('المستفيد غير موجود');
+    if (user.role === 'ASSOCIATION' && String(beneficiary['رقم الجمعية']) !== user.associationId) {
+      throw new Error('ليس لديك صلاحية');
+    }
+    if (user.role === 'DELEGATE' && String(beneficiary['رقم المندوب']) !== user.id) {
+      throw new Error('ليس لديك صلاحية');
+    }
+    const delegates = readTable_(APP.sheets.delegates).rows;
+    const attempts = deliveryAttemptsFor_(beneficiaryId).map(attempt => Object.assign({}, attempt, {
+      delegateName: (function () {
+        const row = delegates.find(d => String(d['رقم المندوب']) === String(attempt.delegateId));
+        return row ? String(row['اسم المندوب']) : attempt.delegateId;
+      })()
+    }));
+    return {ok: true, attempts: attempts};
+  }));
 }
 

@@ -125,9 +125,9 @@ function buildSandbox() {
     DriveApp: {
       createFolder: () => ({
         getId: () => 'folder-id', getUrl: () => 'https://drive.example/folder',
-        createFile: () => ({ getUrl: () => 'https://drive.example/file' })
+        createFile: () => ({ getId: () => 'FILE-TEST', getUrl: () => 'https://drive.example/file' })
       }),
-      getFolderById: () => ({ createFile: () => ({ getUrl: () => 'https://drive.example/file' }) })
+      getFolderById: () => ({ createFile: () => ({ getId: () => 'FILE-TEST', getUrl: () => 'https://drive.example/file' }) })
     },
     UrlFetchApp: {}, Logger: { log: msg => { logs.push(String(msg)); } }
   };
