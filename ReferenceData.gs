@@ -23,7 +23,7 @@ const REFERENCE_SEED_REGIONS_CITIES = Object.freeze({
 
 const REFERENCE_SEED_DEVICE_TYPES = ['ثلاجة', 'غسالة', 'فرن', 'مكيف', 'فريزر', 'سخان'];
 const REFERENCE_SEED_SOCIAL_STATUSES = ['يتيم', 'أرملة', 'مطلق/مطلقة', 'متزوج/متزوجة', 'أخرى'];
-const REFERENCE_SEED_ASSOCIATION_CATEGORIES = ['جمعية أهلية', 'جمعية خيرية', 'مؤسسة أهلية', 'جمعية تنموية', 'أخرى'];
+const REFERENCE_SEED_ASSOCIATION_CATEGORIES = ['جمعية أهلية', 'جمعية خيرية', 'جمعية بر', 'مؤسسة أهلية', 'جمعية تنموية', 'أخرى'];
 /** مجال عمل الجمعية — حقل جديد في نموذج تقديم الجمعيات، مستقل عن "التصنيف". */
 const REFERENCE_SEED_ASSOCIATION_SECTORS = ['رعاية الأيتام', 'رعاية الأسر المنتجة', 'ذوو الإعاقة', 'رعاية كبار السن', 'الإغاثة والكوارث', 'التنمية المجتمعية', 'أخرى'];
 
@@ -91,6 +91,18 @@ const REFERENCE_LEGACY_REGION_SYNONYMS = Object.freeze({
   'المدينة': 'المدينة المنورة',
   'الشرقيه': 'الشرقية',
   'الجوف ': 'الجوف'
+});
+
+/**
+ * أسماء سابقة معروفة بثقة لتصنيف جمعية معتمد حاليًا — "بر" كانت الاسم
+ * المُستخدَم فعليًا قبل اعتماد "جمعية بر" رسميًا. سجلّات قديمة تحمل هذه
+ * القيمة تبقى كما هي بلا أي تعديل تلقائي أو جماعي (لا ترحيل هنا)، ولا
+ * تُعتبر "تصنيفًا مجهولًا" في diagnoseReferenceDataIssues_، بينما أي
+ * إنشاء أو تعديل جديد يمر عبر validateAssociationCategory_ يُخزَّن
+ * دائمًا بالاسم الرسمي "جمعية بر" (راجع validateAssociationCategory_).
+ */
+const REFERENCE_LEGACY_CATEGORY_SYNONYMS = Object.freeze({
+  'بر': 'جمعية بر'
 });
 
 /** فهرس عكسي: كل مدينة معتمدة ← قائمة المناطق التي تظهر تحتها (عادة منطقة واحدة فقط). */
@@ -173,7 +185,8 @@ function diagnoseReferenceDataIssues_(token) {
       report('CITY_REGION_MISMATCH', 'high', 'الجمعيات', id, 'المدينة', city, 'مدينة لا تتبع منطقتها المسجَّلة "' + region + '"');
     }
     const category = String(row['التصنيف'] || '');
-    if (category && data.associationCategories.length && data.associationCategories.indexOf(category) === -1) {
+    if (category && data.associationCategories.length && data.associationCategories.indexOf(category) === -1
+      && !REFERENCE_LEGACY_CATEGORY_SYNONYMS[category]) {
       report('UNKNOWN_CATEGORY', 'low', 'الجمعيات', id, 'التصنيف', category, 'تصنيف جمعية غير معروف في القائمة المعتمدة');
     }
   });
@@ -442,12 +455,15 @@ function validateSocialStatus_(value, previous) {
 function validateAssociationCategory_(value, previous) {
   value = cleanText_(value, 80);
   if (!value) return value; // التصنيف اختياري دائمًا، بخلاف المنطقة/المدينة/الحالة الاجتماعية
+  // اسم سابق معروف (مثل "بر") يُطبَّع دائمًا إلى الاسم الرسمي عند أي
+  // إنشاء أو تعديل جديد — لا يُترك بصيغته القديمة في سجل يُكتَب الآن.
+  const canonical = REFERENCE_LEGACY_CATEGORY_SYNONYMS[value] || value;
   const data = getReferenceData();
-  if (!data.ready || !data.associationCategories.length) return value;
-  if (data.associationCategories.indexOf(value) === -1 && !isGrandfatheredValue_(value, previous)) {
+  if (!data.ready || !data.associationCategories.length) return canonical;
+  if (data.associationCategories.indexOf(canonical) === -1 && !isGrandfatheredValue_(value, previous)) {
     throw new Error('تصنيف الجمعية "' + value + '" غير معروف. اختر من القائمة المعتمدة');
   }
-  return value;
+  return canonical;
 }
 
 /**
