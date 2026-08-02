@@ -24,8 +24,8 @@ const FIXTURES = {
     },
     dashboardModules: {
       beneficiaries: {
-        total: 1284, new: 96, underReview: 140, approved: 210, awaitingDevices: 178,
-        delivering: 152, delivered: 468, stalled: 40,
+        total: 1284, new: 96, underReview: 140, approved: 210, locationPending: 87,
+        awaitingDevices: 178, readyForReferral: 64, delivering: 152, delivered: 468, stalled: 40,
         deliveryRate: {value: 39, numerator: 468, denominator: 1201}
       },
       devices: {
@@ -44,12 +44,12 @@ const FIXTURES = {
       }
     },
     beneficiaries: [
-      ben('BEN-000101', 'فاطمة عبدالله العتيبي', 'الرياض', 'الرياض', 'حي النرجس، شارع الأمير سلطان', 6, true, 'أرملة', 2400, ['ثلاجة', 'غسالة'], 'معتمد', 'جاري التجهيز', 'MND-000001'),
-      ben('BEN-000102', 'نورة سالم القحطاني', 'مكة المكرمة', 'جدة', 'حي الصفا، طريق الملك', 4, true, 'مطلق/مطلقة', 1800, ['ثلاجة', 'مكيف', 'فرن'], 'بانتظار الأجهزة', 'لم يبدأ', ''),
-      ben('BEN-000103', 'محمد إبراهيم الدوسري', 'الشرقية', 'الدمام', 'حي الفيصلية، شارع 12', 8, false, 'متزوج/متزوجة', 4200, ['غسالة', 'فريزر'], 'تم التسليم', 'تم التسليم', 'MND-000002'),
-      ben('BEN-000104', 'هند ناصر الشمري', 'القصيم', 'بريدة', 'حي الرحاب، طريق المدينة', 5, true, 'أرملة', 2100, ['ثلاجة', 'سخان'], 'تحت المراجعة', 'لم يبدأ', ''),
-      ben('BEN-000105', 'عبدالرحمن يوسف الغامدي', 'عسير', 'أبها', 'حي المنسك، شارع الملك فيصل', 7, false, 'يتيم', 0, ['مكيف', 'ثلاجة'], 'جاري التسليم', 'خرج مع المندوب', 'MND-000001'),
-      ben('BEN-000106', 'سارة خالد الحربي', 'المدينة المنورة', 'المدينة', 'حي قباء، شارع السلام', 3, true, 'أرملة', 1500, ['غسالة'], 'معتمد', 'تعذر التسليم', 'MND-000002')
+      ben('BEN-000101', 'فاطمة عبدالله العتيبي', 'الرياض', 'الرياض', 'حي النرجس، شارع الأمير سلطان', 6, true, 'أرملة', 2400, ['ثلاجة', 'غسالة'], 'معتمد', 'جاري التجهيز', 'MND-000001', 'النرجس', true),
+      ben('BEN-000102', 'نورة سالم القحطاني', 'مكة المكرمة', 'جدة', 'حي الصفا، طريق الملك', 4, true, 'مطلق/مطلقة', 1800, ['ثلاجة', 'مكيف', 'فرن'], 'بانتظار الأجهزة', 'لم يبدأ', '', 'الصفا', true),
+      ben('BEN-000103', 'محمد إبراهيم الدوسري', 'الشرقية', 'الدمام', 'حي الفيصلية، شارع 12', 8, false, 'متزوج/متزوجة', 4200, ['غسالة', 'فريزر'], 'تم التسليم', 'تم التسليم', 'MND-000002', 'الفيصلية', true),
+      ben('BEN-000104', 'هند ناصر الشمري', 'القصيم', 'بريدة', 'حي الرحاب، طريق المدينة', 5, true, 'أرملة', 2100, ['ثلاجة', 'سخان'], 'تحت المراجعة', 'لم يبدأ', '', 'الرحاب', false),
+      ben('BEN-000105', 'عبدالرحمن يوسف الغامدي', 'عسير', 'أبها', 'حي المنسك، شارع الملك فيصل', 7, false, 'يتيم', 0, ['مكيف', 'ثلاجة'], 'جاري التسليم', 'خرج مع المندوب', 'MND-000001', 'المنسك', true),
+      ben('BEN-000106', 'سارة خالد الحربي', 'المدينة المنورة', 'المدينة', 'حي قباء، شارع السلام', 3, true, 'أرملة', 1500, ['غسالة'], 'معتمد', 'تعذر التسليم', 'MND-000002', 'قباء', true)
     ],
     associations: [
       assoc('ASC-000001', 'جمعية البر بالرياض', 'الرياض', 'الرياض', 420, 880, 610, 540, 12, 61),
@@ -90,19 +90,24 @@ const FIXTURES = {
       { level: 'high', title: 'طلبات انضمام بانتظار المراجعة', message: '3 طلبات جمعية جديدة قيد المراجعة', section: 'طلبات الانضمام', page: 'applications', filter: 'قيد المراجعة' },
       { level: 'high', title: 'نشاط مكتمل دون شاهد', message: 'استقبال كشوفات الجمعيات', section: 'الشواهد', page: 'activities' },
       { level: 'high', title: 'جمعية تحتاج متابعة', message: 'جمعية عطاء بأبها — لم يسلَّم أي جهاز', section: 'الجمعيات', page: 'associations' },
+      { level: 'high', title: 'مستفيدون بانتظار تحديد الموقع', message: '87 مستفيدًا بلا موقع مؤكَّد على الخريطة', section: 'المستفيدون', page: 'beneficiaries', filter: 'بانتظار تحديد الموقع' },
       { level: 'medium', title: 'مستفيدون بلا مندوب', message: '52 مستفيدًا بانتظار تعيين مندوب', section: 'المستفيدون', page: 'beneficiaries', filter: 'لم يبدأ' },
+      { level: 'medium', title: 'مستفيدون جاهزون للإحالة', message: '64 مستفيدًا لديهم أجهزة مخصَّصة وموقع مؤكَّد بانتظار تعيين مندوب', section: 'المستفيدون', page: 'beneficiaries', filter: 'جاهز للإحالة' },
       { level: 'high', title: 'تسليمات متعثرة', message: '40 تسليمًا يحتاج إعادة محاولة', section: 'المستفيدون', page: 'beneficiaries', filter: 'تعذر التسليم' }
     ],
     audit: auditRows()
   }
 };
 
-function ben(id, name, region, city, address, family, ss, social, income, needs, status, delivery, delegateId) {
+function ben(id, name, region, city, address, family, ss, social, income, needs, status, delivery, delegateId, district, hasLocation) {
+  var lat = hasLocation ? 24.7136 + Math.random() * 0.1 : null;
+  var lng = hasLocation ? 46.6753 + Math.random() * 0.1 : null;
   return {
-    id, associationId: 'ASC-000001', name, region, city, address,
+    id, associationId: 'ASC-000001', name, region, city, district: district || 'النرجس', address,
     phone: '05' + String(10000000 + Math.floor(Math.random() * 8999999)).slice(0, 8),
     phone2: '', familyCount: family, socialSecurity: ss, socialStatus: social, income,
     needs, status, deliveryStatus: delivery, delegateId,
+    lat, lng, locationConfirmed: !!hasLocation, locationSource: hasLocation ? 'خريطة' : '', landmark: '',
     notes: 'يفضّل التسليم في الفترة الصباحية.',
     createdAt: '2026/06/12', deliveredAt: delivery === 'تم التسليم' ? '2026/07/21 11:20' : '',
     updatedAt: '2026/07/25 14:05'

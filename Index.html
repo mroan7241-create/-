@@ -1859,7 +1859,9 @@
           {label: 'جديد', value: b.new, page: 'beneficiaries', filter: 'جديد'},
           {label: 'تحت المراجعة', value: b.underReview, page: 'beneficiaries', filter: 'تحت المراجعة'},
           {label: 'معتمد', value: b.approved, page: 'beneficiaries', filter: 'معتمد'},
+          {label: 'بانتظار تحديد الموقع', value: b.locationPending, page: 'beneficiaries', filter: 'بانتظار تحديد الموقع', tone: b.locationPending ? 'critical' : ''},
           {label: 'بانتظار الأجهزة', value: b.awaitingDevices, page: 'beneficiaries', filter: 'بانتظار الأجهزة'},
+          {label: 'جاهز للإحالة', value: b.readyForReferral, page: 'beneficiaries', filter: 'جاهز للإحالة'},
           {label: 'جاري التسليم', value: b.delivering, page: 'beneficiaries', filter: 'جاري التسليم'},
           {label: 'تم التسليم', value: b.delivered, page: 'beneficiaries', filter: 'تم التسليم'},
           {label: 'متعثر', value: b.stalled, page: 'beneficiaries', filter: 'تعذر التسليم', tone: b.stalled ? 'critical' : ''}

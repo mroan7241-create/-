@@ -246,6 +246,18 @@ function buildDashboardModules_(beneficiaries, associations, devices, delegates,
   const beneficiaryCount = status => countBy_(beneficiaries, 'حالة المستفيد', status);
   const delivered = beneficiaryCount('تم التسليم');
   const stalled = countBy_(beneficiaries, 'حالة التسليم', 'تعذر التسليم');
+  // مرحلتان جديدتان في مسار المستفيد/التسليم (مرحلة الموقع الجغرافي):
+  // "بانتظار تحديد الموقع" (لا إحداثيات مؤكَّدة بعد) و"جاهز للإحالة"
+  // (الموقع مؤكَّد + توجد أجهزة "مخصص" + لم يخرج بعد) — نفس التعريفين
+  // المستخدَمين حرفيًا في فلتري listBeneficiaries_ الاصطناعيين، فتُطابق
+  // هذه الأرقام دائمًا نتيجة النقر على المؤشر المقابل لها.
+  const locationPending = validBeneficiaries.filter(row => !beneficiaryLocationConfirmed_(row)).length;
+  const allocatedBeneficiaryIds = new Set(
+    devices.filter(device => String(device['حالة الجهاز']) === 'مخصص').map(device => String(device['رقم المستفيد']))
+  );
+  const readyForReferral = validBeneficiaries.filter(row =>
+    beneficiaryLocationConfirmed_(row) && String(row['حالة التسليم']) === 'لم يبدأ' && allocatedBeneficiaryIds.has(String(row['رقم المستفيد']))
+  ).length;
 
   const deviceCount = status => countBy_(devices, 'حالة الجهاز', status);
   const conflicts = deviceConflicts_(devices, beneficiaries).length;
@@ -280,7 +292,8 @@ function buildDashboardModules_(beneficiaries, associations, devices, delegates,
     beneficiaries: {
       total: beneficiaries.length,
       new: beneficiaryCount('جديد'), underReview: beneficiaryCount('تحت المراجعة'),
-      approved: beneficiaryCount('معتمد'), awaitingDevices: beneficiaryCount('بانتظار الأجهزة'),
+      approved: beneficiaryCount('معتمد'), locationPending: locationPending,
+      awaitingDevices: beneficiaryCount('بانتظار الأجهزة'), readyForReferral: readyForReferral,
       delivering: beneficiaryCount('جاري التسليم'), delivered: delivered, stalled: stalled,
       deliveryRate: {value: validBeneficiaries.length ? Math.round(delivered / validBeneficiaries.length * 100) : 0,
         numerator: delivered, denominator: validBeneficiaries.length}
@@ -333,12 +346,32 @@ function buildAlerts_(beneficiaries, associations, devices, activities, evidence
       page: 'associations'
     });
   });
+  // موقع غير مؤكَّد يمنع الإحالة خادميًا (assignDelegate) — أولوية عالية
+  // لأنه يوقف المسار كله لهذا المستفيد قبل أي خطوة تالية ممكنة.
+  const beneficiariesLocationPending = beneficiaries.filter(row =>
+    String(row['حالة المستفيد']) !== 'ملغي' && !beneficiaryLocationConfirmed_(row)
+  ).length;
+  if (beneficiariesLocationPending) alerts.push({
+    level: 'high', title: 'مستفيدون بانتظار تحديد الموقع', message: beneficiariesLocationPending + ' مستفيدًا بلا موقع مؤكَّد على الخريطة',
+    section: 'المستفيدون', page: 'beneficiaries', filter: 'بانتظار تحديد الموقع'
+  });
   const beneficiariesWithoutDelegate = beneficiaries.filter(row =>
     String(row['حالة المستفيد']) !== 'ملغي' && String(row['حالة التسليم']) === 'لم يبدأ' && !String(row['رقم المندوب'])
   ).length;
   if (beneficiariesWithoutDelegate) alerts.push({
     level: 'medium', title: 'مستفيدون بلا مندوب', message: beneficiariesWithoutDelegate + ' مستفيدًا بانتظار تعيين مندوب',
     section: 'المستفيدون', page: 'beneficiaries', filter: 'لم يبدأ'
+  });
+  // أجهزة خُصصت فعليًا وموقع المستفيد مؤكَّد — كل شرط الإحالة متوفر، لا
+  // ينقصه سوى ضغطة "تعيين مندوب" واحدة؛ تنبيه إيجابي قابل للفعل الفوري.
+  const beneficiariesReadyForReferral = beneficiaries.filter(row => {
+    if (String(row['حالة المستفيد']) === 'ملغي' || String(row['حالة التسليم']) !== 'لم يبدأ') return false;
+    if (!beneficiaryLocationConfirmed_(row)) return false;
+    return devices.some(device => String(device['رقم المستفيد']) === String(row['رقم المستفيد']) && String(device['حالة الجهاز']) === 'مخصص');
+  }).length;
+  if (beneficiariesReadyForReferral) alerts.push({
+    level: 'medium', title: 'مستفيدون جاهزون للإحالة', message: beneficiariesReadyForReferral + ' مستفيدًا لديهم أجهزة مخصَّصة وموقع مؤكَّد بانتظار تعيين مندوب',
+    section: 'المستفيدون', page: 'beneficiaries', filter: 'جاهز للإحالة'
   });
   const beneficiariesAwaitingDevices = countBy_(beneficiaries, 'حالة المستفيد', 'بانتظار الأجهزة');
   if (beneficiariesAwaitingDevices) alerts.push({

@@ -1413,6 +1413,54 @@ section('25) لوحة التحكم التنفيذية: صحة وحدات buildDa
       && empty.associations.progressRate.value === 0 && empty.activities.progressRate.value === 0
       && empty.activities.nextDeadline === null && isFinite(empty.beneficiaries.deliveryRate.value);
   })());
+
+  // مرحلتا الموقع الجغرافي الجديدتان في الوحدة (المرحلة الثالثة عشرة):
+  // benLoc(id, assocId, status, deliveryStatus, hasCoords) — سيناريو معزول
+  // مستقل بمصفوفة خاصة به حتى لا يغيّر عدّادات السيناريو الأصلي أعلاه.
+  const benLoc = (id, assocId, status, deliveryStatus, hasCoords) => Object.assign(
+    ben(id, assocId, status, deliveryStatus, ''),
+    hasCoords ? {'خط العرض': 24.7, 'خط الطول': 46.6} : {'خط العرض': '', 'خط الطول': ''}
+  );
+  const locBeneficiaries = [
+    benLoc('BEN-L1', 'ASC-1', 'جديد', 'لم يبدأ', false),      // بانتظار تحديد الموقع، بلا جهاز مخصَّص
+    benLoc('BEN-L2', 'ASC-1', 'معتمد', 'لم يبدأ', true),      // موقع مؤكَّد + جهاز مخصَّص → جاهز للإحالة
+    benLoc('BEN-L3', 'ASC-1', 'معتمد', 'لم يبدأ', true),      // موقع مؤكَّد لكن بلا جهاز مخصَّص → ليس جاهزًا للإحالة
+    benLoc('BEN-L4', 'ASC-1', 'ملغي', 'لم يبدأ', false)        // ملغى: يُستثنى من كلا العدَّادين
+  ];
+  const locDevices = [dev('DEV-L1', 'ASC-1', 'مخصص', 'BEN-L2')];
+  const locModules = S2.buildDashboardModules_(locBeneficiaries, [asc('ASC-1', 'نشطة')], locDevices, [], [], [], []);
+  assert('locationPending يحصي غير المؤكَّدين فقط، ويستثني الملغى', locModules.beneficiaries.locationPending === 1);
+  assert('readyForReferral يشترط الموقع المؤكَّد وجهازًا "مخصص" معًا وحالة تسليم "لم يبدأ" فقط', locModules.beneficiaries.readyForReferral === 1);
+
+  const locAlerts = S2.buildAlerts_(locBeneficiaries, [asc('ASC-1', 'نشطة')], locDevices, [], []);
+  assert('buildAlerts_ يضيف تنبيه "بانتظار تحديد الموقع" بفلتر listBeneficiaries_ الاصطناعي نفسه', (() => {
+    const item = locAlerts.find(x => x.title === 'مستفيدون بانتظار تحديد الموقع');
+    return item && item.page === 'beneficiaries' && item.filter === 'بانتظار تحديد الموقع' && item.level === 'high';
+  })());
+  assert('buildAlerts_ يضيف تنبيه "جاهزون للإحالة" بفلتر listBeneficiaries_ الاصطناعي نفسه', (() => {
+    const item = locAlerts.find(x => x.title === 'مستفيدون جاهزون للإحالة');
+    return item && item.page === 'beneficiaries' && item.filter === 'جاهز للإحالة' && item.level === 'medium';
+  })());
+
+  assert('فلترة listBeneficiaries_ الفعلية بـ"بانتظار تحديد الموقع"/"جاهز للإحالة" تطابق أرقام لوحة التحكم تمامًا (لا مؤشر يشير لقائمة بعدد مختلف)', (() => {
+    const adminUser = {id: 'USR-ADMIN-TEST', role: 'ADMIN', associationId: ''};
+    const beforePending = S2.listBeneficiaries_(adminUser, {filter: 'بانتظار تحديد الموقع'}).total;
+    const beforeReady = S2.listBeneficiaries_(adminUser, {filter: 'جاهز للإحالة'}).total;
+    const noLoc = S2.saveBeneficiary(adminSession.token, {associationId: accepted.associationId,
+      name: 'بلا موقع لوحة التحكم', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
+      phone: '0501230001', familyCount: 1, socialStatus: 'أرملة', needs: []});
+    const withLoc = S2.saveBeneficiary(adminSession.token, {associationId: accepted.associationId,
+      name: 'بموقع وجهاز لوحة التحكم', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
+      phone: '0501230002', familyCount: 1, socialStatus: 'أرملة', needs: [], lat: '24.7', lng: '46.6'});
+    S2.saveDevice(adminSession.token, {name: 'ثلاجة لوحة التحكم', type: 'ثلاجة', associationId: accepted.associationId, beneficiaryId: withLoc.id});
+    const boot = S2.getBootstrapDataFor_(adminUser, false);
+    const pendingList = S2.listBeneficiaries_(adminUser, {filter: 'بانتظار تحديد الموقع'});
+    const readyList = S2.listBeneficiaries_(adminUser, {filter: 'جاهز للإحالة'});
+    return boot.dashboardModules.beneficiaries.locationPending === pendingList.total
+      && boot.dashboardModules.beneficiaries.readyForReferral === readyList.total
+      && pendingList.total === beforePending + 1 && readyList.total === beforeReady + 1
+      && pendingList.items.some(x => x.id === noLoc.id) && readyList.items.some(x => x.id === withLoc.id);
+  })());
 }
 
 section('26) لوحة التحكم: عزل الجمعيات وعدم زيادة قراءات Sheets عند التنقل المتكرر');
