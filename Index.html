@@ -506,6 +506,9 @@
     .dg-attempt{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;font-size:12.5px;margin:10px 0 0;color:var(--ink-soft)}
     .dg-attempt-label{font-weight:700;color:var(--gold-700)}
     .dg-note{font-size:12.5px;color:var(--ink-soft);margin:8px 0 0;line-height:1.7}
+    .attempts-list{display:flex;flex-direction:column;gap:10px}
+    .attempt-row{border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 12px}
+    .attempt-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
     .gate-hint{font-size:12.5px;color:var(--ink-soft);margin:10px 0 0;line-height:1.7}
     .gate-hint.is-ready{color:var(--ok)}
 
@@ -2069,6 +2072,12 @@
         + ' · التسليم: ' + esc(item.deliveredAt || 'لم يتم') + '</p>'
         + '<p style="white-space:pre-wrap">' + esc(item.notes || 'لا توجد ملاحظات مسجّلة.') + '</p>';
 
+      var canSeeDelivery = state.data.role === 'ASSOCIATION' || state.data.role === 'ADMIN';
+      if (canSeeDelivery) {
+        body += '<h4 style="margin:18px 0 8px;color:var(--zad-800)">سجل التسليم</h4>'
+          + '<div id="deliveryAttempts"><p class="muted">جارٍ تحميل سجل التسليم…</p></div>';
+      }
+
       var footer = '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>';
       if ((state.data.role === 'ASSOCIATION' || state.data.role === 'ADMIN') && item.deliveryStatus !== 'تم التسليم') {
         footer += '<button class="btn btn-soft" data-act="edit-beneficiary" data-id="' + esc(item.id) + '">تعديل البيانات</button>';
@@ -2077,7 +2086,47 @@
           : '<button class="btn btn-primary" data-act="edit-beneficiary" data-id="' + esc(item.id)
             + '" title="أكمل الإحداثيات على الخريطة أولًا">استكمال الموقع لتفعيل الإحالة</button>';
       }
-      openModal('ملف المستفيد', body, footer);
+      openModal('ملف المستفيد', body, footer, canSeeDelivery ? function () { loadDeliveryAttempts(item.id); } : null);
+    }
+
+    /**
+     * يجلب سجل محاولات التسليم فقط عند فتح تفاصيل المستفيد (تحميل كسول
+     * صريح — لا ضمن أي قائمة أو لوحة تحكم)؛ كل صورة إثبات تُطلَب بدورها
+     * بضغطة مستقلة عبر viewProofImage، فلا تُجلَب أي صورة إلا عند طلبها
+     * فعليًا. يعيد الفحص عن الحاوية بعد وصول الاستجابة لأن المستخدم قد
+     * يكون أغلق النافذة أو فتح غيرها أثناء الانتظار.
+     */
+    function loadDeliveryAttempts(beneficiaryId) {
+      api('listBeneficiaryDeliveryAttempts', state.token, beneficiaryId).then(function (result) {
+        var el = $('#deliveryAttempts');
+        if (el) el.innerHTML = renderDeliveryAttempts(result.attempts);
+      }, function () {
+        var el = $('#deliveryAttempts');
+        if (el) el.innerHTML = '<p class="muted">تعذر تحميل سجل التسليم.</p>';
+      });
+    }
+
+    function renderDeliveryAttempts(attempts) {
+      if (!attempts || !attempts.length) return '<p class="muted">لا توجد محاولات تسليم مسجَّلة بعد.</p>';
+      return '<div class="attempts-list">' + attempts.map(function (a) {
+        return '<div class="attempt-row">'
+          + '<div class="attempt-head">' + statusChip(a.status) + '<span class="muted">' + esc(a.at || '—') + '</span></div>'
+          + '<p class="muted" style="margin:4px 0">المندوب: ' + esc(a.delegateName || '—')
+          + (a.reason ? ' · السبب: ' + esc(a.reason) : '') + '</p>'
+          + (a.hasProof
+            ? '<button class="btn btn-ghost btn-sm" data-act="view-proof" data-id="' + esc(a.id) + '">🖼 عرض صورة الإثبات</button>'
+            : '<span class="hint">لا توجد صورة إثبات لهذه المحاولة</span>')
+          + '</div>';
+      }).join('') + '</div>';
+    }
+
+    /** يجلب صورة الإثبات فقط عند الضغط الصريح (لا تحميل تلقائي) — كل عرض يُسجَّل في سجل العمليات على الخادم. */
+    function viewProofImage(deliveryId) {
+      busy(true);
+      api('getDeliveryProofImage', state.token, deliveryId).then(function (result) {
+        openModal('صورة إثبات التسليم', '<img src="' + esc(result.dataUrl) + '" alt="صورة إثبات التسليم" style="max-width:100%;border-radius:var(--r-md);display:block;margin:0 auto">',
+          '<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>');
+      }, reportError).finally(function () { busy(false); });
     }
 
     /**
@@ -4041,7 +4090,9 @@
         return '<div class="row-item"><div><strong>' + esc(x.beneficiaryName) + '</strong>'
           + '<small>' + esc((x.devices || []).join('، ') || '—') + '</small></div>'
           + '<div class="muted">' + esc(x.deliveredAt) + '</div>'
-          + '<span class="status good">موثّق</span></div>';
+          + (x.hasProof
+            ? '<button type="button" class="btn btn-ghost btn-sm" data-act="view-proof" data-id="' + esc(x.id) + '">🖼 عرض الإثبات</button>'
+            : '<span class="status neutral">بلا صورة إثبات</span>') + '</div>';
       }).join('') + '</div></div>';
     }
 
@@ -4410,6 +4461,7 @@
       'apply-prev': applyStepPrev,
       'view-application': function (el) { viewApplication(el.getAttribute('data-id')); },
       'view-license': function (el) { viewLicenseFile(el.getAttribute('data-id')); },
+      'view-proof': function (el) { viewProofImage(el.getAttribute('data-id')); },
       'accept-application': function (el) { decideApplication(el.getAttribute('data-id'), 'accept'); },
       'reject-application': function (el) { rejectApplicationModal(el.getAttribute('data-id')); },
       'save-reject-application': function (el) { decideApplication(el.getAttribute('data-id'), 'reject'); },

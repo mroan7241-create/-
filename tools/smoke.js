@@ -214,7 +214,7 @@ const DELEGATE_DATA = {
     lat: null, lng: null, locationConfirmed: false,
     devices: [{ id: 'DEV-000001', name: 'ثلاجة', status: 'مع المندوب' }]
   })],
-  history: [{ beneficiaryName: 'نورة السالم', deliveredAt: '2026/07/28 11:00', devices: ['DEV-000002'] }]
+  history: [{ id: 'DLV-000001', beneficiaryName: 'نورة السالم', deliveredAt: '2026/07/28 11:00', devices: ['DEV-000002'], hasProof: true }]
 };
 
 // audit/activities/applications لم تعد ضمن Bootstrap (Bootstrap.gs) —
@@ -385,6 +385,27 @@ app.viewApplication('APP-000001');
 const applicationBody = registry.modalRoot.innerHTML;
 assert('نافذة تفاصيل الطلب تعرض بيانات مقدّم الطلب', applicationBody.includes('سالم العتيبي') && applicationBody.includes('amal@example.org'));
 app.closeModal();
+
+app.state.page = 'beneficiaries';
+app.render();
+app.viewBeneficiary('BEN-000001');
+const beneficiaryDetailBody = registry.modalRoot.innerHTML;
+assert('تفاصيل المستفيد تعرض حاوية سجل التسليم مع رسالة تحميل أولية (تحميل كسول لا فوري)',
+  beneficiaryDetailBody.includes('deliveryAttempts') && beneficiaryDetailBody.includes('جارٍ تحميل سجل التسليم'));
+assert('فتح تفاصيل المستفيد يطلب سجل محاولات التسليم من الخادم (لا ضمن أي قائمة أو لوحة تحكم)',
+  serverCalls.some(c => c.method === 'listBeneficiaryDeliveryAttempts' && c.args[1] === 'BEN-000001'));
+assert('تفاصيل المستفيد تعرض حقل الحي وشارة حالة الموقع', beneficiaryDetailBody.includes('النرجس') && beneficiaryDetailBody.includes('موقع مؤكد'));
+app.closeModal();
+
+assert('renderDeliveryAttempts تعرض زر عرض الإثبات لمحاولة تحمل صورة',
+  app.renderDeliveryAttempts([{ id: 'DLV-000001', status: 'تم التسليم', at: '2026/07/20 09:00', delegateName: 'سعد القحطاني', hasProof: true }]).includes('view-proof'));
+assert('renderDeliveryAttempts تعرض حالة فراغ صريحة لمحاولة بلا صورة إثبات بدل عنصر مكسور',
+  app.renderDeliveryAttempts([{ id: 'DLV-000002', status: 'تعذر التسليم', at: '2026/07/19 09:00', delegateName: 'سعد القحطاني', hasProof: false, reason: 'لا يرد' }]).includes('لا توجد صورة إثبات'));
+assert('renderDeliveryAttempts تعرض حالة فراغ صريحة عند عدم وجود أي محاولات', app.renderDeliveryAttempts([]).includes('لا توجد محاولات تسليم'));
+
+app.viewProofImage('DLV-000001');
+assert('viewProofImage يطلب صورة الإثبات من الخادم عبر المسار المحروس getDeliveryProofImage',
+  serverCalls.some(c => c.method === 'getDeliveryProofImage' && c.args[1] === 'DLV-000001'));
 
 app.state.page = 'activities';
 app.state.activityTab = '';
@@ -632,6 +653,13 @@ setRole(DELEGATE_DATA);
 app.state.delegatePage = 'history';
 app.renderDelegate();
 assert('تبويب السجل يعمل', out().includes('نورة السالم'));
+assert('تسليم موثَّق بصورة يعرض زر عرض الإثبات (لا شارة "موثّق" ثابتة بلا فعل)', out().includes('view-proof') && out().includes('DLV-000001'));
+const historyNoProof = JSON.parse(JSON.stringify(DELEGATE_DATA));
+historyNoProof.history[0].hasProof = false;
+setRole(historyNoProof);
+app.renderDelegate();
+assert('تسليم بلا صورة إثبات يعرض حالة صريحة بدل زر لن يعمل', out().includes('بلا صورة إثبات') && !out().includes('view-proof'));
+setRole(DELEGATE_DATA);
 
 app.state.delegatePage = 'route';
 app.state.delegateRoute = null;

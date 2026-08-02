@@ -91,8 +91,10 @@ function getDeliveryHistory_(delegateId) {
     .map(row => {
       const beneficiary = beneficiaries.find(x => String(x['رقم المستفيد']) === String(row['رقم المستفيد']));
       return {
+        id: String(row['رقم التسليم']),
         beneficiaryName: beneficiary ? String(beneficiary['الاسم']) : String(row['رقم المستفيد']),
         deliveredAt: formatDateTime_(parseDate_(row['تاريخ ووقت التسليم'])),
+        hasProof: !!String(row['رابط الإثبات'] || ''),
         devices: splitList_(row['أرقام الأجهزة'])
       };
     }).reverse();
