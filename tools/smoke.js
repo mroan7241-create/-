@@ -151,10 +151,11 @@ const ADMIN_DATA = {
   },
   beneficiaries: [{
     id: 'BEN-000001', associationId: 'ASC-000001', name: 'فاطمة العتيبي', region: 'الرياض',
-    city: 'الرياض', address: 'حي النرجس، شارع الأمير', phone: '0501234567', phone2: '',
+    city: 'الرياض', district: 'النرجس', address: 'حي النرجس، شارع الأمير', phone: '0501234567', phone2: '',
     familyCount: 5, socialSecurity: true, socialStatus: 'أرملة', income: 2400,
     needs: ['ثلاجة', 'غسالة'], status: 'معتمد', deliveryStatus: 'جاري التجهيز',
     delegateId: 'MND-000001', notes: 'يفضّل التسليم صباحًا',
+    lat: 24.7136, lng: 46.6753, locationConfirmed: true,
     createdAt: '2026/06/01', deliveredAt: '', updatedAt: '2026/07/20 09:00'
   }],
   associations: [{
@@ -205,7 +206,12 @@ const DELEGATE_DATA = {
   user: { id: 'MND-000001', name: 'سعد القحطاني', role: 'DELEGATE', associationId: 'ASC-000001' },
   delegate: ADMIN_DATA.delegates[0],
   summary: { remaining: 3, deliveredToday: 2 },
+  // lat/lng تُصفَّر صراحة هنا رغم وجودها في ADMIN_DATA.beneficiaries[0]:
+  // اختبارات "مسار اليوم" أدناه تفترض عمدًا مستفيدًا بلا إحداثيات لتغطية
+  // حالة الفراغ الخاصة بذلك (لا علاقة لهذا بحظر الإحالة نفسه — المستفيد هنا
+  // مُسنَد للمندوب فعلًا في بيانات المحاكاة الثابتة، بصرف النظر عن الموقع).
   beneficiaries: [Object.assign({}, ADMIN_DATA.beneficiaries[0], {
+    lat: null, lng: null, locationConfirmed: false,
     devices: [{ id: 'DEV-000001', name: 'ثلاجة', status: 'مع المندوب' }]
   })],
   history: [{ beneficiaryName: 'نورة السالم', deliveredAt: '2026/07/28 11:00', devices: ['DEV-000002'] }]
