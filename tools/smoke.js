@@ -77,8 +77,14 @@ const document = {
   addEventListener: (type, fn) => { listeners[type] = fn; },
   contains: () => false,
   activeElement: null,
-  body: new El('body')
+  body: new El('body'),
+  referrer: ''
 };
+
+// location مبسّطة لدعم systemUrl() (رابط "الدخول" في رسائل مشاركة بيانات
+// الدخول) — لا حاجة لأكثر من href ثابت هنا؛ الاختبارات الحية تتحقق فقط
+// من أن الدالة لا تفشل وتعيد نصًا معقولًا.
+const location = { href: 'https://example.com/exec' };
 
 const serverCalls = [];
 const google = {
@@ -96,7 +102,7 @@ const google = {
 const sandbox = {
   console, Intl, Promise, Date, Math, JSON, String, Number, Boolean,
   Array, Object, RegExp, Error, isNaN, parseInt, parseFloat, encodeURIComponent,
-  document, google,
+  document, google, location,
   sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
   FileReader: class { readAsText() {} readAsDataURL() {} },
   FormData: class { get() { return ''; } getAll() { return []; } },
@@ -259,6 +265,17 @@ assert('الحاوية الرئيسية تحمل صنف "login-solo" (تخطيط
 assert('خلفية زخرفية هادئة موجودة (login-bg) بلا أي محتوى نصي داخلها', out().includes('class="login-bg"'));
 assert('زر الدخول الأساسي وزر التقديم الثانوي بينهما تباعد صريح (login-secondary-act)', out().includes('class="login-secondary-act"'));
 assert('الزر الأساسي (تسجيل الدخول) بصريًا أقوى: btn-primary، والثانوي أخف: btn-ghost', out().includes('btn btn-primary btn-block') && out().includes('btn btn-ghost btn-block'));
+
+// صورة معالم السعودية العامة (خلفية) ومخطوطة "أهلا وسهلا" (داخل البطاقة) —
+// كلتاهما مضمَّنتان data URI حقيقيتان لا روابط GitHub خارجية.
+assert('صورة خلفية الدخول (معالم سعودية) مضمَّنة data URI حقيقية',
+  app.BRAND.loginBg.indexOf('data:image/jpeg;base64,') === 0 && app.BRAND.loginBg.length > 5000);
+assert('صورة مخطوطة "أهلا وسهلا" مضمَّنة data URI حقيقية بنسق PNG (شفافية)',
+  app.BRAND.loginCalligraphy.indexOf('data:image/png;base64,') === 0 && app.BRAND.loginCalligraphy.length > 5000);
+assert('خلفية الدخول تُمرَّر عبر متغيّر CSS مخصَّص (--login-photo) لا اعتماد على رابط خارجي',
+  out().includes('--login-photo:url(') && out().includes(app.BRAND.loginBg.slice(0, 40)));
+assert('مخطوطة الترحيب تظهر كعنصر <img> داخل بطاقة الدخول (login-calligraphy)، لا فوق صورة الخلفية',
+  out().includes('class="login-calligraphy"'));
 
 app.state.loginType = 'delegate';
 app.renderLogin();
@@ -769,6 +786,67 @@ assert('phoneIntl يعالج 9 أرقام بلا صفر (العطل المرصو
 assert('phoneLocal يعيد صفرًا بادئًا لبيانات قديمة ناقصة', app.phoneLocal('550791650') === '0550791650');
 assert('phoneLocal يطبّع الصيغة الدولية إلى المحلية', app.phoneLocal('966550791650') === '0550791650');
 assert('phoneLocal يترك الصيغة المحلية الصحيحة كما هي', app.phoneLocal('0550791650') === '0550791650');
+
+/* ---------------- 8ب) تطبيع الجوال ورابط واتساب لمشاركة بيانات الدخول ---------------- */
+
+assert('normalizePhoneForShare يطبّع صيغة سعودية محلية (05...) إلى 9665...',
+  app.normalizePhoneForShare('0550791650') === '966550791650');
+assert('normalizePhoneForShare يطبّع 9 أرقام سعودية بلا صفر بادئ',
+  app.normalizePhoneForShare('550791650') === '966550791650');
+assert('normalizePhoneForShare يترك الصيغة الدولية الصحيحة (9665...) كما هي',
+  app.normalizePhoneForShare('966550791650') === '966550791650');
+assert('normalizePhoneForShare يزيل + والمسافات ورمز الاتصال الدولي 00',
+  app.normalizePhoneForShare('+966 55 079 1650') === '966550791650'
+  && app.normalizePhoneForShare('00966550791650') === '966550791650');
+assert('normalizePhoneForShare يقبل رقمًا دوليًا غير سعودي صالح الطول (مصر مثلًا)',
+  app.normalizePhoneForShare('+201001234567') === '201001234567');
+assert('normalizePhoneForShare يرفض رقمًا قصيرًا جدًا أو فارغًا (null صريح لا رابط فاسد)',
+  app.normalizePhoneForShare('12345') === null && app.normalizePhoneForShare('') === null && app.normalizePhoneForShare(null) === null);
+
+assert('buildWhatsAppShareUrl يبني رابط wa.me برقم دولي ونص مُرمَّز بشكل صحيح',
+  app.buildWhatsAppShareUrl('0550791650', 'مرحبًا').indexOf('https://wa.me/966550791650?text=') === 0);
+assert('buildWhatsAppShareUrl يرمّز الرموز الخاصة والأسطر الجديدة بأمان (encodeURIComponent)',
+  app.buildWhatsAppShareUrl('0550791650', 'س\n&=?').includes(encodeURIComponent('س\n&=?')));
+assert('buildWhatsAppShareUrl يعيد null لرقم غير صالح بدل رابط فاسد', app.buildWhatsAppShareUrl('12', 'x') === null);
+
+assert('associationAcceptMessage يتضمّن اسم الجمعية والبريد وكلمة المرور المؤقتة دون نص تسويقي إضافي',
+  (function () {
+    var msg = app.associationAcceptMessage('جمعية تجريبية', 'a@b.com', 'Tmp-XYZ');
+    return msg.includes('جمعية تجريبية') && msg.includes('a@b.com') && msg.includes('Tmp-XYZ') && msg.includes('رابط الدخول');
+  }()));
+assert('delegateWelcomeMessage يتضمّن اسم المندوب ورمز الدخول',
+  (function () {
+    var msg = app.delegateWelcomeMessage('مندوب تجريبي', 'MND-999999');
+    return msg.includes('مندوب تجريبي') && msg.includes('MND-999999') && msg.includes('رابط الدخول');
+  }()));
+
+// نافذة عرض السرّ الموحَّدة (كلمة مرور جمعية أو رمز مندوب): تعرض السرّ
+// بزر نسخ، وزر نسخ الرسالة كاملة، وزر واتساب فقط إن كان الرقم صالحًا.
+app.showCredentialShareModal({
+  title: 'تم إنشاء الجمعية', personLabel: 'اسم الجمعية', personName: 'جمعية تجريبية',
+  email: 'a@b.com', secretLabel: 'كلمة المرور المؤقتة', secretValue: 'Tmp-XYZ999',
+  phone: '0550791650', message: app.associationAcceptMessage('جمعية تجريبية', 'a@b.com', 'Tmp-XYZ999'),
+  note: 'ملاحظة تجريبية'
+});
+assert('نافذة مشاركة بيانات الدخول تعرض السرّ وزر نسخه',
+  registry.modalRoot.innerHTML.includes('Tmp-XYZ999') && registry.modalRoot.innerHTML.includes('data-act="copy-secret"'));
+assert('نافذة مشاركة بيانات الدخول تعرض زر نسخ الرسالة كاملة', registry.modalRoot.innerHTML.includes('data-act="copy-message"'));
+assert('نافذة مشاركة بيانات الدخول تعرض زر إرسال واتساب لرقم صالح، ورابطه يحمل الرسالة كاملة',
+  registry.modalRoot.innerHTML.includes('data-act="send-whatsapp"') && registry.modalRoot.innerHTML.includes('wa.me/966550791650'));
+
+app.showCredentialShareModal({
+  title: 'تم إنشاء المندوب', personLabel: 'اسم المندوب', personName: 'مندوب تجريبي',
+  secretLabel: 'رمز دخول المندوب', secretValue: 'MND-000123',
+  phone: 'غير صالح', message: app.delegateWelcomeMessage('مندوب تجريبي', 'MND-000123'),
+  note: 'ملاحظة'
+});
+assert('رقم جوال غير صالح: لا يظهر زر واتساب، ويظهر تنبيه واضح بدل رابط فاسد',
+  !registry.modalRoot.innerHTML.includes('data-act="send-whatsapp"') && registry.modalRoot.innerHTML.includes('غير صالح لإرسال واتساب'));
+assert('زر نسخ الرسالة كاملة يبقى متاحًا حتى مع رقم جوال غير صالح (بديل يدوي دائم)',
+  registry.modalRoot.innerHTML.includes('data-act="copy-message"'));
+
+assert('إجراءا copy-message و send-whatsapp مسجَّلان في جدول التوزيع (CLICK_ACTIONS)',
+  typeof app.CLICK_ACTIONS['copy-message'] === 'function' && typeof app.CLICK_ACTIONS['send-whatsapp'] === 'function');
 
 // سجل عمليات المندوب داخل النافذة المنبثقة: خط زمني بديل عن جدول عريض
 // (كان يترك مساحة فارغة واضحة أسفله على الجوال بأعمدة قصيرة/فارغة).
