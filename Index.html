@@ -162,8 +162,29 @@
     .login-bg::before,.login-bg::after{content:"";position:absolute;border-radius:50%}
     .login-bg::before{width:560px;height:560px;top:-260px;inset-inline-end:-200px;border:1px solid rgba(255,255,255,.20)}
     .login-bg::after{width:360px;height:360px;bottom:-180px;inset-inline-start:-140px;border:1px solid rgba(226,166,46,.28)}
-    .login-solo .login-panel{position:relative;z-index:1;background:var(--paper);border-radius:var(--r-xl);
-      box-shadow:var(--sh-4);max-width:460px;width:100%;margin:0;justify-content:flex-start}
+    /* بطاقة زجاجية حقيقية: خلفية معالم السعودية تظهر عبرها كظلال ضبابية
+       ناعمة (backdrop-filter blur+saturate)، لا لون كريمي/بيج/عاجي
+       إطلاقًا — أبيض محايد شبه شفاف فقط، بحد مضيء رفيع ولمعة داخلية
+       وظل عنابي ناعم. العتامة مرفوعة بما يكفي (0.62) كي تبقى النصوص
+       والحقول واضحة القراءة رغم الشفافية (WCAG)، لا "زجاجًا صافيًا"
+       يضحّي بالوضوح. fallback أبيض محايد صريح للمتصفحات التي لا تدعم
+       backdrop-filter (@supports أدناه) — لا اعتماد كليًا على الزجاج. */
+    .login-solo .login-panel{position:relative;z-index:1;
+      background:linear-gradient(165deg, rgba(255,255,255,.72), rgba(255,255,255,.56));
+      -webkit-backdrop-filter:blur(24px) saturate(150%);backdrop-filter:blur(24px) saturate(150%);
+      border:1px solid rgba(255,255,255,.75);border-radius:var(--r-xl);
+      box-shadow:0 30px 70px rgba(94,14,44,.26), inset 0 1px 0 rgba(255,255,255,.65), inset 0 0 40px rgba(255,255,255,.15);
+      max-width:460px;width:100%;margin:0;justify-content:flex-start}
+    @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))) {
+      .login-solo .login-panel{background:var(--paper)}
+    }
+    /* عناصر داخل البطاقة الزجاجية: حقول وتبويب وزر ثانوي بأبيض شبه شفاف
+       متناسق مع الزجاج، بدل الأبيض المصمت أو بيج --canvas الافتراضي
+       (segmented يستخدم --canvas الكريمي أصلًا — ممنوع هنا صراحةً). */
+    .login-solo .login-panel .segmented{background:rgba(255,255,255,.38)}
+    .login-solo .login-panel .segmented button[aria-selected="true"]{background:rgba(255,255,255,.85)}
+    .login-solo .login-panel .control{background:rgba(255,255,255,.78)}
+    .login-solo .login-panel .btn-ghost{background:rgba(255,255,255,.6);border-color:rgba(255,255,255,.8)}
     /* مخطوطة "أهلا وسهلا" داخل البطاقة نفسها (لا فوق صورة الخلفية) —
        بعد الشعارين وقبل حقول الدخول، بلونها العنابي على خلفية البطاقة الفاتحة. */
     .login-calligraphy{display:block;margin:0 auto 18px;max-width:180px;width:44%;height:auto;opacity:.92}
@@ -628,6 +649,10 @@
       .login-panel .lockup-logo{height:66px}
       .login-panel .lockup-partner-logo{height:58px}
       .login-panel .lockup-duo-divider{min-height:52px}
+      /* عتامة أعلى قليلًا للبطاقة الزجاجية على الجوال (شاشة أصغر، غالبًا
+         تباين إضاءة أضعف) لحماية وضوح النص دون فقدان أثر الزجاج نفسه. */
+      .login-solo .login-panel{background:linear-gradient(165deg, rgba(255,255,255,.82), rgba(255,255,255,.68))}
+      .login-solo .login-panel .control{background:rgba(255,255,255,.88)}
 
       /* أهداف لمس أكبر (44 بكسل على الأقل) على الجوال تحديدًا — أزرار
          "التفاصيل"/"تعيين مندوب" الصغيرة وزر إغلاق النافذة الدائري كانا
