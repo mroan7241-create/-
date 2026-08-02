@@ -217,31 +217,146 @@ function changePassword(token, currentPassword, newPassword) {
   return {ok: true};
 }
 
+/**
+ * أجهزة في حالة تتعارض منطقيًا مع حالة المستفيد المرتبط بها — تعريف
+ * واحد يُعاد استخدامه بين buildAlerts_ ووحدة الأجهزة في لوحة التحكم
+ * التنفيذية، بلا أي قراءة إضافية (يُمرَّر له ما سبق تحميله فعلًا).
+ */
+function deviceConflicts_(devices, beneficiaries) {
+  const beneficiaryById = {};
+  beneficiaries.forEach(row => { beneficiaryById[String(row['رقم المستفيد'])] = row; });
+  return devices.filter(device => {
+    if (String(device['حالة الجهاز']) !== 'تم التسليم') return false;
+    const beneficiaryId = String(device['رقم المستفيد'] || '');
+    if (!beneficiaryId) return true;
+    const beneficiary = beneficiaryById[beneficiaryId];
+    return !beneficiary || String(beneficiary['حالة التسليم']) !== 'تم التسليم';
+  });
+}
+
+/**
+ * ملخّص ست وحدات لوحة التحكم التنفيذية — يُحسَب بالكامل من المصفوفات
+ * المحمَّلة أصلًا في buildAdminPortal_ (مستفيدون/جمعيات/أجهزة/مناديب/
+ * أنشطة/طلبات انضمام)، **بلا أي قراءة Sheets إضافية إطلاقًا**. كل رقم
+ * هنا له مقام واضح (نسبة من ماذا) بدل رقم مجرَّد، وكل حقل مرتبط بصفحة
+ * وفلتر فعليَّين في الواجهة للنقر المباشر.
+ */
+function buildDashboardModules_(beneficiaries, associations, devices, delegates, activities, evidence, applications) {
+  const validBeneficiaries = beneficiaries.filter(row => String(row['حالة المستفيد']) !== 'ملغي');
+  const beneficiaryCount = status => countBy_(beneficiaries, 'حالة المستفيد', status);
+  const delivered = beneficiaryCount('تم التسليم');
+  const stalled = countBy_(beneficiaries, 'حالة التسليم', 'تعذر التسليم');
+
+  const deviceCount = status => countBy_(devices, 'حالة الجهاز', status);
+  const conflicts = deviceConflicts_(devices, beneficiaries).length;
+
+  const activeAssociations = countBy_(associations, 'الحالة', 'نشطة');
+  const inactiveAssociations = associations.length - activeAssociations;
+  const pendingApplications = applications.filter(x => x.status === 'قيد المراجعة').length;
+  const acceptedApplications = applications.filter(x => x.status === 'مقبول').length;
+  const rejectedApplications = applications.filter(x => x.status === 'مرفوض').length;
+  const associationsNeedingFollowUp = associations.filter(association => {
+    const id = String(association['رقم الجمعية']);
+    const assigned = devices.filter(device => String(device['رقم الجمعية']) === id).length;
+    const associationDelivered = devices.filter(device => String(device['رقم الجمعية']) === id && String(device['حالة الجهاز']) === 'تم التسليم').length;
+    return assigned > 0 && associationDelivered === 0;
+  }).length;
+  const totalAssociationDevices = devices.length;
+  const totalAssociationDelivered = deviceCount('تم التسليم');
+
+  const completedActivities = activities.filter(x => x.status === 'مكتمل').length;
+  const inProgressActivities = activities.filter(x => x.status === 'جارٍ').length;
+  const upcomingActivities = activities.filter(x => x.status === 'لم يبدأ').length;
+  const lateActivities = activities.filter(x => x.status === 'متأخر').length;
+  const missingEvidence = activities.filter(x => x.progress >= 100 && !x.evidenceUrl).length;
+  // "أقرب موعد قادم": بين الأنشطة الجارية أو لم تبدأ فقط (لا المكتملة ولا
+  // المتأخرة أصلًا — تلك تُعرَض عبر "متأخر" ومركز التنبيهات، لا كموعد
+  // قادم) وبمدة متبقية غير سالبة، فلا يظهر نشاط تجاوز موعده كأنه "قادم".
+  const nextActivity = activities
+    .filter(x => (x.status === 'جارٍ' || x.status === 'لم يبدأ') && x.endDate && x.remainingDays >= 0)
+    .sort((a, b) => a.remainingDays - b.remainingDays)[0];
+
+  return {
+    beneficiaries: {
+      total: beneficiaries.length,
+      new: beneficiaryCount('جديد'), underReview: beneficiaryCount('تحت المراجعة'),
+      approved: beneficiaryCount('معتمد'), awaitingDevices: beneficiaryCount('بانتظار الأجهزة'),
+      delivering: beneficiaryCount('جاري التسليم'), delivered: delivered, stalled: stalled,
+      deliveryRate: {value: validBeneficiaries.length ? Math.round(delivered / validBeneficiaries.length * 100) : 0,
+        numerator: delivered, denominator: validBeneficiaries.length}
+    },
+    devices: {
+      total: devices.length, warehouse: deviceCount('بالمستودع'), allocated: deviceCount('مخصص'),
+      withDelegate: deviceCount('مع المندوب'), delivered: totalAssociationDelivered,
+      damaged: deviceCount('تالف'), conflicts: conflicts
+    },
+    associations: {
+      total: associations.length, active: activeAssociations, inactive: inactiveAssociations,
+      pendingApplications: pendingApplications, acceptedApplications: acceptedApplications,
+      rejectedApplications: rejectedApplications, needsFollowUp: associationsNeedingFollowUp,
+      progressRate: {value: totalAssociationDevices ? Math.round(totalAssociationDelivered / totalAssociationDevices * 100) : 0,
+        numerator: totalAssociationDelivered, denominator: totalAssociationDevices}
+    },
+    activities: {
+      total: activities.length, completed: completedActivities, inProgress: inProgressActivities,
+      upcoming: upcomingActivities, late: lateActivities, missingEvidence: missingEvidence,
+      progressRate: {value: activities.length ? Math.round(completedActivities / activities.length * 100) : 0,
+        numerator: completedActivities, denominator: activities.length},
+      nextDeadline: nextActivity ? {label: nextActivity.subActivity || nextActivity.mainActivity, daysLeft: nextActivity.remainingDays} : null
+    }
+  };
+}
+
 function buildAlerts_(beneficiaries, associations, devices, activities, evidence) {
   const alerts = [];
-  const pendingApplications = getAssociationApplications_().filter(x => x.status === 'قيد المراجعة').length;
+  const applications = getAssociationApplications_();
+  const pendingApplications = applications.filter(x => x.status === 'قيد المراجعة').length;
   if (pendingApplications) alerts.push({
     level: 'high', title: 'طلبات انضمام بانتظار المراجعة',
-    message: pendingApplications + ' طلب جمعية جديدة قيد المراجعة', section: 'طلبات الانضمام'
+    message: pendingApplications + ' طلب جمعية جديدة قيد المراجعة', section: 'طلبات الانضمام',
+    page: 'applications', filter: 'قيد المراجعة'
   });
   activities.filter(x => x.status === 'متأخر').forEach(x => alerts.push({
-    level: 'critical', title: 'نشاط متأخر', message: x.subActivity || x.mainActivity, section: 'الأنشطة'
+    level: 'critical', title: 'نشاط متأخر', message: x.subActivity || x.mainActivity, section: 'الأنشطة',
+    page: 'activities'
   }));
   activities.filter(x => x.progress >= 100 && !x.evidenceUrl).forEach(x => alerts.push({
-    level: 'high', title: 'نشاط مكتمل دون شاهد', message: x.subActivity || x.mainActivity, section: 'الشواهد'
+    level: 'high', title: 'نشاط مكتمل دون شاهد', message: x.subActivity || x.mainActivity, section: 'الشواهد',
+    page: 'activities'
   }));
   associations.forEach(association => {
     const id = String(association['رقم الجمعية']);
     const assigned = devices.filter(device => String(device['رقم الجمعية']) === id).length;
     const delivered = devices.filter(device => String(device['رقم الجمعية']) === id && String(device['حالة الجهاز']) === 'تم التسليم').length;
     if (assigned > 0 && delivered === 0) alerts.push({
-      level: 'high', title: 'جمعية تحتاج متابعة', message: String(association['اسم الجمعية']), section: 'الجمعيات'
+      level: 'high', title: 'جمعية تحتاج متابعة', message: String(association['اسم الجمعية']), section: 'الجمعيات',
+      page: 'associations'
     });
   });
-  const invalid = devices.filter(device =>
-    String(device['حالة الجهاز']) === 'تم التسليم' && !String(device['رقم المستفيد'])
+  const beneficiariesWithoutDelegate = beneficiaries.filter(row =>
+    String(row['حالة المستفيد']) !== 'ملغي' && String(row['حالة التسليم']) === 'لم يبدأ' && !String(row['رقم المندوب'])
   ).length;
-  if (invalid) alerts.push({level: 'critical', title: 'بيانات أجهزة غير منطقية', message: invalid + ' جهازًا مسلّمًا بلا مستفيد', section: 'الأجهزة'});
+  if (beneficiariesWithoutDelegate) alerts.push({
+    level: 'medium', title: 'مستفيدون بلا مندوب', message: beneficiariesWithoutDelegate + ' مستفيدًا بانتظار تعيين مندوب',
+    section: 'المستفيدون', page: 'beneficiaries', filter: 'لم يبدأ'
+  });
+  const beneficiariesAwaitingDevices = countBy_(beneficiaries, 'حالة المستفيد', 'بانتظار الأجهزة');
+  if (beneficiariesAwaitingDevices) alerts.push({
+    level: 'medium', title: 'مستفيدون بلا أجهزة', message: beneficiariesAwaitingDevices + ' مستفيدًا بانتظار تخصيص جهاز',
+    section: 'المستفيدون', page: 'beneficiaries', filter: 'بانتظار الأجهزة'
+  });
+  const stalledDeliveries = countBy_(beneficiaries, 'حالة التسليم', 'تعذر التسليم');
+  if (stalledDeliveries) alerts.push({
+    level: 'high', title: 'تسليمات متعثرة', message: stalledDeliveries + ' تسليمًا يحتاج إعادة محاولة',
+    section: 'المستفيدون', page: 'beneficiaries', filter: 'تعذر التسليم'
+  });
+  const invalid = deviceConflicts_(devices, beneficiaries).length;
+  if (invalid) alerts.push({
+    level: 'critical', title: 'تعارض حالة أجهزة', message: invalid + ' جهازًا بحالة "تم التسليم" لا تطابق حالة المستفيد المرتبط',
+    section: 'الأجهزة', page: 'devices', filter: 'تم التسليم'
+  });
+  const priority = {critical: 0, high: 1, medium: 2, low: 3};
+  alerts.sort((a, b) => (priority[a.level] || 9) - (priority[b.level] || 9));
   return alerts.slice(0, 20);
 }
 

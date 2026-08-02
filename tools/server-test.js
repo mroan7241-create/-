@@ -1323,6 +1323,132 @@ section('24) بوابة التقديم الجديدة: idempotency، honeypot، 
     && legacyRecord.hasLicenseFile === false && legacyRecord.pledgeAccepted === false);
 }
 
+section('25) لوحة التحكم التنفيذية: صحة وحدات buildDashboardModules_ ومقاماتها');
+{
+  const ben = (id, assocId, status, deliveryStatus, delegateId) => ({
+    'رقم المستفيد': id, 'رقم الجمعية': assocId, 'حالة المستفيد': status,
+    'حالة التسليم': deliveryStatus, 'رقم المندوب': delegateId || ''
+  });
+  const dev = (id, assocId, status, beneficiaryId) => ({
+    'رقم الجهاز': id, 'رقم الجمعية': assocId, 'حالة الجهاز': status, 'رقم المستفيد': beneficiaryId || ''
+  });
+  const asc = (id, status) => ({'رقم الجمعية': id, 'الحالة': status});
+  const act = (status, progress, evidenceUrl, remainingDays, label) => ({
+    status: status, progress: progress, evidenceUrl: evidenceUrl, remainingDays: remainingDays,
+    subActivity: label, mainActivity: label, endDate: remainingDays != null ? '2026/09/01' : ''
+  });
+  const app_ = status => ({status: status});
+
+  const beneficiaries = [
+    ben('BEN-1', 'ASC-1', 'جديد', 'لم يبدأ', ''),
+    ben('BEN-2', 'ASC-1', 'تحت المراجعة', 'لم يبدأ', ''),
+    ben('BEN-3', 'ASC-1', 'معتمد', 'لم يبدأ', 'MND-1'),
+    ben('BEN-4', 'ASC-1', 'بانتظار الأجهزة', 'لم يبدأ', 'MND-1'),
+    ben('BEN-5', 'ASC-2', 'جاري التسليم', 'خرج مع المندوب', 'MND-2'),
+    ben('BEN-6', 'ASC-2', 'تم التسليم', 'تم التسليم', 'MND-2'),
+    ben('BEN-7', 'ASC-2', 'تم التسليم', 'تم التسليم', 'MND-2'),
+    ben('BEN-8', 'ASC-2', 'معتمد', 'تعذر التسليم', 'MND-2'),
+    ben('BEN-9', 'ASC-2', 'ملغي', 'لم يبدأ', '')
+  ];
+  const devices = [
+    dev('DEV-1', 'ASC-1', 'بالمستودع'), dev('DEV-2', 'ASC-1', 'بالمستودع'),
+    dev('DEV-3', 'ASC-1', 'مخصص', 'BEN-4'),
+    dev('DEV-4', 'ASC-2', 'مع المندوب', 'BEN-5'),
+    dev('DEV-5', 'ASC-2', 'تم التسليم', 'BEN-6'),
+    dev('DEV-6', 'ASC-2', 'تم التسليم', 'BEN-7'),
+    dev('DEV-7', 'ASC-2', 'تالف'),
+    // تعارض حالة متعمَّد: جهاز "تم التسليم" لمستفيد لم تصل حالته إلى "تم التسليم" فعليًا
+    dev('DEV-8', 'ASC-2', 'تم التسليم', 'BEN-8')
+  ];
+  const associations = [asc('ASC-1', 'نشطة'), asc('ASC-2', 'نشطة'), asc('ASC-3', 'غير نشطة')];
+  const activities = [
+    act('مكتمل', 100, 'https://e', 0, 'نشاط مكتمل موثَّق'),
+    act('مكتمل', 100, '', 0, 'نشاط مكتمل بلا شاهد'),
+    act('جارٍ', 40, '', 5, 'نشاط جارٍ قريب'),
+    act('متأخر', 20, '', -3, 'نشاط متأخر'),
+    act('لم يبدأ', 0, '', 30, 'نشاط قادم بعيد')
+  ];
+  const applications = [app_('قيد المراجعة'), app_('قيد المراجعة'), app_('مقبول'), app_('مرفوض')];
+
+  const modules = S2.buildDashboardModules_(beneficiaries, associations, devices, [], activities, [], applications);
+
+  assert('وحدة المستفيدين: كل الحالات مُحصاة بدقة مطابقة للبيانات المصدر', (() => {
+    const b = modules.beneficiaries;
+    return b.total === 9 && b.new === 1 && b.underReview === 1 && b.approved === 2
+      && b.awaitingDevices === 1 && b.delivering === 1 && b.delivered === 2 && b.stalled === 1;
+  })());
+  assert('وحدة المستفيدين: نسبة التسليم بمقام صحيح (يستثني الملغي، يقسم على المستفيدين الفعّالين فقط)',
+    modules.beneficiaries.deliveryRate.numerator === 2 && modules.beneficiaries.deliveryRate.denominator === 8
+    && modules.beneficiaries.deliveryRate.value === Math.round(2 / 8 * 100));
+
+  assert('وحدة الأجهزة: كل الحالات مُحصاة بدقة', (() => {
+    const d = modules.devices;
+    return d.total === 8 && d.warehouse === 2 && d.allocated === 1 && d.withDelegate === 1
+      && d.delivered === 3 && d.damaged === 1;
+  })());
+  assert('وحدة الأجهزة: تكتشف تعارض حالة الجهاز/المستفيد المتعمَّد (DEV-8) بدقة (لا أكثر ولا أقل)',
+    modules.devices.conflicts === 1);
+
+  assert('وحدة الجمعيات والطلبات: نشطة/غير نشطة وحالات الطلبات الثلاث صحيحة', (() => {
+    const a = modules.associations;
+    return a.total === 3 && a.active === 2 && a.inactive === 1
+      && a.pendingApplications === 2 && a.acceptedApplications === 1 && a.rejectedApplications === 1;
+  })());
+  assert('وحدة الجمعيات: "تحتاج متابعة" تكتشف جمعية بأجهزة مخصَّصة بلا أي تسليم واحد (ASC-1)',
+    modules.associations.needsFollowUp === 1);
+
+  assert('وحدة الأنشطة: كل الحالات الأربع مُحصاة بدقة، وبلا شاهد تُحسَب لكل نشاط مكتمل غير موثَّق', (() => {
+    const t = modules.activities;
+    return t.total === 5 && t.completed === 2 && t.inProgress === 1 && t.upcoming === 1
+      && t.late === 1 && t.missingEvidence === 1;
+  })());
+  assert('وحدة الأنشطة: أقرب موعد قادم يختار أقل مدة متبقية موجبة من بين غير المكتمل، لا سالبًا ولا عشوائيًا',
+    modules.activities.nextDeadline && modules.activities.nextDeadline.label === 'نشاط جارٍ قريب'
+    && modules.activities.nextDeadline.daysLeft === 5);
+
+  assert('لا حالات صفرية تُنتج NaN أو Infinity في أي مقام (بيانات فارغة تمامًا)', (() => {
+    const empty = S2.buildDashboardModules_([], [], [], [], [], [], []);
+    return empty.beneficiaries.deliveryRate.value === 0 && empty.devices.conflicts === 0
+      && empty.associations.progressRate.value === 0 && empty.activities.progressRate.value === 0
+      && empty.activities.nextDeadline === null && isFinite(empty.beneficiaries.deliveryRate.value);
+  })());
+}
+
+section('26) لوحة التحكم: عزل الجمعيات وعدم زيادة قراءات Sheets عند التنقل المتكرر');
+{
+  // dashboardModules تُحسَب فقط للإدارة (buildAdminPortal_) — بوابة
+  // الجمعية تبقى مقيَّدة بملخّصها الخاص (buildProjectSummary_ لجمعيتها
+  // فقط) ولا ترى إطلاقًا حزمة الوحدات الست الكلية لكل الجمعيات.
+  const assocBoot = S2.getBootstrapDataFor_({id: 'USR-ASSOC-DASH', role: 'ASSOCIATION', associationId: accepted.associationId});
+  assert('بوابة الجمعية لا تحمل dashboardModules الإدارية إطلاقًا (لا تسريب بيانات كل الجمعيات لجمعية واحدة)',
+    assocBoot.dashboardModules === undefined);
+
+  const adminBoot1 = S2.getBootstrapDataFor_({id: 'USR-ADMIN-TEST', role: 'ADMIN', associationId: ''}, true);
+  assert('بوابة الإدارة تحمل dashboardModules بوحداته الأربع', adminBoot1.dashboardModules
+    && adminBoot1.dashboardModules.beneficiaries && adminBoot1.dashboardModules.devices
+    && adminBoot1.dashboardModules.associations && adminBoot1.dashboardModules.activities);
+
+  // التنقّل المتكرر لنفس لوحة البيانات (كإعادة فتحها أو التبديل بين
+  // الصفحات ثم العودة، كل واحدة "طلب" منفصل فعليًا) يجب أن يُعاد له من
+  // الذاكرة المؤقتة (APP.cacheSeconds) بعد أول حساب فقط — لا قراءة
+  // Sheets إضافية في أي تنقّل تالٍ طالما لم تُبطَل الذاكرة بكتابة جديدة.
+  const req = read2('_REQ_');
+  S2.clearDashboardCache();
+  S2.beginRequest_('nav-1');
+  S2.getBootstrapDataFor_({id: 'USR-ADMIN-TEST', role: 'ADMIN', associationId: ''}, false);
+  const readsAfterFirstNav = req.reads;
+  assert('أول فتح للوحة بعد إبطال الذاكرة يحسبها فعليًا (قراءات > 0)', readsAfterFirstNav > 0);
+
+  S2.beginRequest_('nav-2');
+  S2.getBootstrapDataFor_({id: 'USR-ADMIN-TEST', role: 'ADMIN', associationId: ''}, false);
+  const readsAfterSecondNav = req.reads;
+  S2.beginRequest_('nav-3');
+  S2.getBootstrapDataFor_({id: 'USR-ADMIN-TEST', role: 'ADMIN', associationId: ''}, false);
+  const readsAfterThirdNav = req.reads;
+  assert('التنقل المتكرر التالي لنفس لوحة الإدارة (طلبان منفصلان آخران) لا يقرأ أي ورقة إطلاقًا — نتيجة من الذاكرة المؤقتة فورًا',
+    readsAfterSecondNav === 0 && readsAfterThirdNav === 0);
+}
+
 /* -------- النتيجة -------- */
 
 console.log('\n' + '='.repeat(56));

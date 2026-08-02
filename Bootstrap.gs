@@ -142,6 +142,7 @@ function buildAdminPortal_(user) {
   // بنية Sheets الحالية دون فهرس مُجمَّع مستقل (راجع RELEASE.md).
   const activities = getActivitiesData_();
   const evidence = getMainActivityEvidence_();
+  const applications = getAssociationApplications_();
   return {
     ok: true,
     generatedAt: formatDateTime_(new Date()),
@@ -149,6 +150,9 @@ function buildAdminPortal_(user) {
     user: user,
     settings: getProjectSettings_(),
     summary: buildProjectSummary_(beneficiaries, associations, devices, delegates, activities),
+    // ملخّص الوحدات الست للوحة التحكم التنفيذية — من نفس المصفوفات
+    // المحمَّلة أعلاه بلا أي قراءة Sheets إضافية (راجع buildDashboardModules_).
+    dashboardModules: buildDashboardModules_(beneficiaries, associations, devices, delegates, activities, evidence, applications),
     beneficiaries: beneficiaries.map(normalizeBeneficiary_),
     associations: associations.map(row => normalizeAssociation_(row, beneficiaries, devices, delegates)),
     devices: devices.map(normalizeDevice_),

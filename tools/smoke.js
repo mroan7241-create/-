@@ -128,6 +128,27 @@ const ADMIN_DATA = {
     devicesWarehouse: 90, devicesAllocated: 60, devicesDelivered: 160,
     deliveryRate: 62, activityRate: 45, completedActivities: 9, totalActivities: 20
   },
+  dashboardModules: {
+    beneficiaries: {
+      total: 128, new: 10, underReview: 8, approved: 20, awaitingDevices: 15,
+      delivering: 15, delivered: 60, stalled: 3,
+      deliveryRate: {value: 55, numerator: 60, denominator: 108}
+    },
+    devices: {
+      total: 310, warehouse: 90, allocated: 60, withDelegate: 20, delivered: 160,
+      damaged: 5, conflicts: 2
+    },
+    associations: {
+      total: 4, active: 3, inactive: 1, pendingApplications: 1, acceptedApplications: 2,
+      rejectedApplications: 1, needsFollowUp: 1,
+      progressRate: {value: 52, numerator: 160, denominator: 310}
+    },
+    activities: {
+      total: 20, completed: 9, inProgress: 4, upcoming: 5, late: 2, missingEvidence: 3,
+      progressRate: {value: 45, numerator: 9, denominator: 20},
+      nextDeadline: {label: 'توزيع الدفعة الثانية', daysLeft: 14}
+    }
+  },
   beneficiaries: [{
     id: 'BEN-000001', associationId: 'ASC-000001', name: 'فاطمة العتيبي', region: 'الرياض',
     city: 'الرياض', address: 'حي النرجس، شارع الأمير', phone: '0501234567', phone2: '',
@@ -155,7 +176,11 @@ const ADMIN_DATA = {
     endDate: '2026/03/01', progress: 60, status: 'متأخر', evidenceUrl: '', delayDays: 12
   }],
   stages: [{ name: 'التجهيز', progress: 60, status: 'قيد التنفيذ' }],
-  alerts: [{ level: 'critical', title: 'نشاط متأخر', message: 'توقيع العقود', section: 'الأنشطة' }],
+  alerts: [
+    { level: 'critical', title: 'نشاط متأخر', message: 'توقيع العقود', section: 'الأنشطة', page: 'activities' },
+    { level: 'high', title: 'طلبات انضمام بانتظار المراجعة', message: '1 طلب جمعية جديدة قيد المراجعة', section: 'طلبات الانضمام', page: 'applications', filter: 'قيد المراجعة' },
+    { level: 'medium', title: 'مستفيدون بلا مندوب', message: '5 مستفيدين بانتظار تعيين مندوب', section: 'المستفيدون', page: 'beneficiaries', filter: 'لم يبدأ' }
+  ],
   audit: [{ user: 'مدير النظام', action: 'إضافة مستفيد', section: 'المستفيدون', recordId: 'BEN-000001', at: '2026/07/20 09:00' }],
   applications: [{
     id: 'APP-000001', name: 'جمعية الأمل', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
@@ -260,40 +285,64 @@ assert('زر إضافة جهاز يظهر للإدارة', out().includes('new-d
 
 app.state.page = 'dashboard';
 app.render();
-assert('مؤشر المستفيدين في لوحة الإدارة قابل للنقر', out().includes('data-act="kpi-nav"') && out().includes('data-page="beneficiaries"'));
-const fakeKpiEl = { getAttribute: k => ({ 'data-page': 'devices', 'data-filter': 'تم التسليم' })[k] };
-app.CLICK_ACTIONS['kpi-nav'](fakeKpiEl);
-assert('النقر على مؤشر "تم تسليمها" ينقل لصفحة الأجهزة', app.state.page === 'devices');
-assert('النقر على المؤشر يطبّق فلتر الحالة المرتبط به', app.state.filter === 'تم التسليم');
-assert('النقر على مؤشر مرتبط بصفحة مُرقَّمة خادميًا يطلب صفحتها من الخادم فعليًا (لا فلترة محلية فقط)',
-  serverCalls.some(c => c.method === 'listDevices'));
-app.state.page = 'dashboard'; app.state.filter = ''; app.render();
 
-/* ---------------- 2ب) أقسام الأنشطة الثلاثة في لوحة بيانات الإدارة ---------------- */
+/* ---------------- 2ب) لوحة التحكم التنفيذية بالوحدات الست (الإدارة) ---------------- */
 
-const activitiesFixture = [
-  {stage: 'التجهيز', mainActivity: 'التعاقد', subActivity: 'توقيع العقود', owner: 'إدارة المشروع',
-    endDate: '2026/01/01', progress: 100, status: 'مكتمل', evidenceUrl: 'https://drive.example/e1'},
-  {stage: 'التنفيذ', mainActivity: 'التوزيع', subActivity: 'توزيع الدفعة الأولى', owner: 'فريق الميدان',
-    endDate: '2026/09/01', progress: 40, status: 'جارٍ', evidenceUrl: ''},
-  {stage: 'التنفيذ', mainActivity: 'التوزيع', subActivity: 'توزيع الدفعة الثانية', owner: 'فريق الميدان',
-    endDate: '2026/12/01', progress: 0, status: 'لم يبدأ', evidenceUrl: ''}
-];
-app.state.lazy.activities = {loading: false, activities: activitiesFixture, stages: [], evidence: []};
-app.state.page = 'dashboard';
+assert('لوحة الإدارة تعرض شبكة الوحدات الأربع الأولى (مستفيدون/أجهزة/جمعيات/أنشطة) بدل بطاقات مفردة كثيرة',
+  out().includes('class="modules-grid"') && (out().match(/class="module-card"/g) || []).length === 4);
+assert('وحدة المستفيدين تعرض كل الحالات المطلوبة بمقام واضح للنسبة', (() => {
+  const html = out();
+  return ['الإجمالي', 'جديد', 'تحت المراجعة', 'معتمد', 'بانتظار الأجهزة', 'جاري التسليم', 'تم التسليم', 'متعثر']
+    .every(label => html.includes(label)) && html.includes('نسبة التسليم: ' + app.fmt(60) + ' من ' + app.fmt(108));
+})());
+assert('وحدة الأجهزة تعرض تعارضات الحالة بلون تحذيري (mstat critical) عند وجودها',
+  /class="mstat clickable critical"[^>]*data-value="devices"/.test(out()));
+assert('وحدة الجمعيات والطلبات تعرض حالات الطلبات الثلاث ورابطها للفلتر الصحيح',
+  /data-act="go" data-value="applications" data-filter="قيد المراجعة"/.test(out())
+  && /data-act="go" data-value="applications" data-filter="مقبول"/.test(out())
+  && /data-act="go" data-value="applications" data-filter="مرفوض"/.test(out()));
+assert('وحدة الأنشطة تعرض الحالات الأربع وأقرب موعد قادم مع المدة المتبقية',
+  ['مكتمل', 'جارٍ', 'قادم', 'متأخر'].every(label => out().includes(label))
+  && out().includes('توزيع الدفعة الثانية') && out().includes(app.fmt(14) + ' يومًا'));
+assert('كل رقم وحدة قابل للنقر عنصر <button> فعلي مع aria-label واضح (وصول بلوحة المفاتيح وقارئ الشاشة)',
+  /<button type="button" class="mstat clickable"[^>]*aria-label="الإجمالي: /.test(out()));
+assert('كل رقم وحدة قابل للنقر ينقل إلى الصفحة والفلتر الصحيحين فعليًا (لا فلترة محلية وهمية)', (() => {
+  const fakeStatEl = { getAttribute: k => ({ 'data-value': 'devices', 'data-filter': 'تم التسليم' })[k] };
+  app.CLICK_ACTIONS['go'](fakeStatEl);
+  const ok = app.state.page === 'devices' && app.state.filter === 'تم التسليم'
+    && serverCalls.some(c => c.method === 'listDevices');
+  app.state.page = 'dashboard'; app.state.filter = ''; app.render();
+  return ok;
+})());
+
+/* ---------------- 2ج) مركز المتابعة والتنبيهات وآخر العمليات ---------------- */
+
+assert('مركز المتابعة والتنبيهات يظهر مرتَّبًا بالأولوية مع إجراء واضح لكل تنبيه',
+  out().includes('مركز المتابعة والتنبيهات') && out().includes('عرض القائمة المرتبطة ←'));
+assert('تنبيه "متوسط" (medium) يُعرض بلون تحذيري محايد لا صارخًا', out().includes('class="alert medium"'));
+const originalAlerts = app.state.data.alerts;
+app.state.data.alerts = [];
 app.render();
-assert('لوحة بيانات الإدارة تعرض قسم "مكتمل" مع رابط الشاهد', out().includes('توقيع العقود') && out().includes('الشاهد ↗'));
-assert('لوحة بيانات الإدارة تعرض قسم "جارٍ حاليًا" بنسبة التقدّم', out().includes('توزيع الدفعة الأولى') && out().includes(app.fmt(40) + '٪'));
-assert('لوحة بيانات الإدارة تعرض قسم "المهمة القادمة" مع موعدها', out().includes('توزيع الدفعة الثانية') && out().includes('2026/12/01'));
-assert('عناصر الأنشطة الثلاثة قابلة للنقر لفتح تفاصيلها', out().includes('data-act="edit-activity"'));
-app.state.lazy.activities = {loading: false, activities: [], stages: [], evidence: []};
+assert('لا توجد تنبيهات: حالة فراغ صريحة إيجابية بدل قائمة فارغة صامتة', out().includes('لا توجد تنبيهات'));
+app.state.data.alerts = originalAlerts;
 app.render();
-assert('لوحة بيانات بلا أنشطة إطلاقًا لا تعرض أقسامًا فارغة مضلِّلة', !out().includes('لا توجد أنشطة مكتملة'));
+assert('لوحة الإدارة تعرض "آخر العمليات" بلا أي بيانات حساسة (لا كلمة مرور ولا تجزئة)',
+  out().includes('آخر العمليات') && !/كلمة المرور|hash|salt/i.test(out()));
+
+const originalModules = app.state.data.dashboardModules;
+app.state.data.dashboardModules = null;
+let moduleError = null;
+try { app.render(); } catch (e) { moduleError = e; }
+assert('غياب dashboardModules (بيانات قديمة مخزَّنة مؤقتًا) لا يُسقِط لوحة الإدارة — سقوط آمن بحالة هيكل عظمي',
+  !moduleError && out().includes('class="sk sk-card"'));
+app.state.data.dashboardModules = originalModules;
+app.render();
 
 setRole(ASSOCIATION_DATA);
 app.state.page = 'dashboard';
 app.render();
-assert('أقسام الأنشطة الثلاثة إدارية فقط، لا تظهر لبوابة الجمعية', !out().includes('المهمة القادمة'));
+assert('وحدات لوحة الإدارة الست إدارية فقط، لا تظهر لبوابة الجمعية', !out().includes('class="modules-grid"'));
+assert('بوابة الجمعية تحتفظ بلوحة "حالة التشغيل" ومؤشراتها كما كانت', out().includes('حالة التشغيل'));
 setRole(ADMIN_DATA);
 app.state.page = 'dashboard'; app.state.filter = ''; app.render();
 

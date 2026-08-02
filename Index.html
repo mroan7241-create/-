@@ -331,6 +331,29 @@
     .kpi strong{position:relative;z-index:1;font-family:var(--font-display);font-size:31px;font-weight:800;color:var(--zad-800);margin-top:auto;line-height:1.1}
     .kpi small{position:relative;z-index:1;color:var(--muted);font-size:12px}
 
+    /* ---------- لوحة التحكم التنفيذية: وحدات ست مجمَّعة ---------- */
+    .modules-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:18px}
+    .module-card{background:var(--paper);border:1px solid var(--line);border-radius:var(--r-lg);padding:18px 20px;box-shadow:var(--sh-1)}
+    .module-head{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+    .module-ico{width:38px;height:38px;flex:none;border-radius:11px;background:var(--zad-100);color:var(--zad-700);display:grid;place-items:center;font-size:17px}
+    .module-head h3{font-size:15.5px;color:var(--zad-800);margin:0}
+    .module-head p{margin:2px 0 0;color:var(--muted);font-size:11.5px}
+    .module-head .ring{margin-inline-start:auto;flex:none;width:52px;height:52px}
+    .module-head .ring::before{width:38px;height:38px;font-size:10.5px}
+    .module-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+    .mstat{background:var(--canvas);border-radius:var(--r-sm);padding:9px 8px;text-align:center;display:flex;flex-direction:column;gap:2px}
+    .mstat strong{font-family:var(--font-display);font-size:18px;font-weight:800;color:var(--zad-800);font-variant-numeric:tabular-nums}
+    .mstat span{font-size:10.5px;color:var(--muted);font-weight:600;line-height:1.3}
+    .mstat.critical strong{color:var(--bad)}
+    .mstat.critical{background:var(--bad-bg)}
+    button.mstat{font:inherit;border:0;width:100%;-webkit-appearance:none;appearance:none}
+    .mstat.clickable{cursor:pointer;transition:transform .12s ease,box-shadow .12s ease}
+    .mstat.clickable:hover,.mstat.clickable:focus-visible{transform:translateY(-1px);box-shadow:var(--sh-2);outline:2px solid var(--zad-700);outline-offset:1px}
+    .module-rate-label{margin:10px 0 0;font-size:11.5px;color:var(--ink-soft);text-align:center}
+    .module-next{margin:10px 0 0;padding:9px 10px;background:var(--gold-100);border-radius:var(--r-sm);font-size:12px;color:var(--zad-800)}
+    .alert.medium{border-color:var(--warn);background:var(--warn-bg)}
+    .alert-action{display:block;margin-top:6px;font-size:11.5px;font-weight:700;color:var(--zad-700)}
+
     /* ---------- Panels ---------- */
     .cols{display:grid;grid-template-columns:1.4fr .85fr;gap:18px}
     .panel{background:var(--paper);border:1px solid var(--line);border-radius:var(--r-lg);padding:20px;box-shadow:var(--sh-1)}
@@ -514,6 +537,7 @@
     @media(max-width:1180px){
       .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
       .cols{grid-template-columns:1fr}
+      .modules-grid{grid-template-columns:1fr}
       /* بلا لوحة الفن الجانبية على الجوال، التمركز الرأسي الكامل ضمن
          100vh يترك مساحة فارغة مفرطة أعلى النموذج على الشاشات الصغيرة —
          محتوى يبدأ من الأعلى بحشوة معقولة بدل تمركز في منتصف الشاشة كاملة. */
@@ -541,6 +565,11 @@
       .kpis{gap:10px}
       .kpi{padding:15px;min-height:112px}
       .kpi strong{font-size:26px}
+      .modules-grid{gap:10px}
+      .module-card{padding:15px}
+      .module-stats{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+      .mstat{padding:7px 5px}
+      .mstat strong{font-size:16px}
       .cards{grid-template-columns:1fr}
       .form-grid{grid-template-columns:1fr}
       .span-2{grid-column:auto}
@@ -1139,7 +1168,9 @@
           state.referenceError = '';
         }
         render();
-        if (state.data.role === 'ADMIN') fetchActivitiesBundle();
+        // لا جلب استباقي لحزمة الأنشطة الكاملة بعد الدخول: وحدة الأنشطة في
+        // لوحة التحكم تُحسَب الآن من بيانات Bootstrap نفسها بلا أي طلب
+        // إضافي، وصفحة "الأنشطة" تجلب حزمتها الخاصة فقط عند فتحها فعليًا.
         toast('مرحبًا بك، ' + (result.user && result.user.name ? result.user.name : ''), 'success');
         if (!state.referenceData) loadReferenceDataOnce();
       }, reportError).finally(function () { busy(false); });
@@ -1703,19 +1734,25 @@
         + '<small>' + esc(item.hint) + '</small></' + tag + '>';
     }
 
+    function dashboardWelcome() {
+      var welcome = state.data.association ? state.data.association.name : 'فريق إدارة المشروع';
+      var todayLabel = '';
+      try {
+        todayLabel = new Intl.DateTimeFormat('ar-SA', {dateStyle: 'full'}).format(new Date());
+      } catch (ignore) { todayLabel = state.data.generatedAt || ''; }
+      return '<section class="hero"><div><h1>مرحبًا، ' + esc(welcome) + '</h1>'
+        + '<p>ملخّص تنفيذي لحالة المشروع والتوزيع في لحظة واحدة.</p></div>'
+        + '<div class="hero-chip">' + esc(todayLabel) + '</div></section>';
+    }
+
     function renderDashboard() {
+      return state.data.role === 'ADMIN' ? renderAdminDashboard() : renderAssociationDashboard();
+    }
+
+    /** لوحة الجمعية — بلا تغيير وظيفي، فقط استُخرجت من renderDashboard الموحَّدة سابقًا. */
+    function renderAssociationDashboard() {
       var s = state.data.summary || {};
-      var isAdmin = state.data.role === 'ADMIN';
-      var kpis = isAdmin ? [
-        {label: 'المستفيدون', value: s.beneficiaries, hint: 'ملف مستفيد', glyph: ICONS.beneficiaries, page: 'beneficiaries'},
-        {label: 'الجمعيات', value: s.associations, hint: 'جمعية مشاركة', glyph: ICONS.associations, page: 'associations'},
-        {label: 'إجمالي الأجهزة', value: s.devices, hint: 'جهاز مسجّل', glyph: ICONS.devices, page: 'devices'},
-        {label: 'المناديب النشطون', value: s.delegates, hint: 'مندوب ميداني', glyph: ICONS.delegates, page: 'delegates'},
-        {label: 'بالمستودع', value: s.devicesWarehouse, hint: 'جهاز جاهز للتخصيص', glyph: '▣', page: 'devices', filter: 'بالمستودع'},
-        {label: 'قيد التسليم', value: s.devicesAllocated, hint: 'مخصص أو مع المندوب', glyph: '◫', page: 'devices', filter: 'مع المندوب'},
-        {label: 'تم تسليمها', value: s.devicesDelivered, hint: 'جهاز موثّق بالصورة', glyph: '✓', accent: true, page: 'devices', filter: 'تم التسليم'},
-        {label: 'نسبة الإنجاز', value: fmt(s.deliveryRate) + '٪', hint: 'من المستفيدين', glyph: '↗', accent: true, page: 'beneficiaries', filter: 'تم التسليم'}
-      ] : [
+      var kpis = [
         {label: 'المستفيدون', value: s.beneficiaries, hint: 'ملف مستفيد', glyph: ICONS.beneficiaries, page: 'beneficiaries'},
         {label: 'الأجهزة المعتمدة', value: s.devices, hint: 'جهاز للجمعية', glyph: ICONS.devices, page: 'devices'},
         {label: 'الأجهزة المستلمة', value: (s.devices || 0) - (s.devicesWarehouse || 0), hint: 'خرجت من المستودع', glyph: '◫', page: 'devices'},
@@ -1723,41 +1760,118 @@
         {label: 'نسبة الإنجاز', value: fmt(s.deliveryRate) + '٪', hint: 'من المستفيدين', glyph: '↗', accent: true, page: 'beneficiaries', filter: 'تم التسليم'},
         {label: 'المناديب', value: s.delegates, hint: 'مندوب نشط', glyph: ICONS.delegates, page: 'delegates'}
       ];
-
-      var activitiesBlock = '';
-      if (isAdmin && s.totalActivities) {
-        activitiesBlock = '<div style="margin-top:22px;padding-top:20px;border-top:1px solid var(--line)">'
-          + '<div class="panel-head"><div><h3>إنجاز أنشطة المشروع</h3><p>'
-          + fmt(s.completedActivities) + ' من ' + fmt(s.totalActivities) + ' نشاطًا مكتملًا</p></div></div>'
-          + bar(s.activityRate, true) + '</div>';
-      }
-      var activitySections = isAdmin ? renderDashboardActivitySections() : '';
-
-      // الجانب: تنبيهات للإدارة، ولمحة تشغيلية للجمعية. لا يُكرَّر هنا
-      // قسم "آخر العمليات" الذي يظهر أسفل اللوحة كاملًا — كان يُعرَض
-      // مرتين بنفس المحتوى تمامًا في بوابة الجمعية (رُصد حيًّا 2026/08/01).
-      var sideTitle = isAdmin ? 'التنبيهات الإدارية' : 'حالة التشغيل';
-      var sideHint = isAdmin ? 'عناصر تستلزم متابعة أو تدخّلًا' : 'مؤشرات تحتاج انتباهك الآن';
-      var sideBody = isAdmin ? renderAlerts() : renderAssociationFocus();
-
-      var welcome = state.data.association ? state.data.association.name : 'فريق إدارة المشروع';
-      var todayLabel = '';
-      try {
-        todayLabel = new Intl.DateTimeFormat('ar-SA', {dateStyle: 'full'}).format(new Date());
-      } catch (ignore) { todayLabel = state.data.generatedAt || ''; }
-
-      return '<section class="hero"><div><h1>مرحبًا، ' + esc(welcome) + '</h1>'
-        + '<p>ملخّص تنفيذي لحالة المشروع والتوزيع في لحظة واحدة.</p></div>'
-        + '<div class="hero-chip">' + esc(todayLabel) + '</div></section>'
+      return dashboardWelcome()
         + '<section class="kpis">' + kpis.map(kpiCard).join('') + '</section>'
         + '<section class="cols"><div class="panel">'
         + '<div class="panel-head"><div><h3>تقدّم التسليم</h3><p>نسبة وصول الأجهزة إلى المستفيدين</p></div>'
-        + ring(s.deliveryRate) + '</div>' + bar(s.deliveryRate) + activitiesBlock + '</div>'
-        + '<div class="panel"><div class="panel-head"><div><h3>' + esc(sideTitle) + '</h3>'
-        + '<p>' + esc(sideHint) + '</p></div></div>' + sideBody + '</div></section>'
-        + activitySections
+        + ring(s.deliveryRate) + '</div>' + bar(s.deliveryRate) + '</div>'
+        + '<div class="panel"><div class="panel-head"><div><h3>حالة التشغيل</h3>'
+        + '<p>مؤشرات تحتاج انتباهك الآن</p></div></div>' + renderAssociationFocus() + '</div></section>'
         + '<section class="panel"><div class="panel-head"><div><h3>آخر العمليات</h3>'
         + '<p>سجل حيّ ومؤرّخ لأحدث الإجراءات</p></div>'
+        + '<button class="btn btn-link" data-act="go" data-value="audit">عرض الكل ←</button></div>'
+        + renderAuditRows(7) + '</section>';
+    }
+
+    /** رقم وحدة واحد — قابل للنقر إن وُصل بصفحة/فلتر فعليَّين، بلون تحذيري إن كان "tone:critical". */
+    function moduleStat(item) {
+      var tag = item.page ? 'button' : 'div';
+      var attrs = item.page
+        ? ' type="button" class="mstat clickable' + (item.tone === 'critical' ? ' critical' : '') + '" data-act="go" data-value="' + esc(item.page) + '"'
+          + (item.filter ? ' data-filter="' + esc(item.filter) + '"' : '')
+          + ' aria-label="' + esc(item.label) + ': ' + fmt(item.value) + '"'
+        : ' class="mstat' + (item.tone === 'critical' ? ' critical' : '') + '"';
+      return '<' + tag + attrs + '><strong>' + fmt(item.value) + '</strong><span>' + esc(item.label) + '</span></' + tag + '>';
+    }
+
+    /** بطاقة وحدة فاخرة واحدة تجمع كل الأرقام المرتبطة معًا بدل بطاقة منفصلة لكل رقم. */
+    function moduleCard(opts) {
+      return '<article class="module-card"><div class="module-head">'
+        + '<span class="module-ico" aria-hidden="true">' + opts.icon + '</span>'
+        + '<div><h3>' + esc(opts.title) + '</h3><p>' + esc(opts.hint) + '</p></div>'
+        + (opts.rate ? ring(opts.rate.value) : '') + '</div>'
+        + '<div class="module-stats">' + opts.stats.map(moduleStat).join('') + '</div>'
+        + (opts.rate ? '<p class="module-rate-label">' + esc(opts.rate.label) + '</p>' : '')
+        + (opts.extra || '') + '</article>';
+    }
+
+    /**
+     * لوحة الإدارة التنفيذية — ست وحدات منظَّمة (بدل بطاقات مفردة كثيرة):
+     * المستفيدون، الأجهزة، الجمعيات والطلبات، الأنشطة (وحدات 1-4 في
+     * شبكة 2×2)، ثم مركز المتابعة والتنبيهات وآخر العمليات (لوحتان
+     * كاملتا العرض أسفلها لأنهما سجلّان لا مجموعة أرقام). كل الأرقام من
+     * dashboardModules المحسوبة على الخادم من نفس بيانات Bootstrap
+     * المحمَّلة أصلًا — بلا أي طلب إضافي عند فتح لوحة البيانات.
+     */
+    function renderAdminDashboard() {
+      var m = state.data.dashboardModules;
+      if (!m) return dashboardWelcome() + skeletonCards(4);
+      var b = m.beneficiaries, d = m.devices, a = m.associations, act = m.activities;
+
+      var beneficiariesCard = moduleCard({
+        icon: ICONS.beneficiaries, title: 'المستفيدون', hint: fmt(b.total) + ' مستفيدًا مسجَّلًا',
+        rate: {value: b.deliveryRate.value, label: 'نسبة التسليم: ' + fmt(b.deliveryRate.numerator) + ' من ' + fmt(b.deliveryRate.denominator) + ' مستفيدًا فعّالًا'},
+        stats: [
+          {label: 'الإجمالي', value: b.total, page: 'beneficiaries'},
+          {label: 'جديد', value: b.new, page: 'beneficiaries', filter: 'جديد'},
+          {label: 'تحت المراجعة', value: b.underReview, page: 'beneficiaries', filter: 'تحت المراجعة'},
+          {label: 'معتمد', value: b.approved, page: 'beneficiaries', filter: 'معتمد'},
+          {label: 'بانتظار الأجهزة', value: b.awaitingDevices, page: 'beneficiaries', filter: 'بانتظار الأجهزة'},
+          {label: 'جاري التسليم', value: b.delivering, page: 'beneficiaries', filter: 'جاري التسليم'},
+          {label: 'تم التسليم', value: b.delivered, page: 'beneficiaries', filter: 'تم التسليم'},
+          {label: 'متعثر', value: b.stalled, page: 'beneficiaries', filter: 'تعذر التسليم', tone: b.stalled ? 'critical' : ''}
+        ]
+      });
+
+      var devicesCard = moduleCard({
+        icon: ICONS.devices, title: 'الأجهزة', hint: fmt(d.total) + ' جهازًا مسجَّلًا',
+        stats: [
+          {label: 'الإجمالي', value: d.total, page: 'devices'},
+          {label: 'بالمستودع', value: d.warehouse, page: 'devices', filter: 'بالمستودع'},
+          {label: 'مخصص', value: d.allocated, page: 'devices', filter: 'مخصص'},
+          {label: 'مع المندوب', value: d.withDelegate, page: 'devices', filter: 'مع المندوب'},
+          {label: 'تم التسليم', value: d.delivered, page: 'devices', filter: 'تم التسليم'},
+          {label: 'تالف', value: d.damaged, page: 'devices', filter: 'تالف'},
+          {label: 'تعارض حالة', value: d.conflicts, page: 'devices', filter: 'تم التسليم', tone: d.conflicts ? 'critical' : ''}
+        ]
+      });
+
+      var associationsCard = moduleCard({
+        icon: ICONS.associations, title: 'الجمعيات والطلبات', hint: fmt(a.total) + ' جمعية مسجَّلة',
+        rate: {value: a.progressRate.value, label: 'إنجاز توزيع الأجهزة: ' + fmt(a.progressRate.numerator) + ' من ' + fmt(a.progressRate.denominator) + ' جهازًا'},
+        stats: [
+          {label: 'نشطة', value: a.active, page: 'associations', filter: 'نشطة'},
+          {label: 'غير نشطة', value: a.inactive, page: 'associations', filter: 'غير نشطة'},
+          {label: 'طلبات قيد المراجعة', value: a.pendingApplications, page: 'applications', filter: 'قيد المراجعة', tone: a.pendingApplications ? 'critical' : ''},
+          {label: 'طلبات مقبولة', value: a.acceptedApplications, page: 'applications', filter: 'مقبول'},
+          {label: 'طلبات مرفوضة', value: a.rejectedApplications, page: 'applications', filter: 'مرفوض'},
+          {label: 'تحتاج متابعة', value: a.needsFollowUp, page: 'associations', tone: a.needsFollowUp ? 'critical' : ''}
+        ]
+      });
+
+      var nextDeadlineHtml = act.nextDeadline
+        ? '<p class="module-next">أقرب موعد: ' + esc(act.nextDeadline.label) + ' — '
+          + (act.nextDeadline.daysLeft > 0 ? 'بعد ' + fmt(act.nextDeadline.daysLeft) + ' يومًا' : 'اليوم') + '</p>'
+        : '';
+      var activitiesCard = moduleCard({
+        icon: '◷', title: 'الأنشطة', hint: fmt(act.total) + ' نشاطًا في خطة المشروع',
+        rate: {value: act.progressRate.value, label: 'نسبة الإنجاز: ' + fmt(act.progressRate.numerator) + ' من ' + fmt(act.progressRate.denominator) + ' نشاطًا مكتملًا'},
+        stats: [
+          {label: 'مكتمل', value: act.completed, page: 'activities'},
+          {label: 'جارٍ', value: act.inProgress, page: 'activities'},
+          {label: 'قادم', value: act.upcoming, page: 'activities'},
+          {label: 'متأخر', value: act.late, page: 'activities', tone: act.late ? 'critical' : ''},
+          {label: 'بلا شاهد', value: act.missingEvidence, page: 'activities', tone: act.missingEvidence ? 'critical' : ''}
+        ],
+        extra: nextDeadlineHtml
+      });
+
+      return dashboardWelcome()
+        + '<section class="modules-grid">' + beneficiariesCard + devicesCard + associationsCard + activitiesCard + '</section>'
+        + '<section class="panel"><div class="panel-head"><div><h3>مركز المتابعة والتنبيهات</h3>'
+        + '<p>مرتَّبة بالأولوية، ولكل تنبيه إجراء مباشر</p></div></div>' + renderAlerts() + '</section>'
+        + '<section class="panel"><div class="panel-head"><div><h3>آخر العمليات</h3>'
+        + '<p>سجل حيّ ومؤرّخ لأحدث الإجراءات — بلا أي بيانات حساسة</p></div>'
         + '<button class="btn btn-link" data-act="go" data-value="audit">عرض الكل ←</button></div>'
         + renderAuditRows(7) + '</section>';
     }
@@ -1798,21 +1912,27 @@
       }).join('') + '</div>';
     }
 
+    /** خريطة توافق خلفي فقط لتنبيهات قديمة مخزَّنة مؤقتًا بلا page/filter صريحين من الخادم. */
     var ALERT_SECTION_PAGE = {
       'طلبات الانضمام': 'applications', 'الأنشطة': 'activities', 'الشواهد': 'activities',
-      'الجمعيات': 'associations', 'الأجهزة': 'devices'
+      'الجمعيات': 'associations', 'الأجهزة': 'devices', 'المستفيدون': 'beneficiaries'
     };
+    var ALERT_LEVEL_CLASS = {critical: 'critical', high: 'high', medium: 'medium'};
     function renderAlerts() {
       var list = state.data.alerts || [];
       if (!list.length) {
-        return emptyState({glyph: '✓', title: 'لا توجد تنبيهات', body: 'كل المؤشرات ضمن النطاق الطبيعي حاليًا.'});
+        return emptyState({glyph: '✓', title: 'لا توجد تنبيهات', body: 'كل المؤشرات ضمن النطاق الطبيعي حاليًا — لا شيء يستلزم تدخّلًا الآن.'});
       }
-      return list.slice(0, 6).map(function (item) {
-        var page = ALERT_SECTION_PAGE[item.section];
-        var openAttrs = page ? ' data-act="go" data-value="' + esc(page) + '" role="button" tabindex="0" style="cursor:pointer"' : '';
-        return '<div class="alert ' + (item.level === 'critical' ? 'critical' : 'high') + '"' + openAttrs + '>'
+      return list.slice(0, 8).map(function (item) {
+        var page = item.page || ALERT_SECTION_PAGE[item.section];
+        var openAttrs = page
+          ? ' data-act="go" data-value="' + esc(page) + '"' + (item.filter ? ' data-filter="' + esc(item.filter) + '"' : '')
+            + ' role="button" tabindex="0" style="cursor:pointer"'
+          : '';
+        return '<div class="alert ' + (ALERT_LEVEL_CLASS[item.level] || 'high') + '"' + openAttrs + '>'
           + '<strong>' + esc(item.title) + '</strong>'
-          + '<small>' + esc(item.message) + ' · ' + esc(item.section) + '</small></div>';
+          + '<small>' + esc(item.message) + ' · ' + esc(item.section) + '</small>'
+          + (page ? '<span class="alert-action">عرض القائمة المرتبطة ←</span>' : '') + '</div>';
       }).join('');
     }
 
@@ -3267,86 +3387,7 @@
       {value: 'لم يبدأ', label: 'قادمة'}
     ];
 
-    /** الأنشطة/المراحل/الشواهد تُجلب عند فتح الصفحة فقط (getActivitiesBundle) — لا ضمن Bootstrap. */
-    /** أيام حتى تاريخ "yyyy/MM/dd" (سالب = تجاوَز الموعد) — تقريب بتوقيت المتصفح المحلي، لعرض إرشادي فقط لا حسابًا رسميًا. */
-    function daysFromToday(dateStr) {
-      if (!dateStr) return null;
-      var parts = String(dateStr).trim().split(/[\/\s:]/).map(Number);
-      if (parts.length < 3 || !parts[0] || isNaN(parts[0])) return null;
-      var target = new Date(parts[0], parts[1] - 1, parts[2]);
-      var today = new Date();
-      today.setHours(0, 0, 0, 0);
-      return Math.round((target - today) / 86400000);
-    }
-
-    /**
-     * ثلاثة أقسام تشغيلية للوحة بيانات الإدارة: مكتمل مع الشاهد، جارٍ
-     * حاليًا بنسبة التقدّم، والمهمة القادمة (أقرب نشاط لم يبدأ بعد حسب
-     * موعد النهاية) مع المدة المتبقية. تُبنى من نفس حزمة getActivitiesBundle
-     * المُستخدَمة في صفحة "متابعة المشروع" — تُجلب هنا كسوليًا أيضًا إن لم
-     * تكن محمَّلة بعد (نفس عملية شبكة واحدة تُعاد استخدامها في الصفحتين).
-     */
-    function renderDashboardActivitySections() {
-      var bundle = state.lazy.activities;
-      // لا يُطلَق الجلب من هنا: استدعاء fetchActivitiesBundle (وهي تستدعي
-      // render() فورًا) أثناء تنفيذ render() نفسه يُعيد الدخول إليها قبل
-      // اكتمالها — الجلب يبدأ عند الدخول/استعادة الجلسة بدلًا (انظر
-      // restoreSession/submitLogin)، وهذه الدالة تكتفي بعرض حالة التحميل.
-      if (!bundle || bundle.loading) return '<section class="panel" style="margin-top:18px">' + skeletonCards(2) + '</section>';
-      var all = bundle.activities || [];
-      if (!all.length) return '';
-
-      var completed = all.filter(function (x) { return x.status === 'مكتمل'; }).slice(0, 3);
-      var inProgress = all.filter(function (x) { return x.status === 'جارٍ'; }).slice(0, 3);
-      var notStarted = all.filter(function (x) { return x.status === 'لم يبدأ'; }).slice().sort(function (a, b) {
-        var da = daysFromToday(a.endDate); var db = daysFromToday(b.endDate);
-        if (da == null) return 1; if (db == null) return -1; return da - db;
-      });
-      var upcoming = notStarted[0];
-
-      function editAttrs(x) {
-        return ' role="button" tabindex="0" style="cursor:pointer" data-act="edit-activity" '
-          + 'data-stage="' + esc(x.stage) + '" data-main="' + esc(x.mainActivity) + '" data-sub="' + esc(x.subActivity) + '"';
-      }
-
-      var completedHtml = completed.length
-        ? '<div class="rows">' + completed.map(function (x) {
-            return '<div class="row-item"' + editAttrs(x) + '><div><strong>' + esc(x.subActivity || x.mainActivity) + '</strong>'
-              + '<small>' + esc(x.owner || 'بلا مسؤول') + '</small></div>'
-              + (x.evidenceUrl ? '<a href="' + esc(x.evidenceUrl) + '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">الشاهد ↗</a>' : '<span class="muted">بلا شاهد</span>') + '</div>';
-          }).join('') + '</div>'
-        : '<p class="muted" style="font-size:13px;padding:4px 0">لا توجد أنشطة مكتملة بعد.</p>';
-
-      var inProgressHtml = inProgress.length
-        ? '<div class="rows">' + inProgress.map(function (x) {
-            return '<div class="row-item"' + editAttrs(x) + '><div><strong>' + esc(x.subActivity || x.mainActivity) + '</strong>'
-              + '<small>' + esc(x.owner || 'بلا مسؤول') + '</small></div>'
-              + '<span class="muted">' + fmt(x.progress) + '٪</span></div>';
-          }).join('') + '</div>'
-        : '<p class="muted" style="font-size:13px;padding:4px 0">لا توجد أنشطة جارية حاليًا.</p>';
-
-      var upcomingHtml;
-      if (upcoming) {
-        var days = daysFromToday(upcoming.endDate);
-        var daysLabel = days == null ? 'بلا موعد محدَّد'
-          : days < 0 ? 'تجاوز الموعد بـ ' + fmt(Math.abs(days)) + ' يومًا'
-          : days === 0 ? 'موعده اليوم'
-          : 'بعد ' + fmt(days) + ' يومًا';
-        upcomingHtml = '<div class="row-item"' + editAttrs(upcoming) + '><div><strong>' + esc(upcoming.subActivity || upcoming.mainActivity) + '</strong>'
-          + '<small>' + esc(upcoming.owner || 'بلا مسؤول') + ' · ' + esc(upcoming.endDate || 'بلا موعد نهاية محدَّد') + '</small></div>'
-          + '<span class="muted">' + esc(daysLabel) + '</span></div>';
-      } else {
-        upcomingHtml = '<p class="muted" style="font-size:13px;padding:4px 0">لا توجد مهمة قادمة لم تبدأ بعد.</p>';
-      }
-
-      return '<section class="cols" style="margin-top:18px">'
-        + '<div class="panel"><div class="panel-head"><div><h3>مكتمل</h3><p>مع رابط الشاهد إن وُجد</p></div></div>' + completedHtml + '</div>'
-        + '<div class="panel"><div class="panel-head"><div><h3>جارٍ حاليًا</h3><p>بنسبة التقدّم الحالية</p></div></div>' + inProgressHtml + '</div>'
-        + '</section>'
-        + '<section class="panel" style="margin-top:14px"><div class="panel-head"><div><h3>المهمة القادمة</h3>'
-        + '<p>أقرب نشاط لم يبدأ بعد حسب موعد النهاية، والمدة المتبقية</p></div>'
-        + '<button class="btn btn-link" data-act="go" data-value="activities">كل الأنشطة ←</button></div>' + upcomingHtml + '</section>';
-    }
+    /** الأنشطة/المراحل/الشواهد تُجلب عند فتح صفحة "الأنشطة" فقط (getActivitiesBundle) — لا ضمن Bootstrap ولا استباقًا بعد الدخول. ملخّصها في لوحة التحكم يُحسَب من dashboardModules.activities بلا أي طلب. */
 
     /* ============================================================
        متابعة الأنشطة — لوحة تنفيذية لا جدولًا تقليديًا.
@@ -4205,7 +4246,6 @@
       api('getPortalBundle', state.token, '', {}).then(function (bundle) {
         adoptPortalBundle(bundle);
         render();
-        if (state.data.role === 'ADMIN') fetchActivitiesBundle();
       }, function (error) {
         // الجلسة صالحة لكن الخادم يرفضها لأنها مُلزَمة بتغيير كلمة مرور
         // مؤقتة أولًا — لا تُسقِط التوكن، اعرض شاشة التغيير الإلزامي.
