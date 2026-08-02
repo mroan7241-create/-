@@ -95,6 +95,28 @@ function migratePhoneNumbers_(token) {
   return {ok: true, fixed: fixable.length, skippedInvalid: preview.report.length - fixable.length};
 }
 
+/**
+ * ضوابط قوة كلمة المرور الجديدة ومنع إعادة الاستخدام — مصدر واحد
+ * يستخدمه changePassword (حساب موثَّق بجلسة قائمة) وresetPasswordWithCode
+ * (حساب غير موثَّق، تحقّق عبر رمز بريد) معًا، فلا تتفرّق الضوابط بين
+ * مسارين مختلفين. لا يكتب شيئًا — يتحقق فقط ويرمي عند المخالفة.
+ */
+function assertPasswordPolicy_(newPassword, record) {
+  newPassword = String(newPassword || '');
+  if (newPassword.length < 10 || !/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
+    throw new Error('كلمة المرور الجديدة يجب أن تكون 10 خانات على الأقل وتضم حروفًا وأرقامًا');
+  }
+  if (constantTimeEquals_(hashSecret_(newPassword, String(record['الملح'])), String(record['كلمة المرور المشفرة']))) {
+    throw new Error('كلمة المرور الجديدة يجب أن تختلف عن الحالية');
+  }
+  const previousSalt = String(record['ملح سابق'] || '');
+  const previousHash = String(record['كلمة مرور سابقة مشفرة'] || '');
+  if (previousSalt && previousHash && constantTimeEquals_(hashSecret_(newPassword, previousSalt), previousHash)) {
+    throw new Error('لا يمكن استخدام كلمة المرور السابقة نفسها. اختر كلمة مرور مختلفة');
+  }
+  return newPassword;
+}
+
 function requiredEmail_(value) {
   const email = String(value || '').trim().toLowerCase();
   if (!isEmail_(email)) throw new Error('البريد الإلكتروني غير صحيح');

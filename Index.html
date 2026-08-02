@@ -208,6 +208,10 @@
        الأساسي واضح القوة (btn-primary القياسي)، والثانوي أخف بصريًا
        (btn-ghost) فلا يتنافسان على الانتباه. */
     .login-secondary-act{margin-top:20px}
+    /* رابط "نسيت كلمة المرور؟/رمز الدخول؟" — تحت آخر حقل مباشرة، بمسافة
+       صغيرة لا تتنافس مع الزر الأساسي أسفله (البطاقة الزجاجية نفسها لم
+       تتغيّر إطلاقًا هنا، فقط عنصر نصي إضافي بلونها العنابي المعتاد). */
+    .login-forgot-link{display:block;margin:2px 0 18px}
     /* ============================================================
        اللوحة التنفيذية للأنشطة — نظام بصري خاص بالزاد لا قالب جاهز.
        المبدأ: تدرّج قراءة من الشريط الكلي ← مسار المراحل ← البطاقة.
@@ -1222,12 +1226,14 @@
           + '<input class="control" id="loginCode" name="code" dir="ltr" autocomplete="one-time-code" '
           + 'placeholder="MND-84KQ2P" required aria-describedby="codeHint">'
           + '<span class="hint" id="codeHint">الرمز مكوّن من MND- وستة رموز، تحصل عليه من جمعيتك.</span></div>'
+          + '<button type="button" class="btn-link login-forgot-link" data-act="forgot-delegate-code">نسيت رمز الدخول؟</button>'
         : '<div class="field"><label for="loginEmail">البريد الإلكتروني</label>'
           + '<input class="control" id="loginEmail" name="email" type="email" dir="ltr" '
           + 'autocomplete="username" placeholder="name@example.org" required></div>'
           + '<div class="field"><label for="loginPassword">كلمة المرور</label>'
           + '<input class="control" id="loginPassword" name="password" type="password" dir="ltr" '
-          + 'autocomplete="current-password" required></div>';
+          + 'autocomplete="current-password" required></div>'
+          + '<button type="button" class="btn-link login-forgot-link" data-act="forgot-password">نسيت كلمة المرور؟</button>';
 
       // شاشة الدخول (بخلاف نموذج التقديم/تغيير كلمة المرور المؤقتة اللذين
       // يحتفظان باللوحة الجانبية) لا تحمل أي لوحة تسويقية أو إحصاءات
@@ -1290,6 +1296,83 @@
         toast('مرحبًا بك، ' + (result.user && result.user.name ? result.user.name : ''), 'success');
         if (!state.referenceData) loadReferenceDataOnce();
       }, reportError).finally(function () { busy(false); });
+    }
+
+    /**
+     * نسيت كلمة المرور (إدارة/جمعية فقط): خطوتان داخل نافذتين منبثقتين
+     * متتاليتين — طلب رمز بالبريد، ثم إدخاله مع كلمة مرور جديدة. البريد
+     * لا يُخزَّن في state إطلاقًا؛ يُمرَّر بين الخطوتين عبر حقل مخفي داخل
+     * DOM النافذة الثانية فقط، ويختفي معها عند الإغلاق كأي سرّ آخر في
+     * هذا النظام.
+     */
+    function showForgotPasswordModal() {
+      var body = '<form id="forgotPasswordForm" novalidate>'
+        + '<p class="hint" style="margin:0 0 16px">أدخل البريد الإلكتروني المسجَّل لحساب الإدارة أو الجمعية. '
+        + 'إذا كان مسجَّلًا فسيصلك رمز استعادة صالح لمدة 15 دقيقة.</p>'
+        + '<div class="field"><label for="fp_email">البريد الإلكتروني</label>'
+        + '<input class="control" id="fp_email" name="email" type="email" dir="ltr" '
+        + 'autocomplete="username" placeholder="name@example.org" required></div>'
+        + '</form>';
+      openModal('نسيت كلمة المرور؟', body,
+        '<button class="btn btn-ghost" data-act="close-modal">إلغاء</button>'
+        + '<button class="btn btn-primary" data-act="submit-forgot-password">إرسال رمز الاستعادة</button>');
+    }
+
+    function submitForgotPassword() {
+      var form = $('#forgotPasswordForm');
+      if (!form || !form.reportValidity()) return;
+      var email = new FormData(form).get('email');
+      busy(true);
+      api('requestPasswordReset', email).then(function (result) {
+        showResetCodeModal(email, result.message);
+      }, reportError).finally(function () { busy(false); });
+    }
+
+    function showResetCodeModal(email, message) {
+      var body = '<form id="resetCodeForm" novalidate>'
+        + '<p class="hint" style="margin:0 0 16px">' + esc(message) + '</p>'
+        + '<div class="field"><label for="rc_code">رمز الاستعادة</label>'
+        + '<input class="control" id="rc_code" name="code" dir="ltr" autocomplete="one-time-code" '
+        + 'placeholder="RST-XXXXXXXX" required></div>'
+        + '<div class="field"><label for="rc_next">كلمة المرور الجديدة</label>'
+        + '<input class="control" id="rc_next" name="next" type="password" dir="ltr" minlength="10" '
+        + 'autocomplete="new-password" required></div>'
+        + '<div class="field"><label for="rc_confirm">تأكيد كلمة المرور الجديدة</label>'
+        + '<input class="control" id="rc_confirm" name="confirm" type="password" dir="ltr" minlength="10" '
+        + 'autocomplete="new-password" required></div>'
+        + '<span class="hint">١٠ خانات على الأقل، وتضم حروفًا وأرقامًا.</span>'
+        + '<input type="hidden" name="email" value="' + esc(email) + '">'
+        + '</form>';
+      openModal('إدخال رمز الاستعادة', body,
+        '<button class="btn btn-ghost" data-act="close-modal">إلغاء</button>'
+        + '<button class="btn btn-primary" data-act="submit-reset-code">تعيين كلمة المرور الجديدة</button>');
+    }
+
+    function submitResetCode() {
+      var form = $('#resetCodeForm');
+      if (!form || !form.reportValidity()) return;
+      var data = new FormData(form);
+      if (data.get('next') !== data.get('confirm')) {
+        toast('تأكيد كلمة المرور غير مطابق.', 'error');
+        return;
+      }
+      busy(true);
+      api('resetPasswordWithCode', data.get('email'), data.get('code'), data.get('next')).then(function () {
+        closeModal();
+        toast('تم تغيير كلمة المرور بنجاح. سجّل الدخول بكلمة المرور الجديدة.', 'success');
+      }, reportError).finally(function () { busy(false); });
+    }
+
+    /**
+     * لا مسار بريد لرمز المندوب إطلاقًا — رسالة رسمية توجّه للتواصل مع
+     * الجمعية، التي تملك بالفعل زر "إعادة إنشاء رمز الدخول" (تُستخدم
+     * regenerateDelegateCode القائمة، بلا أي دالة أو مسار موازٍ جديد).
+     */
+    function showForgotDelegateCodeModal() {
+      openModal('نسيت رمز الدخول؟',
+        '<p>لا يمكن استرجاع رمز دخول المندوب أو إرساله عبر البريد. تواصل مع الجمعية التي '
+        + 'سجَّلتك — بإمكانها إصدار رمز دخول جديد لك فورًا من لوحتها.</p>',
+        '<button class="btn btn-primary" data-act="close-modal">فهمت</button>');
     }
 
     /** شاشة إلزامية كاملة الصفحة: لا وصول لأي بيانات بوابة قبل تغيير كلمة المرور المؤقتة. */
@@ -4698,6 +4781,10 @@
       'toggle-menu': toggleMenu,
       'close-modal': closeModal,
       'close-and-refresh': function () { closeModal(); render(); },
+      'forgot-password': showForgotPasswordModal,
+      'submit-forgot-password': submitForgotPassword,
+      'submit-reset-code': submitResetCode,
+      'forgot-delegate-code': showForgotDelegateCodeModal,
       'new-beneficiary': function () { beneficiaryForm(''); },
       'edit-beneficiary': function (el) { closeModal(); beneficiaryForm(el.getAttribute('data-id')); },
       'view-beneficiary': function (el) { viewBeneficiary(el.getAttribute('data-id')); },

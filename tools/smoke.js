@@ -281,9 +281,37 @@ app.state.loginType = 'delegate';
 app.renderLogin();
 assert('تبديل تبويب المندوب يعرض حقل الرمز', out().includes('رمز دخول المندوب'));
 assert('لا يظهر رابط تقديم طلب انضمام في وضع دخول المندوب', !out().includes('show-apply'));
+assert('تبويب المندوب يعرض رابط "نسيت رمز الدخول؟" لا رابط "نسيت كلمة المرور؟"',
+  out().includes('data-act="forgot-delegate-code"') && !out().includes('data-act="forgot-password"'));
 app.state.loginType = 'association';
 app.renderLogin();
 assert('يظهر رابط تقديم طلب انضمام جمعية في شاشة الدخول', out().includes('show-apply'));
+assert('تبويب الإدارة/الجمعيات يعرض رابط "نسيت كلمة المرور؟" لا رابط رمز المندوب',
+  out().includes('data-act="forgot-password"') && !out().includes('data-act="forgot-delegate-code"'));
+
+/* ---------------- 1ب) استعادة كلمة المرور ونسيان رمز المندوب (واجهة) ---------------- */
+
+app.showForgotPasswordModal();
+assert('نافذة "نسيت كلمة المرور؟" تعرض حقل بريد وزر إرسال', registry.modalRoot.innerHTML.includes('id="fp_email"')
+  && registry.modalRoot.innerHTML.includes('data-act="submit-forgot-password"'));
+app.closeModal();
+
+app.showResetCodeModal('assoc-a@example.org', 'إذا كان البريد مسجلًا فستصلك تعليمات الاستعادة.');
+assert('نافذة إدخال رمز الاستعادة تعرض حقول الرمز وكلمة المرور الجديدة وتأكيدها',
+  registry.modalRoot.innerHTML.includes('id="rc_code"') && registry.modalRoot.innerHTML.includes('id="rc_next"')
+  && registry.modalRoot.innerHTML.includes('id="rc_confirm"') && registry.modalRoot.innerHTML.includes('data-act="submit-reset-code"'));
+assert('نافذة إدخال الرمز تحمل البريد في حقل مخفٍّ لا في نص ظاهر مكرَّر',
+  registry.modalRoot.innerHTML.includes('type="hidden" name="email" value="assoc-a@example.org"'));
+app.closeModal();
+
+app.showForgotDelegateCodeModal();
+assert('نافذة "نسيت رمز الدخول؟" رسالة توجيهية فقط بلا حقول أو نداء خادم', !registry.modalRoot.innerHTML.includes('<form')
+  && registry.modalRoot.innerHTML.includes('تواصل مع الجمعية'));
+app.closeModal();
+
+assert('إجراءات الاستعادة الأربعة مسجَّلة في جدول التوزيع (CLICK_ACTIONS)',
+  typeof app.CLICK_ACTIONS['forgot-password'] === 'function' && typeof app.CLICK_ACTIONS['submit-forgot-password'] === 'function'
+  && typeof app.CLICK_ACTIONS['submit-reset-code'] === 'function' && typeof app.CLICK_ACTIONS['forgot-delegate-code'] === 'function');
 app.renderApplyForm();
 assert('ترسم نموذج طلب الانضمام العام', out().includes('submit-application'));
 assert('نموذج الطلب يطلب اسم الجمعية والبريد (بريد مبني من اسم مستخدم ونطاق)', out().includes('name="name"') && out().includes('name="emailLocal"') && out().includes('name="emailDomain"'));

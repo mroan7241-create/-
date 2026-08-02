@@ -173,3 +173,166 @@ function sessionKey_(token) {
   return 'session:' + token;
 }
 
+/* -------------------- استعادة كلمة مرور الإدارة/الجمعية عبر البريد --------------------
+ * مسار منفصل تمامًا عن رمز دخول المندوب (الذي لا بريد له أصلًا ولا يمرّ
+ * بهذا المسار إطلاقًا — "نسيت رمز الدخول؟" في تبويب المندوب يوجّه
+ * للتواصل مع الجمعية التي تستخدم regenerateDelegateCode الموجودة). */
+
+const PASSWORD_RESET_TTL_SECONDS = 900; // 15 دقيقة — أعلى حد ضمن النطاق المطلوب (10–15)
+const PASSWORD_RESET_MAX_ATTEMPTS = 6;
+const PASSWORD_RESET_GENERIC_MESSAGE = 'إذا كان البريد الإلكتروني مسجلًا في النظام فستصلك تعليمات استعادة كلمة المرور خلال دقائق.';
+const PASSWORD_RESET_INVALID_MESSAGE = 'رمز الاستعادة غير صحيح أو منتهي الصلاحية أو استُخدم بالفعل. اطلب رمزًا جديدًا';
+
+function passwordResetCacheKey_(email) {
+  return 'pwreset:' + hashSecret_(email, 'pwreset-idx');
+}
+
+/**
+ * يبدأ طلب استعادة كلمة مرور. لا يكشف مطلقًا هل البريد مسجَّل أم لا —
+ * نفس الرد النصي العام في كل الحالات (بريد غير موجود، دور غير مؤهَّل،
+ * حساب/جمعية موقوفة، فشل إرسال البريد، أو نجاح فعلي). طلب جديد لنفس
+ * البريد يُلغي أي رمز سابق تلقائيًا لأنه يُخزَّن بنفس مفتاح الذاكرة
+ * المؤقتة فيُستبدَل (لا حاجة لإبطال صريح منفصل).
+ */
+function requestPasswordReset(email) {
+  beginRequest_('requestPasswordReset');
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  const generic = {ok: true, message: PASSWORD_RESET_GENERIC_MESSAGE};
+  if (!isEmail_(cleanEmail)) return generic;
+
+  // تحديد صارم للطلبات لكل بريد على حدة — يمنع التخمين والإزعاج دون
+  // الاعتماد على عنوان IP (غير متاح في Apps Script من جهة العميل).
+  throttle_('pwreset-req:' + hashSecret_(cleanEmail, 'rate'), 5, 900);
+
+  const table = readTable_(APP.sheets.users);
+  const user = table.rows.find(row =>
+    String(row['البريد الإلكتروني']).trim().toLowerCase() === cleanEmail &&
+    String(row['الحالة']) === 'نشط' &&
+    ['ADMIN', 'ASSOCIATION'].indexOf(String(row['الدور'])) !== -1
+  );
+
+  // حساب جمعية موقوف (الجمعية نفسها "غير نشطة" لا حساب المستخدم) لا
+  // يجوز أن يستعيد وصولًا كان يُمنع منه أصلًا — دون كشف ذلك للعميل.
+  let eligible = !!user;
+  if (eligible && String(user['الدور']) === 'ASSOCIATION' && user['رقم الجمعية']) {
+    const association = findById_(APP.sheets.associations, 'رقم الجمعية', user['رقم الجمعية']);
+    eligible = !!association && String(association['الحالة']) !== 'غير نشطة';
+  }
+
+  if (!eligible) {
+    Utilities.sleep(350); // تقريب زمن الاستجابة من مسار الإرسال الفعلي — تخفيف بصمة توقيت
+    return generic;
+  }
+
+  const code = createAccessCode_('RST', 8);
+  const salt = Utilities.getUuid();
+  const payload = {
+    tokenHash: hashSecret_(code, salt), salt: salt,
+    userId: String(user['رقم المستخدم']), attempts: 0, expiresAt: Date.now() + PASSWORD_RESET_TTL_SECONDS * 1000
+  };
+
+  try {
+    MailApp.sendEmail({
+      to: cleanEmail,
+      subject: 'استعادة كلمة المرور — ' + APP.title,
+      body: passwordResetEmailBody_(user['الاسم'], code)
+    });
+  } catch (mailError) {
+    // فشل الإرسال لا يُفصح عنه للعميل، والرمز لا يُخزَّن أصلًا — لا فائدة
+    // من رمز لن يصل صاحبه، وتخزينه كان سيُربك محاولات تحقق لاحقة بلا داعٍ.
+    return generic;
+  }
+
+  CacheService.getScriptCache().put(passwordResetCacheKey_(cleanEmail), JSON.stringify(payload), PASSWORD_RESET_TTL_SECONDS);
+  // السجل لا يحمل البريد كاملًا ولا الرمز — رقم المستخدم الداخلي فقط.
+  audit_({id: user['رقم المستخدم'], name: user['الاسم'], role: user['الدور']},
+    'طلب استعادة كلمة مرور', 'المصادقة', user['رقم المستخدم'], '');
+  return generic;
+}
+
+function passwordResetEmailBody_(name, code) {
+  let link = '';
+  try { link = ScriptApp.getService().getUrl(); } catch (ignore) { /* بيئة لا تدعم getUrl (مثل الاختبار المحلي) */ }
+  return 'مرحبًا ' + name + '،\n\n' +
+    'وصلنا طلب استعادة كلمة المرور لحسابك في ' + APP.title + '.\n' +
+    'رمز الاستعادة: ' + code + '\n' +
+    (link ? 'رابط الدخول: ' + link + '\n' : '') +
+    'صلاحية الرمز 15 دقيقة من الآن، ويُستخدم مرة واحدة فقط.\n\n' +
+    'إن لم تطلب هذا بنفسك فتجاهل هذه الرسالة — لن يتغيّر شيء دون إدخال الرمز.';
+}
+
+/**
+ * يُتِمّ الاستعادة: البريد نفسه هو مفتاح البحث عن الرمز المخزَّن (لا
+ * فهرس عكسي رمز→مستخدم منفصل)، تمامًا كما يُدخله المستخدم في نفس
+ * الشاشة. يعيّن كلمة مرور جديدة بنفس ضوابط القوة ومنع إعادة الاستخدام
+ * المطبَّقة على changePassword تحديدًا (assertPasswordPolicy_ نفسها، لا
+ * ضوابط موازية). رسالة الخطأ عند فشل التحقق **واحدة موحَّدة** لكل
+ * الأسباب (رمز خطأ، منتهٍ، تجاوز عدد المحاولات، أو لا طلب أصلًا) — لا
+ * تمايز بينها لمنع أي تسريب. مقفلة (LockService) لمنع تزامن طلبين
+ * يستهلكان نفس الرمز أو يتلاعبان بعدّاد المحاولات معًا.
+ */
+function resetPasswordWithCode(email, code, newPassword) {
+  beginRequest_('resetPasswordWithCode');
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  throttle_('pwreset-verify:' + hashSecret_(cleanEmail, 'rate'), 10, 900);
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const cache = CacheService.getScriptCache();
+    const key = passwordResetCacheKey_(cleanEmail);
+    const raw = cache.get(key);
+    if (!raw) throw new Error(PASSWORD_RESET_INVALID_MESSAGE);
+    const data = JSON.parse(raw);
+    if (Date.now() > data.expiresAt) {
+      cache.remove(key);
+      throw new Error(PASSWORD_RESET_INVALID_MESSAGE);
+    }
+    if (data.attempts >= PASSWORD_RESET_MAX_ATTEMPTS) {
+      cache.remove(key);
+      throw new Error(PASSWORD_RESET_INVALID_MESSAGE);
+    }
+    const providedHash = hashSecret_(String(code || '').trim().toUpperCase(), data.salt);
+    if (!constantTimeEquals_(providedHash, data.tokenHash)) {
+      data.attempts++;
+      const remainingTtl = Math.max(1, Math.floor((data.expiresAt - Date.now()) / 1000));
+      cache.put(key, JSON.stringify(data), remainingTtl);
+      throw new Error(PASSWORD_RESET_INVALID_MESSAGE);
+    }
+
+    const record = findById_(APP.sheets.users, 'رقم المستخدم', data.userId);
+    if (!record || String(record['الحالة']) !== 'نشط') {
+      cache.remove(key);
+      throw new Error(PASSWORD_RESET_INVALID_MESSAGE);
+    }
+    const finalPassword = assertPasswordPolicy_(String(newPassword || ''), record);
+
+    const salt2 = Utilities.getUuid();
+    updateById_(APP.sheets.users, 'رقم المستخدم', data.userId, {
+      'كلمة مرور سابقة مشفرة': record['كلمة المرور المشفرة'],
+      'ملح سابق': record['الملح'],
+      'كلمة المرور المشفرة': hashSecret_(finalPassword, salt2),
+      'الملح': salt2,
+      'يجب تغيير كلمة المرور': 'لا'
+    });
+    revokeSessions_(data.userId);
+    cache.remove(key); // لمرة واحدة — يُبطَل فورًا بعد النجاح أيضًا
+
+    audit_({id: record['رقم المستخدم'], name: record['الاسم'], role: record['الدور']},
+      'إعادة تعيين كلمة المرور عبر البريد', 'المصادقة', data.userId, '');
+
+    try {
+      MailApp.sendEmail({
+        to: cleanEmail,
+        subject: 'تنبيه أمني: تغيّرت كلمة مرور حسابك — ' + APP.title,
+        body: 'مرحبًا ' + record['الاسم'] + '،\n\nتم تغيير كلمة مرور حسابك في ' + APP.title + ' للتو. ' +
+          'إن لم يكن هذا أنت فتواصل فورًا مع إدارة المشروع.'
+      });
+    } catch (ignore) { /* إشعار تحسيني بعد نجاح العملية الفعلية — لا يُفشل الاستجابة */ }
+
+    return {ok: true};
+  } finally {
+    lock.releaseLock();
+  }
+}
+

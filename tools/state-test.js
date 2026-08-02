@@ -119,6 +119,7 @@ function buildSandbox() {
       })
     },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    MailApp: { sendEmail: () => {} },
     ScriptApp: { getScriptId: () => 'state-test', getOAuthToken: () => 'token' },
     SpreadsheetApp: { getActiveSpreadsheet: () => mockSs },
     HtmlService: { createHtmlOutputFromFile: () => ({ setTitle() { return this; }, addMetaTag() { return this; } }) },

@@ -118,7 +118,7 @@ function buildSandbox() {
       })
     },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
-    ScriptApp: { getScriptId: () => 'account-test', getOAuthToken: () => 'token' },
+    ScriptApp: { getScriptId: () => 'account-test', getOAuthToken: () => 'token', getService: () => ({ getUrl: () => 'https://script.google.com/macros/s/TEST/exec' }) },
     SpreadsheetApp: { getActiveSpreadsheet: () => mockSs },
     HtmlService: { createHtmlOutputFromFile: () => ({ setTitle() { return this; }, addMetaTag() { return this; } }) },
     DriveApp: {
@@ -129,6 +129,17 @@ function buildSandbox() {
       getFolderById: () => ({ createFile: () => ({ getId: () => 'FILE-TEST', getUrl: () => 'https://drive.example/file' }) })
     },
     UrlFetchApp: {}
+  };
+  // MailApp وهمي يلتقط كل رسالة مُرسَلة (sandbox.__sentMails) للتحقق من
+  // محتواها في الاختبارات، ويدعم محاكاة فشل الإرسال عبر sandbox.__mailFail
+  // (يُرمى استثناء بدل الإرسال — يختبر "فشل إرسال البريد دون كشف معلومات").
+  sandbox.__sentMails = [];
+  sandbox.__mailFail = false;
+  sandbox.MailApp = {
+    sendEmail: options => {
+      if (sandbox.__mailFail) throw new Error('MailApp quota exceeded (محاكاة فشل الإرسال)');
+      sandbox.__sentMails.push(options);
+    }
   };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
@@ -462,6 +473,249 @@ section('10) عدم تراجع قواعد سلامة الحالات (StateRules.
     const callSites = (source.match(/repairStateIntegrityIssues_\(/g) || []).length;
     return callSites === 1;
   })());
+}
+
+/* ================================================================
+   11) استعادة كلمة مرور الإدارة/الجمعية عبر البريد (نسيت كلمة المرور)
+   ================================================================ */
+
+/** يُنشئ صف مستخدم إدارة حقيقيًا (بريد/كلمة مرور فعليين) — adminSession() العادية تبني جلسة بلا صف فعلي، فلا تصلح لاختبار مسار بحث بالبريد. */
+function seedAdminUser(S, email, password) {
+  const salt = S.Utilities.getUuid();
+  S.appendObject_('المستخدمون', {
+    'رقم المستخدم': S.nextId_('USR'), 'الاسم': 'مدير النظام', 'البريد الإلكتروني': email,
+    'كلمة المرور المشفرة': S.hashSecret_(password, salt), 'الملح': salt,
+    'الدور': 'ADMIN', 'رقم الجمعية': '', 'الحالة': 'نشط',
+    'تاريخ الإنشاء': S.now_(), 'آخر دخول': '', 'يجب تغيير كلمة المرور': 'لا'
+  });
+}
+
+/** يستخرج رمز الاستعادة (RST-XXXXXXXX) من نص رسالة البريد الملتقَطة، دون أي تسجيل خارج بيئة الاختبار نفسها. */
+function extractResetCode(mailBody) {
+  const match = String(mailBody || '').match(/RST-[A-Z0-9]{8}/);
+  return match ? match[0] : '';
+}
+
+/**
+ * كل سيناريو أدناه يبني S بيئة (buildSandbox+seedScenario) خاصة به —
+ * وليس مشتركة بين السيناريوهات — عمدًا: سيناريوهات متعددة تستدعي
+ * requestPasswordReset لنفس البريد داخل نفس S كانت ستتراكم على حدّ
+ * الطلبات (5 لكل بريد) وتُفشل سيناريوهات لاحقة بخطأ "محاولات كثيرة" لا
+ * علاقة له بما يُختبَر فعليًا؛ بيئة مستقلة لكل سيناريو تُبقي كل اختبار
+ * يقيس ما يقصده فقط، وتترك اختبار حدّ المعدّل نفسه (آخر سيناريو) هو
+ * الوحيد الذي يستنفد الحدّ عمدًا.
+ */
+
+section('11أ) استعادة كلمة المرور — ردّ عام متطابق (لا كشف لوجود البريد)');
+{
+  const S = buildSandbox();
+  seedScenario(S);
+  const respExisting = S.requestPasswordReset('assoc-a@example.org');
+  S.__sentMails.length = 0;
+  const respMissing = S.requestPasswordReset('no-such-account@example.org');
+  assert('رد الطلب لبريد موجود ولبريد غير موجود متطابق نصًّا بالكامل', respExisting.message === respMissing.message && respExisting.ok === respMissing.ok);
+  assert('بريد غير موجود لا يُرسِل أي رسالة فعليًا', S.__sentMails.length === 0);
+  assert('صيغة بريد غير صحيحة أصلًا تُعطي نفس الرد العام دون أي معالجة', S.requestPasswordReset('ليس-بريدًا').message === respMissing.message);
+}
+
+section('11ب) استعادة كلمة المرور — السلسلة الكاملة: إلغاء الرمز السابق، كلمة مرور ضعيفة، نجاح، إبطال الجلسة، منع إعادة الاستخدام');
+{
+  const S = buildSandbox();
+  const { assocA } = seedScenario(S);
+
+  const req1 = S.requestPasswordReset('assoc-a@example.org');
+  assert('طلب صالح يُرسِل رسالة واحدة فعليًا', S.__sentMails.length === 1 && S.__sentMails[0].to === 'assoc-a@example.org' && req1.ok === true);
+  const code1 = extractResetCode(S.__sentMails[0].body);
+  assert('رسالة البريد تحمل رمز استعادة بالصيغة المتوقعة', /^RST-[A-Z0-9]{8}$/.test(code1));
+
+  // 4) طلب استعادة جديد يُلغي الرمز السابق فورًا (يُستبدَل بمفتاح الذاكرة المؤقتة نفسه)
+  S.__sentMails.length = 0;
+  S.requestPasswordReset('assoc-a@example.org');
+  const code2 = extractResetCode(S.__sentMails[0].body);
+  assert('طلب ثانٍ يُنتج رمزًا مختلفًا عن الأول', code2 !== code1 && !!code2);
+  throws('الرمز الأول لم يعد صالحًا بعد صدور رمز ثانٍ لنفس البريد', () =>
+    S.resetPasswordWithCode('assoc-a@example.org', code1, 'ValidNewPass123'), 'غير صحيح');
+
+  // 6) كلمة مرور جديدة ضعيفة تُرفض حتى برمز صحيح
+  throws('رمز صحيح لكن كلمة مرور جديدة ضعيفة تُرفض بوضوح', () =>
+    S.resetPasswordWithCode('assoc-a@example.org', code2, 'weak'), 'كلمة المرور الجديدة');
+
+  const beforeReset = findUserByAssociation(S, assocA.id);
+  const oldSession = S.createSession_({ id: String(beforeReset['رقم المستخدم']), name: 'جمعية الحسابات أ', role: 'ASSOCIATION', associationId: assocA.id });
+  assert('الجلسة القديمة صالحة قبل إعادة التعيين (تمهيد للتحقق من إبطالها لاحقًا)',
+    (() => { try { S.requireSession_(oldSession.token, ['ASSOCIATION']); return true; } catch (e) { return false; } })());
+
+  const confirmResult = S.resetPasswordWithCode('assoc-a@example.org', code2, 'BrandNewResetPass1');
+  assert('الاستعادة تنجح بالرمز الصحيح وكلمة مرور قوية', confirmResult.ok === true);
+  assert('استجابة النجاح لا تحمل أي كلمة مرور أو رمز', JSON.stringify(confirmResult).indexOf('BrandNewResetPass1') === -1 && JSON.stringify(confirmResult).indexOf(code2) === -1);
+
+  // 7) إبطال الجلسات القديمة فورًا
+  throws('الجلسة القديمة تُبطَل فورًا بعد نجاح الاستعادة', () =>
+    S.requireSession_(oldSession.token, ['ASSOCIATION']), 'انتهت الجلسة');
+
+  const reloginNew = S.login({ type: 'user', email: 'assoc-a@example.org', password: 'BrandNewResetPass1' });
+  assert('تسجيل الدخول بكلمة المرور الجديدة بعد الاستعادة ينجح', reloginNew.ok === true && !!reloginNew.bootstrap);
+  throws('تسجيل الدخول بكلمة المرور القديمة (قبل الاستعادة) يفشل', () =>
+    S.login({ type: 'user', email: 'assoc-a@example.org', password: 'AssocPassA123' }), 'بيانات الدخول غير صحيحة');
+
+  // 3) استخدام الرمز مرتين: نفس code2 لا يعمل ثانيةً (أُبطل بالنجاح الأول)
+  throws('نفس رمز الاستعادة لا يعمل مرتين (أُبطل فور نجاح الاستخدام الأول)', () =>
+    S.resetPasswordWithCode('assoc-a@example.org', code2, 'AnotherStrongPass2'), 'غير صحيح');
+}
+
+section('11ج) استعادة كلمة المرور — منع إعادة استخدام كلمة المرور السابقة');
+{
+  const S = buildSandbox();
+  seedScenario(S);
+  S.requestPasswordReset('assoc-a@example.org');
+  const codeX = extractResetCode(S.__sentMails[0].body);
+  const first = S.resetPasswordWithCode('assoc-a@example.org', codeX, 'FirstResetPass123');
+  assert('الاستعادة الأولى تنجح (تمهيد لاختبار منع إعادة الاستخدام)', first.ok === true);
+
+  S.__sentMails.length = 0;
+  S.requestPasswordReset('assoc-a@example.org');
+  const codeY = extractResetCode(S.__sentMails[0].body);
+  throws('الاستعادة ترفض إعادة استخدام كلمة المرور السابقة (الأصلية قبل أول استعادة)', () =>
+    S.resetPasswordWithCode('assoc-a@example.org', codeY, 'AssocPassA123'), 'السابقة');
+}
+
+section('11د) استعادة كلمة المرور — انتهاء صلاحية الرمز');
+{
+  const S = buildSandbox();
+  seedScenario(S);
+  S.requestPasswordReset('assoc-a@example.org');
+  const code = extractResetCode(S.__sentMails[0].body);
+  const key = S.passwordResetCacheKey_('assoc-a@example.org');
+  const cache = S.CacheService.getScriptCache();
+  const stored = JSON.parse(cache.get(key));
+  stored.expiresAt = Date.now() - 1000; // بالماضي — منتهي الصلاحية فعليًا
+  cache.put(key, JSON.stringify(stored), 900);
+  throws('رمز منتهي الصلاحية يُرفض برسالة عامة موحَّدة', () =>
+    S.resetPasswordWithCode('assoc-a@example.org', code, 'ValidNewPass456'), 'منتهي');
+}
+
+section('11هـ) استعادة كلمة المرور — تجاوز عدد محاولات التحقق يُبطل الرمز كليًا');
+{
+  const S = buildSandbox();
+  seedScenario(S);
+  S.requestPasswordReset('assoc-a@example.org');
+  const code = extractResetCode(S.__sentMails[0].body);
+  for (let i = 0; i < 6; i++) {
+    try { S.resetPasswordWithCode('assoc-a@example.org', 'RST-WRONGCOD', 'ValidNewPass789'); } catch (ignore) { /* متوقَّع */ }
+  }
+  throws('بعد تجاوز عدد المحاولات القصوى، حتى الرمز الصحيح نفسه لم يعد يعمل', () =>
+    S.resetPasswordWithCode('assoc-a@example.org', code, 'ValidNewPass789'), 'غير صحيح');
+}
+
+section('11و) استعادة كلمة المرور — فشل إرسال البريد لا يكشف أي معلومة عن الحساب');
+{
+  const S = buildSandbox();
+  seedScenario(S);
+  const respMissing = S.requestPasswordReset('no-such-account@example.org');
+  S.__mailFail = true;
+  const respMailFail = S.requestPasswordReset('assoc-a@example.org');
+  assert('فشل إرسال البريد يُعيد نفس الرد العام بالضبط (لا كشف لوجود الحساب)', respMailFail.message === respMissing.message);
+  assert('لا رمز يُخزَّن فعليًا حين يفشل الإرسال (لا فائدة منه، ويمنع إرباك محاولات لاحقة)',
+    S.CacheService.getScriptCache().get(S.passwordResetCacheKey_('assoc-a@example.org')) === null);
+}
+
+section('11ز) استعادة كلمة المرور — حساب الإدارة مشمول أيضًا لا الجمعيات فقط');
+{
+  const S = buildSandbox();
+  seedScenario(S);
+  seedAdminUser(S, 'admin@example.org', 'AdminPass123');
+  S.requestPasswordReset('admin@example.org');
+  const adminCode = extractResetCode(S.__sentMails[0].body);
+  const adminConfirm = S.resetPasswordWithCode('admin@example.org', adminCode, 'AdminBrandNewPass1');
+  assert('مسار الاستعادة يشمل حساب الإدارة أيضًا لا الجمعيات فقط', adminConfirm.ok === true);
+  const adminRelogin = S.login({ type: 'user', email: 'admin@example.org', password: 'AdminBrandNewPass1' });
+  assert('تسجيل دخول الإدارة بكلمة المرور الجديدة بعد الاستعادة ينجح', adminRelogin.ok === true);
+}
+
+section('11ح) استعادة كلمة المرور — عزل: استعادة جمعية لا تؤثر على جمعية أخرى');
+{
+  const S = buildSandbox();
+  const { assocA, assocB } = seedScenario(S);
+  const userA = findUserByAssociation(S, assocA.id);
+  const assocASession = S.createSession_({ id: String(userA['رقم المستخدم']), name: 'أ', role: 'ASSOCIATION', associationId: assocA.id });
+  assert('جلسة جمعية أ صالحة قبل استعادة جمعية ب', (() => { try { S.requireSession_(assocASession.token, ['ASSOCIATION']); return true; } catch (e) { return false; } })());
+
+  S.requestPasswordReset('assoc-b@example.org');
+  const codeB = extractResetCode(S.__sentMails[0].body);
+  const confirmB = S.resetPasswordWithCode('assoc-b@example.org', codeB, 'AssocBNewPass123');
+  assert('استعادة كلمة مرور جمعية ب تنجح', confirmB.ok === true);
+  assert('استعادة كلمة مرور جمعية ب لا تُبطل جلسة جمعية أ القائمة',
+    (() => { try { S.requireSession_(assocASession.token, ['ASSOCIATION']); return true; } catch (e) { return false; } })());
+  throws('رمز استعادة جمعية ب لا يعمل إطلاقًا على بريد جمعية أ', () =>
+    S.resetPasswordWithCode('assoc-a@example.org', codeB, 'SomeStrongPass123'), 'غير صحيح');
+}
+
+section('11ط) استعادة كلمة المرور — لا كلمة مرور ولا رمز ولا بريد كامل في سجل العمليات');
+{
+  const S = buildSandbox();
+  seedScenario(S);
+  seedAdminUser(S, 'admin@example.org', 'AdminPass123');
+
+  S.requestPasswordReset('assoc-a@example.org');
+  const codeA = extractResetCode(S.__sentMails[0].body);
+  S.resetPasswordWithCode('assoc-a@example.org', codeA, 'AuditCheckPass123');
+
+  S.__sentMails.length = 0;
+  S.requestPasswordReset('admin@example.org');
+  const codeAdmin = extractResetCode(S.__sentMails[0].body);
+  S.resetPasswordWithCode('admin@example.org', codeAdmin, 'AuditCheckAdminPass1');
+
+  const auditRowsAll = S.readTable_('سجل العمليات').rows;
+  const resetAuditRows = auditRowsAll.filter(row =>
+    String(row['العملية']) === 'طلب استعادة كلمة مرور' || String(row['العملية']) === 'إعادة تعيين كلمة المرور عبر البريد');
+  assert('سجل العمليات يحتوي فعلًا على أحداث الاستعادة (لا تسجيل صامت)', resetAuditRows.length >= 4);
+  const auditJson = JSON.stringify(auditRowsAll);
+  [codeA, codeAdmin, 'AuditCheckPass123', 'AuditCheckAdminPass1'].forEach(secret => {
+    assert('سجل العمليات لا يحتوي على القيمة الحساسة: ' + secret, auditJson.indexOf(secret) === -1);
+  });
+  assert('سجل العمليات لا يحتوي على عناوين بريد كاملة لأحداث الاستعادة', resetAuditRows.every(row => String(row['ملاحظات']).indexOf('@') === -1));
+}
+
+section('11ي) استعادة كلمة المرور — تزامن: طلبان متتاليان لنفس البريد يُبقيان الرمز الأحدث فقط صالحًا');
+{
+  const S = buildSandbox();
+  seedScenario(S);
+  // لا سبيل حقيقي لتشغيل عمليتين متزامنتين فعليًا في Node وحيد الخيط، لكن
+  // الأثر المُختبَر هنا (الكتابة على نفس مفتاح الذاكرة المؤقتة من طلبين
+  // متتاليين قبل استخدام أيهما) مطابق تمامًا لما يحدث فعليًا في التزامن
+  // الحقيقي — النتيجة نفسها: الرمز الأقدم يُرفض، الأحدث فقط يعمل.
+  S.requestPasswordReset('assoc-a@example.org');
+  const raceCodeOld = extractResetCode(S.__sentMails[0].body);
+  S.__sentMails.length = 0;
+  S.requestPasswordReset('assoc-a@example.org');
+  const raceCodeNew = extractResetCode(S.__sentMails[0].body);
+  throws('من طلبين "متزامنين"، الرمز الأقدم يُرفض', () =>
+    S.resetPasswordWithCode('assoc-a@example.org', raceCodeOld, 'RaceWinnerPass123'), 'غير صحيح');
+  const raceConfirm = S.resetPasswordWithCode('assoc-a@example.org', raceCodeNew, 'RaceWinnerPass123');
+  assert('الرمز الأحدث من الطلبين هو الصالح فعليًا', raceConfirm.ok === true);
+}
+
+section('11ك) استعادة كلمة المرور — تحديد المعدل يمنع طلبات متكررة كثيرة');
+{
+  const S = buildSandbox();
+  seedScenario(S);
+  throws('تحديد المعدل يمنع طلبات استعادة متكررة كثيرة لنفس البريد خلال وقت قصير', () => {
+    for (let i = 0; i < 10; i++) S.requestPasswordReset('assoc-a@example.org');
+  }, 'محاولات كثيرة');
+}
+
+/* ================================================================
+   12) نسيان رمز دخول المندوب — لا مسار بريد إطلاقًا، يوجَّه المندوب
+   للتواصل مع جمعيته التي تستخدم regenerateDelegateCode الموجودة أصلًا
+   (اختبارات إبطال الرمز القديم والعزل بين الجمعيات مغطاة بالفعل في
+   القسم 5 أعلاه — regenerateDelegateCode لم تتغيّر في هذه المرحلة).
+   ================================================================ */
+
+section('12) نسيان رمز دخول المندوب — تأكيد عدم وجود مسار بريد أو دالة موازية');
+{
+  assert('لا توجد أي دالة خادم جديدة لاستعادة/إرسال رمز مندوب عبر البريد (المسار بالكامل عبر الجمعية)',
+    !/function\s+(requestDelegateCodeReset|resetDelegateCode|sendDelegateCode)\b/.test(source));
+  assert('regenerateDelegateCode ما زالت الدالة الوحيدة لإصدار رمز مندوب جديد', (source.match(/function regenerateDelegateCode\(/g) || []).length === 1);
 }
 
 /* -------- النتيجة -------- */

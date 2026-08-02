@@ -154,6 +154,7 @@ const sandbox = {
     })
   },
   LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+  MailApp: { sendEmail: () => {} },
   ScriptApp: { getScriptId: () => 'script-id-test', getOAuthToken: () => 'token' },
   SpreadsheetApp: { getActiveSpreadsheet: () => null },
   HtmlService: { createHtmlOutputFromFile: () => ({ setTitle() { return this; }, addMetaTag() { return this; } }) },
@@ -486,7 +487,7 @@ const ALL_HEADERS = {
 Object.keys(ALL_HEADERS).forEach(name => S2.ensureSheet_(mockSs, name, ALL_HEADERS[name]));
 
 assert('استقبال الطلبات غير مفعّل بلا شيت (يفشل بأمان لا يكسر التطبيق)', (() => {
-  const emptySandbox = { console, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp, Error, isNaN, isFinite, parseInt, parseFloat, Set, Utilities: sandbox.Utilities, PropertiesService: sandbox.PropertiesService, CacheService: { getScriptCache: () => ({ get: () => null, put: () => {}, remove: () => {} }) }, LockService: sandbox.LockService, ScriptApp: sandbox.ScriptApp, SpreadsheetApp: { getActiveSpreadsheet: () => null }, HtmlService: sandbox.HtmlService, DriveApp: {}, UrlFetchApp: {} };
+  const emptySandbox = { console, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp, Error, isNaN, isFinite, parseInt, parseFloat, Set, Utilities: sandbox.Utilities, PropertiesService: sandbox.PropertiesService, CacheService: { getScriptCache: () => ({ get: () => null, put: () => {}, remove: () => {} }) }, LockService: sandbox.LockService, MailApp: sandbox.MailApp, ScriptApp: sandbox.ScriptApp, SpreadsheetApp: { getActiveSpreadsheet: () => null }, HtmlService: sandbox.HtmlService, DriveApp: {}, UrlFetchApp: {} };
   emptySandbox.globalThis = emptySandbox;
   vm.createContext(emptySandbox);
   vm.runInContext(source, emptySandbox, { filename: 'Code.gs(noSheet)' });

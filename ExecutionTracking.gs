@@ -187,21 +187,7 @@ function changePassword(token, currentPassword, newPassword) {
   if (!record || !constantTimeEquals_(String(record['كلمة المرور المشفرة']), hashSecret_(String(currentPassword || ''), String(record['الملح'])))) {
     throw new Error('كلمة المرور الحالية غير صحيحة');
   }
-  newPassword = String(newPassword || '');
-  if (newPassword.length < 10 || !/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
-    throw new Error('كلمة المرور الجديدة يجب أن تكون 10 خانات على الأقل وتضم حروفًا وأرقامًا');
-  }
-  if (constantTimeEquals_(hashSecret_(newPassword, String(record['الملح'])), String(record['كلمة المرور المشفرة']))) {
-    throw new Error('كلمة المرور الجديدة يجب أن تختلف عن الحالية');
-  }
-  // منع إعادة استخدام كلمة المرور السابقة مباشرة (طبقة حماية واحدة ضمن
-  // البنية الحالية — لا يُحفظ سجل كامل لكل كلمات المرور القديمة، فقط
-  // آخر واحدة سبقت الحالية).
-  const previousSalt = String(record['ملح سابق'] || '');
-  const previousHash = String(record['كلمة مرور سابقة مشفرة'] || '');
-  if (previousSalt && previousHash && constantTimeEquals_(hashSecret_(newPassword, previousSalt), previousHash)) {
-    throw new Error('لا يمكن استخدام كلمة المرور السابقة نفسها. اختر كلمة مرور مختلفة');
-  }
+  newPassword = assertPasswordPolicy_(newPassword, record);
   const salt = Utilities.getUuid();
   updateById_(APP.sheets.users, 'رقم المستخدم', user.id, {
     'كلمة مرور سابقة مشفرة': record['كلمة المرور المشفرة'],
