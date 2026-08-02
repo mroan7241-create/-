@@ -175,8 +175,14 @@ FIXTURES.delegate = {
     Object.assign({}, FIXTURES.admin.beneficiaries[3], { phone: '0533221100', devices: [] })
   ],
   history: [
-    { beneficiaryName: 'محمد إبراهيم الدوسري', deliveredAt: '2026/07/29 09:14', devices: ['DEV-001003'] },
-    { beneficiaryName: 'عائشة فهد المطيري', deliveredAt: '2026/07/29 08:02', devices: ['DEV-000998', 'DEV-000999'] }
+    { id: 'DLV-000501', beneficiaryName: 'محمد إبراهيم الدوسري', deliveredAt: '2026/07/29 09:14', devices: ['DEV-001003'], hasProof: true },
+    { id: 'DLV-000499', beneficiaryName: 'عائشة فهد المطيري', deliveredAt: '2026/07/29 08:02', devices: ['DEV-000998', 'DEV-000999'], hasProof: false }
+  ],
+  audit: [
+    { user: 'سعد ماجد القحطاني', action: 'تأكيد تسليم', section: 'التسليمات', recordId: 'BEN-000103', notes: '', at: '2026/07/29 09:14' },
+    { user: 'سعد ماجد القحطاني', action: 'تعذر التسليم', section: 'التسليمات', recordId: 'BEN-000106', notes: 'لا يرد', at: '2026/07/28 16:40' },
+    { user: 'سعد ماجد القحطاني', action: 'إعادة محاولة تسليم', section: 'التسليمات', recordId: 'BEN-000106', notes: '', at: '2026/07/28 17:05' },
+    { user: 'سعد ماجد القحطاني', action: 'تسجيل دخول', section: 'المصادقة', recordId: 'MND-000001', notes: '', at: '2026/07/29 07:40' }
   ]
 };
 
@@ -199,34 +205,47 @@ function findFixtureDevice(id){
 }
 `;
 
-const shim = '<script>' + listShimHelpers + 'window.google={script:{run:(function(){'
-  + 'var ok=null,fail=null;'
-  + 'var handler={withSuccessHandler:function(f){ok=f;return handler},'
-  + 'withFailureHandler:function(f){fail=f;return handler},'
-  + 'getBootstrapData:function(){setTimeout(function(){ok(window.__FIXTURE)},60)},'
-  + 'login:function(){setTimeout(function(){ok({token:"preview-token-0000000000000000000000000000000000",'
-  + 'user:window.__FIXTURE.user,bootstrap:window.__FIXTURE})},60)},'
-  + 'logout:function(){setTimeout(function(){ok({ok:true})},10)},'
-  + 'listBeneficiaries:function(token,options){setTimeout(function(){ok(fakePage(window.__FIXTURE.beneficiaries||[],options))},60)},'
-  + 'listDevices:function(token,options){setTimeout(function(){ok(fakePage(window.__FIXTURE.devices||[],options))},60)},'
-  + 'listDelegates:function(token,options){setTimeout(function(){ok(fakePage(window.__FIXTURE.delegates||[],options))},60)},'
-  + 'listAssociations:function(token,options){setTimeout(function(){ok(fakePage(window.__FIXTURE.associations||[],options))},60)},'
-  + 'listAuditLog:function(token,options){setTimeout(function(){ok(fakePage(window.__FIXTURE.audit||[],options))},60)},'
-  + 'listApplications:function(token,options){setTimeout(function(){ok(fakePage(window.__FIXTURE.applications||[],options))},60)},'
-  + 'listDelegateAuditLog:function(token,id,options){setTimeout(function(){ok(Object.assign(fakePage((window.__FIXTURE.audit||[]).filter(function(r){return r.recordId===id}),options),{delegateName:""}))},60)},'
-  + 'getDeviceDetail:function(token,id){setTimeout(function(){'
-  + 'var d=findFixtureDevice(id);'
-  + 'if(!d){fail(new Error("الجهاز غير موجود"));return}'
-  + 'var ben=(window.__FIXTURE.beneficiaries||[]).find(function(b){return b.id===d.beneficiaryId});'
-  + 'ok({ok:true,device:d,associationName:"جمعية البر بالرياض",beneficiaryName:ben?ben.name:"",delegateId:"",delegateName:ben&&ben.delegateId?"سعد ماجد القحطاني":"",assignedAt:d.createdAt,dispatchedAt:"",log:[]})'
-  + '},60)},'
-  + 'getReferenceData:function(){setTimeout(function(){ok(window.__PREVIEW_REFERENCE_DATA)},30)},'
-  + 'listBeneficiaryDeliveryAttempts:function(token,id){setTimeout(function(){ok({ok:true,attempts:['
-  + '{id:"DLV-000501",status:"تم التسليم",reason:"",notes:"",delegateName:"سعد ماجد القحطاني",hasProof:true,at:"2026/07/21 11:20"}'
-  + ']})},60)},'
-  + 'getDeliveryProofImage:function(){setTimeout(function(){ok({ok:true,dataUrl:window.__PREVIEW_PROOF_IMAGE})},60)}'
+// كل استدعاء google.script.run.withSuccessHandler(f).withFailureHandler(g).method(...)
+// حقيقي يحمل ok/fail خاصَّين به معزولَين عن أي استدعاء آخر متزامن. تسجيل
+// ok/fail في متغيّرين مشترَكين (كما في نسخة سابقة من هذه المحاكاة) كان
+// يُنتج تعارضًا حقيقيًا عندما يحدث أكثر من استدعاء api() قبل أن يُنفَّذ
+// أول setTimeout: النتيجة الأولى تصل بعد أن يكون ok قد أُعيد ضبطه لمعالج
+// الاستدعاء الثاني، فتُفقَد النتيجة الأولى أو تُخلَط بالثانية. البناء هنا
+// (makeRunner يُعيد كائنًا جديدًا لكل ربط withSuccessHandler/withFailureHandler
+// بدل تعديل حالة مشتركة) يطابق دلالات google.script.run الحقيقية.
+const METHOD_IMPLS = {
+  getBootstrapData: 'function(ok,fail){setTimeout(function(){ok(window.__FIXTURE)},60)}',
+  login: 'function(ok,fail){setTimeout(function(){ok({token:"preview-token-0000000000000000000000000000000000",user:window.__FIXTURE.user,bootstrap:window.__FIXTURE})},60)}',
+  logout: 'function(ok,fail){setTimeout(function(){ok({ok:true})},10)}',
+  listBeneficiaries: 'function(ok,fail,token,options){setTimeout(function(){ok(fakePage(window.__FIXTURE.beneficiaries||[],options))},60)}',
+  listDevices: 'function(ok,fail,token,options){setTimeout(function(){ok(fakePage(window.__FIXTURE.devices||[],options))},60)}',
+  listDelegates: 'function(ok,fail,token,options){setTimeout(function(){ok(fakePage(window.__FIXTURE.delegates||[],options))},60)}',
+  listAssociations: 'function(ok,fail,token,options){setTimeout(function(){ok(fakePage(window.__FIXTURE.associations||[],options))},60)}',
+  listAuditLog: 'function(ok,fail,token,options){setTimeout(function(){ok(fakePage(window.__FIXTURE.audit||[],options))},60)}',
+  listApplications: 'function(ok,fail,token,options){setTimeout(function(){ok(fakePage(window.__FIXTURE.applications||[],options))},60)}',
+  listDelegateAuditLog: 'function(ok,fail,token,id,options){setTimeout(function(){ok(Object.assign(fakePage((window.__FIXTURE.audit||[]).filter(function(r){return r.recordId===id}),options),{delegateName:""}))},60)}',
+  getDeviceDetail: 'function(ok,fail,token,id){setTimeout(function(){var d=findFixtureDevice(id);if(!d){fail(new Error("الجهاز غير موجود"));return}var ben=(window.__FIXTURE.beneficiaries||[]).find(function(b){return b.id===d.beneficiaryId});ok({ok:true,device:d,associationName:"جمعية البر بالرياض",beneficiaryName:ben?ben.name:"",delegateId:"",delegateName:ben&&ben.delegateId?"سعد ماجد القحطاني":"",assignedAt:d.createdAt,dispatchedAt:"",log:[]})},60)}',
+  getReferenceData: 'function(ok,fail){setTimeout(function(){ok(window.__PREVIEW_REFERENCE_DATA)},30)}',
+  listBeneficiaryDeliveryAttempts: 'function(ok,fail,token,id){setTimeout(function(){ok({ok:true,attempts:[{id:"DLV-000501",status:"تم التسليم",reason:"",notes:"",delegateName:"سعد ماجد القحطاني",hasProof:true,at:"2026/07/21 11:20"}]})},60)}',
+  getDeliveryProofImage: 'function(ok,fail){setTimeout(function(){ok({ok:true,dataUrl:window.__PREVIEW_PROOF_IMAGE})},60)}'
+};
+const methodsSrc = Object.keys(METHOD_IMPLS).map(name => JSON.stringify(name) + ':' + METHOD_IMPLS[name]).join(',');
+
+const shim = '<script>' + listShimHelpers
+  + 'var __METHODS__={' + methodsSrc + '};'
+  + 'function __makeRunner__(ok,fail){'
+  + 'var runner={withSuccessHandler:function(f){return __makeRunner__(f,fail)},'
+  + 'withFailureHandler:function(f){return __makeRunner__(ok,f)}};'
+  + 'Object.keys(__METHODS__).forEach(function(name){'
+  + 'runner[name]=function(){'
+  + 'var args=[ok||function(){},fail||function(){}].concat(Array.prototype.slice.call(arguments));'
+  + '__METHODS__[name].apply(null,args);'
   + '};'
-  + 'return handler}())}};</script>';
+  + '});'
+  + 'return runner;'
+  + '}'
+  + 'window.google={script:{run:__makeRunner__(null,null)}};'
+  + '</script>';
 
 // #login (بدل #admin/#association/#delegate): يعرض شاشة الدخول نفسها
 // دون بيانات جلسة إطلاقًا — ?type=delegate يبدّل تبويب "دخول المندوب".
@@ -235,6 +254,7 @@ const seeder = '<script>(function(){'
   + 'if(role==="login"){'
   + 'var loginType=new URLSearchParams(location.search).get("type");'
   + 'if(loginType)window.state.loginType=loginType;'
+  + 'if(new URLSearchParams(location.search).get("open")==="apply"){window.renderApplyForm();return;}'
   + 'window.renderLogin();'
   + 'return;'
   + '}'
@@ -243,9 +263,17 @@ const seeder = '<script>(function(){'
   + 'window.state.data=window.__FIXTURE;'
   + 'window.state.user=window.__FIXTURE.user;'
   + 'window.state.referenceData=window.__PREVIEW_REFERENCE_DATA;'
+  + 'function lazyPg(list){list=list||[];return {loading:false,items:list,total:list.length,page:1,totalPages:1,pageSize:25};}'
+  + 'window.state.lazy={'
+  + 'beneficiaries:lazyPg(window.__FIXTURE.beneficiaries),associations:lazyPg(window.__FIXTURE.associations),'
+  + 'devices:lazyPg(window.__FIXTURE.devices),delegates:lazyPg(window.__FIXTURE.delegates),'
+  + 'audit:lazyPg(window.__FIXTURE.audit),applications:lazyPg(window.__FIXTURE.applications),'
+  + 'activities:{loading:false,activities:window.__FIXTURE.activities||[],stages:window.__FIXTURE.stages||[],evidence:window.__FIXTURE.evidence||[]}'
+  + '};'
   + 'var page=new URLSearchParams(location.search).get("page");'
   + 'if(page)window.state.page=page;'
   + 'window.render();'
+  + 'try{'
   + 'var open=new URLSearchParams(location.search).get("open");'
   + 'var openId=new URLSearchParams(location.search).get("id");'
   + 'if(open==="beneficiary-form")window.beneficiaryForm(openId||"");'
@@ -253,6 +281,20 @@ const seeder = '<script>(function(){'
   + 'if(open==="view-delegate-log"){window.openModal("سجل عمليات المندوب: سعد ماجد القحطاني",'
   + 'window.delegateLogTimeline(window.__FIXTURE.audit||[]),'
   + '\'<button class="btn btn-ghost" data-act="close-modal">إغلاق</button>\')}'
+  + '}catch(seedErr){'
+  + 'var errBox=document.createElement("div");'
+  + 'errBox.style.cssText="position:fixed;inset:0;z-index:99999;background:#fff;color:#c00;padding:20px;font:14px monospace;white-space:pre-wrap;overflow:auto";'
+  + 'errBox.textContent="SEED_ERROR: "+String((seedErr&&seedErr.stack)||seedErr);'
+  + 'document.body.appendChild(errBox);'
+  + '}'
+  + 'try{if(open==="view-proof")window.viewProofImage("DLV-000501");}catch(e2){}'
+  + 'if(new URLSearchParams(location.search).get("scrollBottom")){'
+  + 'setTimeout(function(){var mb=document.querySelector(".modal-body");if(mb)mb.scrollTop=mb.scrollHeight;},900);'
+  + '}'
+  + 'var scrollFrac=new URLSearchParams(location.search).get("scrollFrac");'
+  + 'if(scrollFrac){'
+  + 'setTimeout(function(){var mb=document.querySelector(".modal-body");if(mb)mb.scrollTop=mb.scrollHeight*parseFloat(scrollFrac);},900);'
+  + '}'
   + '}());</script>';
 
 // أدنى بيانات مرجعية واقعية كافية لعرض حقول المنطقة/المدينة والتصنيفات
