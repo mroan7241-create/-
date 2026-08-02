@@ -249,6 +249,17 @@ assert('شعار مؤسسة أبانمي الفعلي مضمَّن (data URI ح�
   app.BRAND.partnerLogo.indexOf('data:image/png;base64,') === 0 && app.BRAND.partnerLogo.length > 1000);
 assert('شاشة الدخول تعرض وسم <img> فعليًا لشعار الزاد (لا SVG بديل)', out().includes('class="lockup-logo"'));
 assert('شاشة الدخول تعرض وسم <img> فعليًا لشعار الشريك (لا اسم نصي بديل)', out().includes('class="lockup-partner-logo"'));
+
+// إعادة تصميم شاشة الدخول: بلا لوحة تسويقية ولا إحصاءات، نموذج مركزي
+// وحيد فوق خلفية زخرفية فقط.
+assert('لا توجد لوحة فنية جانبية (login-art) في شاشة الدخول تحديدًا', !out().includes('class="login-art"'));
+assert('لا يظهر أي نص ترويجي/إحصائي قديم ("منظومة موحّدة"/"أدوار تشغيلية"/"توثيق بالصورة"/"زادٌ ونَماء")',
+  !out().includes('منظومة موحّدة') && !out().includes('أدوار تشغيلية') && !out().includes('توثيق بالصورة') && !out().includes('زادٌ ونَماء'));
+assert('الحاوية الرئيسية تحمل صنف "login-solo" (تخطيط عمود واحد مركزي)', out().includes('login login-solo'));
+assert('خلفية زخرفية هادئة موجودة (login-bg) بلا أي محتوى نصي داخلها', out().includes('class="login-bg"'));
+assert('زر الدخول الأساسي وزر التقديم الثانوي بينهما تباعد صريح (login-secondary-act)', out().includes('class="login-secondary-act"'));
+assert('الزر الأساسي (تسجيل الدخول) بصريًا أقوى: btn-primary، والثانوي أخف: btn-ghost', out().includes('btn btn-primary btn-block') && out().includes('btn btn-ghost btn-block'));
+
 app.state.loginType = 'delegate';
 app.renderLogin();
 assert('تبديل تبويب المندوب يعرض حقل الرمز', out().includes('رمز دخول المندوب'));
@@ -259,6 +270,10 @@ assert('يظهر رابط تقديم طلب انضمام جمعية في شاش�
 app.renderApplyForm();
 assert('ترسم نموذج طلب الانضمام العام', out().includes('submit-application'));
 assert('نموذج الطلب يطلب اسم الجمعية والبريد (بريد مبني من اسم مستخدم ونطاق)', out().includes('name="name"') && out().includes('name="emailLocal"') && out().includes('name="emailDomain"'));
+// نموذج التقديم لم يُعَد تصميمه (خارج نطاق تبسيط شاشة الدخول) — يحتفظ
+// بلوحته الجانبية كما كانت تمامًا؛ انحداره هنا يعني أن تبسيط تخطيط
+// الدخول أثّر خطأً في شاشة لم يُطلَب لمسها إطلاقًا.
+assert('نموذج التقديم يحتفظ بلوحته الجانبية (login-art) كما كانت — لم يُعَد تصميمه', out().includes('class="login-art"'));
 app.renderLogin();
 
 /* ---------------- 2) لوحة الإدارة ---------------- */

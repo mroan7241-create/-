@@ -223,8 +223,16 @@ const shim = '<script>' + listShimHelpers + 'window.google={script:{run:(functio
   + '};'
   + 'return handler}())}};</script>';
 
+// #login (بدل #admin/#association/#delegate): يعرض شاشة الدخول نفسها
+// دون بيانات جلسة إطلاقًا — ?type=delegate يبدّل تبويب "دخول المندوب".
 const seeder = '<script>(function(){'
   + 'var role=(location.hash||"#admin").slice(1);'
+  + 'if(role==="login"){'
+  + 'var loginType=new URLSearchParams(location.search).get("type");'
+  + 'if(loginType)window.state.loginType=loginType;'
+  + 'window.renderLogin();'
+  + 'return;'
+  + '}'
   + 'window.__FIXTURE=window.__PREVIEW_DATA[role]||window.__PREVIEW_DATA.admin;'
   + 'window.state.token="preview-token-0000000000000000000000000000000000";'
   + 'window.state.data=window.__FIXTURE;'
@@ -245,4 +253,4 @@ fs.mkdirSync(OUT_DIR, { recursive: true });
 const outFile = path.join(OUT_DIR, 'preview.html');
 fs.writeFileSync(outFile, preview, 'utf8');
 console.log('تم إنشاء ملف المعاينة: ' + path.relative(ROOT, outFile));
-console.log('افتحه بـ  #admin  أو  #association  أو  #delegate  و ?page=beneficiaries');
+console.log('افتحه بـ  #admin  أو  #association  أو  #delegate  أو  #login  و ?page=beneficiaries');

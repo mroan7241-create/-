@@ -146,6 +146,22 @@
       background:linear-gradient(90deg,var(--gold-600),var(--gold-400))}
     .login-panel h1{font-size:clamp(28px,3.4vw,42px);color:var(--zad-800);margin-bottom:12px;letter-spacing:-.01em}
     .login-lede{color:var(--ink-soft);font-size:15.5px;margin:0 0 28px;max-width:44ch}
+
+    /* ---------- شاشة الدخول: بلا لوحة تسويقية، نموذج مركزي فوق خلفية
+       زخرفية هادئة فقط (دوائر رفيعة + تدرّج عنابي/ذهبي شفاف). ---------- */
+    .login-solo{grid-template-columns:1fr;place-items:center;padding:24px;position:relative;overflow:hidden;background:var(--canvas);min-height:100vh}
+    .login-bg{position:absolute;inset:0;z-index:0;pointer-events:none;
+      background:var(--zad-gradient-soft), radial-gradient(circle at 85% 12%, rgba(142,27,69,.07), transparent 45%),
+      radial-gradient(circle at 8% 92%, rgba(226,166,46,.10), transparent 45%)}
+    .login-bg::before,.login-bg::after{content:"";position:absolute;border-radius:50%}
+    .login-bg::before{width:560px;height:560px;top:-260px;inset-inline-end:-200px;border:1px solid rgba(142,27,69,.12)}
+    .login-bg::after{width:360px;height:360px;bottom:-180px;inset-inline-start:-140px;border:1px solid rgba(226,166,46,.22)}
+    .login-solo .login-panel{position:relative;z-index:1;background:var(--paper);border-radius:var(--r-xl);
+      box-shadow:var(--sh-4);max-width:460px;width:100%;margin:0;justify-content:flex-start}
+    /* مسافة واضحة (≥16px) بين زر الدخول الأساسي والزر الثانوي أسفله —
+       الأساسي واضح القوة (btn-primary القياسي)، والثانوي أخف بصريًا
+       (btn-ghost) فلا يتنافسان على الانتباه. */
+    .login-secondary-act{margin-top:16px}
     /* ============================================================
        اللوحة التنفيذية للأنشطة — نظام بصري خاص بالزاد لا قالب جاهز.
        المبدأ: تدرّج قراءة من الشريط الكلي ← مسار المراحل ← البطاقة.
@@ -558,6 +574,10 @@
       .login{grid-template-columns:1fr;min-height:auto}
       .login-art{display:none}
       .login-panel{max-width:640px;width:100%;margin-inline:auto;justify-content:flex-start;padding-top:clamp(20px,4vh,40px)}
+      /* شاشة الدخول المفردة (بلا لوحة فن) تبقى ملء الشاشة دائمًا كي تغطي
+         الخلفية الزخرفية كامل العرض المرئي، بخلاف الشاشتين ثنائيتَي
+         العمود أعلاه اللتين تتفادى فيهما القاعدة العامة الفراغ الزائد. */
+      .login-solo{min-height:100vh;padding-top:calc(24px + env(safe-area-inset-top));padding-bottom:calc(24px + env(safe-area-inset-bottom))}
       .sidebar{width:236px}.main{margin-inline-end:236px}
     }
     @media(max-width:820px){
@@ -1156,7 +1176,12 @@
           + '<input class="control" id="loginPassword" name="password" type="password" dir="ltr" '
           + 'autocomplete="current-password" required></div>';
 
-      $('#root').innerHTML = '<main class="login">'
+      // شاشة الدخول (بخلاف نموذج التقديم/تغيير كلمة المرور المؤقتة اللذين
+      // يحتفظان باللوحة الجانبية) لا تحمل أي لوحة تسويقية أو إحصاءات
+      // إطلاقًا — نموذج الدخول نفسه هو محور التركيز البصري الوحيد، فوق
+      // خلفية زخرفية هادئة مستمدة من هوية الزاد (دوائر خفيفة + تدرّج
+      // عنابي/ذهبي شفاف) بلا أي نص ترويجي.
+      $('#root').innerHTML = '<main class="login login-solo"><div class="login-bg" aria-hidden="true"></div>'
         + '<section class="login-panel">' + lockup({partner: true})
         + '<div class="login-divider" aria-hidden="true"></div>'
         + '<div class="segmented" role="tablist" aria-label="نوع الدخول">'
@@ -1167,18 +1192,10 @@
         + '<form id="loginForm" data-act="submit-login" novalidate>' + fields
         + '<button class="btn btn-primary btn-block" type="submit">'
         + (isDelegate ? 'دخول المندوب' : 'تسجيل الدخول') + '</button></form>'
-        + (isDelegate ? '' : '<button type="button" class="btn btn-ghost btn-block" data-act="show-apply">'
-          + 'تقديم طلب انضمام جمعية جديدة</button>')
-        + '</section>'
-        + '<aside class="login-art"><div class="art-card">'
-        + '<div class="art-seal" aria-hidden="true">' + ZAD_SEAL_SVG + '</div>'
-        + '<h2>زادٌ ونَماء</h2>'
-        + '<p>أثرٌ موثّق يصل إلى بيت المستفيد، ويُقاس في كل مرحلة.</p>'
-        + '<div class="art-stats">'
-        + '<div><strong>١</strong><span>منظومة موحّدة</span></div>'
-        + '<div><strong>٣</strong><span>أدوار تشغيلية</span></div>'
-        + '<div><strong>١٠٠٪</strong><span>توثيق بالصورة</span></div>'
-        + '</div></div></aside></main>';
+        + (isDelegate ? '' : '<div class="login-secondary-act">'
+          + '<button type="button" class="btn btn-ghost btn-block" data-act="show-apply">'
+          + 'تقديم طلب انضمام جمعية جديدة</button></div>')
+        + '</section></main>';
 
       var first = $('#loginForm .control');
       if (first) first.focus();
