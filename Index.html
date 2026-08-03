@@ -206,7 +206,11 @@
        --canvas الافتراضي لـsegmented. */
     .login-solo .login-panel .segmented{background:rgba(255,255,255,.22);border:1px solid rgba(255,255,255,.4)}
     .login-solo .login-panel .segmented button[aria-selected="true"]{background:rgba(255,255,255,.8);box-shadow:0 2px 10px rgba(58,8,27,.14)}
-    .login-solo .login-panel .control{background:rgba(255,255,255,.55);border-color:rgba(255,255,255,.7)}
+    /* حقل .control بلا font-size خاص به عمومًا (يرث 15px من body) —
+       أقل من 16px يجعل Safari على iPhone يُكبِّر الصفحة تلقائيًا عند
+       التركيز على حقل البريد/كلمة المرور/الرمز. 16px هنا يمنع ذلك دون
+       تغيير حجم الخط في أي نموذج آخر خارج شاشة الدخول. */
+    .login-solo .login-panel .control{background:rgba(255,255,255,.55);border-color:rgba(255,255,255,.7);font-size:16px}
     .login-solo .login-panel .control::placeholder{color:var(--ink-faint)}
     .login-solo .login-panel .btn-ghost{background:rgba(255,255,255,.4);border-color:rgba(255,255,255,.75)}
     /* مخطوطة "أهلا وسهلا" داخل البطاقة نفسها (لا فوق صورة الخلفية) —
