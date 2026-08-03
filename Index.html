@@ -5,6 +5,33 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#8E1B45">
   <title>نظام متابعة توزيع الأجهزة | جمعية الزاد</title>
+  <script>
+    /**
+     * ارتفاع حقيقي مقاس بجافاسكربت (--real-vh) بدل الاعتماد فقط على
+     * وحدات CSS (vh/svh/dvh). سبب وجوده: داخل إطار (iframe) Apps
+     * Script المعزول (خصوصًا رابط /exec المنشور، بخلاف بيئة الاختبار
+     * المحلية)، رُصد حيًّا أن الصفحة تُنتج مساحة تمرير رأسية زائدة
+     * فارغة أسفل بطاقة الدخول رغم أن 100vh/100svh/100dvh تبدو صحيحة
+     * نظريًا — ما يعني أن حساب هذه الوحدات داخل ذلك الإطار تحديدًا لا
+     * يطابق الارتفاع المرئي الفعلي. window.innerHeight (أو
+     * visualViewport.height إن توفرت، الأدق عند تغيّر لوحة المفاتيح أو
+     * شريط عنوان الجوال) يقيس الارتفاع الحقيقي من داخل هذا المستند
+     * نفسه مباشرة، بصرف النظر عن أي غرابة في حساب وحدات vh المضيفة.
+     * يعمل بلا تعديل أي وظيفة أخرى: متغيّر CSS إضافي فقط، تُفضَّل قيمته
+     * (var(--real-vh, 100vh)) على 100vh كحد أدنى أخير إن تعذّر تشغيل
+     * جافاسكربت لأي سبب.
+     */
+    (function () {
+      function setRealVh() {
+        var h = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+        if (h) document.documentElement.style.setProperty('--real-vh', h + 'px');
+      }
+      setRealVh();
+      window.addEventListener('resize', setRealVh);
+      window.addEventListener('orientationchange', setRealVh);
+      if (window.visualViewport) window.visualViewport.addEventListener('resize', setRealVh);
+    }());
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
@@ -157,7 +184,8 @@
        شريط عنوان جوال Safari الديناميكي. */
     .login-solo{grid-template-columns:1fr;place-items:center;padding:16px;position:relative;
       overflow-x:hidden;overflow-y:auto;background:var(--canvas);
-      min-height:100vh;min-height:100svh;min-height:100dvh}
+      min-height:100vh;min-height:100svh;min-height:100dvh;
+      min-height:var(--real-vh, 100vh)}
     /* صورة معالم سعودية عامة (ليست خاصة بمنطقة القصيم) كخلفية زخرفية —
        تدرّج عنابي-أسود محايد فوقها (لا وردي باهت) يرفع تباين المشهد
        بدل تغطيته بغشاوة، ثم دوائر رفيعة كما كانت. */
@@ -691,6 +719,7 @@
          خلف شريط عنوان جوال Safari الديناميكي؛ حشوة safe-area تحمي من
          حواف الشاشة المنحنية/الشق العلوي. */
       .login-solo{min-height:100vh;min-height:100svh;min-height:100dvh;
+        min-height:var(--real-vh, 100vh);
         padding-top:calc(16px + env(safe-area-inset-top));padding-bottom:calc(16px + env(safe-area-inset-bottom))}
       .sidebar{width:236px}.main{margin-inline-end:236px}
     }

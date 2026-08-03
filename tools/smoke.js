@@ -277,6 +277,18 @@ assert('خلفية الدخول تُمرَّر عبر متغيّر CSS مخصَ�
 assert('مخطوطة الترحيب تظهر كعنصر <img> داخل بطاقة الدخول (login-calligraphy)، لا فوق صورة الخلفية',
   out().includes('class="login-calligraphy"'));
 
+// ارتفاع حقيقي مقاس بجافاسكربت (--real-vh) — يعالج تمررًا رأسيًا زائدًا
+// رُصد حيًّا داخل إطار Apps Script المنشور تحديدًا (رابط /exec)، حيث لا
+// تطابق 100vh/100svh/100dvh الارتفاع المرئي الفعلي. يجب أن يعمل قبل أي
+// رسم للصفحة (سكربت مبكر في <head>)، ويُستخدَم كأولوية أخيرة في
+// .login-solo فوق سلسلة وحدات vh القياسية.
+assert('سكربت --real-vh مبكر في <head> (قبل أي محتوى الجسم) لقياس الارتفاع الحقيقي بجافاسكربت',
+  html.indexOf('--real-vh') < html.indexOf('<body>') && html.indexOf("setProperty('--real-vh'") > 0);
+assert('سكربت --real-vh يستمع لتغيّر الحجم وvisualViewport (لوحة المفاتيح/تدوير الجوال)',
+  html.includes("addEventListener('resize', setRealVh)") && html.includes('window.visualViewport'));
+assert('.login-solo تُفضِّل var(--real-vh) على وحدات vh القياسية كحدّ أدنى أخير للارتفاع',
+  html.includes('min-height:var(--real-vh, 100vh)'));
+
 app.state.loginType = 'delegate';
 app.renderLogin();
 assert('تبديل تبويب المندوب يعرض حقل الرمز', out().includes('رمز دخول المندوب'));
