@@ -77,6 +77,7 @@ const document = {
   addEventListener: (type, fn) => { listeners[type] = fn; },
   contains: () => false,
   activeElement: null,
+  documentElement: new El('html'),
   body: new El('body'),
   referrer: ''
 };
@@ -277,17 +278,38 @@ assert('خلفية الدخول تُمرَّر عبر متغيّر CSS مخصَ�
 assert('مخطوطة الترحيب تظهر كعنصر <img> داخل بطاقة الدخول (login-calligraphy)، لا فوق صورة الخلفية',
   out().includes('class="login-calligraphy"'));
 
-// ارتفاع حقيقي مقاس بجافاسكربت (--real-vh) — يعالج تمررًا رأسيًا زائدًا
-// رُصد حيًّا داخل إطار Apps Script المنشور تحديدًا (رابط /exec)، حيث لا
-// تطابق 100vh/100svh/100dvh الارتفاع المرئي الفعلي. يجب أن يعمل قبل أي
-// رسم للصفحة (سكربت مبكر في <head>)، ويُستخدَم كأولوية أخيرة في
-// .login-solo فوق سلسلة وحدات vh القياسية.
-assert('سكربت --real-vh مبكر في <head> (قبل أي محتوى الجسم) لقياس الارتفاع الحقيقي بجافاسكربت',
-  html.indexOf('--real-vh') < html.indexOf('<body>') && html.indexOf("setProperty('--real-vh'") > 0);
-assert('سكربت --real-vh يستمع لتغيّر الحجم وvisualViewport (لوحة المفاتيح/تدوير الجوال)',
-  html.includes("addEventListener('resize', setRealVh)") && html.includes('window.visualViewport'));
-assert('.login-solo تُفضِّل var(--real-vh) على وحدات vh القياسية كحدّ أدنى أخير للارتفاع',
-  html.includes('min-height:var(--real-vh, 100vh)'));
+// صدفة تطبيق ثابتة (login-viewport-lock + .login-solo كـ position:fixed):
+// تحلّ محل تخمين min-height/vh القديم بمنع شاشة الدخول من المشاركة في
+// ارتفاع المستند إطلاقًا، بدل مجرد مطابقته. --app-viewport-height تُقاس
+// بجافاسكربت (visualViewport أولوية، fallback إلى innerHeight) وتُستخدَم
+// كـ height فعلي للصدفة لا كحدّ أدنى، مع تحديث مُقيَّد بـ rAF عبر أحداث
+// resize/orientationchange/visualViewport كي لا تتراكم المستمعات.
+assert('سكربت --app-viewport-height مبكر في <head> (قبل أي محتوى الجسم) لقياس الارتفاع الحقيقي بجافاسكربت',
+  html.indexOf('--app-viewport-height') < html.indexOf('<body>') && html.indexOf("setProperty('--app-viewport-height'") > 0);
+assert('سكربت --app-viewport-height يستمع لتغيّر الحجم وvisualViewport (لوحة المفاتيح/تدوير الجوال) بلا تكرار مستمعات',
+  html.includes("addEventListener('resize', scheduleApply)") && html.includes('window.visualViewport')
+  && html.includes("visualViewport.addEventListener('resize', scheduleApply)"));
+assert('قياس الارتفاع مُقيَّد بـ requestAnimationFrame (لا تحديث متزامن مباشر عند كل حدث)',
+  html.includes('requestAnimationFrame(applyHeight)'));
+assert('.login-solo يستخدم height الفعلي (لا min-height) مضبوطًا على var(--app-viewport-height)',
+  html.includes('height:var(--app-viewport-height, 100vh)') && !html.includes('min-height:var(--real-vh'));
+assert('.login-solo مثبَّتة خارج تدفّق المستند (position:fixed;inset:0) فلا يمكنها زيادة ارتفاع المستند إطلاقًا',
+  /\.login-solo\{[^}]*position:fixed;inset:0/.test(html));
+assert('صنف login-viewport-lock يقفل تمرير html/body فقط أثناء عرض شاشة الدخول (overflow:hidden + منع الارتداد)',
+  html.includes('html.login-viewport-lock') && html.includes('body.login-viewport-lock')
+  && /html\.login-viewport-lock[\s\S]{0,150}overflow:hidden/.test(html)
+  && html.includes('overscroll-behavior:none'));
+assert('دالة setLoginViewportLock تبدّل الصنف على html وbody معًا (idempotent)',
+  html.includes('function setLoginViewportLock(active)')
+  && html.includes("documentElement.classList.toggle('login-viewport-lock'")
+  && html.includes("body.classList.toggle('login-viewport-lock'"));
+assert('renderLogin يُفعِّل القفل (أول سطر) وrender() يُلغيه افتراضيًا قبل التفريع لكل شاشة أخرى',
+  /function renderLogin\(\)\s*\{\s*setLoginViewportLock\(true\)/.test(html)
+  && /function render\(\)\s*\{[\s\S]{0,500}setLoginViewportLock\(false\)/.test(html));
+assert('شاشات أخرى (تقديم الجمعية/تغيير كلمة المرور الإلزامي/بوابة المندوب) تُلغي القفل صراحة عند رسمها',
+  /function renderApplyForm\([^)]*\)\s*\{\s*setLoginViewportLock\(false\)/.test(html)
+  && /function renderForcePasswordChange\(\)\s*\{\s*setLoginViewportLock\(false\)/.test(html)
+  && /function renderDelegate\(\)\s*\{\s*setLoginViewportLock\(false\)/.test(html));
 
 app.state.loginType = 'delegate';
 app.renderLogin();
