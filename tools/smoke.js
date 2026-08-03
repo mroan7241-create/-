@@ -85,7 +85,7 @@ const document = {
 // location مبسّطة لدعم systemUrl() (رابط "الدخول" في رسائل مشاركة بيانات
 // الدخول) — لا حاجة لأكثر من href ثابت هنا؛ الاختبارات الحية تتحقق فقط
 // من أن الدالة لا تفشل وتعيد نصًا معقولًا.
-const location = { href: 'https://example.com/exec' };
+const location = { href: 'https://example.com/exec', search: '' };
 
 const serverCalls = [];
 const google = {
@@ -103,7 +103,7 @@ const google = {
 const sandbox = {
   console, Intl, Promise, Date, Math, JSON, String, Number, Boolean,
   Array, Object, RegExp, Error, isNaN, parseInt, parseFloat, encodeURIComponent,
-  document, google, location,
+  document, google, location, URLSearchParams,
   sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
   FileReader: class { readAsText() {} readAsDataURL() {} },
   FormData: class { get() { return ''; } getAll() { return []; } },

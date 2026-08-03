@@ -5205,6 +5205,98 @@
     });
 
     /* ============================================================
+       15ب) وضع تشخيص الـviewport (اختياري، للنشر الحي فقط)
+       ============================================================
+       لا يعمل ولا يظهر أي أثر إطلاقًا إلا مع ?viewportDebug=1 صراحةً في
+       الرابط. سبب وجوده: بيئة الاختبار المحلية (بما فيها إطار iframe
+       متداخل يحاكي استضافة Apps Script) لا يمكنها إثبات أو نفي أي فرق
+       قد يظهر فقط داخل الرابط /exec الحي الفعلي (نطاق googleusercontent
+       المعزول الحقيقي الذي لا نملك وصولًا شبكيًا إليه من بيئة التطوير).
+       بدل الادعاء أن المشكلة انتهت رغم عدم القدرة على تكرارها حيًّا، هذه
+       الأداة تلتقط الأرقام الحقيقية من داخل الصفحة الحية نفسها وتعرضها
+       كنص JSON قابل للتحديد والنسخ يدويًا (لا Clipboard API لتفادي أي
+       صلاحية قد تُرفض داخل إطار معزول)، ليُرسَل هنا للتحليل الدقيق بدل
+       تخمين أعمى آخر. */
+    function collectViewportDebugReport_() {
+      var vv = window.visualViewport;
+      var de = document.documentElement;
+      var b = document.body;
+      function rectOf(sel) {
+        var el = document.querySelector(sel);
+        if (!el) return null;
+        var r = el.getBoundingClientRect();
+        return {x: r.x, y: r.y, width: r.width, height: r.height, top: r.top, bottom: r.bottom};
+      }
+      var overflowing = [];
+      $$('#root *').forEach(function (el) {
+        var r = el.getBoundingClientRect();
+        if (r.bottom > window.innerHeight + 1 || r.right > window.innerWidth + 1 || r.top < -1 || r.left < -1) {
+          overflowing.push({
+            tag: el.tagName, cls: (el.getAttribute && el.getAttribute('class')) || '',
+            top: r.top, bottom: r.bottom, left: r.left, right: r.right,
+            width: r.width, height: r.height
+          });
+        }
+        if (overflowing.length >= 25) return;
+      });
+      return {
+        capturedAt: new Date().toISOString(),
+        userAgent: navigator.userAgent,
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+        visualViewport: vv ? {
+          width: vv.width, height: vv.height, offsetTop: vv.offsetTop,
+          offsetLeft: vv.offsetLeft, scale: vv.scale
+        } : null,
+        devicePixelRatio: window.devicePixelRatio,
+        documentElement: {
+          clientWidth: de.clientWidth, clientHeight: de.clientHeight,
+          scrollWidth: de.scrollWidth, scrollHeight: de.scrollHeight,
+          scrollTop: de.scrollTop, className: de.className
+        },
+        body: {
+          clientWidth: b.clientWidth, clientHeight: b.clientHeight,
+          scrollWidth: b.scrollWidth, scrollHeight: b.scrollHeight,
+          scrollTop: b.scrollTop, className: b.className
+        },
+        scrollX: window.scrollX, scrollY: window.scrollY,
+        computedOverflow: {
+          html: getComputedStyle(de).overflow, body: getComputedStyle(b).overflow
+        },
+        appViewportHeightVar: getComputedStyle(de).getPropertyValue('--app-viewport-height').trim(),
+        rects: {
+          root: rectOf('#root'), loginSolo: rectOf('.login-solo'),
+          loginPanel: rectOf('.login-panel'), loginBg: rectOf('.login-bg')
+        },
+        overflowingElements: overflowing,
+        inTopFrame: window.top === window.self
+      };
+    }
+    function initViewportDebugMode_() {
+      if (new URLSearchParams(location.search).get('viewportDebug') !== '1') return;
+      var box = document.createElement('div');
+      box.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99999;width:min(94vw,420px);'
+        + 'background:#111;color:#0f0;font:11px/1.4 monospace;padding:10px;border-radius:8px;'
+        + 'box-shadow:0 8px 24px rgba(0,0,0,.4);direction:ltr;text-align:left';
+      var btn = document.createElement('button');
+      btn.textContent = 'تحديث تقرير التشخيص';
+      btn.style.cssText = 'display:block;width:100%;margin-bottom:6px;padding:6px;cursor:pointer';
+      var ta = document.createElement('textarea');
+      ta.readOnly = true;
+      ta.style.cssText = 'width:100%;height:220px;background:#000;color:#0f0;border:1px solid #333;font:inherit';
+      function refresh() {
+        ta.value = JSON.stringify(collectViewportDebugReport_(), null, 2);
+        ta.focus();
+        ta.select();
+      }
+      btn.addEventListener('click', refresh);
+      box.appendChild(btn);
+      box.appendChild(ta);
+      document.body.appendChild(box);
+      refresh();
+    }
+
+    /* ============================================================
        16) الإقلاع
        ============================================================ */
 
@@ -5214,6 +5306,7 @@
     // العام يحتاجها)، وتُجلب مرة واحدة فقط عند الإقلاع فتكون جاهزة قبل
     // أن يفتح الزائر النموذج بدل أن يراه بحقول نصية ثم يتغيّر تحته.
     if (!state.token) loadReferenceDataOnce();
+    initViewportDebugMode_();
   </script>
 </body>
 </html>
