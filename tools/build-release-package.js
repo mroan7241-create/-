@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * يبني حزمة تركيب يدوية منفصلة (17 ملف: 16 .gs + Index.html) لأحدث Release
+ * يبني حزمة تركيب يدوية منفصلة (18 ملفًا: 17 .gs + Index.html) لأحدث Release
  * Candidate، مع INSTALL.txt وMANIFEST.txt وSHA256.txt داخل أرشيف ZIP واحد.
  * لا يُشغّل أي دالة صيانة، ولا يعدّل Google Sheets، ولا ينشر أي شيء —
  * يقرأ فقط ملفات المصدر الحالية في جذر المستودع وينسخها كما هي حرفيًا.
@@ -15,7 +15,7 @@ const { GS_FILES_ORDER } = require('./gs-manifest');
 
 const ROOT = path.join(__dirname, '..');
 const DIST = path.join(ROOT, 'dist');
-const PKG_NAME = 'alzad-rc-split-17-files';
+const PKG_NAME = 'alzad-rc-split-18-files';
 const STAGE = path.join(DIST, PKG_NAME);
 const ZIP_PATH = path.join(DIST, PKG_NAME + '.zip');
 
@@ -23,7 +23,7 @@ const ALL_GS = GS_FILES_ORDER.slice();
 const ALL_FILES = ALL_GS.concat(['Index.html']);
 
 /**
- * بعد المرحلة التاسعة: **كل الملفات الـ17 تُستبدل بالكامل**، ولا ملف
+ * بعد المرحلة التاسعة: **كل الملفات الـ18 تُستبدل بالكامل**، ولا ملف
  * جديد يُنشأ. البنية نفسها لم تتغيّر (16 `.gs` + `Index.html` بنفس
  * الأسماء تمامًا)، لكن التعديلات متشابكة عبر الملفات (نطاق الطلب، شكل
  * الاستجابات، عقد الواجهة/الخادم) — فخلط نسخة قديمة بأخرى جديدة يكسر
@@ -74,7 +74,7 @@ function writeManifest(meta) {
   lines.push('الكوميت المصدر (Source commit): ' + meta.commit);
   lines.push('تاريخ بناء الحزمة (Package build date): ' + meta.date);
   lines.push('');
-  lines.push('عدد الملفات في الحزمة: ' + ALL_FILES.length + ' ملفًا (16 .gs + Index.html واحد)');
+  lines.push('عدد الملفات في الحزمة: ' + ALL_FILES.length + ' ملفًا (17 .gs + Index.html واحد)');
   lines.push('');
   lines.push('قائمة الملفات ونوع كل ملف:');
   ALL_FILES.forEach(name => {
@@ -87,7 +87,7 @@ function writeManifest(meta) {
   lines.push('ملفات جديدة يجب إنشاؤها: لا يوجد. البنية نفسها لم تتغيّر');
   lines.push('(16 ملف .gs + Index.html بنفس الأسماء تمامًا).');
   lines.push('');
-  lines.push('⚠️ مهم: استبدل الملفات الـ17 كلها، لا بعضها. التعديلات متشابكة');
+  lines.push('⚠️ مهم: استبدل الملفات الـ18 كلها، لا بعضها. التعديلات متشابكة');
   lines.push('عبر الملفات (نطاق الطلب الواحد، شكل الاستجابات، عقد الواجهة/الخادم)،');
   lines.push('وخلط نسخة قديمة بأخرى جديدة يكسر العقد بينهما.');
   lines.push('');
@@ -119,7 +119,7 @@ function writeInstall() {
   lines.push('   - احذف الملف TempPasswordReset.gs من مشروع Apps Script التجريبي إن وُجد.');
   lines.push('   - هذا الملف ليس جزءًا من النسخة النهائية ولا يوجد داخل هذه الحزمة.');
   lines.push('');
-  lines.push('3) استبدل محتوى كل ملف من الملفات الـ17 التالية واحدًا تلو الآخر');
+  lines.push('3) استبدل محتوى كل ملف من الملفات الـ18 التالية واحدًا تلو الآخر');
   lines.push('   (افتح الملف، احذف محتواه بالكامل بـCtrl+A، ثم الصق المحتوى الجديد');
   lines.push('   من الملف الذي يحمل نفس الاسم داخل هذه الحزمة):');
   ALL_FILES.forEach((name, index) => lines.push('   ' + (index + 1) + '. ' + name));
@@ -152,7 +152,7 @@ function writeInstall() {
 
 function writeSha256(meta) {
   const lines = [];
-  lines.push('SHA256.txt — بصمات التحقق لكل ملف من الملفات الـ17 داخل هذه الحزمة');
+  lines.push('SHA256.txt — بصمات التحقق لكل ملف من الملفات الـ18 داخل هذه الحزمة');
   lines.push('الكوميت المصدر: ' + meta.commit);
   lines.push('تاريخ البناء: ' + meta.date);
   lines.push('');
@@ -160,7 +160,7 @@ function writeSha256(meta) {
   lines.push('دائرية). بصمة الأرشيف مذكورة في ملف مرافق خارج الحزمة باسم');
   lines.push('"' + PKG_NAME + '.SHA256.txt" بجانب ملف ZIP، وكذلك في التقرير النهائي.');
   lines.push('');
-  lines.push('بصمات الملفات الـ17 داخل الحزمة (SHA-256):');
+  lines.push('بصمات الملفات الـ18 داخل الحزمة (SHA-256):');
   ALL_FILES.forEach(name => {
     lines.push('  ' + sha256File(path.join(STAGE, name)) + '  ' + name);
   });

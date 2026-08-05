@@ -143,8 +143,9 @@ const ALL_HEADERS = {
   'إعدادات المشروع': ['المفتاح', 'القيمة', 'الوصف'],
   'المستخدمون': ['رقم المستخدم', 'الاسم', 'البريد الإلكتروني', 'كلمة المرور المشفرة', 'الملح', 'الدور', 'رقم الجمعية', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول', 'يجب تغيير كلمة المرور', 'كلمة مرور سابقة مشفرة', 'ملح سابق'],
   'الجمعيات': ['رقم الجمعية', 'اسم الجمعية', 'التصنيف', 'المنطقة', 'المدينة', 'أرقام التواصل', 'البريد الإلكتروني', 'الحالة', 'تاريخ الإنشاء'],
-  'المستفيدون': ['رقم المستفيد', 'رقم الجمعية', 'الاسم', 'المنطقة', 'المدينة', 'العنوان', 'رقم الجوال', 'رقم جوال إضافي', 'عدد الأفراد', 'ضمان اجتماعي', 'الحالة الاجتماعية', 'مبلغ الدخل', 'الاحتياج', 'حالة المستفيد', 'حالة التسليم', 'رقم المندوب', 'الملاحظات', 'تاريخ الإنشاء', 'تاريخ التسليم', 'آخر تحديث', 'خط العرض', 'خط الطول', 'علامة مميزة', 'مصدر الموقع', 'تاريخ تحديث الموقع', 'الحي'],
-  'الأجهزة': ['رقم الجهاز', 'اسم الجهاز', 'النوع', 'رقم الجمعية', 'رقم المستفيد', 'حالة الجهاز', 'تاريخ الإضافة', 'تاريخ التسليم', 'ملاحظات'],
+  'المستفيدون': ['رقم المستفيد', 'رقم الجمعية', 'الاسم', 'المنطقة', 'المدينة', 'العنوان', 'رقم الجوال', 'رقم جوال إضافي', 'عدد الأفراد', 'ضمان اجتماعي', 'الحالة الاجتماعية', 'مبلغ الدخل', 'الاحتياج', 'حالة المستفيد', 'حالة التسليم', 'رقم المندوب', 'الملاحظات', 'تاريخ الإنشاء', 'تاريخ التسليم', 'آخر تحديث', 'خط العرض', 'خط الطول', 'علامة مميزة', 'مصدر الموقع', 'تاريخ تحديث الموقع', 'الحي', 'حالة مراجعة المستفيد', 'سبب رفض المستفيد', 'مراجع اعتماد المستفيد', 'تاريخ مراجعة المستفيد'],
+  'احتياجات المستفيدين': ['رقم الاحتياج', 'رقم المستفيد', 'رقم الجمعية', 'نوع الجهاز', 'حالة القرار', 'سبب الرفض', 'المراجع', 'تاريخ القرار', 'حالة التنفيذ', 'تاريخ الإنشاء', 'آخر تحديث'],
+  'الأجهزة': ['رقم الجهاز', 'اسم الجهاز', 'النوع', 'رقم الجمعية', 'رقم المستفيد', 'حالة الجهاز', 'تاريخ الإضافة', 'تاريخ التسليم', 'ملاحظات', 'رقم الاحتياج'],
   'المناديب': ['رقم المندوب', 'رقم الجمعية', 'اسم المندوب', 'رقم الجوال', 'رمز الدخول المشفر', 'الملح', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول'],
   'التسليمات': ['رقم التسليم', 'رقم المستفيد', 'رقم المندوب', 'أرقام الأجهزة', 'الحالة', 'سبب التعذر', 'الملاحظات', 'رابط الإثبات', 'تاريخ ووقت التسليم', 'تاريخ الإنشاء'],
   'إدارة الأنشطة': ['ترتيب المرحلة', 'اسم المرحلة', 'ترتيب النشاط الرئيسي', 'اسم النشاط الرئيسي', 'اسم النشاط الفرعي', 'المسؤول', 'تاريخ البداية', 'تاريخ النهاية', 'نسبة الإنجاز', 'الحالة', 'رابط الشاهد', 'ملاحظات'],
@@ -279,7 +280,7 @@ section('3) عزل بيانات الجمعيات (IDOR) بين جمعيتين م
   const userA = S.createSession_({ id: 'USR-ASSOC-A', name: 'جمعية أ', role: 'ASSOCIATION', associationId: associationAId });
   const userB = S.createSession_({ id: 'USR-ASSOC-B', name: 'جمعية ب', role: 'ASSOCIATION', associationId: associationBId });
 
-  const beneficiaryA = S.saveBeneficiary(userA.token, {
+  const beneficiaryA = S.saveBeneficiary(userA.token, { deviceTypes: ['ثلاجة'],
     name: 'مستفيد الجمعية أ', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
     phone: '0501234567', familyCount: 2, socialStatus: 'أرملة', needs: ['ثلاجة']
   });
@@ -298,7 +299,7 @@ section('3) عزل بيانات الجمعيات (IDOR) بين جمعيتين م
   throws('جمعية ب لا يمكنها تعطيل مندوب جمعية أ', () =>
     S.setDelegateStatus(userB.token, delegateA.id, 'غير نشط'), 'صلاحية');
   throws('جمعية ب لا يمكنها تعيين مندوب جمعية أ لمستفيد جمعية ب', () => {
-    const beneficiaryB = S.saveBeneficiary(userB.token, {
+    const beneficiaryB = S.saveBeneficiary(userB.token, { deviceTypes: ['ثلاجة'],
       name: 'مستفيد الجمعية ب', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
       phone: '0501234568', familyCount: 1, socialStatus: 'أرملة', needs: []
     });
@@ -307,7 +308,7 @@ section('3) عزل بيانات الجمعيات (IDOR) بين جمعيتين م
 
   const delegateSessionA = S.loginDelegate_ ? null : null; // لا تُختبَر بيانات اعتماد المندوب هنا لتفادي تعقيد الاعتماد
   const fakeDelegateA = S.createSession_({ id: delegateA.id, name: 'مندوب أ', role: 'DELEGATE', associationId: associationAId });
-  const beneficiaryOfB = S.saveBeneficiary(userB.token, {
+  const beneficiaryOfB = S.saveBeneficiary(userB.token, { deviceTypes: ['ثلاجة'],
     name: 'مستفيد للاختبار', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
     phone: '0501234569', familyCount: 1, socialStatus: 'أرملة', needs: ['غسالة']
   });
@@ -328,7 +329,7 @@ section('4) XSS وحقن الصيغ (Formula Injection) — اختبار كتا�
   const userA = S.createSession_({ id: 'USR-ASSOC-XSS', name: 'جمعية', role: 'ASSOCIATION', associationId: associationAId });
 
   const maliciousName = '=HYPERLINK("http://evil.example","انقر هنا")';
-  const saved = S.saveBeneficiary(userA.token, {
+  const saved = S.saveBeneficiary(userA.token, { deviceTypes: ['ثلاجة'],
     name: maliciousName, region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
     phone: '0501234570', familyCount: 1, socialStatus: 'أرملة', needs: []
   });
@@ -339,7 +340,7 @@ section('4) XSS وحقن الصيغ (Formula Injection) — اختبار كتا�
     String(rawRow['الاسم']) === maliciousName);
 
   const scriptName = '<script>alert(1)</script>';
-  const savedScript = S.saveBeneficiary(userA.token, {
+  const savedScript = S.saveBeneficiary(userA.token, { deviceTypes: ['ثلاجة'],
     name: scriptName, region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
     phone: '0501234571', familyCount: 1, socialStatus: 'أرملة', needs: []
   });
@@ -348,7 +349,7 @@ section('4) XSS وحقن الصيغ (Formula Injection) — اختبار كتا�
     String(rawScriptRow['الاسم']) === scriptName);
 
   const landmarkXss = '<img src=x onerror=alert(1)>';
-  const savedLandmark = S.saveBeneficiary(userA.token, {
+  const savedLandmark = S.saveBeneficiary(userA.token, { deviceTypes: ['ثلاجة'],
     name: 'مستفيد بعلامة مميزة خبيثة', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
     phone: '0501234572', familyCount: 1, socialStatus: 'أرملة', needs: [], landmark: landmarkXss
   });
@@ -369,12 +370,12 @@ section('5) التحقق من أحجام وأنواع المدخلات');
   const { associationAId } = seedFullEnvironment(S);
   const userA = S.createSession_({ id: 'USR-ASSOC-VAL', name: 'جمعية', role: 'ASSOCIATION', associationId: associationAId });
 
-  throws('اسم مستفيد فارغ يُرفض', () => S.saveBeneficiary(userA.token, {
+  throws('اسم مستفيد فارغ يُرفض', () => S.saveBeneficiary(userA.token, { deviceTypes: ['ثلاجة'],
     name: '   ', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار', phone: '0501234572', familyCount: 1
   }), 'مطلوب');
   throws('اسم مستفيد يتجاوز 120 حرفًا يُقصّ ولا يفشل (سلوك مصمَّم لا خطأ)', () => {
     const longName = 'ا'.repeat(200);
-    const result = S.saveBeneficiary(userA.token, {
+    const result = S.saveBeneficiary(userA.token, { deviceTypes: ['ثلاجة'],
       name: longName, region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
       phone: '0501234573', familyCount: 1, socialStatus: 'أرملة', needs: []
     });
@@ -382,13 +383,13 @@ section('5) التحقق من أحجام وأنواع المدخلات');
     if (String(row['الاسم']).length > 120) throw new Error('تجاوز الحد المسموح فعليًا');
     throw new Error('تم القصّ بأمان');
   }, 'تم القصّ بأمان');
-  throws('عدد أفراد خارج الحدود (0) يُرفض', () => S.saveBeneficiary(userA.token, {
+  throws('عدد أفراد خارج الحدود (0) يُرفض', () => S.saveBeneficiary(userA.token, { deviceTypes: ['ثلاجة'],
     name: 'مستفيد', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار', phone: '0501234574', familyCount: 0
   }), 'غير صحيح');
-  throws('عدد أفراد خارج الحدود (1000) يُرفض', () => S.saveBeneficiary(userA.token, {
+  throws('عدد أفراد خارج الحدود (1000) يُرفض', () => S.saveBeneficiary(userA.token, { deviceTypes: ['ثلاجة'],
     name: 'مستفيد', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار', phone: '0501234575', familyCount: 1000
   }), 'غير صحيح');
-  throws('رقم جوال بصيغة غير سعودية يُرفض', () => S.saveBeneficiary(userA.token, {
+  throws('رقم جوال بصيغة غير سعودية يُرفض', () => S.saveBeneficiary(userA.token, { deviceTypes: ['ثلاجة'],
     name: 'مستفيد', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار', phone: '0112345678', familyCount: 1
   }), 'غير صحيح');
   assert('معرّف يشبه محاولة حقن (لا يوجد SQL فعليًا، المطابقة نصية حرفية) لا يطابق أي سجل حقيقي فيُعامَل بأمان كإنشاء جديد لا كتعديل غير مصرَّح', (() => {
@@ -527,15 +528,16 @@ section('9) سلامة سجل العمليات');
     const usesInsideDeleteRowById = (body.match(/\.deleteRow\(/g) || []).length;
     return allDeleteRowUses.length === usesInsideDeleteRowById && usesInsideDeleteRowById === 1;
   })());
-  assert('deleteRowById_ تُستدعى فقط من removePendingBeneficiaryNeed_ عبر كامل المصدر (لا مسار آخر يحذف سجلًا صامتًا)',
-    (source.match(/\bdeleteRowById_\(/g) || []).length === 2 // التعريف نفسه + استدعاء واحد
-    && /function removePendingBeneficiaryNeed_\([\s\S]{0,1500}deleteRowById_\(/.test(source));
+  assert('deleteRowById_ لا تُستدعى إطلاقًا على ورقة "المستفيدون" — كل استدعاءاتها (Phase 2.2: إزالة احتياج معلَّق، وتنظيف احتياجات معلَّقة عند فشل إنشاء مستفيد) تستهدف حصرًا ورقة "احتياجات المستفيدين" التي لا قيمة تاريخية لصفوفها قبل أي قرار', (() => {
+    const calls = [...source.matchAll(/(?<!function )deleteRowById_\(([^,]+),/g)].map(m => m[1].trim());
+    return calls.length >= 1 && calls.every(target => target === 'APP.sheets.beneficiaryNeeds');
+  })());
 
   const S = buildSandbox();
   const { associationAId } = seedFullEnvironment(S);
   const userA = S.createSession_({ id: 'USR-ASSOC-AUDIT', name: 'جمعية', role: 'ASSOCIATION', associationId: associationAId });
   const beforeCount = S.readTable_('سجل العمليات').rows.length;
-  S.saveBeneficiary(userA.token, {
+  S.saveBeneficiary(userA.token, { deviceTypes: ['ثلاجة'],
     name: 'مستفيد لسجل العمليات', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
     phone: '0501234580', familyCount: 1, socialStatus: 'أرملة', needs: []
   });
@@ -699,7 +701,7 @@ section('13) حراسة الأسطح الجديدة (getPortalBundle / retryDeli
   throws('getPortalBundle ترفض الرمز الفارغ', () => S.getPortalBundle('', 'beneficiaries', {}), 'انتهت الجلسة');
   throws('getPortalBundle ترفض الرمز المزوَّر', () => S.getPortalBundle('forged-token-1234567890123456', 'beneficiaries', {}), 'انتهت الجلسة');
 
-  const beneficiaryA = S.saveBeneficiary(userA.token, {
+  const beneficiaryA = S.saveBeneficiary(userA.token, { deviceTypes: ['ثلاجة'],
     name: 'مستفيد الحزمة أ', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
     phone: '0501239001', familyCount: 2, socialStatus: 'أرملة', needs: ['ثلاجة']
   });
@@ -750,7 +752,7 @@ section('14) تأمين الوصول لصورة إثبات التسليم');
   const userB = S.createSession_({ id: 'USR-PROOF-B', name: 'جمعية ب', role: 'ASSOCIATION', associationId: associationBId });
   const admin = adminSession(S);
 
-  const beneficiaryA = S.saveBeneficiary(userA.token, {
+  const beneficiaryA = S.saveBeneficiary(userA.token, { deviceTypes: ['ثلاجة'],
     name: 'مستفيد إثبات أ', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
     phone: '0501119001', familyCount: 2, socialStatus: 'أرملة', needs: ['ثلاجة'], lat: '24.7', lng: '46.6'
   });

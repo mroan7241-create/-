@@ -39,7 +39,7 @@ const entries = fs.readdirSync(extractedDir);
 const codeFiles = entries.filter(name => name.endsWith('.gs') || name === 'Index.html');
 const sidecarFiles = entries.filter(name => ['INSTALL.txt', 'MANIFEST.txt', 'SHA256.txt'].indexOf(name) !== -1);
 
-assert('عدد ملفات الكود بالضبط 17 (16 .gs + Index.html واحد)، لا أكثر', codeFiles.length === 17);
+assert('عدد ملفات الكود بالضبط 18 (17 .gs + Index.html واحد)، لا أكثر', codeFiles.length === 18);
 assert('عدد ملفات .gs بالضبط 16', codeFiles.filter(n => n.endsWith('.gs')).length === 16);
 assert('يوجد Index.html واحد بالضبط', codeFiles.filter(n => n === 'Index.html').length === 1);
 

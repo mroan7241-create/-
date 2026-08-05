@@ -475,8 +475,9 @@ const ALL_HEADERS = {
   'إعدادات المشروع': ['المفتاح', 'القيمة', 'الوصف'],
   'المستخدمون': ['رقم المستخدم', 'الاسم', 'البريد الإلكتروني', 'كلمة المرور المشفرة', 'الملح', 'الدور', 'رقم الجمعية', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول', 'يجب تغيير كلمة المرور', 'كلمة مرور سابقة مشفرة', 'ملح سابق'],
   'الجمعيات': ['رقم الجمعية', 'اسم الجمعية', 'التصنيف', 'المنطقة', 'المدينة', 'أرقام التواصل', 'البريد الإلكتروني', 'الحالة', 'تاريخ الإنشاء'],
-  'المستفيدون': ['رقم المستفيد', 'رقم الجمعية', 'الاسم', 'المنطقة', 'المدينة', 'العنوان', 'رقم الجوال', 'رقم جوال إضافي', 'عدد الأفراد', 'ضمان اجتماعي', 'الحالة الاجتماعية', 'مبلغ الدخل', 'الاحتياج', 'حالة المستفيد', 'حالة التسليم', 'رقم المندوب', 'الملاحظات', 'تاريخ الإنشاء', 'تاريخ التسليم', 'آخر تحديث', 'خط العرض', 'خط الطول', 'علامة مميزة', 'مصدر الموقع', 'تاريخ تحديث الموقع', 'الحي'],
-  'الأجهزة': ['رقم الجهاز', 'اسم الجهاز', 'النوع', 'رقم الجمعية', 'رقم المستفيد', 'حالة الجهاز', 'تاريخ الإضافة', 'تاريخ التسليم', 'ملاحظات'],
+  'المستفيدون': ['رقم المستفيد', 'رقم الجمعية', 'الاسم', 'المنطقة', 'المدينة', 'العنوان', 'رقم الجوال', 'رقم جوال إضافي', 'عدد الأفراد', 'ضمان اجتماعي', 'الحالة الاجتماعية', 'مبلغ الدخل', 'الاحتياج', 'حالة المستفيد', 'حالة التسليم', 'رقم المندوب', 'الملاحظات', 'تاريخ الإنشاء', 'تاريخ التسليم', 'آخر تحديث', 'خط العرض', 'خط الطول', 'علامة مميزة', 'مصدر الموقع', 'تاريخ تحديث الموقع', 'الحي', 'حالة مراجعة المستفيد', 'سبب رفض المستفيد', 'مراجع اعتماد المستفيد', 'تاريخ مراجعة المستفيد'],
+  'احتياجات المستفيدين': ['رقم الاحتياج', 'رقم المستفيد', 'رقم الجمعية', 'نوع الجهاز', 'حالة القرار', 'سبب الرفض', 'المراجع', 'تاريخ القرار', 'حالة التنفيذ', 'تاريخ الإنشاء', 'آخر تحديث'],
+  'الأجهزة': ['رقم الجهاز', 'اسم الجهاز', 'النوع', 'رقم الجمعية', 'رقم المستفيد', 'حالة الجهاز', 'تاريخ الإضافة', 'تاريخ التسليم', 'ملاحظات', 'رقم الاحتياج'],
   'المناديب': ['رقم المندوب', 'رقم الجمعية', 'اسم المندوب', 'رقم الجوال', 'رمز الدخول المشفر', 'الملح', 'الحالة', 'تاريخ الإنشاء', 'آخر دخول'],
   'التسليمات': ['رقم التسليم', 'رقم المستفيد', 'رقم المندوب', 'أرقام الأجهزة', 'الحالة', 'سبب التعذر', 'الملاحظات', 'رابط الإثبات', 'تاريخ ووقت التسليم', 'تاريخ الإنشاء'],
   'إدارة الأنشطة': ['ترتيب المرحلة', 'اسم المرحلة', 'ترتيب النشاط الرئيسي', 'اسم النشاط الرئيسي', 'اسم النشاط الفرعي', 'المسؤول', 'تاريخ البداية', 'تاريخ النهاية', 'نسبة الإنجاز', 'الحالة', 'رابط الشاهد', 'ملاحظات'],
@@ -609,7 +610,7 @@ section('15ب) إبطال ذاكرة Bootstrap المؤقتة (جيل مشترك
   const assocSession = S2.createSession_({id: 'USR-ASSOC-CACHE', name: 'جمعية اختبار الذاكرة المؤقتة', role: 'ASSOCIATION', associationId: accepted.associationId});
   const before = S2.getBootstrapData(assocSession.token);
   const beforeCount = before.summary.beneficiaries;
-  S2.saveBeneficiary(assocSession.token, {
+  S2.saveBeneficiary(assocSession.token, { deviceTypes: ['ثلاجة'],
     name: 'مستفيد لاختبار إبطال الذاكرة المؤقتة', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
     phone: '0501119999', familyCount: 1, socialStatus: 'أرملة', needs: []
   });
@@ -622,7 +623,7 @@ section('15ب) إبطال ذاكرة Bootstrap المؤقتة (جيل مشترك
 
 section('16) موقع المستفيد الجغرافي: حفظ وقراءة فعليان');
 
-const savedBeneficiary = S2.saveBeneficiary(adminSession.token, {
+const savedBeneficiary = S2.saveBeneficiary(adminSession.token, { deviceTypes: ['ثلاجة'],
   associationId: accepted.associationId, name: 'مستفيد باختبار الموقع',
   region: 'الرياض', city: 'الرياض', address: 'حي النخيل', district: 'النخيل', phone: '0501112233',
   familyCount: 3, socialStatus: 'أرملة', needs: ['ثلاجة'],
@@ -633,7 +634,7 @@ const savedRow = S2.findById_('المستفيدون', 'رقم المستفيد',
 const normalized = S2.normalizeBeneficiary_(savedRow);
 assert('الإحداثيات تُقرأ بعد الحفظ كأرقام صحيحة', normalized.lat === 24.7136 && normalized.lng === 46.6753);
 
-const savedWithoutCoords = S2.saveBeneficiary(adminSession.token, {
+const savedWithoutCoords = S2.saveBeneficiary(adminSession.token, { deviceTypes: ['ثلاجة'],
   associationId: accepted.associationId, name: 'مستفيد بلا إحداثيات',
   region: 'الرياض', city: 'الرياض', address: 'حي آخر', district: 'آخر', phone: '0501112244',
   familyCount: 2, socialStatus: 'أرملة', needs: ['غسالة']
@@ -646,13 +647,13 @@ assert('مصدر الموقع وتاريخ تحديثه فارغان أيضًا 
 assert('saveBeneficiary يضبط مصدر الموقع الافتراضي "يدوي" وتاريخ التحديث عند وجود إحداثيات',
   normalized.locationSource === 'يدوي' && !!normalized.locationUpdatedAt);
 
-throws('saveBeneficiary يرفض إحداثيات خارج النطاق العالمي المسموح', () => S2.saveBeneficiary(adminSession.token, {
+throws('saveBeneficiary يرفض إحداثيات خارج النطاق العالمي المسموح', () => S2.saveBeneficiary(adminSession.token, { deviceTypes: ['ثلاجة'],
   associationId: accepted.associationId, name: 'مستفيد بإحداثيات فاسدة',
   region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار', phone: '0501112255',
   familyCount: 1, socialStatus: 'أرملة', needs: [], lat: '95', lng: '46.6'
 }), 'بين -90 و90');
 
-const savedWithSource = S2.saveBeneficiary(adminSession.token, {
+const savedWithSource = S2.saveBeneficiary(adminSession.token, { deviceTypes: ['ثلاجة'],
   associationId: accepted.associationId, name: 'مستفيد بمصدر موقع محدد',
   region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار', phone: '0501112266',
   familyCount: 1, socialStatus: 'أرملة', needs: [], lat: '24.7', lng: '46.6', locationSource: 'خريطة'
@@ -738,7 +739,7 @@ section('18) منع التكرار في المستفيدين والاستيرا�
 
 const dupBase = {
   associationId: accepted.associationId, region: 'الرياض', city: 'الرياض', address: 'حي التعاون', district: 'التعاون',
-  familyCount: 3, socialStatus: 'أرملة', needs: []
+  familyCount: 3, socialStatus: 'أرملة', needs: [], deviceTypes: ['ثلاجة']
 };
 
 const dupFirst = S2.saveBeneficiary(adminSession.token, Object.assign({}, dupBase, {
@@ -803,7 +804,7 @@ try {
   const otherAssocSession = S2.createSession_({id: 'USR-OTHER-ASSOC', name: 'جمعية أخرى', role: 'ASSOCIATION', associationId: otherAccepted.associationId});
   // نفس رقم الجوال (0509990001) يخص جمعية "accepted" الأولى — يجب ألا تكتشف
   // جمعية أخرى هذا التكرار إطلاقًا (لا كشف بيانات جمعية أخرى)، فتنجح الإضافة.
-  const otherSave = S2.saveBeneficiary(otherAssocSession.token, {
+  const otherSave = S2.saveBeneficiary(otherAssocSession.token, { deviceTypes: ['ثلاجة'],
     name: 'مستفيد لدى جمعية أخرى', phone: '0509990001', region: 'الرياض', city: 'الرياض',
     address: 'حي', district: 'حي الاختبار', familyCount: 2, socialStatus: 'أرملة', needs: []
   });
@@ -907,7 +908,7 @@ except zipfile.BadZipFile as e:
 
 section('20) تفاصيل الجهاز وسجل عمليات المندوب');
 
-const detailBeneficiary = S2.saveBeneficiary(adminSession.token, {
+const detailBeneficiary = S2.saveBeneficiary(adminSession.token, { deviceTypes: ['ثلاجة'],
   associationId: accepted.associationId, name: 'مستفيد تفاصيل الجهاز', region: 'الرياض', city: 'الرياض',
   address: 'حي', district: 'حي الاختبار', phone: '0509990030', familyCount: 2, socialStatus: 'أرملة', needs: [],
   lat: '24.7', lng: '46.6'
@@ -1149,7 +1150,7 @@ section('23) انحدارات مؤكَّدة من الاختبار الحي 2026
   const admin = S3.createSession_({id: 'USR-ADMIN-RETRY', name: 'مدير', role: 'ADMIN', associationId: ''});
   const assoc = S3.saveAssociation(admin.token, {name: 'جمعية التعذّر', category: 'جمعية خيرية',
     region: 'الرياض', city: 'الرياض', phone: '0505550001', email: 'retry@example.org', password: 'ZadRetry2026x'});
-  const ben = S3.saveBeneficiary(admin.token, {name: 'مستفيد التعذّر', phone: '0505550002', region: 'الرياض',
+  const ben = S3.saveBeneficiary(admin.token, { deviceTypes: ['ثلاجة'],name: 'مستفيد التعذّر', phone: '0505550002', region: 'الرياض',
     city: 'الرياض', address: 'حي النرجس', district: 'النرجس', familyCount: 4, socialStatus: 'أرملة', needs: [],
     associationId: assoc.id, lat: '24.7', lng: '46.6'});
   const delegate = S3.saveDelegate(admin.token, {name: 'مندوب التعذّر', phone: '0505550003', associationId: assoc.id});
@@ -1204,7 +1205,7 @@ section('23) انحدارات مؤكَّدة من الاختبار الحي 2026
   const admin = S4.createSession_({id: 'USR-ADMIN-BUNDLE', name: 'مدير', role: 'ADMIN', associationId: ''});
   const assoc = S4.saveAssociation(admin.token, {name: 'جمعية الحزمة', category: 'جمعية خيرية',
     region: 'الرياض', city: 'الرياض', phone: '0506660001', email: 'bundle@example.org', password: 'ZadBundle2026x'});
-  S4.saveBeneficiary(admin.token, {name: 'مستفيد الحزمة', phone: '0506660002', region: 'الرياض', city: 'الرياض',
+  S4.saveBeneficiary(admin.token, { deviceTypes: ['ثلاجة'],name: 'مستفيد الحزمة', phone: '0506660002', region: 'الرياض', city: 'الرياض',
     address: 'حي', district: 'حي الاختبار', familyCount: 3, socialStatus: 'أرملة', needs: [], associationId: assoc.id});
 
   const bundle = S4.getPortalBundle(admin.token, 'beneficiaries', {page: 1, pageSize: 25});
@@ -1452,10 +1453,10 @@ section('25) لوحة التحكم التنفيذية: صحة وحدات buildDa
     const adminUser = {id: 'USR-ADMIN-TEST', role: 'ADMIN', associationId: ''};
     const beforePending = S2.listBeneficiaries_(adminUser, {filter: 'بانتظار تحديد الموقع'}).total;
     const beforeReady = S2.listBeneficiaries_(adminUser, {filter: 'جاهز للإحالة'}).total;
-    const noLoc = S2.saveBeneficiary(adminSession.token, {associationId: accepted.associationId,
+    const noLoc = S2.saveBeneficiary(adminSession.token, { deviceTypes: ['ثلاجة'],associationId: accepted.associationId,
       name: 'بلا موقع لوحة التحكم', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
       phone: '0501230001', familyCount: 1, socialStatus: 'أرملة', needs: []});
-    const withLoc = S2.saveBeneficiary(adminSession.token, {associationId: accepted.associationId,
+    const withLoc = S2.saveBeneficiary(adminSession.token, { deviceTypes: ['ثلاجة'],associationId: accepted.associationId,
       name: 'بموقع وجهاز لوحة التحكم', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
       phone: '0501230002', familyCount: 1, socialStatus: 'أرملة', needs: [], lat: '24.7', lng: '46.6'});
     S2.saveDevice(adminSession.token, {name: 'ثلاجة لوحة التحكم', type: 'ثلاجة', associationId: accepted.associationId, beneficiaryId: withLoc.id});
@@ -1514,7 +1515,7 @@ const otherApp = S2.submitAssociationApplication(applicationFixture({
 }));
 const otherAssocForAudit = S2.reviewAssociationApplication(adminSession.token, otherApp.id, 'accept', '');
 
-const auditBeneficiary = S2.saveBeneficiary(adminSession.token, {
+const auditBeneficiary = S2.saveBeneficiary(adminSession.token, { deviceTypes: ['ثلاجة'],
   associationId: accepted.associationId, name: 'مستفيد تدقيق الأجهزة', region: 'الرياض', city: 'الرياض',
   address: 'حي', district: 'حي الاختبار', phone: '0509991111', familyCount: 2, socialStatus: 'أرملة', needs: []
 });

@@ -176,7 +176,13 @@ function adminSession(S) {
   return S.createSession_({ id: 'USR-ADMIN-NT', name: 'مدير الاحتياجات', role: 'ADMIN', associationId: '' });
 }
 
-/** جمعية + مستفيد واحد بلا احتياجات مسجَّلة بعد. */
+/**
+ * جمعية + مستفيد واحد بدأ باحتياج واحد ("ثلاجة") — Phase 2.2 تمنع وجود
+ * مستفيد بلا احتياج إطلاقًا (لا مسار ينشئ سجلًا فارغًا بعد الآن)، فهذا
+ * هو أدنى سيناريو أساسي ممكن أصلًا. الاختبارات التي تحتاج "مستفيدًا
+ * طازجًا بلا احتياجات مسبقة لاختبار الإنشاء نفسه" تستدعي saveBeneficiary
+ * مباشرة بنفسها بدل استخدام هذا الملحق المشترك.
+ */
 function seedScenario(S) {
   seedSheets(S);
   const admin = adminSession(S);
@@ -187,11 +193,14 @@ function seedScenario(S) {
   const assocSession = S.createSession_({ id: 'USR-ASSOC-NT', name: 'جمعية الاحتياجات', role: 'ASSOCIATION', associationId: assoc.id });
   const beneficiary = S.saveBeneficiary(assocSession.token, {
     name: 'مستفيد الاحتياجات', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
-    phone: '0500000021', familyCount: 3, socialStatus: 'أرملة', needs: [],
-    lat: '24.7', lng: '46.6'
+    phone: '0500000021', familyCount: 3, socialStatus: 'أرملة',
+    lat: '24.7', lng: '46.6', deviceTypes: ['ثلاجة']
   });
   return { S, admin, assoc, assocSession, beneficiaryId: beneficiary.id };
 }
+
+let phoneSeq = 40;
+function freshPhone_() { phoneSeq++; return '05000000' + phoneSeq; }
 
 function beneficiaryRow(S, beneficiaryId) { return S.findById_('المستفيدون', 'رقم المستفيد', beneficiaryId); }
 function needRows(S, beneficiaryId) { return S.beneficiaryNeeds_(beneficiaryId); }
@@ -337,11 +346,12 @@ section('5) idempotency: opId داخل نفس القفل — لا تكرار ك�
 /* ================================================================
    6) مؤشرات الكميات — تعريف دقيق ولا احتساب مزدوج
    ================================================================ */
-section('6) needsSummaryByDeviceType_ — مؤشرات دقيقة بلا احتساب مزدوج');
+section('6) needsSummaryByDeviceType_ — مؤشرات دقيقة تعتمد ربط الجهاز الفعلي بالاحتياج، بلا احتساب مزدوج');
 {
   const ctx = seedScenario(buildSandbox());
   const { S, admin, assocSession, assoc, beneficiaryId } = ctx;
-  S.setBeneficiaryNeeds(assocSession.token, beneficiaryId, ['ثلاجة', 'فرن']);
+  // beneficiaryId يحمل أصلًا احتياج "ثلاجة" (من seedScenario) — نضيف "فرن" فوقه.
+  S.setBeneficiaryNeeds(assocSession.token, beneficiaryId, ['فرن']);
   const needs = needRows(S, beneficiaryId);
   const byType = {}; needs.forEach(n => { byType[n.deviceType] = n; });
   S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, {
@@ -351,35 +361,63 @@ section('6) needsSummaryByDeviceType_ — مؤشرات دقيقة بلا احت�
       { needId: byType['فرن'].id, decision: 'مرفوض', rejectReason: 'غير متاح' }
     ]
   });
+  const fridgeNeedId = byType['ثلاجة'].id;
 
-  // خمسة أجهزة ثلاجة بحالات مختلفة لاختبار كل فرع من فروع الحساب معًا.
+  // مستفيد ثانٍ بنفس الجمعية باحتياج ثلاجة معتمد أيضًا — لاختبار readyOrAllocated=2 (جهازان مرتبطان صحيحًا).
+  const beneficiary2 = S.saveBeneficiary(assocSession.token, {
+    name: 'مستفيد ثانٍ', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+    phone: '0500000029', familyCount: 2, socialStatus: 'أرملة', lat: '24.7', lng: '46.6', deviceTypes: ['ثلاجة']
+  });
+  const need2Id = needRows(S, beneficiary2.id)[0].id;
+  S.reviewBeneficiaryNeeds(admin.token, beneficiary2.id, { beneficiaryDecision: 'معتمد', needDecisions: [{ needId: need2Id, decision: 'معتمد' }] });
+
+  // خمسة أجهزة ثلاجة بحالات/روابط مختلفة لاختبار كل فرع من فروع الحساب معًا.
   const warehouse = S.saveDevice(admin.token, { name: 'ثلاجة مستودع', type: 'ثلاجة', associationId: assoc.id });
-  const allocated = S.saveDevice(admin.token, { name: 'ثلاجة مخصصة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiaryId });
-  S.updateById_('الأجهزة', 'رقم الجهاز', allocated.id, { 'حالة الجهاز': 'مخصص' });
-  const withDelegate = S.saveDevice(admin.token, { name: 'ثلاجة مع مندوب', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiaryId });
+  const allocated = S.saveDevice(admin.token, { name: 'ثلاجة مخصصة', type: 'ثلاجة', associationId: assoc.id });
+  S.linkDeviceToNeed(admin.token, allocated.id, fridgeNeedId); // بالمستودع → مخصص + ربط صحيح
+  const withDelegate = S.saveDevice(admin.token, { name: 'ثلاجة مع مندوب', type: 'ثلاجة', associationId: assoc.id });
+  S.linkDeviceToNeed(admin.token, withDelegate.id, need2Id);
   S.updateById_('الأجهزة', 'رقم الجهاز', withDelegate.id, { 'حالة الجهاز': 'مع المندوب' });
   const delivered = S.saveDevice(admin.token, { name: 'ثلاجة مسلَّمة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiaryId });
   S.updateById_('الأجهزة', 'رقم الجهاز', delivered.id, { 'حالة الجهاز': 'تم التسليم' });
   const broken = S.saveDevice(admin.token, { name: 'ثلاجة تالفة', type: 'ثلاجة', associationId: assoc.id });
   S.updateById_('الأجهزة', 'رقم الجهاز', broken.id, { 'حالة الجهاز': 'تالف' });
+  // جهاز مخصص بمستفيد لكن **بلا ربط رقم احتياج** (محاكاة مسار قديم) — يجب ألا يُحسب في readyOrAllocated.
+  const legacyAllocated = S.saveDevice(admin.token, { name: 'ثلاجة مسار قديم', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiaryId });
+  S.updateById_('الأجهزة', 'رقم الجهاز', legacyAllocated.id, { 'حالة الجهاز': 'مخصص' });
 
   const summary = S.needsSummaryByDeviceType_(assoc.id);
-  assert('requestedTotal للثلاجة = 1', summary['ثلاجة'].requestedTotal === 1);
-  assert('approvedTotal للثلاجة = 1', summary['ثلاجة'].approvedTotal === 1);
+  assert('requestedTotal للثلاجة = 2 (مستفيدان)', summary['ثلاجة'].requestedTotal === 2);
+  assert('approvedTotal للثلاجة = 2', summary['ثلاجة'].approvedTotal === 2);
   assert('rejectedTotal للفرن = 1', summary['فرن'].rejectedTotal === 1);
-  assert('deliveredTotal للثلاجة = 0 (الاستحقاق نفسه لم يُسلَّم بعد، الجهاز المسلَّم غير مرتبط باستحقاق في هذا الاختبار)', summary['ثلاجة'].deliveredTotal === 0);
-  assert('outstandingApproved للثلاجة = 1 (معتمد - مسلَّم = 1 - 0)', summary['ثلاجة'].outstandingApproved === 1);
-  assert('physicalAvailable = 1 فقط (المستودع غير المرتبط) — لا يُحتسب المخصص ولا مع المندوب ولا المسلَّم ولا التالف',
-    summary['ثلاجة'].physicalAvailable === 1);
-  assert('readyOrAllocated = 2 (مخصص + مع المندوب) — لا يُحسب المسلَّم ولا التالف', summary['ثلاجة'].readyOrAllocated === 2);
-  assert('لا احتساب مزدوج: physicalAvailable + readyOrAllocated + (المسلَّم والتالف المستبعدان) = كل الأجهزة الخمسة بالضبط',
-    summary['ثلاجة'].physicalAvailable + summary['ثلاجة'].readyOrAllocated === 3);
-  assert('shortage للثلاجة = 0 (معتمد معلَّق 1 ≤ متاح+جاهز 3)', summary['ثلاجة'].shortage === 0);
+  assert('deliveredTotal للثلاجة = 0 (الجهاز المسلَّم غير مرتبط باستحقاق في هذا الاختبار)', summary['ثلاجة'].deliveredTotal === 0);
+  assert('outstandingApproved للثلاجة = 2 (معتمد - مسلَّم = 2 - 0)', summary['ثلاجة'].outstandingApproved === 2);
+  assert('physicalAvailable = 1 فقط (المستودع غير المرتبط)', summary['ثلاجة'].physicalAvailable === 1);
+  assert('readyOrAllocated = 2 (جهازان مرتبطان فعليًا برقم احتياج معتمد صحيح، لا الجهاز غير المرتبط رغم كونه "مخصص")',
+    summary['ثلاجة'].readyOrAllocated === 2);
+  assert('shortage للثلاجة = 0 (معتمد معلَّق 2 ≤ متاح+جاهز 3)', summary['ثلاجة'].shortage === 0);
   assert('shortage للفرن = 0 (لا احتياج معتمد أصلًا)', summary['فرن'].shortage === 0);
+
+  throws('ربط جهاز ثانٍ بنفس الاحتياج مرفوض (لا يجوز أكثر من جهاز واحد لكل استحقاق)',
+    () => S.linkDeviceToNeed(admin.token, warehouse.id, fridgeNeedId), 'مرتبط بالفعل بجهاز آخر');
+  throws('ربط جهاز باحتياج غير معتمد (بانتظار المراجعة) مرفوض', () => {
+    const pendingBeneficiary = S.saveBeneficiary(assocSession.token, {
+      name: 'مستفيد بانتظار المراجعة', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: '0500000028', familyCount: 1, socialStatus: 'أرملة', lat: '24.7', lng: '46.6', deviceTypes: ['غسالة']
+    });
+    const pendingNeed = needRows(S, pendingBeneficiary.id)[0];
+    const washer = S.saveDevice(admin.token, { name: 'غسالة', type: 'غسالة', associationId: assoc.id });
+    S.linkDeviceToNeed(admin.token, washer.id, pendingNeed.id);
+  }, 'لم يُبتّ فيه بعد');
+  throws('ربط جهاز بنوع مختلف عن نوع الاحتياج مرفوض', () => {
+    const oven = S.saveDevice(admin.token, { name: 'فرن', type: 'فرن', associationId: assoc.id });
+    S.linkDeviceToNeed(admin.token, oven.id, need2Id);
+  }, 'لا يطابق نوع الاحتياج');
 
   const ctx2 = seedScenario(buildSandbox());
   const otherSummary = ctx2.S.needsSummaryByDeviceType_(ctx2.assoc.id);
-  assert('عزل الجمعيات: تجميع جمعية أخرى لا يرى احتياجات هذه الجمعية', otherSummary['ثلاجة'].requestedTotal === 0);
+  assert('عزل الجمعيات: تجميع جمعية أخرى يرى احتياجاتها هي فقط (احتياج "ثلاجة" الأساسي من seedScenario الخاص بها وحدها)',
+    otherSummary['ثلاجة'].requestedTotal === 1 && otherSummary['ثلاجة'].requestedTotal !== summary['ثلاجة'].requestedTotal);
 
   const projectWide = S.needsSummaryByDeviceType_(); // بلا associationId — تجميع كامل المشروع لـADMIN
   assert('تجميع كامل المشروع (بلا associationId) يشمل نفس الأرقام على الأقل', projectWide['ثلاجة'].requestedTotal >= summary['ثلاجة'].requestedTotal);
@@ -397,12 +435,17 @@ section('7) previewNeedsMigration_ — قراءة فقط، لا كتابة');
     name: 'جمعية الترحيل', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
     phone: '0500000030', email: 'migration-assoc@example.org', password: 'MigrPass123'
   });
-  const assocSession = S.createSession_({ id: 'USR-ASSOC-MIG', name: 'جمعية الترحيل', role: 'ASSOCIATION', associationId: assoc.id });
-  const legacyConvertible = S.saveBeneficiary(assocSession.token, {
+  const assocUser = { id: 'USR-ASSOC-MIG', name: 'جمعية الترحيل', role: 'ASSOCIATION', associationId: assoc.id };
+  const assocSession = S.createSession_(assocUser);
+  // بيانات تاريخية محاكاة: تُنشأ عبر saveBeneficiary_ الداخلية مباشرة
+  // (لا saveBeneficiary العامة المُقفَلة الآن) — تحاكي سجلات موجودة فعلًا
+  // على الشيت الحي من *قبل* إغلاق الممر القديم في Phase 2.2، وهذا بالضبط
+  // ما previewNeedsMigration_ مصمَّمة لمسحه ومعاينته.
+  const legacyConvertible = S.saveBeneficiary_(assocUser, {
     name: 'مستفيد قديم قابل للتحويل', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
     phone: '0500000031', familyCount: 2, socialStatus: 'أرملة', needs: ['ثلاجة', 'فرن'], lat: '24.7', lng: '46.6'
   });
-  const legacyManual = S.saveBeneficiary(assocSession.token, {
+  const legacyManual = S.saveBeneficiary_(assocUser, {
     name: 'مستفيد قديم يحتاج مراجعة', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
     phone: '0500000032', familyCount: 2, socialStatus: 'أرملة', needs: ['مكيف'], lat: '24.7', lng: '46.6'
   });
@@ -538,9 +581,9 @@ section('12) فشل التراجع نفسه يُبلَّغ كحالة حرجة �
     return original(sheetName, idHeader, id, changes);
   };
   S.__logs.length = 0;
-  throws('فشل الكتابة الوسطية مع فشل التراجع معًا يُبلَّغ بوضوح دون بيانات حساسة',
+  throws('فشل الكتابة الوسطية مع فشل التراجع معًا يُبلَّغ بوضوح دون بيانات حساسة (معرّفات فقط)',
     () => S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, { beneficiaryDecision: 'معتمد', needDecisions: [{ needId: needId, decision: 'معتمد' }] }),
-    'تعذّر التراجع التلقائي أيضًا');
+    'تعذّر التراجع الكامل، يتطلب مراجعة يدوية فورية للسجلات');
   S.updateById_ = original;
   assert('سجل الأخطاء يحتوي إشارة "حرج جدًا" للمراجعة اليدوية', S.__logs.some(l => l.indexOf('حرج جدًا') !== -1));
   assert('القفل مُحرَّر رغم الفشل المزدوج', S.__lock.__state().locked === false);
@@ -568,7 +611,7 @@ section('13) فشل audit بعد نجاح القرار فعليًا لا يُف�
 section('14) saveBeneficiaryWithNeeds — مصدر حقيقة واحد، بلا كتابة موازية للحقل القديم');
 {
   const ctx = seedScenario(buildSandbox());
-  const { S, assocSession, assoc } = ctx;
+  const { S, assocSession, assoc, beneficiaryId } = ctx;
   const result = S.saveBeneficiaryWithNeeds(assocSession.token, {
     name: 'مستفيد موحّد', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
     phone: '0500000099', familyCount: 2, socialStatus: 'أرملة', lat: '24.7', lng: '46.6',
@@ -587,38 +630,57 @@ section('14) saveBeneficiaryWithNeeds — مصدر حقيقة واحد، بلا 
     }), 'غير مسموح به');
   assert('لم يُنشأ أي سجل مستفيد أصلًا لهذا الجوال (فُحص الصيغة قبل أي كتابة)', !S.findConfirmedDuplicateBeneficiary_(assoc.id, '0500000098', null));
 
-  // فشل لاحق (لا صيغة) بعد نجاح إنشاء المستفيد فعليًا: المستفيد يبقى
-  // محفوظًا (لا حذف)، والخطأ يسمّي رقمه صراحةً بدل الفشل الصامت.
-  const originalAppend = S.appendObjects_;
+  // Phase 2.2 (القسم 2): الآن ذرّي بالكامل — فشل كتابة الاحتياجات (لا
+  // خطأ صيغة) يعني عدم كتابة صف المستفيد إطلاقًا (الاحتياجات تُكتب أولًا
+  // في الترتيب الجديد)، لا "مستفيد ناجٍ بلا احتياجات" كما كان في Phase 2.1.
+  const originalAppendObjects = S.appendObjects_;
   S.appendObjects_ = function (sheetName, objects) {
     if (sheetName === 'احتياجات المستفيدين') throw new Error('فشل كتابة احتياجات محاكى');
-    return originalAppend(sheetName, objects);
+    return originalAppendObjects(sheetName, objects);
   };
-  let survivingId = null;
-  throws('فشل كتابة فعلي (لا خطأ صيغة) بعد نجاح إنشاء المستفيد: خطأ صريح يسمّي رقمه، لا حذف له', () => {
-    try {
-      S.saveBeneficiaryWithNeeds(assocSession.token, {
-        name: 'مستفيد نجا من الفشل', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
-        phone: '0500000096', familyCount: 1, socialStatus: 'أرملة', lat: '24.7', lng: '46.6',
-        deviceTypes: ['ثلاجة']
-      });
-    } catch (e) {
-      const match = e.message.match(/رقم (BEN-\d{6})/);
-      survivingId = match ? match[1] : null;
-      throw e;
-    }
-  }, 'حُفظت بيانات المستفيد');
-  S.appendObjects_ = originalAppend;
-  assert('رقم المستفيد ذُكر صراحةً في رسالة الخطأ (غير صامت)', !!survivingId);
-  assert('سجل المستفيد ما زال موجودًا فعليًا (لم يُحذف)', survivingId && !!beneficiaryRow(S, survivingId));
-  const completed = S.setBeneficiaryNeeds(assocSession.token, survivingId, ['ثلاجة']);
-  assert('يمكن إكمال تسجيل احتياجاته لاحقًا بنفس الرقم دون إعادة إدخال بياناته', completed.ok && completed.needs.length === 1);
+  throws('فشل كتابة الاحتياجات (أول كتابة في الترتيب الجديد) يمنع إنشاء المستفيد بالكامل', () => {
+    S.saveBeneficiaryWithNeeds(assocSession.token, {
+      name: 'مستفيد يفشل عند الاحتياج', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: '0500000096', familyCount: 1, socialStatus: 'أرملة', lat: '24.7', lng: '46.6',
+      deviceTypes: ['ثلاجة']
+    });
+  }, 'تعذّر إنشاء المستفيد');
+  S.appendObjects_ = originalAppendObjects;
+  assert('لا يوجد أي مستفيد بهذا الجوال بعد فشل كتابة الاحتياجات (لم يُكتب المستفيد أصلًا)',
+    !S.findConfirmedDuplicateBeneficiary_(assoc.id, '0500000096', null));
 
-  const legacy = S.saveBeneficiary(assocSession.token, {
-    name: 'مستفيد قديم المسار', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
-    phone: '0500000097', familyCount: 1, socialStatus: 'أرملة', needs: ['ثلاجة'], lat: '24.7', lng: '46.6'
+  // فشل كتابة المستفيد نفسه (بعد نجاح كتابة الاحتياجات) → الاحتياجات
+  // المعلَّقة الجديدة تُزال تلقائيًا (تنظيف تعويضي، لا يتيم يبقى).
+  const originalAppendObject = S.appendObject_;
+  S.appendObject_ = function (sheetName, object) {
+    if (sheetName === 'المستفيدون') throw new Error('فشل كتابة المستفيد محاكى');
+    return originalAppendObject(sheetName, object);
+  };
+  throws('فشل كتابة المستفيد بعد نجاح الاحتياجات يُزيل الاحتياجات المعلَّقة الجديدة تلقائيًا',
+    () => S.saveBeneficiaryWithNeeds(assocSession.token, {
+      name: 'مستفيد يفشل بعد الاحتياج', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: '0500000095', familyCount: 1, socialStatus: 'أرملة', lat: '24.7', lng: '46.6',
+      deviceTypes: ['ثلاجة', 'فرن']
+    }), 'تعذّر إنشاء المستفيد');
+  S.appendObject_ = originalAppendObject;
+  const needsSheetRows = S.readTable_('احتياجات المستفيدين').rows;
+  assert('لا صفوف احتياج يتيمة متبقية لمستفيد "يفشل بعد الاحتياج" (لا رقم مستفيد له أصلًا)',
+    !needsSheetRows.some(r => String(r['رقم الجمعية']) === assoc.id && !S.findById_('المستفيدون', 'رقم المستفيد', String(r['رقم المستفيد']))));
+
+  // نجاح فعلي كامل بعد ذلك يثبت أن الأدوات لم تُترك في حالة معطوبة.
+  const succeeded = S.saveBeneficiaryWithNeeds(assocSession.token, {
+    name: 'مستفيد ناجح بعد الفشل', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+    phone: '0500000094', familyCount: 1, socialStatus: 'أرملة', lat: '24.7', lng: '46.6',
+    deviceTypes: ['ثلاجة']
   });
-  assert('saveBeneficiary القديم ما زال يكتب "الاحتياج" النصي كما كان دون أي تغيير سلوك', String(beneficiaryRow(S, legacy.id)['الاحتياج']) === 'ثلاجة');
+  assert('إنشاء ناجح لاحق يعمل بلا مشاكل بعد اختبارات الفشل أعلاه', succeeded.ok && succeeded.needs.length === 1);
+
+  const editedLegacy = S.saveBeneficiary(assocSession.token, {
+    id: beneficiaryId, name: 'مستفيد الاحتياجات (مُعدَّل)', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
+    phone: '0500000021', familyCount: 3, socialStatus: 'أرملة', needs: ['ثلاجة', 'فرن'], lat: '24.7', lng: '46.6'
+  });
+  assert('تعديل سجل قائم عبر saveBeneficiary العام (مسار قديم لا يزال يعمل للتعديل فقط) يكتب الحقل النصي القديم كما كان',
+    String(beneficiaryRow(S, editedLegacy.id)['الاحتياج']) === 'ثلاجة، فرن');
 }
 
 /* ================================================================
@@ -646,7 +708,7 @@ section('15) removePendingBeneficiaryNeed — إزالة قبل المراجعة
     beneficiaryDecision: 'معتمد',
     needDecisions: [{ needId: fridgeNeed.id, decision: 'معتمد' }, { needId: washerNeed.id, decision: 'مرفوض', rejectReason: 'سبب' }]
   });
-  throws('لا يمكن إزالة احتياج سبق البتّ فيه (معتمد)', () => S.removePendingBeneficiaryNeed(admin.token, fridgeNeed.id), 'سبق البتّ فيه');
+  throws('لا يمكن إزالة احتياج بعد اعتماد المستفيد نهائيًا (لم يعد "تحت المراجعة")', () => S.removePendingBeneficiaryNeed(admin.token, fridgeNeed.id), 'ليس تحت المراجعة حاليًا');
 
   const ctx2 = seedScenario(buildSandbox());
   ctx2.S.setBeneficiaryNeeds(ctx2.assocSession.token, ctx2.beneficiaryId, ['ثلاجة', 'فرن']);

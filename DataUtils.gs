@@ -453,13 +453,23 @@ function withIdempotency_(actorId, opId, fn) {
  * الخاص بنفسها، وإلا وقعنا في نفس عطل القفل المتداخل الذي أُصلح في
  * nextIdsLocked_/nextIds_ أعلاه.
  */
-function runLockedIdempotent_(actorId, opId, fn) {
+/**
+ * operationScope (Phase 2.2) — بلا هذا المعامل، مفتاح الكاش كان
+ * actorId+opId فقط: نفس opId مُعاد استخدامه خطأً بين نقطتي دخول مختلفتين
+ * (مثال: reviewBeneficiaryNeeds وremovePendingBeneficiaryNeed لنفس
+ * المستخدم بنفس opId بمحض الصدفة) كان يمكن أن يُعيد نتيجة العملية
+ * الأخرى تمامًا بدل تنفيذ العملية الحالية. المفتاح الآن
+ * operationScope+actorId+opId — عزل كامل بين نقاط الدخول. computeDigest
+ * (SHA-256) يبقي طول المفتاح آمنًا بصرف النظر عن طول opId/operationScope.
+ */
+function runLockedIdempotent_(operationScope, actorId, opId, fn) {
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
     if (!opId) return fn();
     const cache = CacheService.getScriptCache();
-    const key = 'opid:' + actorId + ':' + String(opId).slice(0, 80);
+    const digestBytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(operationScope) + '|' + String(actorId) + '|' + String(opId));
+    const key = 'opid2:' + Utilities.base64EncodeWebSafe(digestBytes);
     const cached = cache.get(key);
     if (cached) return JSON.parse(cached);
     const result = fn();

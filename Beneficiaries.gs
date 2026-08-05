@@ -47,7 +47,56 @@ function listBeneficiaries_(user, options) {
     items = items.filter(item => item.status === options.filter || item.deliveryStatus === options.filter);
   }
   items = applySort_(items, options.sortBy, options.sortDir);
-  return Object.assign({ok: true}, paginate_(items, options));
+  const page = paginate_(items, options);
+  // Phase 2.2 (القسم 10): بيانات الاعتماد الجديدة تُدمَج هنا بلا N+1 —
+  // قراءة واحدة لورقة "احتياجات المستفيدين" كاملة (لا قراءة لكل مستفيد
+  // على حدة)، ثم Map حسب رقم المستفيد يُطبَّق فقط على صفحة النتائج
+  // الحالية المُرجَعة للعميل (لا كل السجلات المطابقة للبحث/الفلتر).
+  page.items = attachNeedsSummaryToBeneficiaries_(page.items);
+  return Object.assign({ok: true}, page);
+}
+
+/**
+ * يُرفق بكل عنصر مستفيد (مصفوفة items من normalizeBeneficiary_) حقول
+ * الاعتماد: reviewStatus/beneficiaryRejectReason/reviewedBy/reviewedAt
+ * من صف المستفيد نفسه (بلا قراءة إضافية — موجودة أصلًا)، و
+ * requestedNeeds/approvedNeeds/rejectedNeeds/fulfillment من ورقة
+ * "احتياجات المستفيدين" عبر قراءة واحدة لكامل الورقة وMap حسب
+ * beneficiaryId — لا قراءة منفصلة لكل مستفيد (N+1). آمنة تمامًا حتى لو
+ * لم تُنشأ الورقة/الأعمدة الجديدة بعد على الشيت الحي (تُرجِع حقولًا
+ * فارغة/محايدة بدل رمي استثناء، عبر try/catch على قراءة الورقة فقط —
+ * لا تُخفي أي خطأ آخر).
+ */
+function attachNeedsSummaryToBeneficiaries_(items) {
+  if (!items.length) return items;
+  let needsByBeneficiary = null;
+  try {
+    needsByBeneficiary = {};
+    readTable_(APP.sheets.beneficiaryNeeds).rows.forEach(row => {
+      const bId = String(row['رقم المستفيد']);
+      (needsByBeneficiary[bId] = needsByBeneficiary[bId] || []).push(normalizeNeedRow_(row));
+    });
+  } catch (ignore) {
+    // الورقة غير موجودة بعد على هذا المشروع (المخطط الجديد لم يُطبَّق) —
+    // سلوك متوقَّع، لا عطل. كل عنصر يعود بحقول فارغة أدناه.
+    needsByBeneficiary = {};
+  }
+  const rawRowsById = {};
+  readTable_(APP.sheets.beneficiaries).rows.forEach(row => { rawRowsById[String(row['رقم المستفيد'])] = row; });
+  return items.map(item => {
+    const rawRow = rawRowsById[item.id];
+    const needs = needsByBeneficiary[item.id] || [];
+    return Object.assign({}, item, {
+      reviewStatus: rawRow ? String(rawRow['حالة مراجعة المستفيد'] || '') : '',
+      beneficiaryRejectReason: rawRow ? String(rawRow['سبب رفض المستفيد'] || '') : '',
+      reviewedBy: rawRow ? String(rawRow['مراجع اعتماد المستفيد'] || '') : '',
+      reviewedAt: rawRow ? formatDateTime_(parseDate_(rawRow['تاريخ مراجعة المستفيد'])) : '',
+      requestedNeeds: needs,
+      approvedNeeds: needs.filter(n => n.decisionStatus === 'معتمد'),
+      rejectedNeeds: needs.filter(n => n.decisionStatus === 'مرفوض'),
+      pendingNeeds: needs.filter(n => n.decisionStatus === 'بانتظار المراجعة')
+    });
+  });
 }
 
 /** يطبّع اسمًا للمقارنة التقريبية فقط (مسافات/حالة أحرف) — إشارة "مطابق محتمل"، لا دليل قاطع أبدًا وحده. */
@@ -92,37 +141,38 @@ function findPossibleDuplicateBeneficiary_(associationId, name, city, excludeId)
 function saveBeneficiary(token, payload) {
   return perfTime_('saveBeneficiary', () => {
     const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
+    payload = payload || {};
+    // Phase 2.2 — إغلاق الممر القديم كتجاوز لنموذج الاحتياجات الجديد:
+    // إنشاء مستفيد **جديد** (بلا payload.id) عبر هذا المسار العام يُوجَّه
+    // إلزاميًا إلى المسار الذري الموحَّد (createBeneficiaryWithNeeds_ في
+    // BeneficiaryNeeds.gs)، الذي يفرض احتياجًا واحدًا صالحًا على الأقل من
+    // الأنواع الثلاثة الجديدة. بلا payload.deviceTypes صالحة، يُرفض
+    // الإنشاء برسالة صريحة — المنع هنا خادمي بحت، لا يعتمد على تعديل
+    // Index.html كضابط أمان. **تعديل** سجل قائم (payload.id موجود) يبقى
+    // عبر saveBeneficiary_ التاريخية دون تغيير — الاحتياجات الجديدة
+    // لسجل قائم تُدار حصرًا من مسارات BeneficiaryNeeds.gs المخصَّصة
+    // (setBeneficiaryNeeds/updateBeneficiaryWithNeeds_)، لا من هنا.
+    if (!payload.id) {
+      if (!Array.isArray(payload.deviceTypes) || !payload.deviceTypes.length) {
+        throw new Error('اختر احتياجًا واحدًا على الأقل من النموذج الجديد.');
+      }
+      return createBeneficiaryWithNeeds_(user, payload);
+    }
     return saveBeneficiary_(user, payload);
   });
 }
 
 /**
- * النسخة الداخلية (تأخذ المستخدم المُتحقَّق منه بدل الرمز) — مطابقة
- * تمامًا لمنطق saveBeneficiary العام، فُصلت فقط ليستدعيها مسار موحَّد
- * آخر (saveBeneficiaryWithNeeds_ في BeneficiaryNeeds.gs) دون المرور
- * بـrequireSession_/perfTime_ مرتين ضمن الطلب المُجمَّع نفسه.
+ * يبني كائن القيم القابل للكتابة مباشرة لصف مستفيد من payload خام —
+ * دالة نقية بلا أي قراءة/كتابة، مشتركة بين saveBeneficiary_ (تعديل سجل
+ * قائم) وcreateBeneficiaryWithNeeds_/updateBeneficiaryWithNeeds_ (Phase
+ * 2.2 — BeneficiaryNeeds.gs) كي لا يتفرّق منطق بناء الحقول بين ملفين.
+ * existing (أو null لسجل جديد) يحدّد قيم الحقول التي تُحفَظ من السجل
+ * القديم بدل استبدالها (الحالة/التسليم/المندوب/تاريخ تحديث الموقع...).
+ * **لا تُدرِج مفتاح "الاحتياج" هنا إطلاقًا** — الحقل النصي القديم مسؤولية
+ * الطالب وحده (انظر options.skipLegacyNeedsWrite في saveBeneficiary_).
  */
-function saveBeneficiary_(user, payload) {
-  payload = payload || {};
-  const existing = payload.id ? findById_(APP.sheets.beneficiaries, 'رقم المستفيد', cleanId_(payload.id)) : null;
-  const associationId = user.role === 'ASSOCIATION' ? user.associationId : cleanId_(payload.associationId);
-  if (!associationId || !findById_(APP.sheets.associations, 'رقم الجمعية', associationId)) throw new Error('اختر جمعية صحيحة');
-  if (existing && user.role === 'ASSOCIATION') {
-    if (String(existing['رقم الجمعية']) !== user.associationId) throw new Error('ليس لديك صلاحية لتعديل هذا المستفيد');
-    if (String(existing['حالة التسليم']) === 'تم التسليم') throw new Error('لا يمكن تعديل بيانات مستفيد تم تسليمه');
-  }
-  const phone = normalizePhone_(payload.phone);
-  const existingId = existing ? String(existing['رقم المستفيد']) : null;
-  // مطابق مؤكَّد (نفس الجوال ضمن الجمعية نفسها) يُرفض دائمًا — عند التعديل
-  // يُستثنى السجل نفسه من الفحص حتى لا يرفض حفظ بياناته الخاصة.
-  if (findConfirmedDuplicateBeneficiary_(associationId, phone, existingId)) {
-    throw new Error('يوجد مستفيد آخر بنفس رقم الجوال لدى هذه الجمعية بالفعل — تحقق من عدم تكرار الإضافة');
-  }
-  const possibleDuplicate = findPossibleDuplicateBeneficiary_(associationId, payload.name, payload.city, existingId);
-  // تمرير القيم المخزَّنة حاليًا لهذا السجل بالذات: قيمة قديمة خارج
-  // القائمة المعتمدة لا تمنع تعديل حقل آخر في نفس السجل (grandfathering).
-  const previousPlace = existing ? {region: String(existing['المنطقة'] || ''), city: String(existing['المدينة'] || '')} : null;
-  const place = validateRegionCity_(payload.region, payload.city, previousPlace);
+function buildBeneficiaryFieldValues_(payload, place, phone, existing, associationId) {
   const coordinates = optionalCoordinate_(payload.lat, payload.lng);
   const hasCoordinates = coordinates.lat !== '';
   // لا يُحدَّث "مصدر الموقع"/"تاريخ تحديث الموقع" إلا إذا تغيّرت الإحداثيات
@@ -142,8 +192,8 @@ function saveBeneficiary_(user, payload) {
     locationSource = String(existing['مصدر الموقع'] || '');
     locationUpdatedAt = String(existing['تاريخ تحديث الموقع'] || '');
   }
-  const values = {
-    'رقم الجمعية': associationId,
+  return {
+    'رقم الجمعية': associationId || (existing ? String(existing['رقم الجمعية']) : ''),
     'الاسم': requiredText_(payload.name, 'اسم المستفيد', 120),
     'المنطقة': place.region,
     'المدينة': place.city,
@@ -155,7 +205,6 @@ function saveBeneficiary_(user, payload) {
     'ضمان اجتماعي': payload.socialSecurity === true || payload.socialSecurity === 'نعم' ? 'نعم' : 'لا',
     'الحالة الاجتماعية': validateSocialStatus_(payload.socialStatus, existing ? String(existing['الحالة الاجتماعية'] || '') : ''),
     'مبلغ الدخل': boundedNumber_(payload.income || 0, 0, 1000000, 'مبلغ الدخل'),
-    'الاحتياج': normalizeNeeds_(payload.needs),
     'حالة المستفيد': existing ? String(existing['حالة المستفيد']) : 'جديد',
     'حالة التسليم': existing ? String(existing['حالة التسليم']) : 'لم يبدأ',
     'رقم المندوب': existing ? String(existing['رقم المندوب'] || '') : '',
@@ -167,6 +216,49 @@ function saveBeneficiary_(user, payload) {
     'مصدر الموقع': locationSource,
     'تاريخ تحديث الموقع': locationUpdatedAt
   };
+}
+
+/**
+ * النسخة الداخلية لتعديل سجل **قائم فقط** الآن (Phase 2.2 حوّلت مسار
+ * الإنشاء الجديد إلى createBeneficiaryWithNeeds_). ما زالت تُستدعى
+ * مباشرة من importBeneficiaries وبعض مسارات الصيانة الداخلية، ومن
+ * updateBeneficiaryWithNeeds_ (BeneficiaryNeeds.gs) لتعديل سجل قائم مع
+ * مزامنة احتياجاته معًا.
+ *
+ * options.skipLegacyNeedsWrite (افتراضيًا false): true يمنع إدراج مفتاح
+ * "الاحتياج" في القيم المكتوبة إطلاقًا — لا يُكتب حرفٌ واحد إليه، فتبقى
+ * قيمته التاريخية القائمة كما هي دون أي مسح. **لا تستخدم `needs: []`
+ * كحيلة لمنع الكتابة** — ذلك يكتب فعليًا سلسلة فارغة فوق أي قيمة
+ * تاريخية قائمة؛ options.skipLegacyNeedsWrite هو الطريق الآمن الوحيد.
+ */
+function saveBeneficiary_(user, payload, options) {
+  payload = payload || {};
+  options = options || {};
+  const existing = payload.id ? findById_(APP.sheets.beneficiaries, 'رقم المستفيد', cleanId_(payload.id)) : null;
+  const associationId = user.role === 'ASSOCIATION' ? user.associationId : cleanId_(payload.associationId);
+  if (!associationId || !findById_(APP.sheets.associations, 'رقم الجمعية', associationId)) throw new Error('اختر جمعية صحيحة');
+  if (existing && user.role === 'ASSOCIATION') {
+    if (String(existing['رقم الجمعية']) !== user.associationId) throw new Error('ليس لديك صلاحية لتعديل هذا المستفيد');
+    if (String(existing['حالة التسليم']) === 'تم التسليم') throw new Error('لا يمكن تعديل بيانات مستفيد تم تسليمه');
+  }
+  const phone = normalizePhone_(payload.phone);
+  const existingId = existing ? String(existing['رقم المستفيد']) : null;
+  // مطابق مؤكَّد (نفس الجوال ضمن الجمعية نفسها) يُرفض دائمًا — عند التعديل
+  // يُستثنى السجل نفسه من الفحص حتى لا يرفض حفظ بياناته الخاصة.
+  if (findConfirmedDuplicateBeneficiary_(associationId, phone, existingId)) {
+    throw new Error('يوجد مستفيد آخر بنفس رقم الجوال لدى هذه الجمعية بالفعل — تحقق من عدم تكرار الإضافة');
+  }
+  const possibleDuplicate = findPossibleDuplicateBeneficiary_(associationId, payload.name, payload.city, existingId);
+  // تمرير القيم المخزَّنة حاليًا لهذا السجل بالذات: قيمة قديمة خارج
+  // القائمة المعتمدة لا تمنع تعديل حقل آخر في نفس السجل (grandfathering).
+  const previousPlace = existing ? {region: String(existing['المنطقة'] || ''), city: String(existing['المدينة'] || '')} : null;
+  const place = validateRegionCity_(payload.region, payload.city, previousPlace);
+  const values = buildBeneficiaryFieldValues_(payload, place, phone, existing, associationId);
+  if (options.skipLegacyNeedsWrite) {
+    delete values['الاحتياج'];
+  } else {
+    values['الاحتياج'] = normalizeNeeds_(payload.needs);
+  }
   let id;
   if (existing) {
     id = String(existing['رقم المستفيد']);
