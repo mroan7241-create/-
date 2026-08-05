@@ -518,8 +518,18 @@ section('9) سلامة سجل العمليات');
 {
   assert('لا توجد أي دالة تعديل أو حذف لصفوف سجل العمليات (إلحاق فقط - append-only)',
     !/updateById_\(APP\.sheets\.audit/.test(source) && !/updateRowByMatch_\(APP\.sheets\.audit/.test(source));
-  assert('لا يوجد أي مسار في الواجهة أو الخادم يحذف صفًا من أي ورقة (لا دالة deleteRow مستخدَمة في المنطق)',
-    !/\.deleteRow\(/.test(source));
+  assert('لا يوجد حذف صف فعلي لأي بيانات ذات دلالة تاريخية/تشغيلية — .deleteRow( محصورة حصرًا داخل deleteRowById_ (تُستدعى فقط لإزالة احتياج لم يُبتّ فيه بعد، Phase 2.1)', (() => {
+    const allDeleteRowUses = source.match(/\.deleteRow\(/g) || [];
+    const start = source.indexOf('function deleteRowById_(');
+    if (start === -1) return allDeleteRowUses.length === 0; // لا الدالة ولا أي استخدام آخر — الحالة الأصلية
+    const end = source.indexOf('\nfunction ', start + 10);
+    const body = source.slice(start, end === -1 ? start + 2000 : end);
+    const usesInsideDeleteRowById = (body.match(/\.deleteRow\(/g) || []).length;
+    return allDeleteRowUses.length === usesInsideDeleteRowById && usesInsideDeleteRowById === 1;
+  })());
+  assert('deleteRowById_ تُستدعى فقط من removePendingBeneficiaryNeed_ عبر كامل المصدر (لا مسار آخر يحذف سجلًا صامتًا)',
+    (source.match(/\bdeleteRowById_\(/g) || []).length === 2 // التعريف نفسه + استدعاء واحد
+    && /function removePendingBeneficiaryNeed_\([\s\S]{0,1500}deleteRowById_\(/.test(source));
 
   const S = buildSandbox();
   const { associationAId } = seedFullEnvironment(S);

@@ -622,7 +622,7 @@ section('10) عدم تراجع قواعد سلامة الحالات وإدارة
   assert('كل دوال الصيانة تنتهي بشرطة سفلية (خاصة، لا تُستدعى من الواجهة) وتتطلب requireMaintenanceAccess_',
     ['setupSheets_', 'migrateReferenceData_', 'migrateLegacyReferenceValues_', 'previewPhoneNormalization_',
       'migratePhoneNumbers_', 'diagnoseReferenceDataIssues_', 'diagnoseStateIntegrity_', 'repairStateIntegrityIssues_',
-      'preflightRelease_', 'applyReleaseSchema_', 'previewNeedsMigration_'].every(name => {
+      'preflightRelease_', 'applyReleaseSchema_', 'previewNeedsMigration_', 'diagnoseNeedsIntegrity_'].every(name => {
       const match = source.match(new RegExp('function ' + name + '\\([^)]*\\)\\s*\\{([\\s\\S]{0,120})'));
       return match && /requireMaintenanceAccess_\(/.test(match[1]);
     }));

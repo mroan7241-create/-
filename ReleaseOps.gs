@@ -118,6 +118,9 @@ function preflightRelease_(token) {
   let stateIntegrity;
   try { stateIntegrity = diagnoseStateIntegrity_(token); } catch (error) { stateIntegrity = {ok: false, error: error.message}; }
 
+  let needsIntegrity;
+  try { needsIntegrity = diagnoseNeedsIntegrity_(token); } catch (error) { needsIntegrity = {ok: false, error: error.message}; }
+
   let proofFolder;
   try {
     const folderId = PropertiesService.getScriptProperties().getProperty('PROOF_FOLDER_ID');
@@ -144,6 +147,7 @@ function preflightRelease_(token) {
     sheetsWithMissingColumns: sheetsWithMissingColumns,
     referenceData: referenceData,
     stateIntegrity: stateIntegrity,
+    needsIntegrity: needsIntegrity,
     proofFolder: proofFolder,
     readyForSchemaApply: missingSheets.length > 0 || sheetsWithMissingColumns.length > 0,
     summary: (missingSheets.length === 0 && sheetsWithMissingColumns.length === 0)

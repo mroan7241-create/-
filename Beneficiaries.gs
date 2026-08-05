@@ -91,7 +91,18 @@ function findPossibleDuplicateBeneficiary_(associationId, name, city, excludeId)
 
 function saveBeneficiary(token, payload) {
   return perfTime_('saveBeneficiary', () => {
-  const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
+    const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
+    return saveBeneficiary_(user, payload);
+  });
+}
+
+/**
+ * النسخة الداخلية (تأخذ المستخدم المُتحقَّق منه بدل الرمز) — مطابقة
+ * تمامًا لمنطق saveBeneficiary العام، فُصلت فقط ليستدعيها مسار موحَّد
+ * آخر (saveBeneficiaryWithNeeds_ في BeneficiaryNeeds.gs) دون المرور
+ * بـrequireSession_/perfTime_ مرتين ضمن الطلب المُجمَّع نفسه.
+ */
+function saveBeneficiary_(user, payload) {
   payload = payload || {};
   const existing = payload.id ? findById_(APP.sheets.beneficiaries, 'رقم المستفيد', cleanId_(payload.id)) : null;
   const associationId = user.role === 'ASSOCIATION' ? user.associationId : cleanId_(payload.associationId);
@@ -194,7 +205,6 @@ function saveBeneficiary(token, payload) {
     result.possibleDuplicateWarning = 'تنبيه: يوجد مستفيد آخر بنفس الاسم والمدينة (رقم ' + result.possibleDuplicateId + ') — تأكد أنه ليس تكرارًا قبل المتابعة';
   }
   return result;
-  });
 }
 
 function importBeneficiaries(token, rows, acceptedPledge) {

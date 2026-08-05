@@ -1,9 +1,16 @@
 #!/usr/bin/env node
 /**
- * اختبارات Phase 2: دورة اعتماد المستفيد والاحتياج (BeneficiaryNeeds.gs).
- * بيئة محاكاة كاملة في الذاكرة فقط (مطابقة لنمط tools/state-test.js) —
+ * اختبارات Phase 2 + Phase 2.1 (تصليب وتكامل): دورة اعتماد المستفيد
+ * والاحتياج (BeneficiaryNeeds.gs). بيئة محاكاة كاملة في الذاكرة فقط —
  * لا علاقة لها بأي شيت حي، ولا تُشغِّل applyReleaseSchema_ أو
  * setupSheets_ على أي بيانات حقيقية.
+ *
+ * محاكاة القفل هنا **واقعية عمدًا** (لا waitLock()/releaseLock() فارغتين
+ * كما في الإصدار الأول من هذا الملف): تحتفظ بحالة ممسوك/محرَّر فعليًا،
+ * وترفض أي إعادة استحواذ متداخلة (nested lock) وأي تحرير بلا استحواذ —
+ * هذا وحده كان كافيًا لفضح عطل القفل المتداخل الأصلي في
+ * setBeneficiaryNeeds_ (Phase 2) قبل إصلاحه في Phase 2.1.
+ *
  *   تشغيل:  node tools/beneficiary-needs-test.js
  */
 'use strict';
@@ -59,7 +66,8 @@ function buildMockSpreadsheet() {
         setHorizontalAlignment() { return this; }, setWrap() { return this; }, setDataValidation() { return this; }
       }),
       setFrozenRows: () => {}, autoResizeColumns: () => {}, getMaxRows: () => rows.length,
-      appendRow: row => { rows.push(row.slice().map(stripForceText_)); }
+      appendRow: row => { rows.push(row.slice().map(stripForceText_)); },
+      deleteRow: rowNum => { rows.splice(rowNum - 1, 1); }
     };
   }
   return {
@@ -69,11 +77,39 @@ function buildMockSpreadsheet() {
   };
 }
 
+/**
+ * محاكاة LockService واقعية: حالة ممسوك/محرَّر فعلية مشتركة بين كل
+ * getScriptLock() (يطابق دلالات ScriptLock الحقيقية — قفل واحد على
+ * مستوى المشروع، لا كائن مستقل لكل استدعاء). ترفض أي استحواذ متداخل
+ * وأي تحرير بلا استحواذ سابق، بدلًا من waitLock()/releaseLock() فارغتين.
+ */
+function buildLockService_() {
+  let locked = false;
+  let acquireCount = 0;
+  function makeLock() {
+    return {
+      waitLock: () => {
+        if (locked) throw new Error('LockService المحاكاة: استحواذ متداخل مرفوض — القفل ممسوك بالفعل ولم يُحرَّر بعد (nested ScriptLock)');
+        locked = true;
+        acquireCount++;
+      },
+      releaseLock: () => {
+        if (!locked) throw new Error('LockService المحاكاة: محاولة تحرير قفل غير ممسوك أصلًا');
+        locked = false;
+      }
+    };
+  }
+  const service = { getScriptLock: makeLock };
+  Object.defineProperty(service, '__state', { value: () => ({ locked, acquireCount }), enumerable: false });
+  return service;
+}
+
 function buildSandbox() {
   const props = {};
   const cache = {};
   const logs = [];
   const mockSs = buildMockSpreadsheet();
+  const lockService = buildLockService_();
   const sandbox = {
     console, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp, Error,
     isNaN, isFinite, parseInt, parseFloat, Set,
@@ -108,7 +144,7 @@ function buildSandbox() {
         remove: k => { delete cache[k]; }
       })
     },
-    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    LockService: lockService,
     MailApp: { sendEmail: () => {} },
     ScriptApp: { getScriptId: () => 'needs-test', getOAuthToken: () => 'token' },
     SpreadsheetApp: { getActiveSpreadsheet: () => mockSs },
@@ -124,6 +160,7 @@ function buildSandbox() {
   };
   sandbox.globalThis = sandbox;
   sandbox.__logs = logs;
+  sandbox.__lock = lockService;
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox, { filename: 'gs-merged(needs)' });
   return sandbox;
@@ -175,10 +212,14 @@ section('1) تسجيل احتياجات المستفيد');
   const ctx = seedScenario(buildSandbox());
   const { S, assocSession, beneficiaryId } = ctx;
 
+  const acquireBefore = S.__lock.__state().acquireCount;
   const one = S.setBeneficiaryNeeds(assocSession.token, beneficiaryId, ['ثلاجة']);
   assert('جمعية تضيف مستفيدًا باحتياج واحد', one.ok && one.needs.length === 1);
   assert('حالة الاحتياج الافتراضية "بانتظار المراجعة"', one.needs[0].decisionStatus === 'بانتظار المراجعة');
   assert('حالة مراجعة المستفيد أصبحت "تحت المراجعة"', String(beneficiaryRow(S, beneficiaryId)['حالة مراجعة المستفيد']) === 'تحت المراجعة');
+  assert('توليد المعرّف الجديد (nextIdsLocked_) لم يُمسك القفل مرتين — استحواذ واحد فقط لكامل الاستدعاء (إصلاح القفل المتداخل)',
+    S.__lock.__state().acquireCount === acquireBefore + 1);
+  assert('القفل مُحرَّر تمامًا بعد انتهاء الاستدعاء', S.__lock.__state().locked === false);
 
   const three = S.setBeneficiaryNeeds(assocSession.token, beneficiaryId, ['ثلاجة', 'فرن', 'غسالة']);
   assert('جمعية تضيف مستفيدًا بثلاثة احتياجات (بلا تكرار الثلاجة الموجودة أصلًا)', three.needs.length === 3);
@@ -209,7 +250,7 @@ section('2) ADMIN يرفض المستفيد مع سبب');
   assert('كل صفوف الاحتياج فعليًا "مرفوض"', needsAfter.every(n => n.decisionStatus === 'مرفوض'));
   assert('لا حالة تنفيذ لاحتياج مرفوض (لا استحقاق)', needsAfter.every(n => n.fulfillmentStatus === ''));
 
-  throws('لا يمكن اعتماد احتياج لمستفيد مرفوض بعد ذلك',
+  throws('لا يمكن اعتماد احتياج لمستفيد مرفوض بعد ذلك (منع تنفيذ القرار مرتين أيضًا)',
     () => S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, { beneficiaryDecision: 'معتمد' }),
     'غير مسموح');
 }
@@ -266,14 +307,14 @@ section('4) قيود الاعتماد الإلزامية');
     'سبب رفض الاحتياج');
 
   throws('احتياج غير موجود لهذا المستفيد يُرفض',
-    () => S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, { beneficiaryDecision: 'معتمد', needDecisions: [{ needId: 'NEED-999999', decision: 'معتمد' }] }),
+    () => S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, { beneficiaryDecision: 'معتمد', needDecisions: [{ needId: 'NED-999999', decision: 'معتمد' }] }),
     'احتياج غير موجود');
 }
 
 /* ================================================================
-   5) idempotency (opId) — منع كتابة ثانية عند إعادة نفس الطلب
+   5) idempotency مقفلة (opId داخل نفس القفل)
    ================================================================ */
-section('5) إعادة تنفيذ نفس opId لا تكتب مرتين');
+section('5) idempotency: opId داخل نفس القفل — لا تكرار كتابة ولا تعارض');
 {
   const ctx = seedScenario(buildSandbox());
   const { S, admin, assocSession, beneficiaryId } = ctx;
@@ -281,16 +322,22 @@ section('5) إعادة تنفيذ نفس opId لا تكتب مرتين');
   const needId = needRows(S, beneficiaryId)[0].id;
   const payload = { beneficiaryDecision: 'معتمد', needDecisions: [{ needId: needId, decision: 'معتمد' }], opId: 'OP-FIXED-1' };
 
+  const auditCountBefore = S.readTable_('سجل العمليات').rows.length;
   const first = S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, payload);
   assert('أول تنفيذ ناجح', first.ok);
+  const auditAfterFirst = S.readTable_('سجل العمليات').rows.length;
   const second = S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, payload);
   assert('إعادة إرسال نفس opId تُعيد نفس النتيجة الأصلية دون خطأ "سبق اتخاذ قرار"', second.ok && second.approvedCount === first.approvedCount);
+  const auditAfterSecond = S.readTable_('سجل العمليات').rows.length;
+  assert('إعادة الإرسال لا تُنشئ سجل audit ثانيًا (fn() لم تُنفَّذ مرة ثانية أصلًا)', auditAfterSecond === auditAfterFirst && auditAfterFirst === auditCountBefore + 1);
+
+  assert('القفل مُحرَّر تمامًا بعد كلا الاستدعاءين', S.__lock.__state().locked === false);
 }
 
 /* ================================================================
-   6) صحة التجميع حسب نوع الجهاز والجمعية
+   6) مؤشرات الكميات — تعريف دقيق ولا احتساب مزدوج
    ================================================================ */
-section('6) تجميع الكميات حسب نوع الجهاز');
+section('6) needsSummaryByDeviceType_ — مؤشرات دقيقة بلا احتساب مزدوج');
 {
   const ctx = seedScenario(buildSandbox());
   const { S, admin, assocSession, assoc, beneficiaryId } = ctx;
@@ -304,23 +351,42 @@ section('6) تجميع الكميات حسب نوع الجهاز');
       { needId: byType['فرن'].id, decision: 'مرفوض', rejectReason: 'غير متاح' }
     ]
   });
-  S.saveDevice(admin.token, { name: 'ثلاجة مستودع', type: 'ثلاجة', associationId: assoc.id });
+
+  // خمسة أجهزة ثلاجة بحالات مختلفة لاختبار كل فرع من فروع الحساب معًا.
+  const warehouse = S.saveDevice(admin.token, { name: 'ثلاجة مستودع', type: 'ثلاجة', associationId: assoc.id });
+  const allocated = S.saveDevice(admin.token, { name: 'ثلاجة مخصصة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiaryId });
+  S.updateById_('الأجهزة', 'رقم الجهاز', allocated.id, { 'حالة الجهاز': 'مخصص' });
+  const withDelegate = S.saveDevice(admin.token, { name: 'ثلاجة مع مندوب', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiaryId });
+  S.updateById_('الأجهزة', 'رقم الجهاز', withDelegate.id, { 'حالة الجهاز': 'مع المندوب' });
+  const delivered = S.saveDevice(admin.token, { name: 'ثلاجة مسلَّمة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiaryId });
+  S.updateById_('الأجهزة', 'رقم الجهاز', delivered.id, { 'حالة الجهاز': 'تم التسليم' });
+  const broken = S.saveDevice(admin.token, { name: 'ثلاجة تالفة', type: 'ثلاجة', associationId: assoc.id });
+  S.updateById_('الأجهزة', 'رقم الجهاز', broken.id, { 'حالة الجهاز': 'تالف' });
 
   const summary = S.needsSummaryByDeviceType_(assoc.id);
-  assert('إجمالي الثلاجات المطلوبة = 1', summary['ثلاجة'].requested === 1);
-  assert('إجمالي الثلاجات المعتمدة = 1', summary['ثلاجة'].approved === 1);
-  assert('إجمالي الأفران المرفوضة = 1', summary['فرن'].rejected === 1);
-  assert('الثلاجات المتوفرة فعليًا من ورقة الأجهزة = 1', summary['ثلاجة'].available === 1);
-  assert('لا عجز في الثلاجات (معتمد 1، متوفر 1)', summary['ثلاجة'].shortage === 0);
-  assert('عجز الأفران = 0 (لا احتياج معتمد أصلًا)', summary['فرن'].shortage === 0);
+  assert('requestedTotal للثلاجة = 1', summary['ثلاجة'].requestedTotal === 1);
+  assert('approvedTotal للثلاجة = 1', summary['ثلاجة'].approvedTotal === 1);
+  assert('rejectedTotal للفرن = 1', summary['فرن'].rejectedTotal === 1);
+  assert('deliveredTotal للثلاجة = 0 (الاستحقاق نفسه لم يُسلَّم بعد، الجهاز المسلَّم غير مرتبط باستحقاق في هذا الاختبار)', summary['ثلاجة'].deliveredTotal === 0);
+  assert('outstandingApproved للثلاجة = 1 (معتمد - مسلَّم = 1 - 0)', summary['ثلاجة'].outstandingApproved === 1);
+  assert('physicalAvailable = 1 فقط (المستودع غير المرتبط) — لا يُحتسب المخصص ولا مع المندوب ولا المسلَّم ولا التالف',
+    summary['ثلاجة'].physicalAvailable === 1);
+  assert('readyOrAllocated = 2 (مخصص + مع المندوب) — لا يُحسب المسلَّم ولا التالف', summary['ثلاجة'].readyOrAllocated === 2);
+  assert('لا احتساب مزدوج: physicalAvailable + readyOrAllocated + (المسلَّم والتالف المستبعدان) = كل الأجهزة الخمسة بالضبط',
+    summary['ثلاجة'].physicalAvailable + summary['ثلاجة'].readyOrAllocated === 3);
+  assert('shortage للثلاجة = 0 (معتمد معلَّق 1 ≤ متاح+جاهز 3)', summary['ثلاجة'].shortage === 0);
+  assert('shortage للفرن = 0 (لا احتياج معتمد أصلًا)', summary['فرن'].shortage === 0);
 
   const ctx2 = seedScenario(buildSandbox());
   const otherSummary = ctx2.S.needsSummaryByDeviceType_(ctx2.assoc.id);
-  assert('عزل الجمعيات: تجميع جمعية أخرى لا يرى احتياجات هذه الجمعية', otherSummary['ثلاجة'].requested === 0);
+  assert('عزل الجمعيات: تجميع جمعية أخرى لا يرى احتياجات هذه الجمعية', otherSummary['ثلاجة'].requestedTotal === 0);
+
+  const projectWide = S.needsSummaryByDeviceType_(); // بلا associationId — تجميع كامل المشروع لـADMIN
+  assert('تجميع كامل المشروع (بلا associationId) يشمل نفس الأرقام على الأقل', projectWide['ثلاجة'].requestedTotal >= summary['ثلاجة'].requestedTotal);
 }
 
 /* ================================================================
-   7) معاينة ترحيل الاحتياج النصي القديم (قراءة فقط)
+   7) previewNeedsMigration_ — قراءة فقط
    ================================================================ */
 section('7) previewNeedsMigration_ — قراءة فقط، لا كتابة');
 {
@@ -351,6 +417,277 @@ section('7) previewNeedsMigration_ — قراءة فقط، لا كتابة');
     && report.convertible.some(r => r.beneficiaryId === legacyConvertible.id && r.deviceType === 'فرن'));
   assert('يصنّف "مكيف" كيحتاج مراجعة يدوية (خارج الأنواع الثلاثة الجديدة)', report.needsManualReview.some(r => r.beneficiaryId === legacyManual.id && r.rawValue === 'مكيف'));
   assert('لا اعتماد تلقائي ضمني — التقرير توزيع فقط بلا حقل "معتمد تلقائيًا"', report.legacyBeneficiaryStatusDistribution && typeof report.legacyBeneficiaryStatusDistribution === 'object');
+}
+
+/* ================================================================
+   8) سباق حقيقي: اعتماد الإدارة أثناء انتظار طلب الجمعية للقفل
+   ================================================================ */
+section('8) سباق: الإدارة تعتمد المستفيد بينما طلب الجمعية بانتظار القفل — يجب رفض الطلب المتأخر ولا صف يُضاف');
+{
+  const ctx = seedScenario(buildSandbox());
+  const { S, admin, assocSession, beneficiaryId } = ctx;
+  S.setBeneficiaryNeeds(assocSession.token, beneficiaryId, ['ثلاجة']);
+  const needId = needRows(S, beneficiaryId)[0].id;
+
+  const originalGetLock = S.LockService.getScriptLock;
+  let injected = false;
+  S.LockService.getScriptLock = function () {
+    const lock = originalGetLock();
+    const originalWait = lock.waitLock;
+    lock.waitLock = function () {
+      if (!injected) {
+        injected = true;
+        // يُحاكي: بينما طلب الجمعية "بالطريق" لهذا القفل، اكتمل قرار
+        // الإدارة بالكامل (قفله الخاص + تحريره) قبل أن يصل طلب الجمعية فعليًا.
+        S.LockService.getScriptLock = originalGetLock;
+        S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, { beneficiaryDecision: 'معتمد', needDecisions: [{ needId: needId, decision: 'معتمد' }] });
+      }
+      originalWait.call(lock);
+    };
+    return lock;
+  };
+
+  throws('طلب الجمعية لإضافة احتياج آخر يُرفض لأن الإدارة اعتمدت المستفيد أثناء الانتظار (إعادة القراءة داخل القفل تكتشف ذلك)',
+    () => S.setBeneficiaryNeeds(assocSession.token, beneficiaryId, ['فرن']), 'تم اتخاذ قرار مراجعة نهائي');
+  S.LockService.getScriptLock = originalGetLock;
+  assert('لم يُضَف أي صف احتياج جديد (فرن) نتيجة الطلب المرفوض', needRows(S, beneficiaryId).filter(n => n.deviceType === 'فرن').length === 0);
+}
+
+/* ================================================================
+   9) failure-injection + rollback في reviewBeneficiaryNeeds_
+   ================================================================ */
+section('9) فشل كتابة وسطية → تراجع تعويضي كامل');
+{
+  const ctx = seedScenario(buildSandbox());
+  const { S, admin, assocSession, beneficiaryId } = ctx;
+  S.setBeneficiaryNeeds(assocSession.token, beneficiaryId, ['ثلاجة', 'فرن']);
+  const needs = needRows(S, beneficiaryId);
+  const need1 = needs[0].id, need2 = needs[1].id;
+
+  const original = S.updateById_;
+  S.updateById_ = function (sheetName, idHeader, id, changes) {
+    if (sheetName === 'احتياجات المستفيدين' && id === need2) throw new Error('فشل كتابة الاحتياج الثاني محاكى');
+    return original(sheetName, idHeader, id, changes);
+  };
+  throws('فشل كتابة الاحتياج الثاني بعد نجاح المستفيد والاحتياج الأول يُعيد الكل لحالته السابقة',
+    () => S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, { beneficiaryDecision: 'معتمد', needDecisions: [{ needId: need1, decision: 'معتمد' }, { needId: need2, decision: 'معتمد' }] }),
+    'أُعيدت كل السجلات المتأثرة لحالتها السابقة');
+  S.updateById_ = original;
+
+  assert('المستفيد عاد لحالة "تحت المراجعة" بعد التراجع (لا "معتمد" جزئي)', String(beneficiaryRow(S, beneficiaryId)['حالة مراجعة المستفيد']) === 'تحت المراجعة');
+  const after = needRows(S, beneficiaryId);
+  assert('الاحتياج الأول عاد "بانتظار المراجعة" (لا اعتماد جزئي متروك)', after.find(n => n.id === need1).decisionStatus === 'بانتظار المراجعة');
+  assert('لا حالة تنفيذ متروكة على الاحتياج الأول بعد التراجع', after.find(n => n.id === need1).fulfillmentStatus === '');
+  assert('القفل مُحرَّر رغم الفشل والتراجع (finally نُفِّذت)', S.__lock.__state().locked === false);
+}
+
+section('10) فشل الكتابة الأولى (المستفيد نفسه) — لا شيء كُتب أصلًا فلا حاجة لتراجع');
+{
+  const ctx = seedScenario(buildSandbox());
+  const { S, admin, assocSession, beneficiaryId } = ctx;
+  S.setBeneficiaryNeeds(assocSession.token, beneficiaryId, ['ثلاجة']);
+  const needId = needRows(S, beneficiaryId)[0].id;
+
+  const original = S.updateById_;
+  S.updateById_ = function (sheetName, idHeader, id, changes) {
+    if (sheetName === 'المستفيدون' && id === beneficiaryId) throw new Error('فشل كتابة المستفيد محاكى');
+    return original(sheetName, idHeader, id, changes);
+  };
+  throws('فشل تحديث المستفيد نفسه يُرفض بوضوح', () => S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, { beneficiaryDecision: 'معتمد', needDecisions: [{ needId: needId, decision: 'معتمد' }] }));
+  S.updateById_ = original;
+  assert('حالة الاحتياج بقيت "بانتظار المراجعة" (لم تُكتب أصلًا)', needRows(S, beneficiaryId)[0].decisionStatus === 'بانتظار المراجعة');
+}
+
+section('11) فشل الكتابة الأخيرة يُتراجَع عنه أيضًا');
+{
+  const ctx = seedScenario(buildSandbox());
+  const { S, admin, assocSession, beneficiaryId } = ctx;
+  S.setBeneficiaryNeeds(assocSession.token, beneficiaryId, ['ثلاجة', 'فرن', 'غسالة']);
+  const needs = needRows(S, beneficiaryId);
+  const [n1, n2, n3] = needs.map(n => n.id);
+
+  const original = S.updateById_;
+  S.updateById_ = function (sheetName, idHeader, id, changes) {
+    if (sheetName === 'احتياجات المستفيدين' && id === n3) throw new Error('فشل كتابة الاحتياج الثالث محاكى');
+    return original(sheetName, idHeader, id, changes);
+  };
+  throws('فشل الاحتياج الثالث (الأخير) يُعيد المستفيد والاحتياجين الأولين لحالتهما السابقة',
+    () => S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, { beneficiaryDecision: 'معتمد', needDecisions: [{ needId: n1, decision: 'معتمد' }, { needId: n2, decision: 'معتمد' }, { needId: n3, decision: 'معتمد' }] }),
+    'أُعيدت كل السجلات المتأثرة');
+  S.updateById_ = original;
+  const after = needRows(S, beneficiaryId);
+  assert('الاحتياج الأول والثاني عادا "بانتظار المراجعة"', after.find(n => n.id === n1).decisionStatus === 'بانتظار المراجعة' && after.find(n => n.id === n2).decisionStatus === 'بانتظار المراجعة');
+  assert('المستفيد عاد "تحت المراجعة"', String(beneficiaryRow(S, beneficiaryId)['حالة مراجعة المستفيد']) === 'تحت المراجعة');
+}
+
+section('12) فشل التراجع نفسه يُبلَّغ كحالة حرجة صريحة');
+{
+  const ctx = seedScenario(buildSandbox());
+  const { S, admin, assocSession, beneficiaryId } = ctx;
+  S.setBeneficiaryNeeds(assocSession.token, beneficiaryId, ['ثلاجة']);
+  const needId = needRows(S, beneficiaryId)[0].id;
+
+  let beneficiaryUpdateCount = 0;
+  const original = S.updateById_;
+  S.updateById_ = function (sheetName, idHeader, id, changes) {
+    if (sheetName === 'المستفيدون' && id === beneficiaryId) {
+      beneficiaryUpdateCount++;
+      if (beneficiaryUpdateCount === 2) throw new Error('فشل رولباك محاكى');
+    }
+    if (sheetName === 'احتياجات المستفيدين' && id === needId) throw new Error('فشل كتابة الاحتياج محاكى');
+    return original(sheetName, idHeader, id, changes);
+  };
+  S.__logs.length = 0;
+  throws('فشل الكتابة الوسطية مع فشل التراجع معًا يُبلَّغ بوضوح دون بيانات حساسة',
+    () => S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, { beneficiaryDecision: 'معتمد', needDecisions: [{ needId: needId, decision: 'معتمد' }] }),
+    'تعذّر التراجع التلقائي أيضًا');
+  S.updateById_ = original;
+  assert('سجل الأخطاء يحتوي إشارة "حرج جدًا" للمراجعة اليدوية', S.__logs.some(l => l.indexOf('حرج جدًا') !== -1));
+  assert('القفل مُحرَّر رغم الفشل المزدوج', S.__lock.__state().locked === false);
+}
+
+section('13) فشل audit بعد نجاح القرار فعليًا لا يُفشل القرار نفسه');
+{
+  const ctx = seedScenario(buildSandbox());
+  const { S, admin, assocSession, beneficiaryId } = ctx;
+  S.setBeneficiaryNeeds(assocSession.token, beneficiaryId, ['ثلاجة']);
+  const needId = needRows(S, beneficiaryId)[0].id;
+  const originalAudit = S.audit_;
+  S.audit_ = () => { throw new Error('فشل تسجيل العملية محاكى'); };
+  S.__logs.length = 0;
+  const result = S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, { beneficiaryDecision: 'معتمد', needDecisions: [{ needId: needId, decision: 'معتمد' }] });
+  S.audit_ = originalAudit;
+  assert('فشل audit لا يفشل القرار نفسه (ok: true رغم تعذّر السجل)', result.ok === true);
+  assert('حالة مراجعة المستفيد اعتُمدت فعليًا رغم فشل audit', String(beneficiaryRow(S, beneficiaryId)['حالة مراجعة المستفيد']) === 'معتمد');
+  assert('سجل الأخطاء يحتوي تحذيرًا بفشل تسجيل العملية (لا خطأ حرج)', S.__logs.some(l => l.indexOf('تحذير') !== -1 && l.indexOf('سجل العمليات') !== -1));
+}
+
+/* ================================================================
+   14) توحيد مسار saveBeneficiaryWithNeeds
+   ================================================================ */
+section('14) saveBeneficiaryWithNeeds — مصدر حقيقة واحد، بلا كتابة موازية للحقل القديم');
+{
+  const ctx = seedScenario(buildSandbox());
+  const { S, assocSession, assoc } = ctx;
+  const result = S.saveBeneficiaryWithNeeds(assocSession.token, {
+    name: 'مستفيد موحّد', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+    phone: '0500000099', familyCount: 2, socialStatus: 'أرملة', lat: '24.7', lng: '46.6',
+    deviceTypes: ['ثلاجة', 'فرن']
+  });
+  assert('إنشاء مستفيد + احتياجاته في عملية واحدة ناجحة', result.ok && result.needs.length === 2);
+  const row = beneficiaryRow(S, result.id);
+  assert('الحقل النصي القديم "الاحتياج" يبقى فارغًا لسجل أُنشئ عبر المسار الموحَّد', String(row['الاحتياج'] || '') === '');
+  assert('حالة مراجعة المستفيد "تحت المراجعة" فورًا', String(row['حالة مراجعة المستفيد']) === 'تحت المراجعة');
+
+  throws('نوع احتياج غير مسموح به يُرفض قبل إنشاء أي سجل مستفيد إطلاقًا (لا حذف فعلي لأي سجل مستفيد في هذا النظام)',
+    () => S.saveBeneficiaryWithNeeds(assocSession.token, {
+      name: 'مستفيد فاشل', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: '0500000098', familyCount: 1, socialStatus: 'أرملة', lat: '24.7', lng: '46.6',
+      deviceTypes: ['مكيف']
+    }), 'غير مسموح به');
+  assert('لم يُنشأ أي سجل مستفيد أصلًا لهذا الجوال (فُحص الصيغة قبل أي كتابة)', !S.findConfirmedDuplicateBeneficiary_(assoc.id, '0500000098', null));
+
+  // فشل لاحق (لا صيغة) بعد نجاح إنشاء المستفيد فعليًا: المستفيد يبقى
+  // محفوظًا (لا حذف)، والخطأ يسمّي رقمه صراحةً بدل الفشل الصامت.
+  const originalAppend = S.appendObjects_;
+  S.appendObjects_ = function (sheetName, objects) {
+    if (sheetName === 'احتياجات المستفيدين') throw new Error('فشل كتابة احتياجات محاكى');
+    return originalAppend(sheetName, objects);
+  };
+  let survivingId = null;
+  throws('فشل كتابة فعلي (لا خطأ صيغة) بعد نجاح إنشاء المستفيد: خطأ صريح يسمّي رقمه، لا حذف له', () => {
+    try {
+      S.saveBeneficiaryWithNeeds(assocSession.token, {
+        name: 'مستفيد نجا من الفشل', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+        phone: '0500000096', familyCount: 1, socialStatus: 'أرملة', lat: '24.7', lng: '46.6',
+        deviceTypes: ['ثلاجة']
+      });
+    } catch (e) {
+      const match = e.message.match(/رقم (BEN-\d{6})/);
+      survivingId = match ? match[1] : null;
+      throw e;
+    }
+  }, 'حُفظت بيانات المستفيد');
+  S.appendObjects_ = originalAppend;
+  assert('رقم المستفيد ذُكر صراحةً في رسالة الخطأ (غير صامت)', !!survivingId);
+  assert('سجل المستفيد ما زال موجودًا فعليًا (لم يُحذف)', survivingId && !!beneficiaryRow(S, survivingId));
+  const completed = S.setBeneficiaryNeeds(assocSession.token, survivingId, ['ثلاجة']);
+  assert('يمكن إكمال تسجيل احتياجاته لاحقًا بنفس الرقم دون إعادة إدخال بياناته', completed.ok && completed.needs.length === 1);
+
+  const legacy = S.saveBeneficiary(assocSession.token, {
+    name: 'مستفيد قديم المسار', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+    phone: '0500000097', familyCount: 1, socialStatus: 'أرملة', needs: ['ثلاجة'], lat: '24.7', lng: '46.6'
+  });
+  assert('saveBeneficiary القديم ما زال يكتب "الاحتياج" النصي كما كان دون أي تغيير سلوك', String(beneficiaryRow(S, legacy.id)['الاحتياج']) === 'ثلاجة');
+}
+
+/* ================================================================
+   15) إزالة احتياج معلَّق قبل المراجعة
+   ================================================================ */
+section('15) removePendingBeneficiaryNeed — إزالة قبل المراجعة فقط');
+{
+  const ctx = seedScenario(buildSandbox());
+  const { S, admin, assocSession, beneficiaryId } = ctx;
+  S.setBeneficiaryNeeds(assocSession.token, beneficiaryId, ['ثلاجة', 'فرن']);
+  const needs = needRows(S, beneficiaryId);
+  const oven = needs.find(n => n.deviceType === 'فرن');
+
+  const removed = S.removePendingBeneficiaryNeed(assocSession.token, oven.id);
+  assert('إزالة احتياج معلَّق تنجح وتترك احتياجًا واحدًا فقط', removed.ok && removed.needs.length === 1 && removed.needs[0].deviceType === 'ثلاجة');
+
+  const lastOne = removed.needs[0];
+  throws('لا يمكن ترك المستفيد بلا أي احتياج', () => S.removePendingBeneficiaryNeed(assocSession.token, lastOne.id), 'لا يمكن ترك المستفيد بلا أي احتياج');
+
+  S.setBeneficiaryNeeds(assocSession.token, beneficiaryId, ['غسالة']);
+  const withWasher = needRows(S, beneficiaryId);
+  const fridgeNeed = withWasher.find(n => n.deviceType === 'ثلاجة');
+  const washerNeed = withWasher.find(n => n.deviceType === 'غسالة');
+  S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, {
+    beneficiaryDecision: 'معتمد',
+    needDecisions: [{ needId: fridgeNeed.id, decision: 'معتمد' }, { needId: washerNeed.id, decision: 'مرفوض', rejectReason: 'سبب' }]
+  });
+  throws('لا يمكن إزالة احتياج سبق البتّ فيه (معتمد)', () => S.removePendingBeneficiaryNeed(admin.token, fridgeNeed.id), 'سبق البتّ فيه');
+
+  const ctx2 = seedScenario(buildSandbox());
+  ctx2.S.setBeneficiaryNeeds(ctx2.assocSession.token, ctx2.beneficiaryId, ['ثلاجة', 'فرن']);
+  const otherNeeds = needRows(ctx2.S, ctx2.beneficiaryId);
+  const otherSession = ctx2.S.createSession_({ id: 'USR-OTHER-REM', name: 'جمعية أخرى', role: 'ASSOCIATION', associationId: 'ASC-999999' });
+  throws('جمعية أخرى لا يمكنها إزالة احتياج ليس لها', () => ctx2.S.removePendingBeneficiaryNeed(otherSession.token, otherNeeds[0].id), 'ليس لديك صلاحية');
+}
+
+/* ================================================================
+   16) بادئة معرّف الاحتياج NED تمر عبر cleanId_
+   ================================================================ */
+section('16) بادئة معرّف الاحتياج NED صحيحة (ثلاثة أحرف، تمر عبر cleanId_)');
+{
+  const ctx = seedScenario(buildSandbox());
+  const { S, assocSession, beneficiaryId } = ctx;
+  S.setBeneficiaryNeeds(assocSession.token, beneficiaryId, ['ثلاجة']);
+  const needId = needRows(S, beneficiaryId)[0].id;
+  assert('رقم الاحتياج يطابق الصيغة NED-000000', /^NED-\d{6}$/.test(needId));
+  assert('رقم الاحتياج يمر عبر cleanId_ بنجاح (لا يُرفض كفارغ)', S.cleanId_(needId) === needId);
+}
+
+/* ================================================================
+   17) diagnoseNeedsIntegrity_
+   ================================================================ */
+section('17) diagnoseNeedsIntegrity_ — قراءة فقط، تكتشف الأعطال دون إصلاح تلقائي');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const token = grantToken_(S);
+  const emptyReport = S.diagnoseNeedsIntegrity_(token);
+  assert('لا مشاكل على ورقة فارغة نظيفة', emptyReport.ok && emptyReport.issueCount === 0);
+
+  const scenario = seedScenario(S);
+  S.setBeneficiaryNeeds(scenario.assocSession.token, scenario.beneficiaryId, ['ثلاجة']);
+  const needId = S.beneficiaryNeeds_(scenario.beneficiaryId)[0].id;
+  // إفساد مباشر يحاكي تعديلًا يدويًا خارج مسار BeneficiaryNeeds.gs.
+  S.updateById_('احتياجات المستفيدين', 'رقم الاحتياج', needId, {'نوع الجهاز': 'مكيف صحراوي', 'حالة القرار': 'قيد كذا'});
+  const report = S.diagnoseNeedsIntegrity_(token);
+  assert('يكتشف نوع جهاز غير معروف', report.issues.some(i => i.type === 'UNKNOWN_DEVICE_TYPE'));
+  assert('يكتشف حالة قرار غير معروفة', report.issues.some(i => i.type === 'UNKNOWN_DECISION_STATUS'));
+  assert('لا يُصلح أي شيء تلقائيًا (القيم الفاسدة ما زالت كما هي)', S.beneficiaryNeeds_(scenario.beneficiaryId)[0].deviceType === 'مكيف صحراوي');
 }
 
 console.log(failures === 0 ? '\n=== ALL PASS ===' : '\n=== ' + failures + ' FAILURE(S) ===');

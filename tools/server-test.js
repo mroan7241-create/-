@@ -813,7 +813,12 @@ assert('فحص التكرار لا يكشف عن بيانات جمعية أخر�
   dupImportNoLeak && dupImportNoLeak.ok === true);
 
 assert('saveBeneficiary يعيد فحص التكرار المؤكَّد داخل قفل قبل الإضافة الفعلية لمنع سباق التزامن', (() => {
-  const start = source.indexOf('function saveBeneficiary(');
+  // منطق الحفظ الفعلي انتقل إلى saveBeneficiary_ الداخلية (Phase 2.1 —
+  // فُصلت ليستدعيها أيضًا saveBeneficiaryWithNeeds_ في BeneficiaryNeeds.gs
+  // دون المرور بـrequireSession_ مرتين)؛ saveBeneficiary العامة أصبحت
+  // غلافًا رقيقًا فقط. السلوك المُختبَر (قفل + إعادة فحص التكرار) لم
+  // يتغيّر، فقط موضعه في المصدر.
+  const start = source.indexOf('function saveBeneficiary_(');
   const end = source.indexOf('\nfunction ', start + 10);
   const body = source.slice(start, end === -1 ? start + 4000 : end);
   return /LockService\.getScriptLock\(\)/.test(body) && /findConfirmedDuplicateBeneficiary_/.test(body);

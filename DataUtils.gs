@@ -229,6 +229,35 @@ function updateById_(sheetName, idHeader, id, changes) {
 }
 
 /**
+ * حذف صف فعليًا بمطابقة معرّف — **مستخدَمة حصرًا** من
+ * removePendingBeneficiaryNeed_ (BeneficiaryNeeds.gs) لإزالة احتياج
+ * لم يُبتّ فيه بعد (بانتظار المراجعة فقط، لا قرار نهائي إطلاقًا عليه) —
+ * ليست له قيمة تاريخية أو محاسبية بعد. عمدًا **لا تُستخدَم** لأي سجل
+ * ذي دلالة تاريخية أو تشغيلية (مستفيد، جهاز، تسليم، جمعية، مندوب...):
+ * مبدأ هذا النظام الثابت هو عدم حذف تلك السجلات إطلاقًا (راجع الاختبار
+ * الأمني المخصص الذي يفرض بقاء حذف الصف الفعلي محصورًا في هذه الدالة
+ * وحدها عبر كامل المصدر). أي حاجة مستقبلية لحذف سجل آخر تتطلب مراجعة صريحة
+ * لهذا القيد المعماري أولًا، لا استدعاء هذه الدالة بصمت من مكان جديد.
+ * نفس رفض معرّف مكرَّر الصارم في updateById_/findById_.
+ */
+function deleteRowById_(sheetName, idHeader, id) {
+  _REQ_.writes++;
+  const sheet = sheet_(sheetName);
+  const values = sheet.getDataRange().getValues();
+  const map = {};
+  values[0].forEach((header, index) => map[String(header)] = index);
+  const matchingRows = [];
+  values.forEach((row, index) => {
+    if (index > 0 && String(row[map[idHeader]]) === String(id)) matchingRows.push(index);
+  });
+  if (matchingRows.length > 1) throw new Error(duplicateIdMessage_(sheetName, idHeader, id, matchingRows.length));
+  if (!matchingRows.length) return false;
+  sheet.deleteRow(matchingRows[0] + 1);
+  invalidateTableCache_(sheetName);
+  return true;
+}
+
+/**
  * تحديث صف بمطابقة أكثر من عمود معًا (بدل معرّف واحد)، للأوراق التي لا
  * تملك عمود رقم تسلسلي مستقل — مثل "إدارة الأنشطة" التي يُعرَّف صفها
  * بثلاثية (المرحلة، النشاط الرئيسي، النشاط الفرعي) لا برقم منفصل.
@@ -266,7 +295,11 @@ const ID_PREFIX_SOURCES_ = Object.freeze({
   DLV: {sheet: 'التسليمات', column: 'رقم التسليم'},
   USR: {sheet: 'المستخدمون', column: 'رقم المستخدم'},
   REF: {sheet: 'البيانات المرجعية', column: 'المعرف'},
-  NEED: {sheet: 'احتياجات المستفيدين', column: 'رقم الاحتياج'}
+  // بادئة من ثلاثة أحرف بالضبط — cleanId_ يفرض ^[A-Z]{3}-\d{6}$ حرفيًا،
+  // و"NEED" (4 أحرف) كانت تفشل هذا الفحص فتُعامَل معرّفات الاحتياج
+  // كفارغة أينما مرّت عبر cleanId_. لم يُطبَّق المخطط بعد ولا بيانات حية
+  // بهذه البادئة، فالتصحيح هنا آمن بالكامل بلا أي أثر على بيانات قائمة.
+  NED: {sheet: 'احتياجات المستفيدين', column: 'رقم الاحتياج'}
 });
 
 /**
@@ -311,27 +344,45 @@ function nextId_(prefix) {
 }
 
 function nextIds_(prefix, count) {
-  count = Math.max(0, Math.floor(Number(count) || 0));
-  if (!count) return [];
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
-    const props = PropertiesService.getScriptProperties();
-    const key = 'SEQ_' + prefix;
-    const storedSeq = Number(props.getProperty(key) || 0);
-    // لا نثق بعدّاد Script Properties وحده: عند نسخ المشروع (Make a copy)
-    // يُعاد هذا العدّاد للصفر بينما تحتفظ الأوراق ببياناتها القديمة كاملة،
-    // فقد يعيد استخدام معرّف موجود فعليًا. نأخذ الأكبر بين العدّاد وأعلى
-    // رقم فعلي موجود في الورقة نفسها، دائمًا داخل القفل نفسه لمنع التزامن.
-    const actualMax = highestExistingSeq_(prefix);
-    const current = Math.max(storedSeq, actualMax);
-    props.setProperty(key, String(current + count));
-    return Array.from({length: count}, (_, index) =>
-      prefix + '-' + Utilities.formatString('%06d', current + index + 1)
-    );
+    return nextIdsLocked_(prefix, count);
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * ⚠️ تفترض أن المستدعي **يُمسك ScriptLock فعلًا** قبل استدعائها، ولا
+ * تُمسك أي قفل بنفسها — لا تستدعها إلا من داخل قفل خارجي ممسوك مسبقًا
+ * (مثال: setBeneficiaryNeeds_ في BeneficiaryNeeds.gs، الذي يحتاج توليد
+ * معرّفات ضمن نفس القفل الذي يحمي فحص التكرار). استدعاؤها بلا قفل
+ * خارجي ممسوك يعرّض العدّاد لتزامن حقيقي — استخدم nextIds_ العامة بدل
+ * ذلك في أي مسار لا يُمسك قفله الخاص أصلًا.
+ *
+ * السبب التاريخي لوجود هذا الفصل: nextIds_ كانت تُمسك ScriptLock بنفسها
+ * دائمًا، فإمساك مستدعٍ آخر لقفله الخاص أولًا ثم استدعاء nextIds_ من
+ * داخله كان يعني محاولة إمساك ScriptLock مرتين ضمن نفس التنفيذ (nested
+ * lock) — سلوك غير مضمون في Apps Script الحقيقي وقد يُعلّق الطلب حتى
+ * انتهاء المهلة. هذه النسخة المجرَّدة من القفل تحل المشكلة جذريًا.
+ */
+function nextIdsLocked_(prefix, count) {
+  count = Math.max(0, Math.floor(Number(count) || 0));
+  if (!count) return [];
+  const props = PropertiesService.getScriptProperties();
+  const key = 'SEQ_' + prefix;
+  const storedSeq = Number(props.getProperty(key) || 0);
+  // لا نثق بعدّاد Script Properties وحده: عند نسخ المشروع (Make a copy)
+  // يُعاد هذا العدّاد للصفر بينما تحتفظ الأوراق ببياناتها القديمة كاملة،
+  // فقد يعيد استخدام معرّف موجود فعليًا. نأخذ الأكبر بين العدّاد وأعلى
+  // رقم فعلي موجود في الورقة نفسها، دائمًا داخل القفل الممسوك من المستدعي.
+  const actualMax = highestExistingSeq_(prefix);
+  const current = Math.max(storedSeq, actualMax);
+  props.setProperty(key, String(current + count));
+  return Array.from({length: count}, (_, index) =>
+    prefix + '-' + Utilities.formatString('%06d', current + index + 1)
+  );
 }
 
 /**
@@ -384,6 +435,39 @@ function withIdempotency_(actorId, opId, fn) {
   const result = fn();
   try { cache.put(key, JSON.stringify(result), 300); } catch (ignore) { /* تحسين، لا يوقف الاستجابة */ }
   return result;
+}
+
+/**
+ * withIdempotency_ العادية (cache.get → fn() → cache.put) لا تمنع
+ * طلبين متزامنين بنفس opId من تجاوز cache.get معًا قبل أن يكتب أيّهما —
+ * كلاهما ينفّذ fn() فعليًا. لعمليات تتطلب ضمان "مرة واحدة فقط" حقيقيًا
+ * (مثال: reviewBeneficiaryNeeds — قرار اعتماد لا يجوز تكراره) استخدم
+ * هذه بدلًا منها: تفحص opId **وتكتب نتيجته** داخل نفس ScriptLock الذي
+ * يحمي fn() نفسها، فلا يمكن لطلب ثانٍ بنفس opId أن يبدأ تنفيذ fn()
+ * إلا بعد أن ينتهي الطلب الأول تمامًا (بما فيه تخزين نتيجته في الكاش)
+ * ويُحرِّر القفل — عندها يجد الثاني النتيجة المخزَّنة جاهزة فورًا بدل
+ * تنفيذ fn() مرة أخرى.
+ *
+ * ⚠️ fn() هنا تفترض أن القفل ممسوك بالفعل عند استدعائها — أي دالة
+ * داخلية تُمرَّر هنا (مثل reviewBeneficiaryNeeds_) يجب ألا تُمسك قفلها
+ * الخاص بنفسها، وإلا وقعنا في نفس عطل القفل المتداخل الذي أُصلح في
+ * nextIdsLocked_/nextIds_ أعلاه.
+ */
+function runLockedIdempotent_(actorId, opId, fn) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    if (!opId) return fn();
+    const cache = CacheService.getScriptCache();
+    const key = 'opid:' + actorId + ':' + String(opId).slice(0, 80);
+    const cached = cache.get(key);
+    if (cached) return JSON.parse(cached);
+    const result = fn();
+    try { cache.put(key, JSON.stringify(result), 300); } catch (ignore) { /* تحسين، لا يوقف الاستجابة */ }
+    return result;
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function audit_(user, action, section, recordId, notes) {
