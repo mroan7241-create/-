@@ -205,3 +205,95 @@ function repairStateIntegrityIssues_(token) {
 function dispatchedAndAssignedDevicesForBeneficiary_(beneficiaryId) {
   return devicesForBeneficiary_(beneficiaryId).filter(device => ['مخصص', 'مع المندوب'].indexOf(device.status) >= 0);
 }
+
+// -------------------- دورة اعتماد المستفيد والاحتياج (طور تصميم — لم تُفعَّل بعد) --------------------
+//
+// هذا القسم يضيف مصدر حقيقة مركزيًا لثلاث حالات منفصلة تمامًا لا يجوز
+// خلطها في حقل واحد: حالة مراجعة المستفيد نفسه، حالة قرار كل احتياج
+// (جهاز) على حدة، وحالة تنفيذ ذلك الاحتياج بعد اعتماده. لا تستبدل أو
+// تُعدّل جداول DEVICE_STATUS_TRANSITIONS_/DELIVERY_STATUS_TRANSITIONS_
+// أعلاه — تلك تبقى كما هي لحالة سجل الجهاز المادي الفردي نفسه، وهذا
+// القسم طبقة أعلى منها (حالة "الاستحقاق" لا حالة "القطعة").
+//
+// حالة مراجعة المستفيد: تحت المراجعة → معتمد | مرفوض (نهائيتان، لا رجوع).
+const BENEFICIARY_REVIEW_STATUSES = ['تحت المراجعة', 'معتمد', 'مرفوض'];
+const BENEFICIARY_REVIEW_TRANSITIONS_ = Object.freeze({
+  'تحت المراجعة': ['تحت المراجعة', 'معتمد', 'مرفوض'],
+  'معتمد': ['معتمد'],
+  'مرفوض': ['مرفوض']
+});
+
+// حالة قرار الاحتياج الواحد (نوع جهاز واحد لمستفيد واحد): بانتظار
+// المراجعة → معتمد | مرفوض. مستقلة عن قرار بقية احتياجات المستفيد نفسه.
+const NEED_DECISION_STATUSES = ['بانتظار المراجعة', 'معتمد', 'مرفوض'];
+const NEED_DECISION_TRANSITIONS_ = Object.freeze({
+  'بانتظار المراجعة': ['بانتظار المراجعة', 'معتمد', 'مرفوض'],
+  'معتمد': ['معتمد'],
+  'مرفوض': ['مرفوض']
+});
+
+// حالة تنفيذ الاحتياج المعتمد فقط (لا معنى لها قبل الاعتماد). تفصل
+// صراحة بين "استحقاق معتمد" (قرار إداري منجز، لا جهاز مادي بعد) و"جهاز
+// جاهز" (جهاز مادي فعلي أُخذ من المخزون وربط بهذا الاستحقاق تحديدًا)
+// — لا خطوة تخصيص يدوية إضافية بين الاثنتين، فقط ربط تلقائي عند توفر
+// جهاز مطابق النوع (انظر Phase 2: linkAvailableDeviceToNeed_).
+const NEED_FULFILLMENT_STATUSES = [
+  'استحقاق معتمد', 'بانتظار توفر الجهاز', 'جهاز جاهز',
+  'بانتظار تعيين مندوب', 'معيّن للمندوب — بانتظار التنفيذ',
+  'خرج مع المندوب', 'مؤجل', 'بانتظار تأكيد الإرجاع',
+  'أعيد للجمعية/المستودع', 'تم التسليم'
+];
+const NEED_FULFILLMENT_TRANSITIONS_ = Object.freeze({
+  'استحقاق معتمد': ['استحقاق معتمد', 'بانتظار توفر الجهاز'],
+  'بانتظار توفر الجهاز': ['بانتظار توفر الجهاز', 'جهاز جاهز'],
+  'جهاز جاهز': ['جهاز جاهز', 'بانتظار تعيين مندوب'],
+  'بانتظار تعيين مندوب': ['بانتظار تعيين مندوب', 'معيّن للمندوب — بانتظار التنفيذ'],
+  'معيّن للمندوب — بانتظار التنفيذ': ['معيّن للمندوب — بانتظار التنفيذ', 'خرج مع المندوب'],
+  'خرج مع المندوب': ['خرج مع المندوب', 'تم التسليم', 'مؤجل', 'بانتظار تأكيد الإرجاع'],
+  'مؤجل': ['مؤجل', 'خرج مع المندوب'],
+  'بانتظار تأكيد الإرجاع': ['بانتظار تأكيد الإرجاع', 'أعيد للجمعية/المستودع'],
+  'أعيد للجمعية/المستودع': ['أعيد للجمعية/المستودع', 'بانتظار تعيين مندوب'],
+  'تم التسليم': []
+});
+
+/** يتحقق من انتقال حالة مراجعة المستفيد، بنفس مبدأ assertDeviceTransition_ أعلاه. */
+function assertBeneficiaryReviewTransition_(fromStatus, toStatus) {
+  fromStatus = String(fromStatus || '');
+  toStatus = String(toStatus || '');
+  if (BENEFICIARY_REVIEW_STATUSES.indexOf(toStatus) === -1) throw new Error('حالة مراجعة مستفيد غير معروفة: ' + toStatus);
+  if (!fromStatus) return true;
+  const allowed = BENEFICIARY_REVIEW_TRANSITIONS_[fromStatus];
+  if (!allowed) throw new Error('حالة مراجعة مستفيد حالية غير معروفة: ' + fromStatus);
+  if (allowed.indexOf(toStatus) === -1) {
+    throw new Error('انتقال غير مسموح لحالة مراجعة المستفيد: من «' + fromStatus + '» إلى «' + toStatus + '»');
+  }
+  return true;
+}
+
+/** يتحقق من انتقال حالة قرار احتياج واحد. */
+function assertNeedDecisionTransition_(fromStatus, toStatus) {
+  fromStatus = String(fromStatus || '');
+  toStatus = String(toStatus || '');
+  if (NEED_DECISION_STATUSES.indexOf(toStatus) === -1) throw new Error('حالة قرار احتياج غير معروفة: ' + toStatus);
+  if (!fromStatus) return true;
+  const allowed = NEED_DECISION_TRANSITIONS_[fromStatus];
+  if (!allowed) throw new Error('حالة قرار احتياج حالية غير معروفة: ' + fromStatus);
+  if (allowed.indexOf(toStatus) === -1) {
+    throw new Error('انتقال غير مسموح لحالة قرار الاحتياج: من «' + fromStatus + '» إلى «' + toStatus + '»');
+  }
+  return true;
+}
+
+/** يتحقق من انتقال حالة تنفيذ احتياج معتمد. */
+function assertNeedFulfillmentTransition_(fromStatus, toStatus) {
+  fromStatus = String(fromStatus || '');
+  toStatus = String(toStatus || '');
+  if (NEED_FULFILLMENT_STATUSES.indexOf(toStatus) === -1) throw new Error('حالة تنفيذ احتياج غير معروفة: ' + toStatus);
+  if (!fromStatus) return true;
+  const allowed = NEED_FULFILLMENT_TRANSITIONS_[fromStatus];
+  if (!allowed) throw new Error('حالة تنفيذ احتياج حالية غير معروفة: ' + fromStatus);
+  if (allowed.indexOf(toStatus) === -1) {
+    throw new Error('انتقال غير مسموح لحالة تنفيذ الاحتياج: من «' + fromStatus + '» إلى «' + toStatus + '»');
+  }
+  return true;
+}
