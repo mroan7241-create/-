@@ -196,3 +196,69 @@ function applyReleaseSchema_(token, options) {
     after: {schemaVersion: after.schemaVersion, missingSheets: after.missingSheets, sheetsWithMissingColumns: after.sheetsWithMissingColumns.map(row => row.sheet)}
   };
 }
+
+/**
+ * معاينة قراءة-فقط (Phase 2 — لم تُشغَّل، ولا تُشغَّل تلقائيًا من أي
+ * مكان) لِما يمكن اشتقاقه من الحقل النصي القديم "الاحتياج" لو أُريد
+ * تحويله لصفوف "احتياجات المستفيدين" الجديدة مستقبلًا. **لا تكتب أي
+ * شيء إطلاقًا** — لا تُنشئ صف احتياج، ولا تُعدّل أي عمود قديم أو جديد.
+ *
+ * عمدًا لا تفترض أي قرار اعتماد تلقائي: كل احتياج تاريخي يُصنَّف هنا
+ * "قابل للتحويل" (نوعه يطابق NEW_NEED_DEVICE_TYPES حرفيًا) أو "يتطلب
+ * قرارًا يدويًا" (نص غير مطابق تمامًا، أو نوع تاريخي خارج الثلاثة
+ * الجديدة كـ"مكيف"/"فريزر"/"سخان" — هذه لم تُحذف من REFERENCE_SEED_
+ * DEVICE_TYPES ولن تُحذف، لكنها لا تدخل تلقائيًا في التحويل الجديد).
+ * لا توجد بعد أي دالة "تطبيق" فعلية لهذا التحويل — القاعدة الصريحة
+ * لكيفية تحديد "معتمد تلقائيًا" (إن وُجدت) يجب أن تُعتمَد صراحةً أولًا،
+ * ثم تُكتب دالة تطبيق منفصلة كباقي أنماط هذا الملف.
+ */
+function previewNeedsMigration_(token) {
+  requireMaintenanceAccess_(token);
+  const beneficiaries = readTable_(APP.sheets.beneficiaries).rows;
+  const convertible = [];
+  const needsManualReview = [];
+  let totalLegacyTokens = 0;
+
+  beneficiaries.forEach(row => {
+    const beneficiaryId = String(row['رقم المستفيد']);
+    const legacyNeeds = splitList_(row['الاحتياج']);
+    if (!legacyNeeds.length) return;
+    legacyNeeds.forEach(token => {
+      totalLegacyTokens++;
+      const clean = String(token || '').trim();
+      const entry = {beneficiaryId: beneficiaryId, associationId: String(row['رقم الجمعية']), rawValue: clean};
+      if (NEW_NEED_DEVICE_TYPES.indexOf(clean) !== -1) {
+        convertible.push(Object.assign({deviceType: clean}, entry));
+      } else {
+        needsManualReview.push(Object.assign({
+          reason: REFERENCE_SEED_DEVICE_TYPES.indexOf(clean) !== -1
+            ? 'نوع جهاز تاريخي صالح لكنه خارج الأنواع الثلاثة الجديدة المعتمدة'
+            : 'نص غير مطابق لأي نوع جهاز معروف'
+        }, entry));
+      }
+    });
+  });
+
+  const legacyApprovedStatusCounts = {};
+  beneficiaries.forEach(row => {
+    if (!splitList_(row['الاحتياج']).length) return;
+    const status = String(row['حالة المستفيد'] || '') || '(فارغة)';
+    legacyApprovedStatusCounts[status] = (legacyApprovedStatusCounts[status] || 0) + 1;
+  });
+
+  return {
+    ok: true,
+    generatedAt: formatDateTime_(new Date()),
+    note: 'قراءة فقط — لم يُكتب أو يُعدَّل أي شيء. لا تحويل تلقائي بعد؛ هذا تقرير معاينة فقط.',
+    totalBeneficiariesWithLegacyNeeds: beneficiaries.filter(row => splitList_(row['الاحتياج']).length).length,
+    totalLegacyNeedTokens: totalLegacyTokens,
+    convertibleCount: convertible.length,
+    needsManualReviewCount: needsManualReview.length,
+    convertible: convertible,
+    needsManualReview: needsManualReview,
+    // توزيع "حالة المستفيد" القديمة (BENEFICIARY_STATUSES) بين من لديهم
+    // احتياج نصي قديم — لإطلاع من سيعتمد قاعدة "معتمد تلقائيًا" المستقبلية
+    // على البيانات الفعلية قبل اعتمادها، لا لاتخاذ أي قرار هنا.
+    legacyBeneficiaryStatusDistribution: legacyApprovedStatusCounts
+  };
+}

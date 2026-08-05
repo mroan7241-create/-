@@ -44,6 +44,8 @@ assert('تحت المراجعة → معتمد مسموح', S.assertBeneficiaryR
 assert('تحت المراجعة → مرفوض مسموح', S.assertBeneficiaryReviewTransition_('تحت المراجعة', 'مرفوض'));
 throws('معتمد → مرفوض ممنوع (حالة نهائية)', () => S.assertBeneficiaryReviewTransition_('معتمد', 'مرفوض'), 'غير مسموح');
 throws('مرفوض → معتمد ممنوع (حالة نهائية)', () => S.assertBeneficiaryReviewTransition_('مرفوض', 'معتمد'), 'غير مسموح');
+throws('معتمد → معتمد ممنوع (منع تنفيذ قرار الاعتماد مرتين، لا حلقة ذاتية على حالة نهائية)', () => S.assertBeneficiaryReviewTransition_('معتمد', 'معتمد'), 'غير مسموح');
+throws('مرفوض → مرفوض ممنوع (نفس المبدأ)', () => S.assertBeneficiaryReviewTransition_('مرفوض', 'مرفوض'), 'غير مسموح');
 throws('حالة غير معروفة تُرفض', () => S.assertBeneficiaryReviewTransition_('تحت المراجعة', 'شيء غريب'), 'غير معروفة');
 
 console.log('\n2) حالة قرار الاحتياج الواحد');

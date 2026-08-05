@@ -25,6 +25,7 @@ const GS_FILES_ORDER = [
   'Auth.gs',
   'Bootstrap.gs',
   'Beneficiaries.gs',
+  'BeneficiaryNeeds.gs',
   'ExcelTemplate.gs',
   'Delegates.gs',
   'DevicesAssociations.gs',

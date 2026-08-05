@@ -265,7 +265,8 @@ const ID_PREFIX_SOURCES_ = Object.freeze({
   MND: {sheet: 'المناديب', column: 'رقم المندوب'},
   DLV: {sheet: 'التسليمات', column: 'رقم التسليم'},
   USR: {sheet: 'المستخدمون', column: 'رقم المستخدم'},
-  REF: {sheet: 'البيانات المرجعية', column: 'المعرف'}
+  REF: {sheet: 'البيانات المرجعية', column: 'المعرف'},
+  NEED: {sheet: 'احتياجات المستفيدين', column: 'رقم الاحتياج'}
 });
 
 /**
