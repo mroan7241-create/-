@@ -180,7 +180,10 @@ function saveBeneficiary(token, payload) {
       if (!Array.isArray(payload.deviceTypes) || !payload.deviceTypes.length) {
         throw new Error('اختر احتياجًا واحدًا على الأقل من النموذج الجديد.');
       }
-      return createBeneficiaryWithNeeds_(user, payload);
+      // Phase 2.3.3 (القسم 7): opId اختياري عبر runLockedIdempotent_ — نفس
+      // نطاق العملية المستخدَم في saveBeneficiaryWithNeeds (BeneficiaryNeeds.gs)
+      // حتى تُعامَل إعادة المحاولة بنفس opId من أي من المسارين كعملية واحدة.
+      return runLockedIdempotent_('createBeneficiaryWithNeeds', user.id, payload.opId, () => createBeneficiaryWithNeeds_(user, payload));
     }
     return saveBeneficiary_(user, payload);
   });
@@ -346,7 +349,7 @@ function saveBeneficiary_(user, payload, options) {
  * جمعيتها دائمًا؛ أي associationId آخر تُرسله يُتجاهَل كليًا — لا مسار
  * لاستيراد نيابة عن جمعية أخرى.
  */
-function importBeneficiaries(token, rows, acceptedPledge, associationId) {
+function importBeneficiaries(token, rows, acceptedPledge, associationId, opId) {
   const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
   if (acceptedPledge !== true) throw new Error('يجب الموافقة على التعهد قبل الاستيراد');
   if (!Array.isArray(rows) || rows.length === 0 || rows.length > 1000) throw new Error('الملف فارغ أو يتجاوز 1000 سجل');
@@ -362,70 +365,74 @@ function importBeneficiaries(token, rows, acceptedPledge, associationId) {
     if (String(assocRow['الحالة']) === 'غير نشطة') throw new Error('الجمعية المحدَّدة غير نشطة — لا يمكن الاستيراد لها');
   }
 
-  const validBeneficiaries = [];
-  const validRowMeta = []; // موازٍ لـvalidBeneficiaries: {associationId, deviceTypes}
-  const errors = [];
-  // يتتبّع أرقام الجوال ضمن الملف نفسه (لكل جمعية على حدة) لاكتشاف تكرار
-  // بين صفوف الملف الواحد، بالإضافة إلى فحص السجلات الموجودة مسبقًا في الجدول.
-  const seenPhones = Object.create(null);
-  rows.forEach((row, index) => {
-    try {
-      const associationId = resolvedAssociationId;
-      const place = validateRegionCity_(row.region, row.city);
-      const coordinates = optionalCoordinate_(row.lat, row.lng);
-      const hasCoordinates = coordinates.lat !== '';
-      const phone = normalizePhone_(row.phone);
-      const phoneKey = associationId + '|' + phone;
-      if (seenPhones[phoneKey]) {
-        throw new Error('رقم الجوال مكرر مع الصف رقم ' + seenPhones[phoneKey] + ' داخل الملف نفسه');
+  // Phase 2.3.3 (القسم 7): كل التحقق من صحة الصفوف (بما فيه فحص تكرار
+  // رقم الجوال ضد السجلات الموجودة فعليًا) انتقل **داخل** runLockedIdempotent_
+  // — لو بقي خارجها، فإعادة نفس الطلب بنفس opId بعد نجاح الدفعة الأولى
+  // فعليًا كانت سترى السجلات المستوردة حديثًا وترفض الصفوف بخطأ "تكرار
+  // جوال" زائف بدل إعادة نتيجة النجاح الأصلية من الكاش. الآن: عند وجود
+  // opId ونتيجة مخزَّنة سلفًا، لا يُعاد فحص الصفوف إطلاقًا.
+  return runLockedIdempotent_('importBeneficiaries:' + resolvedAssociationId, user.id, opId, () => {
+    const validBeneficiaries = [];
+    const validRowMeta = []; // موازٍ لـvalidBeneficiaries: {associationId, deviceTypes}
+    const errors = [];
+    // يتتبّع أرقام الجوال ضمن الملف نفسه (لكل جمعية على حدة) لاكتشاف تكرار
+    // بين صفوف الملف الواحد، بالإضافة إلى فحص السجلات الموجودة مسبقًا في الجدول.
+    const seenPhones = Object.create(null);
+    rows.forEach((row, index) => {
+      try {
+        const associationId = resolvedAssociationId;
+        const place = validateRegionCity_(row.region, row.city);
+        const coordinates = optionalCoordinate_(row.lat, row.lng);
+        const hasCoordinates = coordinates.lat !== '';
+        const phone = normalizePhone_(row.phone);
+        const phoneKey = associationId + '|' + phone;
+        if (seenPhones[phoneKey]) {
+          throw new Error('رقم الجوال مكرر مع الصف رقم ' + seenPhones[phoneKey] + ' داخل الملف نفسه');
+        }
+        if (findConfirmedDuplicateBeneficiary_(associationId, phone, null)) {
+          throw new Error('يوجد مستفيد بنفس رقم الجوال لدى هذه الجمعية بالفعل — لن يتم استيراد هذا الصف');
+        }
+        seenPhones[phoneKey] = index + 2;
+        // يرمي خطأً صريحًا باسم النوع ورقم الصف عند أي نوع غير معروف أو
+        // خارج الأنواع الثلاثة — لا يتجاهله ويقبل بقية الصف (نفس التحقق
+        // الموحَّد المستخدَم في كل مسارات الإنشاء الجديدة).
+        const deviceTypes = parseDeviceTypesFromLegacyText_(row.needs);
+        validBeneficiaries.push({
+          'رقم المستفيد': '',
+          'رقم الجمعية': associationId,
+          'الاسم': requiredText_(row.name, 'الاسم', 120),
+          'المنطقة': place.region,
+          'المدينة': place.city,
+          'الحي': requiredText_(row.district, 'الحي', 120),
+          'العنوان': requiredText_(row.address, 'العنوان', 250),
+          'رقم الجوال': phone,
+          'رقم جوال إضافي': row.phone2 ? normalizePhone_(row.phone2) : '',
+          'عدد الأفراد': boundedNumber_(row.familyCount, 1, 99, 'عدد الأفراد'),
+          'ضمان اجتماعي': row.socialSecurity === true || row.socialSecurity === 'نعم' ? 'نعم' : 'لا',
+          'الحالة الاجتماعية': validateSocialStatus_(row.socialStatus),
+          'مبلغ الدخل': boundedNumber_(row.income || 0, 0, 1000000, 'مبلغ الدخل'),
+          'حالة المستفيد': 'جديد',
+          'حالة التسليم': 'لم يبدأ',
+          'رقم المندوب': '',
+          'الملاحظات': cleanText_(row.notes, 1000),
+          'تاريخ الإنشاء': now_(),
+          'تاريخ التسليم': '',
+          'آخر تحديث': now_(),
+          'خط العرض': coordinates.lat,
+          'خط الطول': coordinates.lng,
+          'علامة مميزة': cleanText_(row.landmark, 200),
+          'مصدر الموقع': hasCoordinates ? 'استيراد' : '',
+          'تاريخ تحديث الموقع': hasCoordinates ? now_() : '',
+          'حالة مراجعة المستفيد': 'تحت المراجعة'
+        });
+        validRowMeta.push({associationId: associationId, deviceTypes: deviceTypes});
+      } catch (error) {
+        errors.push({row: index + 2, message: error.message});
       }
-      if (findConfirmedDuplicateBeneficiary_(associationId, phone, null)) {
-        throw new Error('يوجد مستفيد بنفس رقم الجوال لدى هذه الجمعية بالفعل — لن يتم استيراد هذا الصف');
-      }
-      seenPhones[phoneKey] = index + 2;
-      // يرمي خطأً صريحًا باسم النوع ورقم الصف عند أي نوع غير معروف أو
-      // خارج الأنواع الثلاثة — لا يتجاهله ويقبل بقية الصف (نفس التحقق
-      // الموحَّد المستخدَم في كل مسارات الإنشاء الجديدة).
-      const deviceTypes = parseDeviceTypesFromLegacyText_(row.needs);
-      validBeneficiaries.push({
-        'رقم المستفيد': '',
-        'رقم الجمعية': associationId,
-        'الاسم': requiredText_(row.name, 'الاسم', 120),
-        'المنطقة': place.region,
-        'المدينة': place.city,
-        'الحي': requiredText_(row.district, 'الحي', 120),
-        'العنوان': requiredText_(row.address, 'العنوان', 250),
-        'رقم الجوال': phone,
-        'رقم جوال إضافي': row.phone2 ? normalizePhone_(row.phone2) : '',
-        'عدد الأفراد': boundedNumber_(row.familyCount, 1, 99, 'عدد الأفراد'),
-        'ضمان اجتماعي': row.socialSecurity === true || row.socialSecurity === 'نعم' ? 'نعم' : 'لا',
-        'الحالة الاجتماعية': validateSocialStatus_(row.socialStatus),
-        'مبلغ الدخل': boundedNumber_(row.income || 0, 0, 1000000, 'مبلغ الدخل'),
-        'حالة المستفيد': 'جديد',
-        'حالة التسليم': 'لم يبدأ',
-        'رقم المندوب': '',
-        'الملاحظات': cleanText_(row.notes, 1000),
-        'تاريخ الإنشاء': now_(),
-        'تاريخ التسليم': '',
-        'آخر تحديث': now_(),
-        'خط العرض': coordinates.lat,
-        'خط الطول': coordinates.lng,
-        'علامة مميزة': cleanText_(row.landmark, 200),
-        'مصدر الموقع': hasCoordinates ? 'استيراد' : '',
-        'تاريخ تحديث الموقع': hasCoordinates ? now_() : '',
-        'حالة مراجعة المستفيد': 'تحت المراجعة'
-      });
-      validRowMeta.push({associationId: associationId, deviceTypes: deviceTypes});
-    } catch (error) {
-      errors.push({row: index + 2, message: error.message});
-    }
-  });
-  if (errors.length) return {ok: false, validCount: validBeneficiaries.length, errorCount: errors.length, errors: errors.slice(0, 50)};
+    });
+    if (errors.length) return {ok: false, validCount: validBeneficiaries.length, errorCount: errors.length, errors: errors.slice(0, 50)};
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
-  let generatedNeedIds = [];
-  try {
+    const generatedNeedIds = [];
     // إبطال ذاكرة الجدول المخزَّنة لهذا الطلب قبل إعادة الفحص: بدون هذا،
     // قد تُعاد قراءة لقطة سابقة على الانتظار للقفل نفسه، فيفوّت فحص
     // السباق تكرارًا كتبه تنفيذ آخر أثناء الانتظار.
@@ -473,30 +480,29 @@ function importBeneficiaries(token, rows, acceptedPledge, associationId) {
       }
       throw new Error('تعذّر إتمام الاستيراد: ' + writeError.message + ' — لم يُكتب أي سجل من هذه الدفعة (لا نجاح جزئي).');
     }
-  } finally {
-    lock.releaseLock();
-  }
-  clearDashboardCache();
-  // فشل تسجيل audit بعد نجاح الاستيراد فعليًا لا يُعتبر فشلًا للعملية —
-  // البيانات الأساسية اكتملت وصحيحة؛ فقط سجل العمليات قد يفوّت هذه الحركة.
-  try {
-    audit_(user, 'استيراد مستفيدين', 'المستفيدون', '', 'عدد السجلات: ' + validBeneficiaries.length);
-  } catch (auditError) {
-    Logger.log('تحذير: فشل تسجيل العملية في سجل العمليات بعد نجاح الاستيراد فعليًا — traceId=' + requestMeta_().traceId + ' — ' + auditError.message);
-  }
-  // لا تُعاد السجلات المستوردة كاملة (قد تصل لألف سجل) — الواجهة تُعيد
-  // طلب صفحة المستفيدين الأولى بعد نجاح الاستيراد بدلًا من ذلك.
-  // Phase 2.3.2 (القسم 6): الدفعة كُتبت فعليًا ونجحت في هذه اللحظة —
-  // فشل computeCoreSummary_ بعدها لا يجوز أن يجعل المستخدم يظن أن
-  // الاستيراد فشل فيعيد رفع نفس الملف (تكرار غير ضروري)؛ تُعاد استجابة
-  // نجاح دنيا صريحة بدل رمي استثناء.
-  try {
-    const summary = computeCoreSummary_(user.role === 'ASSOCIATION' ? user.associationId : null);
-    return {ok: true, imported: validBeneficiaries.length, summary: summary};
-  } catch (summaryError) {
-    Logger.log('تحذير: نجح الاستيراد فعليًا لكن فشل حساب ملخّص لوحة التحكم بعده — traceId=' + requestMeta_().traceId + ' — ' + summaryError.message);
-    return {ok: true, imported: validBeneficiaries.length, refreshRequired: true};
-  }
+
+    clearDashboardCache();
+    // فشل تسجيل audit بعد نجاح الاستيراد فعليًا لا يُعتبر فشلًا للعملية —
+    // البيانات الأساسية اكتملت وصحيحة؛ فقط سجل العمليات قد يفوّت هذه الحركة.
+    try {
+      audit_(user, 'استيراد مستفيدين', 'المستفيدون', '', 'عدد السجلات: ' + validBeneficiaries.length);
+    } catch (auditError) {
+      Logger.log('تحذير: فشل تسجيل العملية في سجل العمليات بعد نجاح الاستيراد فعليًا — traceId=' + requestMeta_().traceId + ' — ' + auditError.message);
+    }
+    // لا تُعاد السجلات المستوردة كاملة (قد تصل لألف سجل) — الواجهة تُعيد
+    // طلب صفحة المستفيدين الأولى بعد نجاح الاستيراد بدلًا من ذلك.
+    // Phase 2.3.2 (القسم 6): الدفعة كُتبت فعليًا ونجحت في هذه اللحظة —
+    // فشل computeCoreSummary_ بعدها لا يجوز أن يجعل المستخدم يظن أن
+    // الاستيراد فشل فيعيد رفع نفس الملف (تكرار غير ضروري)؛ تُعاد استجابة
+    // نجاح دنيا صريحة بدل رمي استثناء.
+    try {
+      const summary = computeCoreSummary_(user.role === 'ASSOCIATION' ? user.associationId : null);
+      return {ok: true, imported: validBeneficiaries.length, summary: summary};
+    } catch (summaryError) {
+      Logger.log('تحذير: نجح الاستيراد فعليًا لكن فشل حساب ملخّص لوحة التحكم بعده — traceId=' + requestMeta_().traceId + ' — ' + summaryError.message);
+      return {ok: true, imported: validBeneficiaries.length, refreshRequired: true};
+    }
+  });
 }
 
 /**
@@ -636,7 +642,7 @@ function inspectBeneficiaryExcel(token, payload) {
  * هذان الانتقالان يخصّان مرحلة استلام المندوب للأجهزة فعليًا (endpoint
  * مستقل لاحق مثل startDelivery/confirmDevicePickup — لم يُنشأ بعد
  * عمدًا). هنا فقط: يُسجَّل رقم المندوب، وتنتقل حالة تنفيذ كل احتياج
- * معتمد جاهز إلى "معيّن للمندوب — بانتظار التنفيذ" عبر assertNeedFulfillmentChain_
+ * معتمد جاهز إلى "معيّن للمندوب — بانتظار التنفيذ" عبر assertDelegateAssignFulfillment_
  * المركزية (لا اختصار)، وتنتقل حالة تسليم المستفيد إلى "جاري التجهيز"
  * فقط. opId اختياري (Phase 2.3.1 القسم 3): يمرّ عبر runLockedIdempotent_
  * بنطاق مُقيَّد بالمستفيد — إعادة الطلب نفسه بعد timeout تُعيد نفس
@@ -732,10 +738,11 @@ function assignDelegate_(user, beneficiaryId, delegateId) {
     return {needId: needId, fulfillmentStatus: fulfillmentStatus};
   });
 
-  // يتحقق من صحة سلسلة الانتقال الكاملة قبل أي كتابة (StateRules.gs
-  // المركزية عبر assertNeedFulfillmentChain_ — لا اختصار يتجاوزها).
+  // يتحقق من صحة الانتقال قبل أي كتابة عبر مسار صريح مخصَّص لعملية
+  // تعيين المندوب تحديدًا (Phase 2.3.3 القسم 5 — StateRules.gs المركزية،
+  // لا بحث عام يتجاوزها).
   readyNeeds.forEach(need => {
-    assertNeedFulfillmentChain_(need.fulfillmentStatus, 'معيّن للمندوب — بانتظار التنفيذ');
+    assertDelegateAssignFulfillment_(need.fulfillmentStatus);
   });
   // حالة تسليم المستفيد: "لم يبدأ" → "جاري التجهيز" فقط (تعيين، لا
   // خروج فعلي)، أو حلقة ذاتية إن كانت "جاري التجهيز" أصلًا (إعادة تعيين).

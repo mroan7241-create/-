@@ -10,12 +10,15 @@
 //                  ↘ (رجوع للمستودع)      ↘ (تعذّر التسليم: يبقى مع المندوب)
 //   أي حالة (عدا تم التسليم) → تالف
 //
-// دورة حياة حالة التسليم للمستفيد المعتمدة:
-//   لم يبدأ → خرج مع المندوب → تم التسليم
-//   (جاري التجهيز) حالة وسيطة اختيارية قبل الخروج مع مندوب، لم تعد
-//   تُستخدم فعليًا من أي مسار حالي (assignDelegate ينقل مباشرة من "لم
-//   يبدأ" إلى "خرج مع المندوب" بمجرد تخصيص جهاز وتعيين مندوب)، لكنها
-//   أُبقيت في القائمة لتوافق البيانات القديمة/المستوردة.
+// دورة حياة حالة التسليم للمستفيد المعتمدة (محدَّثة — Phase 2.3 التصحيح
+// الوظيفي + Phase 2.3.3 القسم 6): assignDelegate يُنفِّذ حصرًا مرحلة
+// "التعيين" — يضبط حالة التسليم على "جاري التجهيز" فقط، ولا يحرِّك أي
+// جهاز إلى "مع المندوب" ولا حالة تنفيذ احتياج إلى "خرج مع المندوب".
+// "خرج مع المندوب" و"مع المندوب" (حالة الجهاز) لا تُكتَبان إلا عبر
+// مسار استلام/عهدة فعلية مستقل (endpoint لاحق مثل startDelivery/
+// confirmDevicePickup — Phase 3، لم يُنشأ بعد عمدًا):
+//   لم يبدأ → جاري التجهيز (assignDelegate) → خرج مع المندوب (استلام
+//   فعلي لاحق) → تم التسليم
 //                                        ↘ تعذر التسليم → خرج مع المندوب (إعادة محاولة)
 //
 // كل الانتقالات "من الحالة نفسها إلى نفسها" مسموحة دائمًا (لا تُغيّر شيئًا).
@@ -255,7 +258,12 @@ const NEED_FULFILLMENT_TRANSITIONS_ = Object.freeze({
   // احتياج "جهاز جاهز"/"بانتظار تعيين مندوب" خطوة للخلف عبر assert
   // حقيقي بدل الكتابة المباشرة القديمة.
   'جهاز جاهز': ['جهاز جاهز', 'بانتظار تعيين مندوب', 'بانتظار توفر الجهاز'],
-  'بانتظار تعيين مندوب': ['بانتظار تعيين مندوب', 'معيّن للمندوب — بانتظار التنفيذ', 'بانتظار توفر الجهاز'],
+  // Phase 2.3.3 (القسم 2): انتقال تراجُع جماعي صريح مباشر — عندما يفقد
+  // مستفيدٌ جاهزيته الجماعية (فكّ ربط جهاز احتياج واحد بعد اكتمال
+  // المجموعة) يجب أن تتراجع بقية احتياجاته "بانتظار تعيين مندوب" إلى
+  // "جهاز جاهز" مباشرة — لا عبر "بانتظار توفر الجهاز" (فهي لا تزال
+  // مرتبطة بجهاز صالح فعليًا، فقط المجموعة لم تعد مكتملة).
+  'بانتظار تعيين مندوب': ['بانتظار تعيين مندوب', 'معيّن للمندوب — بانتظار التنفيذ', 'بانتظار توفر الجهاز', 'جهاز جاهز'],
   'معيّن للمندوب — بانتظار التنفيذ': ['معيّن للمندوب — بانتظار التنفيذ', 'خرج مع المندوب'],
   'خرج مع المندوب': ['خرج مع المندوب', 'تم التسليم', 'مؤجل', 'بانتظار تأكيد الإرجاع'],
   'مؤجل': ['مؤجل', 'خرج مع المندوب'],
@@ -307,43 +315,97 @@ function assertNeedFulfillmentTransition_(fromStatus, toStatus) {
 }
 
 /**
- * Phase 2.3.1 (القسم 7): يتحقق من سلسلة انتقال كاملة لحالة تنفيذ
- * الاحتياج — قفزة واحدة مباشرة، أو قفزتان عبر حالة وسيطة واحدة معروفة
- * ضمن NEED_FULFILLMENT_TRANSITIONS_ — بدل أن يكتب أي مسار في المشروع
- * الحالة النهائية مباشرة متجاوزًا الحالات الوسيطة دون أي assert. يرمي
- * إن لم يوجد مسار قصير (قفزة أو قفزتان) بين الحالتين — لا يبحث عن
- * مسارات أطول عمدًا، فكل الاستخدامات الفعلية في هذا المشروع قفزة واحدة
- * أو قفزتان فقط؛ مسار أطول يعني خطأً منطقيًا في الاستدعاء نفسه.
+ * Phase 2.3.3 (القسم 5): يتحقق من مسار انتقال **صريح** مُعطى مسبقًا من
+ * المستدعي (لا بحث تلقائي عن أي مسار موجود في الرسم). كل قفزة على
+ * الطريق تُحقَّق عبر assertNeedFulfillmentTransition_ نفسها — لا اختصار
+ * يتجاوزها. هذا يحلّ محل البحث العرضي (BFS) العام الذي كان قائمًا في
+ * Phase 2.3.2 (assertNeedFulfillmentChain_، أُزيلت): بحث عام على رسم
+ * يحوي انتقالات عكسية/حلقات قد "يثبت" مسارًا نظريًا غير مقصود لعملية
+ * بعينها حتى لو كان كل قفزة على حدة مسموحة رسميًا — كل عملية في هذا
+ * الملف يجب أن تُعلن مسارها المقصود صراحة عبر الدوال المُسمّاة أدناه.
  */
-function assertNeedFulfillmentChain_(fromStatus, toStatus) {
+function assertNeedFulfillmentPath_(fromStatus, explicitPath) {
   fromStatus = String(fromStatus || '');
-  toStatus = String(toStatus || '');
-  if (fromStatus === toStatus) { assertNeedFulfillmentTransition_(fromStatus, toStatus); return; }
-  // Phase 2.3.2: بحث عرضي (BFS) عام على رسم NEED_FULFILLMENT_TRANSITIONS_
-  // الصغير الثابت — القفزتان لم تعودا كافيتين وحدهما بعد دمج التقدُّم
-  // الجماعي (مثال حقيقي: "استحقاق معتمد" ← "بانتظار تعيين مندوب" ثلاث
-  // قفزات). يتحقق أن كل قفزة على المسار الموجود مسموحة فعليًا عبر
-  // assertNeedFulfillmentTransition_ نفسها — لا اختصار يتجاوزها.
-  const queue = [[fromStatus]];
-  const visited = {};
-  visited[fromStatus] = true;
-  let path = null;
-  while (queue.length) {
-    const current = queue.shift();
-    const last = current[current.length - 1];
-    const nextStates = NEED_FULFILLMENT_TRANSITIONS_[last] || [];
-    for (let i = 0; i < nextStates.length; i++) {
-      const next = nextStates[i];
-      if (next === last) continue; // تجاهل الحلقات الذاتية عند البحث عن مسار تقدُّمي
-      if (next === toStatus) { path = current.concat([next]); break; }
-      if (!visited[next]) { visited[next] = true; queue.push(current.concat([next])); }
-    }
-    if (path) break;
+  if (!explicitPath || !explicitPath.length) {
+    throw new Error('مسار انتقال حالة تنفيذ الاحتياج فارغ — من «' + fromStatus + '»');
   }
+  let current = fromStatus;
+  for (let i = 0; i < explicitPath.length; i++) {
+    const next = String(explicitPath[i]);
+    assertNeedFulfillmentTransition_(current, next);
+    current = next;
+  }
+}
+
+/**
+ * مسار ربط جهاز باحتياج (saveDevice/linkDeviceToNeed): من أي حالة
+ * ابتدائية معروفة تنتهي عند "جهاز جاهز" فقط — لا يُسمح بأي حالة ابتدائية
+ * أخرى (مثل حالات ما بعد التعيين/الخروج مع مندوب) عبر هذا المسار إطلاقًا.
+ */
+const DEVICE_LINK_FULFILLMENT_PATHS_ = Object.freeze({
+  'استحقاق معتمد': ['بانتظار توفر الجهاز', 'جهاز جاهز'],
+  'بانتظار توفر الجهاز': ['جهاز جاهز'],
+  'جهاز جاهز': ['جهاز جاهز']
+});
+function assertDeviceLinkFulfillment_(fromStatus) {
+  const path = DEVICE_LINK_FULFILLMENT_PATHS_[String(fromStatus || '')];
   if (!path) {
-    throw new Error('انتقال غير مسموح لحالة تنفيذ الاحتياج: من «' + fromStatus + '» إلى «' + toStatus + '» (لا مسار معروف)');
+    throw new Error('انتقال غير مسموح لحالة تنفيذ الاحتياج: لا يمكن ربط جهاز لاحتياج حالته الحالية «' + fromStatus + '»');
   }
-  for (let i = 0; i < path.length - 1; i++) {
-    assertNeedFulfillmentTransition_(path[i], path[i + 1]);
+  assertNeedFulfillmentPath_(fromStatus, path);
+}
+
+/** مسار اكتمال المجموعة (كل احتياجات المستفيد المعتمدة جاهزة معًا): قفزة واحدة فقط من "جهاز جاهز". */
+function assertGroupCompletionFulfillment_(fromStatus) {
+  if (String(fromStatus || '') !== 'جهاز جاهز') {
+    throw new Error('انتقال غير مسموح لحالة تنفيذ الاحتياج: تقدُّم جماعي لاحتياج حالته الحالية «' + fromStatus + '» غير مسموح');
   }
+  assertNeedFulfillmentPath_(fromStatus, ['بانتظار تعيين مندوب']);
+}
+
+/**
+ * مسار مركَّب: ربط جهاز باحتياج ثم اكتمال المجموعة الجماعي في نفس
+ * الكتابة (الاحتياج الأساسي نفسه وصل لتوّه "جهاز جاهز" فأكمل المجموعة
+ * فورًا) — يمتد مسار الربط المعروف بقفزة أخيرة إلى "بانتظار تعيين مندوب".
+ */
+function assertLinkAndGroupCompleteFulfillment_(fromStatus) {
+  const linkPath = DEVICE_LINK_FULFILLMENT_PATHS_[String(fromStatus || '')];
+  if (!linkPath) {
+    throw new Error('انتقال غير مسموح لحالة تنفيذ الاحتياج: لا يمكن ربط جهاز مع اكتمال جماعي لاحتياج حالته الحالية «' + fromStatus + '»');
+  }
+  assertNeedFulfillmentPath_(fromStatus, linkPath.concat(['بانتظار تعيين مندوب']));
+}
+
+/**
+ * مسار تراجُع المجموعة (Phase 2.3.3 القسم 2): فقدان الجاهزية الجماعية
+ * بعد فكّ ربط جهاز احتياج آخر — قفزة واحدة فقط من "بانتظار تعيين مندوب"
+ * إلى "جهاز جاهز"، ولا يجوز إطلاقًا لاحتياج تجاوز هذه الحالة (وصل فعليًا
+ * إلى "معيّن للمندوب — بانتظار التنفيذ" أو أبعد).
+ */
+function assertGroupRegressionFulfillment_(fromStatus) {
+  if (String(fromStatus || '') !== 'بانتظار تعيين مندوب') {
+    throw new Error('انتقال غير مسموح لحالة تنفيذ الاحتياج: تراجُع جماعي لاحتياج حالته الحالية «' + fromStatus + '» غير مسموح');
+  }
+  assertNeedFulfillmentPath_(fromStatus, ['جهاز جاهز']);
+}
+
+/** مسار فكّ ربط جهاز عن احتياج: فقط من "جهاز جاهز" أو "بانتظار تعيين مندوب" إلى "بانتظار توفر الجهاز". */
+function assertDeviceUnlinkFulfillment_(fromStatus) {
+  if (['جهاز جاهز', 'بانتظار تعيين مندوب'].indexOf(String(fromStatus || '')) === -1) {
+    throw new Error('انتقال غير مسموح لحالة تنفيذ الاحتياج: لا يمكن فكّ ربط جهاز لاحتياج حالته الحالية «' + fromStatus + '»');
+  }
+  assertNeedFulfillmentPath_(fromStatus, ['بانتظار توفر الجهاز']);
+}
+
+/**
+ * مسار تعيين مندوب (assignDelegate): من "جهاز جاهز"/"بانتظار تعيين
+ * مندوب" إلى "معيّن للمندوب — بانتظار التنفيذ"، أو حلقة ذاتية عليها
+ * (إعادة تعيين مندوب قبل بدء الاستلام الفعلي — آمنة ومسموحة صراحة).
+ */
+function assertDelegateAssignFulfillment_(fromStatus) {
+  const allowed = ['جهاز جاهز', 'بانتظار تعيين مندوب', 'معيّن للمندوب — بانتظار التنفيذ'];
+  if (allowed.indexOf(String(fromStatus || '')) === -1) {
+    throw new Error('انتقال غير مسموح لحالة تنفيذ الاحتياج: لا يمكن تعيين مندوب لاحتياج حالته الحالية «' + fromStatus + '»');
+  }
+  assertNeedFulfillmentPath_(fromStatus, ['معيّن للمندوب — بانتظار التنفيذ']);
 }

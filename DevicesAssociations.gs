@@ -1,8 +1,10 @@
 // -------------------- الأجهزة والجمعيات --------------------
 
 // حالتا "مع المندوب" و"تم التسليم" لا تُضبَطان يدويًا من هذا النموذج
-// إطلاقًا — لا تصلان إلا عبر assignDelegate وconfirmDelivery، حتى لا
-// ينكسر الترابط بتعديل مستقل من صفحة الأجهزة (راجع StateRules.gs).
+// إطلاقًا. assignDelegate (بعد تصحيح Phase 2.3) لا يصل إليهما — فقط
+// مسار استلام/عهدة فعلية مستقل (Phase 3، لم يُنشأ بعد) يصل إلى "مع
+// المندوب"، وconfirmDelivery يصل إلى "تم التسليم" بعده. لا تُضبطان من
+// هنا حتى لا ينكسر الترابط بتعديل مستقل من صفحة الأجهزة (راجع StateRules.gs).
 const DEVICE_MANUAL_STATUSES_ = Object.freeze(['بالمستودع', 'مخصص', 'تالف']);
 
 /** قائمة أجهزة مُرقَّمة — عزل الجمعيات مفروض قبل أي بحث أو ترقيم. */
@@ -53,7 +55,7 @@ function listAssociations_(user, options) {
  * عهدة فعلية ("مع المندوب"/"تم التسليم") محمي بالكامل من أي تعديل رابط
  * أو حالة عبر هذا المسار (القسم 5). الربط وفكّ الربط معاملتان مترابطتان
  * (جهاز + احتياج) بلقطة خام وتراجع best-effort (القسم 6)، وكل انتقال
- * لحالة تنفيذ الاحتياج يمرّ عبر assertNeedFulfillmentChain_ المركزية
+ * لحالة تنفيذ الاحتياج يمرّ عبر مسار صريح مخصَّص (StateRules.gs، Phase 2.3.3)
  * (القسم 7). opId اختياري يمرّ عبر runLockedIdempotent_ (القسم 3).
  */
 function saveDevice(token, payload) {
@@ -157,7 +159,7 @@ function saveDevice_(user, payload) {
 
     if (currentBeneficiaryId && currentNeedId) {
       // إرجاع جهاز كان مرتبطًا: معاملة مترابطة (جهاز + احتياج) بتراجع
-      // مشترك، وإعادة حالة تنفيذ الاحتياج عبر assertNeedFulfillmentChain_
+      // مشترك، وإعادة حالة تنفيذ الاحتياج عبر مسار فكّ الربط الصريح
       // (القسم 6+7) — لا كتابة مباشرة لـ"حالة التنفيذ" بعد الآن.
       return commitDeviceWithNeed_(user, {
         id: id, isNew: false, values: values, beneficiaryId: currentBeneficiaryId,
@@ -182,7 +184,8 @@ function saveDevice_(user, payload) {
     throw new Error('هذا الجهاز مخصَّص لمستفيد آخر حاليًا؛ أعده إلى المستودع أولًا قبل تخصيصه لمستفيد جديد');
   }
   // "مع المندوب"/"تم التسليم" تبقيان محظورتين يدويًا من هذا النموذج
-  // بصرف النظر عن مسار الربط — لا تُحدَّثان إلا عبر assignDelegate/confirmDelivery.
+  // بصرف النظر عن مسار الربط — لا تُحدَّثان إلا عبر مسار استلام/عهدة
+  // فعلية مستقل (Phase 3)/confirmDelivery، وليس assignDelegate.
   if (payload.status && payload.status !== currentStatus
     && DEVICE_MANUAL_STATUSES_.indexOf(payload.status) === -1 && DEVICE_STATUSES.indexOf(payload.status) >= 0) {
     throw new Error('لا يمكن ضبط حالة "' + payload.status + '" يدويًا؛ تُحدَّث فقط عبر تعيين المندوب أو تأكيد التسليم');
@@ -273,16 +276,49 @@ function saveDeviceDescriptiveOnly_(user, id, existing, payload) {
     'رقم المستفيد': existing['رقم المستفيد'], 'رقم الاحتياج': existing['رقم الاحتياج'],
     'حالة الجهاز': existing['حالة الجهاز'], 'ملاحظات': cleanText_(payload.notes, 500)
   };
-  updateById_(APP.sheets.devices, 'رقم الجهاز', id, values);
+
+  // Phase 2.3.3 (القسم 3): نفس ضمانات كل معاملة حرجة أخرى في المشروع —
+  // لقطة خام كاملة قبل الكتابة، وتسجيل "محاولة" قبل استدعاء updateById_
+  // لا بعده (حتى لو فشلت الكتابة الأولى نفسها جزئيًا، يُحاول تراجعها).
+  const deviceSnapshot = Object.assign({}, existing);
+  let deviceAttempted = false;
+  try {
+    deviceAttempted = true;
+    updateById_(APP.sheets.devices, 'رقم الجهاز', id, values);
+  } catch (writeError) {
+    const traceId = requestMeta_().traceId;
+    let restoredOk = false;
+    let rollbackErrorMessage = '';
+    if (deviceAttempted) {
+      try {
+        updateById_(APP.sheets.devices, 'رقم الجهاز', id, deviceSnapshot);
+        restoredOk = true;
+      } catch (rollbackError) {
+        rollbackErrorMessage = rollbackError.message;
+      }
+    }
+    if (!restoredOk) {
+      Logger.log('حرج جدًا: فشل تراجع التعديل الوصفي لجهاز — traceId=' + traceId + ' deviceId=' + id + ' — تعذّر إعادة: device:' + id + ' (' + rollbackErrorMessage + ') — خطأ الكتابة الأصلي: ' + writeError.message);
+      throw new Error('تعذّر إتمام التعديل الوصفي (traceId: ' + traceId + ') — تعذّر التراجع الكامل، يتطلب مراجعة يدوية فورية للسجل: device:' + id);
+    }
+    throw new Error('تعذّر إتمام التعديل الوصفي (traceId: ' + traceId + ') — أُعيد الجهاز لحالته السابقة تلقائيًا.');
+  }
+
   clearDashboardCache();
   try {
     audit_(user, 'تعديل جهاز', 'الأجهزة', id, 'تعديل وصفي فقط (الجهاز في عهدة المندوب — لا تغيير حالة/ربط)');
   } catch (auditError) {
     Logger.log('تحذير: فشل تسجيل العملية بعد نجاح التعديل الوصفي فعليًا — traceId=' + requestMeta_().traceId + ' — ' + auditError.message);
   }
-  const record = normalizeDevice_(findById_(APP.sheets.devices, 'رقم الجهاز', id));
-  const summary = computeCoreSummary_(null);
-  return {ok: true, id: id, record: record, summary: summary};
+
+  try {
+    const record = normalizeDevice_(findById_(APP.sheets.devices, 'رقم الجهاز', id));
+    const summary = computeCoreSummary_(null);
+    return {ok: true, id: id, record: record, summary: summary};
+  } catch (enrichError) {
+    Logger.log('تحذير: نجح التعديل الوصفي فعليًا لكن فشل بناء استجابة مُثراة — traceId=' + requestMeta_().traceId + ' deviceId=' + id + ' — ' + enrichError.message);
+    return {ok: true, id: id, refreshRequired: true};
+  }
 }
 
 /**
@@ -316,7 +352,16 @@ function commitDeviceWithNeed_(user, spec) {
     ? Object.assign({'رقم الجهاز': spec.id}, spec.values)
     : Object.assign({}, findById_(APP.sheets.devices, 'رقم الجهاز', spec.id), spec.values);
   const needPlans = planNeedTransitionsForDeviceChange_(spec.beneficiaryId || '', spec.primaryNeedId || null, spec.primaryTargetFulfillment || null, plannedDeviceRow);
-  needPlans.forEach(plan => assertNeedFulfillmentChain_(plan.fromStatus, plan.toStatus));
+  // Phase 2.3.3 (القسم 5): كل خطة تُحقَّق عبر المسار الصريح المخصَّص
+  // لنوعها (kind) — لا بحث عام يقبل أي مسار موجود في الرسم.
+  needPlans.forEach(plan => {
+    if (plan.kind === 'link') assertDeviceLinkFulfillment_(plan.fromStatus);
+    else if (plan.kind === 'unlink') assertDeviceUnlinkFulfillment_(plan.fromStatus);
+    else if (plan.kind === 'group-complete') assertGroupCompletionFulfillment_(plan.fromStatus);
+    else if (plan.kind === 'group-regress') assertGroupRegressionFulfillment_(plan.fromStatus);
+    else if (plan.kind === 'link-complete') assertLinkAndGroupCompleteFulfillment_(plan.fromStatus);
+    else throw new Error('نوع خطة انتقال احتياج غير معروف: ' + plan.kind);
+  });
 
   // -------- (2) لقطات خام كاملة --------
   const deviceSnapshot = spec.isNew ? null : Object.assign({}, findById_(APP.sheets.devices, 'رقم الجهاز', spec.id));

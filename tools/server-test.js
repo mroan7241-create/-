@@ -828,10 +828,13 @@ assert('saveBeneficiary يعيد فحص التكرار المؤكَّد داخل
 })());
 
 assert('importBeneficiaries يعيد فحص التكرار المؤكَّد داخل قفل قبل الكتابة الفعلية لمنع سباق التزامن بين استيرادين متزامنين', (() => {
+  // Phase 2.3.3 (القسم 7): القفل اليدوي المباشر استُبدل بـrunLockedIdempotent_
+  // (التي تُمسك ScriptLock بنفسها) لدعم opId اختياري — السلوك المُختبَر
+  // (قفل + إعادة فحص التكرار قبل الكتابة) لم يتغيّر، فقط آلية إمساك القفل.
   const start = source.indexOf('function importBeneficiaries(');
   const end = source.indexOf('\nfunction ', start + 10);
   const body = source.slice(start, end === -1 ? start + 4000 : end);
-  return /LockService\.getScriptLock\(\)/.test(body) && /raceDuplicate/.test(body);
+  return /runLockedIdempotent_\(/.test(body) && /raceDuplicate/.test(body);
 })());
 
 /* -------- 19) قالب Excel حقيقي (.xlsx) -------- */
