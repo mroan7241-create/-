@@ -616,18 +616,22 @@ function reviewBeneficiaryNeeds_(user, beneficiaryId, payload) {
     };
   });
 
+  // Phase 2.3.2 (القسم 1): "written" يُسجَّل **قبل** استدعاء updateById_
+  // لا بعده — updateById_ تكتب عدة خلايا عبر setValue منفصلة، فقد ينجح
+  // بعضها ويفشل الباقي فيرمي الاستدعاء خطأً بعد تعديل جزئي فعلي للصف.
   const written = []; // 'beneficiary' أو رقم احتياج — لتحديد ما يحتاج تراجعًا فعليًا فقط عند الفشل
   const nowStamp = now_();
   try {
+    written.push('beneficiary');
     updateById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId, {
       'حالة مراجعة المستفيد': beneficiaryDecision,
       'سبب رفض المستفيد': beneficiaryRejectReason,
       'مراجع اعتماد المستفيد': user.name,
       'تاريخ مراجعة المستفيد': nowStamp
     });
-    written.push('beneficiary');
     resolvedDecisions.forEach(item => {
       const needId = String(item.row['رقم الاحتياج']);
+      written.push(needId);
       updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', needId, {
         'حالة القرار': item.decision,
         'سبب الرفض': item.rejectReason,
@@ -636,7 +640,6 @@ function reviewBeneficiaryNeeds_(user, beneficiaryId, payload) {
         'حالة التنفيذ': item.decision === 'معتمد' ? 'استحقاق معتمد' : '',
         'آخر تحديث': nowStamp
       });
-      written.push(needId);
     });
   } catch (writeError) {
     // تراجع best-effort (Phase 2.2): تُحاوَل إعادة **كل** سجل مكتوب فعليًا
@@ -733,33 +736,97 @@ function requiredIfRejected_(decision, reason, label) {
  * آخر كما هو — لا "جاهزية جزئية" تُعرَض كاكتمال. تُستدعى من داخل قفل
  * saveDevice القائم أصلًا (لا تُمسك قفلها الخاص).
  */
-function maybeAdvanceNeedsToPendingDelegate_(beneficiaryId) {
-  const needs = readTable_(APP.sheets.beneficiaryNeeds).rows
+/**
+ * Phase 2.3.2 (القسم 2+3): دالة **نقية** بلا أي كتابة — تحسب خطة
+ * الانتقالات الكاملة الناتجة عن ربط/فك ربط جهاز واحد (plannedDeviceRow
+ * يمثّل حالته المُخطَّطة بعد هذه العملية تحديدًا، حتى قبل كتابته فعليًا)
+ * باحتياج واحد (primaryNeedId)، شاملة أي تقدُّم جماعي لبقية احتياجات
+ * المستفيد المعتمدة إلى "بانتظار تعيين مندوب". تحلّ محل الاستدعاء
+ * اللاحق المنفصل لـ"التقدُّم الجماعي" الذي كان يُنفَّذ بعد commitDeviceWithNeed_
+ * (Phase 2.3.1) — الآن جزء من خطة واحدة تُكتب معًا داخل نفس المعاملة.
+ *
+ * تقرأ الجداول (لا تكتب) — تُستدعى من داخل قفل ممسوك مسبقًا، قبل أي
+ * كتابة فعلية، ويجب أن تُحقَّق كل نتائجها عبر assertNeedFulfillmentChain_
+ * قبل الكتابة الفعلية في المُستدعي.
+ *
+ * سلامة البيانات (القسم 3): جهاز واحد بالضبط لكل رقم احتياج — لا Map
+ * يكتب آخر جهاز ويصمت عن التكرار. وجود أكثر من جهاز مرتبط بنفس الاحتياج
+ * (لأي احتياج في مجموعة المستفيد، لا الاحتياج الأساسي فقط) يرمي خطأ
+ * سلامة بيانات صريحًا فورًا — لا يُبتلَع ولا يُتجاهَل بصمت.
+ */
+function planNeedTransitionsForDeviceChange_(beneficiaryId, primaryNeedId, primaryTargetFulfillment, plannedDeviceRow) {
+  const plans = [];
+  if (!primaryNeedId || !primaryTargetFulfillment) return plans;
+
+  const primaryNeedRow = findById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', primaryNeedId);
+  if (!primaryNeedRow) throw new Error('الاحتياج غير موجود: ' + primaryNeedId);
+  const currentPrimaryFulfillment = String(primaryNeedRow['حالة التنفيذ']);
+  if (currentPrimaryFulfillment !== primaryTargetFulfillment) {
+    plans.push({needId: primaryNeedId, fromStatus: currentPrimaryFulfillment, toStatus: primaryTargetFulfillment});
+  }
+
+  // فقط عند تقدُّم الاحتياج الأساسي فعليًا إلى "جهاز جاهز" (لا عند فكّ
+  // الربط أو أي انتقال آخر) يستحق فحص اكتمال المجموعة — فكّ الربط لا
+  // يمكن أن يُقدِّم أي شيء بالتعريف.
+  if (!beneficiaryId || primaryTargetFulfillment !== 'جهاز جاهز') return plans;
+
+  const approvedNeeds = readTable_(APP.sheets.beneficiaryNeeds).rows
     .filter(row => String(row['رقم المستفيد']) === beneficiaryId && String(row['حالة القرار']) === 'معتمد');
-  if (!needs.length) return;
-  const deviceByNeed = {};
+  if (!approvedNeeds.length) return plans;
+
+  const devicesByNeed = {};
   readTable_(APP.sheets.devices).rows.forEach(row => {
+    const rowDeviceId = String(row['رقم الجهاز']);
     const needId = String(row['رقم الاحتياج'] || '');
-    if (needId) deviceByNeed[needId] = row;
+    if (!needId) return;
+    if (plannedDeviceRow && rowDeviceId === String(plannedDeviceRow['رقم الجهاز'])) return; // يُستبدَل بالحالة المخطَّطة أدناه
+    (devicesByNeed[needId] = devicesByNeed[needId] || []).push(row);
   });
-  const allReady = needs.every(need => {
-    const fulfillment = String(need['حالة التنفيذ']);
-    if (fulfillment === 'بانتظار تعيين مندوب') return true; // مكتمل بالفعل
-    if (fulfillment !== 'جهاز جاهز') return false;
-    const device = deviceByNeed[String(need['رقم الاحتياج'])];
+  // الجهاز قيد الكتابة الآن يُدرَج بحالته **المخطَّطة** (لم تُكتب بعد)،
+  // لا بحالته القديمة المقروءة من الجدول (إن وُجدت أصلًا).
+  const plannedNeedId = plannedDeviceRow ? String(plannedDeviceRow['رقم الاحتياج'] || '') : '';
+  if (plannedNeedId) {
+    (devicesByNeed[plannedNeedId] = devicesByNeed[plannedNeedId] || []).push(plannedDeviceRow);
+  }
+
+  const effectiveFulfillment = {};
+  approvedNeeds.forEach(n => { effectiveFulfillment[String(n['رقم الاحتياج'])] = String(n['حالة التنفيذ']); });
+  plans.forEach(p => { effectiveFulfillment[p.needId] = p.toStatus; });
+
+  const allReady = approvedNeeds.every(need => {
+    const needId = String(need['رقم الاحتياج']);
+    const fulfillment = effectiveFulfillment[needId];
+    if (fulfillment !== 'جهاز جاهز' && fulfillment !== 'بانتظار تعيين مندوب') return false;
+    const linkedDevices = devicesByNeed[needId] || [];
+    if (linkedDevices.length > 1) {
+      throw new Error('تعذّر التحقق من جاهزية احتياجات المستفيد: يوجد أكثر من جهاز مرتبط بالاستحقاق ' + needId + '، ويلزم تصحيح سلامة البيانات أولًا.');
+    }
+    const device = linkedDevices[0];
     return device
       && String(device['النوع']) === String(need['نوع الجهاز'])
       && String(device['رقم الجمعية']) === String(need['رقم الجمعية'])
       && String(device['رقم المستفيد']) === beneficiaryId
       && String(device['حالة الجهاز']) === 'مخصص';
   });
-  if (!allReady) return;
-  needs.forEach(need => {
-    if (String(need['حالة التنفيذ']) === 'جهاز جاهز') {
-      assertNeedFulfillmentChain_('جهاز جاهز', 'بانتظار تعيين مندوب');
-      updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', String(need['رقم الاحتياج']), {'حالة التنفيذ': 'بانتظار تعيين مندوب', 'آخر تحديث': now_()});
-    }
-  });
+
+  if (allReady) {
+    approvedNeeds.forEach(need => {
+      const needId = String(need['رقم الاحتياج']);
+      if (effectiveFulfillment[needId] !== 'جهاز جاهز') return;
+      // إن كان لهذا الاحتياج خطة سابقة بالفعل (الاحتياج الأساسي نفسه، وصل
+      // لتوّه إلى "جهاز جاهز")، تُمدَّد خطته إلى الهدف النهائي "بانتظار
+      // تعيين مندوب" بدل تجاهل القفزة الثانية — تبقى كتابة سطر واحدة لكل
+      // احتياج، وتتحقق assertNeedFulfillmentChain_ من كامل المسار (قد
+      // يكون أكثر من قفزتين، كـ"استحقاق معتمد" ← "بانتظار تعيين مندوب").
+      const existingPlan = plans.find(p => p.needId === needId);
+      if (existingPlan) {
+        existingPlan.toStatus = 'بانتظار تعيين مندوب';
+      } else {
+        plans.push({needId: needId, fromStatus: 'جهاز جاهز', toStatus: 'بانتظار تعيين مندوب'});
+      }
+    });
+  }
+  return plans;
 }
 
 function needsSummaryByDeviceType_(associationId) {
@@ -847,79 +914,79 @@ function needsSummaryByDeviceType_(associationId) {
  * ويحوّل حالته من "بالمستودع" إلى "مخصص" عبر assertDeviceTransition_
  * القياسية (لا اختصار يتجاوز StateRules.gs).
  */
-function linkDeviceToNeed(token, deviceId, needId) {
+/**
+ * Phase 2.3.2 (القسم 5): لم تعد تكتب مباشرة — تتحقق من نفس شروط الربط
+ * التاريخية ثم تُسلِّم الكتابة الفعلية لـcommitDeviceWithNeed_ نفسها
+ * (DevicesAssociations.gs)، أي مسار الكتابة/rollback/idempotency/التقدُّم
+ * الجماعي/cache/audit المستخدَم في saveDevice حرفيًا — لا مسار مستقل
+ * ثانٍ يكتب "رقم الاحتياج" بقواعد مختلفة.
+ */
+function linkDeviceToNeed(token, deviceId, needId, opId) {
   return perfTime_('linkDeviceToNeed', () => {
     const user = requireSession_(token, ['ADMIN']);
-    return linkDeviceToNeed_(user, deviceId, needId);
+    deviceId = cleanId_(deviceId);
+    needId = cleanId_(needId);
+    return runLockedIdempotent_('linkDeviceToNeed:' + deviceId + ':' + needId, user.id, opId, () => linkDeviceToNeed_(user, deviceId, needId));
   });
 }
 
+/**
+ * ⚠️ تفترض أن المستدعي يُمسك ScriptLock فعلًا (عبر runLockedIdempotent_
+ * في linkDeviceToNeed أعلاه) — لا تُمسك أي قفل بنفسها.
+ */
 function linkDeviceToNeed_(user, deviceId, needId) {
-  deviceId = cleanId_(deviceId);
-  needId = cleanId_(needId);
   if (!deviceId) throw new Error('رقم جهاز غير صالح');
   if (!needId) throw new Error('رقم احتياج غير صالح');
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(15000);
-  try {
-    invalidateTableCache_(APP.sheets.devices);
-    invalidateTableCache_(APP.sheets.beneficiaryNeeds);
+  invalidateTableCache_(APP.sheets.devices);
+  invalidateTableCache_(APP.sheets.beneficiaryNeeds);
 
-    const device = findById_(APP.sheets.devices, 'رقم الجهاز', deviceId);
-    if (!device) throw new Error('الجهاز غير موجود');
-    const need = findById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', needId);
-    if (!need) throw new Error('الاحتياج غير موجود');
+  const device = findById_(APP.sheets.devices, 'رقم الجهاز', deviceId);
+  if (!device) throw new Error('الجهاز غير موجود');
+  const need = findById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', needId);
+  if (!need) throw new Error('الاحتياج غير موجود');
 
-    const decisionStatus = String(need['حالة القرار']);
-    if (decisionStatus !== 'معتمد') {
-      throw new Error('لا يمكن ربط جهاز باستحقاق ' + (decisionStatus === 'مرفوض' ? 'مرفوض' : 'لم يُبتّ فيه بعد'));
-    }
-    if (String(device['النوع']) !== String(need['نوع الجهاز'])) {
-      throw new Error('نوع الجهاز (' + device['النوع'] + ') لا يطابق نوع الاحتياج المعتمد (' + need['نوع الجهاز'] + ')');
-    }
-    const deviceBeneficiaryId = String(device['رقم المستفيد'] || '');
-    if (deviceBeneficiaryId && deviceBeneficiaryId !== String(need['رقم المستفيد'])) {
-      throw new Error('الجهاز مرتبط حاليًا بمستفيد آخر — أعده إلى المستودع أولًا');
-    }
-    if (String(device['رقم الجمعية']) !== String(need['رقم الجمعية'])) {
-      throw new Error('جمعية الجهاز لا تطابق جمعية الاحتياج');
-    }
-    const deviceStatus = String(device['حالة الجهاز']);
-    if (['تم التسليم', 'تالف'].indexOf(deviceStatus) !== -1) {
-      throw new Error('لا يمكن ربط جهاز بحالة "' + deviceStatus + '" باستحقاق — خرج من التداول التشغيلي');
-    }
-    const conflictingDevice = readTable_(APP.sheets.devices).rows
-      .find(r => String(r['رقم الاحتياج'] || '') === needId && String(r['رقم الجهاز']) !== deviceId);
-    if (conflictingDevice) {
-      throw new Error('هذا الاحتياج مرتبط بالفعل بجهاز آخر (' + conflictingDevice['رقم الجهاز'] + ') — لا يجوز ربط أكثر من جهاز واحد بنفس الاستحقاق');
-    }
-
-    const nextStatus = deviceStatus === 'بالمستودع' ? 'مخصص' : deviceStatus;
-    if (nextStatus !== deviceStatus) assertDeviceTransition_(deviceStatus, nextStatus);
-    updateById_(APP.sheets.devices, 'رقم الجهاز', deviceId, {
-      'رقم المستفيد': String(need['رقم المستفيد']),
-      'رقم الجمعية': String(need['رقم الجمعية']),
-      'رقم الاحتياج': needId,
-      'حالة الجهاز': nextStatus
-    });
-    // Phase 2.3.1 (القسم 7): يمرّ عبر assertNeedFulfillmentChain_ المركزية
-    // (قفزة أو قفزتان معروفتان) بدل كتابة "جهاز جاهز" مباشرة.
-    const fulfillmentBeforeLink = String(need['حالة التنفيذ']);
-    if (['استحقاق معتمد', 'بانتظار توفر الجهاز'].indexOf(fulfillmentBeforeLink) !== -1) {
-      assertNeedFulfillmentChain_(fulfillmentBeforeLink, 'جهاز جاهز');
-      updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', needId, {'حالة التنفيذ': 'جهاز جاهز', 'آخر تحديث': now_()});
-    }
-    clearDashboardCache();
-    try {
-      audit_(user, 'ربط جهاز باستحقاق', 'الأجهزة', deviceId, 'احتياج: ' + needId);
-    } catch (auditError) {
-      Logger.log('تحذير: فشل تسجيل العملية بعد نجاح الربط فعليًا — traceId=' + requestMeta_().traceId + ' — ' + auditError.message);
-    }
-    return {ok: true, deviceId: deviceId, needId: needId, device: normalizeDevice_(findById_(APP.sheets.devices, 'رقم الجهاز', deviceId))};
-  } finally {
-    lock.releaseLock();
+  const decisionStatus = String(need['حالة القرار']);
+  if (decisionStatus !== 'معتمد') {
+    throw new Error('لا يمكن ربط جهاز باستحقاق ' + (decisionStatus === 'مرفوض' ? 'مرفوض' : 'لم يُبتّ فيه بعد'));
   }
+  if (String(device['النوع']) !== String(need['نوع الجهاز'])) {
+    throw new Error('نوع الجهاز (' + device['النوع'] + ') لا يطابق نوع الاحتياج المعتمد (' + need['نوع الجهاز'] + ')');
+  }
+  const deviceBeneficiaryId = String(device['رقم المستفيد'] || '');
+  if (deviceBeneficiaryId && deviceBeneficiaryId !== String(need['رقم المستفيد'])) {
+    throw new Error('الجهاز مرتبط حاليًا بمستفيد آخر — أعده إلى المستودع أولًا');
+  }
+  if (String(device['رقم الجمعية']) !== String(need['رقم الجمعية'])) {
+    throw new Error('جمعية الجهاز لا تطابق جمعية الاحتياج');
+  }
+  const deviceStatus = String(device['حالة الجهاز']);
+  if (['تم التسليم', 'تالف'].indexOf(deviceStatus) !== -1) {
+    throw new Error('لا يمكن ربط جهاز بحالة "' + deviceStatus + '" باستحقاق — خرج من التداول التشغيلي');
+  }
+  const conflictingDevice = readTable_(APP.sheets.devices).rows
+    .find(r => String(r['رقم الاحتياج'] || '') === needId && String(r['رقم الجهاز']) !== deviceId);
+  if (conflictingDevice) {
+    throw new Error('هذا الاحتياج مرتبط بالفعل بجهاز آخر (' + conflictingDevice['رقم الجهاز'] + ') — لا يجوز ربط أكثر من جهاز واحد بنفس الاستحقاق');
+  }
+
+  const nextStatus = deviceStatus === 'بالمستودع' ? 'مخصص' : deviceStatus;
+  if (nextStatus !== deviceStatus) assertDeviceTransition_(deviceStatus, nextStatus);
+
+  const values = {
+    'اسم الجهاز': device['اسم الجهاز'], 'النوع': device['النوع'],
+    'رقم الجمعية': String(need['رقم الجمعية']), 'رقم المستفيد': String(need['رقم المستفيد']),
+    'رقم الاحتياج': needId, 'حالة الجهاز': nextStatus, 'ملاحظات': device['ملاحظات'] || ''
+  };
+  const fulfillmentBeforeLink = String(need['حالة التنفيذ']);
+  const targetFulfillment = ['استحقاق معتمد', 'بانتظار توفر الجهاز'].indexOf(fulfillmentBeforeLink) !== -1 ? 'جهاز جاهز' : null;
+
+  const result = commitDeviceWithNeed_(user, {
+    id: deviceId, isNew: false, values: values, beneficiaryId: String(need['رقم المستفيد']),
+    primaryNeedId: targetFulfillment ? needId : null, primaryTargetFulfillment: targetFulfillment,
+    auditAction: 'ربط جهاز باستحقاق', auditNotes: 'احتياج: ' + needId
+  });
+  return {ok: true, deviceId: deviceId, needId: needId, device: result.record || normalizeDevice_(findById_(APP.sheets.devices, 'رقم الجهاز', deviceId))};
 }
 
 /**

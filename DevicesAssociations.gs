@@ -160,13 +160,13 @@ function saveDevice_(user, payload) {
       // مشترك، وإعادة حالة تنفيذ الاحتياج عبر assertNeedFulfillmentChain_
       // (القسم 6+7) — لا كتابة مباشرة لـ"حالة التنفيذ" بعد الآن.
       return commitDeviceWithNeed_(user, {
-        id: id, isNew: false, values: values,
-        needId: currentNeedId, targetFulfillment: 'بانتظار توفر الجهاز',
+        id: id, isNew: false, values: values, beneficiaryId: currentBeneficiaryId,
+        primaryNeedId: currentNeedId, primaryTargetFulfillment: 'بانتظار توفر الجهاز',
         auditAction: 'تعديل جهاز', auditNotes: 'الحالة: ' + (currentStatus || '—') + ' ← ' + status + ' (إرجاع للمستودع، فكّ ربط الاحتياج ' + currentNeedId + ')'
       });
     }
     return commitDeviceWithNeed_(user, {
-      id: id, isNew: isNew, values: values, needId: null, targetFulfillment: null,
+      id: id, isNew: isNew, values: values, beneficiaryId: '', primaryNeedId: null, primaryTargetFulfillment: null,
       auditAction: isNew ? 'إضافة جهاز' : 'تعديل جهاز',
       auditNotes: isNew ? 'الحالة الابتدائية: ' + status : 'الحالة: ' + (currentStatus || '—') + ' ← ' + status
     });
@@ -205,7 +205,7 @@ function saveDevice_(user, payload) {
       'حالة الجهاز': currentStatus, 'ملاحظات': cleanText_(payload.notes, 500)
     };
     return commitDeviceWithNeed_(user, {
-      id: id, isNew: false, values: values, needId: null, targetFulfillment: null,
+      id: id, isNew: false, values: values, beneficiaryId: '', primaryNeedId: null, primaryTargetFulfillment: null,
       auditAction: 'تعديل جهاز', auditNotes: 'تعديل وصفي فقط (سجل تاريخي بلا رقم احتياج)'
     });
   }
@@ -240,22 +240,15 @@ function saveDevice_(user, payload) {
   };
   const currentNeedFulfillment = String(matchingNeed['حالة التنفيذ']);
   const targetFulfillment = ['استحقاق معتمد', 'بانتظار توفر الجهاز'].indexOf(currentNeedFulfillment) !== -1 ? 'جهاز جاهز' : null;
-  const result = commitDeviceWithNeed_(user, {
-    id: id, isNew: isNew, values: values, needId: needId, targetFulfillment: targetFulfillment,
+  // Phase 2.3.2 (القسم 2): التقدُّم الجماعي إلى "بانتظار تعيين مندوب"
+  // جزء من هذه المعاملة نفسها الآن (عبر planNeedTransitionsForDeviceChange_
+  // داخل commitDeviceWithNeed_) — لا استدعاء لاحق منفصل بعد نجاح الكتابة.
+  return commitDeviceWithNeed_(user, {
+    id: id, isNew: isNew, values: values, beneficiaryId: beneficiaryId,
+    primaryNeedId: needId, primaryTargetFulfillment: targetFulfillment,
     auditAction: isNew ? 'إضافة جهاز' : 'تعديل جهاز',
     auditNotes: (isNew ? 'الحالة الابتدائية: ' : 'الحالة: ' + (currentStatus || '—') + ' ← ') + status + ' — ربط بالاحتياج ' + needId
   });
-  // Phase 2.3.1 (القسم 8): بعد ربط ناجح، يفحص كل احتياجات المستفيد
-  // المعتمدة معًا — فقط إن أصبحت كلها جاهزة فعليًا، تنتقل كمجموعة إلى
-  // "بانتظار تعيين مندوب" (الحالة الحقيقية التي يبدأ منها assignDelegate).
-  if (targetFulfillment === 'جهاز جاهز') {
-    try {
-      maybeAdvanceNeedsToPendingDelegate_(beneficiaryId);
-    } catch (advanceError) {
-      Logger.log('تحذير: فشل فحص/تقدُّم "بانتظار تعيين مندوب" بعد ربط جهاز ناجح — traceId=' + requestMeta_().traceId + ' beneficiaryId=' + beneficiaryId + ' — ' + advanceError.message);
-    }
-  }
-  return result;
 }
 
 /** تعديل وصفي فقط (اسم/ملاحظات) لجهاز في عهدة فعلية — كل حقول الربط/الحالة تبقى كما هي حرفيًا (القسم 5). */
@@ -293,72 +286,91 @@ function saveDeviceDescriptiveOnly_(user, id, existing, payload) {
 }
 
 /**
- * Phase 2.3.1 (القسم 6): يكتب جهازًا (جديدًا أو تعديلًا) واحتياجًا
- * مرتبطًا (اختياري) كمعاملة واحدة — لقطة خام كاملة قبل الكتابة، تحديث
- * الجهاز ثم تحديث حالة تنفيذ الاحتياج عبر assertNeedFulfillmentChain_
- * (القسم 7)، وaudit منفصل بعد نجاح البيانات الأساسية (القسم 2). عند
- * فشل أي كتابة: تراجع best-effort لكليهما معًا، بلا توقف عند أول خطأ.
+ * Phase 2.3.2 (القسم 2-7): يكتب جهازًا (جديدًا أو تعديلًا) وكل احتياجات
+ * المستفيد المتأثرة (الاحتياج الأساسي المرتبط + أي تقدُّم جماعي حقيقي
+ * إلى "بانتظار تعيين مندوب") **كمعاملة واحدة غير قابلة للتجزئة**:
+ *
+ * spec = {
+ *   id, isNew, values,                    // الجهاز
+ *   beneficiaryId,                        // لتخطيط التقدُّم الجماعي (فارغ إن لم يوجد ربط)
+ *   primaryNeedId, primaryTargetFulfillment, // الاحتياج المرتبط مباشرة (فارغان إن لا ربط)
+ *   auditAction, auditNotes
+ * }
+ *
+ * الترتيب الإلزامي (القسم 7): (1) تخطيط كامل بلا كتابة عبر
+ * planNeedTransitionsForDeviceChange_ — يشمل فحص التقدُّم الجماعي ويرمي
+ * فورًا عند خلل سلامة بيانات (جهازان لنفس الاحتياج) قبل أي كتابة؛
+ * (2) لقطات خام كاملة؛ (3) الاحتياجات المخطَّطة تُكتب أولًا، والجهاز
+ * آخر كتابة أساسية (القسم 4 — يمنع الحاجة لحذف جهاز جديد عند فشل ربطه:
+ * إن فشلت الاحتياجات لا يُضاف الجهاز أصلًا؛ إن فشل الجهاز بعد نجاح
+ * الاحتياجات تُعاد الاحتياجات فقط، ولا "جهاز شبح" لأنه لم يُكتب أصلًا)؛
+ * (4) عند أي فشل: تراجع best-effort لكل ما جرت "محاولة" كتابته فعليًا
+ * (القسم 1 — يُسجَّل قبل الاستدعاء لا بعده)؛ (5) بعد نجاح كل الكتابات
+ * فقط: clearDashboardCache مرة واحدة، ثم audit معزول؛ (6) إثراء
+ * الاستجابة (normalizeDevice_/computeCoreSummary_) لا يجوز أن يحوّل
+ * نجاحًا فعليًا إلى فشل — فشله يُعيد {ok:true, refreshRequired:true}.
  */
 function commitDeviceWithNeed_(user, spec) {
+  // -------- (1) تخطيط كامل بلا أي كتابة --------
+  const plannedDeviceRow = spec.isNew
+    ? Object.assign({'رقم الجهاز': spec.id}, spec.values)
+    : Object.assign({}, findById_(APP.sheets.devices, 'رقم الجهاز', spec.id), spec.values);
+  const needPlans = planNeedTransitionsForDeviceChange_(spec.beneficiaryId || '', spec.primaryNeedId || null, spec.primaryTargetFulfillment || null, plannedDeviceRow);
+  needPlans.forEach(plan => assertNeedFulfillmentChain_(plan.fromStatus, plan.toStatus));
+
+  // -------- (2) لقطات خام كاملة --------
   const deviceSnapshot = spec.isNew ? null : Object.assign({}, findById_(APP.sheets.devices, 'رقم الجهاز', spec.id));
-  const needSnapshotRow = spec.needId ? findById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', spec.needId) : null;
-  const needSnapshot = needSnapshotRow ? {'حالة التنفيذ': needSnapshotRow['حالة التنفيذ'], 'آخر تحديث': needSnapshotRow['آخر تحديث']} : null;
-  const currentFulfillment = needSnapshotRow ? String(needSnapshotRow['حالة التنفيذ']) : '';
+  const needSnapshots = {};
+  needPlans.forEach(plan => {
+    const row = findById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', plan.needId);
+    needSnapshots[plan.needId] = {'حالة التنفيذ': row['حالة التنفيذ'], 'آخر تحديث': row['آخر تحديث']};
+  });
 
-  // يتحقق من صحة سلسلة انتقال الاحتياج قبل أي كتابة (لا نصف كتابة عند رفض انتقال).
-  if (spec.needId && spec.targetFulfillment && currentFulfillment !== spec.targetFulfillment) {
-    assertNeedFulfillmentChain_(currentFulfillment, spec.targetFulfillment);
-  }
-
-  let deviceWritten = false;
-  let needWritten = false;
+  // -------- (3) الكتابة: الاحتياجات كلها أولًا، الجهاز آخر كتابة أساسية --------
+  const needsWritten = []; // Phase 2.3.2 القسم 1: يُسجَّل قبل الاستدعاء لا بعده
+  let deviceAttempted = false;
   try {
+    needPlans.forEach(plan => {
+      needsWritten.push(plan.needId);
+      updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', plan.needId, {'حالة التنفيذ': plan.toStatus, 'آخر تحديث': now_()});
+    });
+    deviceAttempted = true;
     if (spec.isNew) {
       appendObject_(APP.sheets.devices, Object.assign({'رقم الجهاز': spec.id, 'تاريخ الإضافة': now_(), 'تاريخ التسليم': ''}, spec.values));
     } else {
       updateById_(APP.sheets.devices, 'رقم الجهاز', spec.id, spec.values);
     }
-    deviceWritten = true;
-    if (spec.needId && spec.targetFulfillment && currentFulfillment !== spec.targetFulfillment) {
-      updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', spec.needId, {'حالة التنفيذ': spec.targetFulfillment, 'آخر تحديث': now_()});
-      needWritten = true;
-    }
   } catch (writeError) {
     const restored = [];
     const failedToRestore = [];
-    if (deviceWritten) {
+    // القسم 4: جهاز جديد فشلت كتابته لم يُنشَأ فعليًا في هذا الترتيب
+    // (آخر كتابة أساسية) — لا "جهاز شبح" يحتاج تنظيفًا أو حذفًا إطلاقًا.
+    if (deviceAttempted && !spec.isNew && deviceSnapshot) {
       try {
-        if (spec.isNew) {
-          // جهاز جديد لا يُحذَف (لا حذف فعلي خارج ورقة الاحتياجات في هذا
-          // النظام) — يُعاد بدل ذلك لحالة محايدة غير مرتبطة بأي مستفيد.
-          updateById_(APP.sheets.devices, 'رقم الجهاز', spec.id, Object.assign({}, spec.values, {'رقم المستفيد': '', 'رقم الاحتياج': '', 'حالة الجهاز': 'بالمستودع'}));
-        } else if (deviceSnapshot) {
-          updateById_(APP.sheets.devices, 'رقم الجهاز', spec.id, deviceSnapshot);
-        }
+        updateById_(APP.sheets.devices, 'رقم الجهاز', spec.id, deviceSnapshot);
         restored.push('device:' + spec.id);
       } catch (rollbackError) {
         failedToRestore.push('device:' + spec.id + ' (' + rollbackError.message + ')');
       }
     }
-    if (needWritten && needSnapshot) {
+    needsWritten.forEach(needId => {
       try {
-        updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', spec.needId, needSnapshot);
-        restored.push('need:' + spec.needId);
+        updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', needId, needSnapshots[needId]);
+        restored.push('need:' + needId);
       } catch (rollbackError) {
-        failedToRestore.push('need:' + spec.needId + ' (' + rollbackError.message + ')');
+        failedToRestore.push('need:' + needId + ' (' + rollbackError.message + ')');
       }
-    }
+    });
     const traceId = requestMeta_().traceId;
     if (failedToRestore.length) {
-      Logger.log('حرج جدًا: فشل تراجع جزئي في ربط/فك ربط جهاز — traceId=' + traceId
+      Logger.log('حرج جدًا: فشل تراجع جزئي في معاملة جهاز/احتياجات — traceId=' + traceId
         + ' — أُعيدت: [' + restored.join('، ') + '] — تعذّر إعادة: [' + failedToRestore.join('، ') + '] — خطأ الكتابة الأصلي: ' + writeError.message);
       throw new Error('تعذّر إتمام حفظ الجهاز (traceId: ' + traceId + ') — تعذّر التراجع الكامل، يتطلب مراجعة يدوية فورية للسجلات: ' + failedToRestore.map(s => s.split(' (')[0]).join('، '));
     }
     throw new Error('تعذّر إتمام حفظ الجهاز (traceId: ' + traceId + ') — أُعيدت كل السجلات المتأثرة لحالتها السابقة تلقائيًا.');
   }
 
-  // Phase 2.3.1 (القسم 2): البيانات الأساسية نجحت — clearDashboardCache
-  // فورًا، وaudit في try/catch مستقل لا يُسقِط نجاح العملية إن فشل هو وحده.
+  // -------- (5) نجاح كل الكتابات: cache مرة واحدة ثم audit معزول --------
   clearDashboardCache();
   try {
     audit_(user, spec.auditAction, 'الأجهزة', spec.id, spec.auditNotes);
@@ -366,9 +378,15 @@ function commitDeviceWithNeed_(user, spec) {
     Logger.log('تحذير: فشل تسجيل العملية بعد نجاح حفظ الجهاز فعليًا — traceId=' + requestMeta_().traceId + ' deviceId=' + spec.id + ' — ' + auditError.message);
   }
 
-  const record = normalizeDevice_(findById_(APP.sheets.devices, 'رقم الجهاز', spec.id));
-  const summary = computeCoreSummary_(null);
-  return {ok: true, id: spec.id, record: record, summary: summary};
+  // -------- (6) القسم 6: إثراء الاستجابة لا يحوّل نجاحًا فعليًا إلى فشل --------
+  try {
+    const record = normalizeDevice_(findById_(APP.sheets.devices, 'رقم الجهاز', spec.id));
+    const summary = computeCoreSummary_(null);
+    return {ok: true, id: spec.id, record: record, summary: summary};
+  } catch (enrichError) {
+    Logger.log('تحذير: نجحت كتابة الجهاز فعليًا لكن فشل بناء استجابة مُثراة — traceId=' + requestMeta_().traceId + ' deviceId=' + spec.id + ' — ' + enrichError.message);
+    return {ok: true, id: spec.id, refreshRequired: true};
+  }
 }
 
 /**

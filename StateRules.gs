@@ -319,16 +319,31 @@ function assertNeedFulfillmentChain_(fromStatus, toStatus) {
   fromStatus = String(fromStatus || '');
   toStatus = String(toStatus || '');
   if (fromStatus === toStatus) { assertNeedFulfillmentTransition_(fromStatus, toStatus); return; }
-  const direct = NEED_FULFILLMENT_TRANSITIONS_[fromStatus] || [];
-  if (direct.indexOf(toStatus) !== -1) { assertNeedFulfillmentTransition_(fromStatus, toStatus); return; }
-  for (let i = 0; i < direct.length; i++) {
-    const mid = direct[i];
-    const midAllowed = NEED_FULFILLMENT_TRANSITIONS_[mid] || [];
-    if (midAllowed.indexOf(toStatus) !== -1) {
-      assertNeedFulfillmentTransition_(fromStatus, mid);
-      assertNeedFulfillmentTransition_(mid, toStatus);
-      return;
+  // Phase 2.3.2: بحث عرضي (BFS) عام على رسم NEED_FULFILLMENT_TRANSITIONS_
+  // الصغير الثابت — القفزتان لم تعودا كافيتين وحدهما بعد دمج التقدُّم
+  // الجماعي (مثال حقيقي: "استحقاق معتمد" ← "بانتظار تعيين مندوب" ثلاث
+  // قفزات). يتحقق أن كل قفزة على المسار الموجود مسموحة فعليًا عبر
+  // assertNeedFulfillmentTransition_ نفسها — لا اختصار يتجاوزها.
+  const queue = [[fromStatus]];
+  const visited = {};
+  visited[fromStatus] = true;
+  let path = null;
+  while (queue.length) {
+    const current = queue.shift();
+    const last = current[current.length - 1];
+    const nextStates = NEED_FULFILLMENT_TRANSITIONS_[last] || [];
+    for (let i = 0; i < nextStates.length; i++) {
+      const next = nextStates[i];
+      if (next === last) continue; // تجاهل الحلقات الذاتية عند البحث عن مسار تقدُّمي
+      if (next === toStatus) { path = current.concat([next]); break; }
+      if (!visited[next]) { visited[next] = true; queue.push(current.concat([next])); }
     }
+    if (path) break;
   }
-  throw new Error('انتقال غير مسموح لحالة تنفيذ الاحتياج: من «' + fromStatus + '» إلى «' + toStatus + '» (لا مسار مباشر أو قصير معروف)');
+  if (!path) {
+    throw new Error('انتقال غير مسموح لحالة تنفيذ الاحتياج: من «' + fromStatus + '» إلى «' + toStatus + '» (لا مسار معروف)');
+  }
+  for (let i = 0; i < path.length - 1; i++) {
+    assertNeedFulfillmentTransition_(path[i], path[i + 1]);
+  }
 }

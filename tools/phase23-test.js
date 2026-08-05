@@ -763,30 +763,69 @@ section('9) saveDevice: ربط الجهاز والاحتياج معاملة وا
     return beneficiary;
   }
 
-  // فشل تحديث الاحتياج بعد نجاح كتابة الجهاز: يتراجع الجهاز إلى حالة محايدة غير مرتبطة.
+  // Phase 2.3.2 (القسم 4): الترتيب الآن الاحتياجات أولًا ثم الجهاز آخرًا
+  // — فشل تحديث الاحتياج يعني ألا يُضاف الجهاز الجديد إطلاقًا (لا "جهاز
+  // شبح" يحتاج تنظيفًا لاحقًا؛ ببساطة لم يُكتب من الأصل).
   {
     const beneficiary = readyBeneficiary_('أ');
+    const before = S.readTable_('الأجهزة').rows.length;
     const originalUpdate = S.updateById_;
     S.updateById_ = function (sheetName, keyField, id, values) {
-      if (sheetName === 'احتياجات المستفيدين') throw new Error('فشل محاكى في تحديث الاحتياج بعد نجاح الجهاز');
+      if (sheetName === 'احتياجات المستفيدين') throw new Error('فشل محاكى في تحديث الاحتياج الأول');
       return originalUpdate.apply(this, arguments);
     };
     let threw = false;
     try { S.saveDevice(admin.token, { name: 'ثلاجة فشل احتياج', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiary.id }); }
     catch (error) { threw = /تعذّر إتمام حفظ الجهاز/.test(error.message); }
     finally { S.updateById_ = originalUpdate; }
-    assert('فشل تحديث الاحتياج بعد كتابة جهاز جديد ناجحة: العملية تُرفض', threw === true);
-    const need = needRow(S, beneficiary.id, 'ثلاجة');
-    assert('الاحتياج لم يتغيّر (بقي "استحقاق معتمد")', String(need['حالة التنفيذ']) === 'استحقاق معتمد');
-    const devicesAfter = S.readTable_('الأجهزة').rows.filter(r => String(r['رقم الاحتياج'] || '') === String(need['رقم الاحتياج']));
-    assert('الجهاز المُنشَأ حديثًا (فشل ربطه) يعود لحالة محايدة "بالمستودع" غير مرتبطة، لا يُحذَف (لا حذف فعلي خارج ورقة الاحتياجات)',
-      devicesAfter.length === 0 && S.readTable_('الأجهزة').rows.some(r => r['اسم الجهاز'] === 'ثلاجة فشل احتياج' && r['حالة الجهاز'] === 'بالمستودع' && !r['رقم المستفيد']));
+    assert('(القسم 4) فشل تحديث الاحتياج الأول: العملية تُرفض', threw === true);
+    assert('(القسم 4) الاحتياج لم يتغيّر (بقي "استحقاق معتمد")', String(needRow(S, beneficiary.id, 'ثلاجة')['حالة التنفيذ']) === 'استحقاق معتمد');
+    assert('(القسم 4) فشل تحديث الاحتياج الأول: لا جهاز جديد يُضاف إطلاقًا (الاحتياجات تُكتب قبل الجهاز)',
+      S.readTable_('الأجهزة').rows.length === before && !S.readTable_('الأجهزة').rows.some(r => r['اسم الجهاز'] === 'ثلاجة فشل احتياج'));
   }
 
-  // فشل تحديث الجهاز نفسه: لا كتابة للاحتياج إطلاقًا (الجهاز يُكتب أولًا).
+  // فشل تحديث احتياج التقدم الجماعي (لا الاحتياج الأساسي نفسه): مستفيد
+  // له احتياجان، الأول جاهز بالفعل والثاني قيد الربط الآن — فشل تحديث
+  // خطة التقدُّم الجماعي (الاحتياج الأول) يُرجع كل شيء ولا يُضاف الجهاز.
+  {
+    const groupBeneficiary = S.saveBeneficiary(assocSession.token, {
+      deviceTypes: ['ثلاجة', 'فرن'], name: 'مستفيد تقدُّم جماعي فاشل', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: nextPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+    });
+    approveBeneficiary_(S, admin, groupBeneficiary.id, ['ثلاجة', 'فرن']);
+    S.saveDevice(admin.token, { name: 'ثلاجة جاهزة سلفًا', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: groupBeneficiary.id });
+    const fridgeNeedId = String(needRow(S, groupBeneficiary.id, 'ثلاجة')['رقم الاحتياج']);
+    assert('الاحتياج الأول (ثلاجة) وحده يبقى "جهاز جاهز" (لم يكتمل بعد احتياج ثانٍ)',
+      String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', fridgeNeedId)['حالة التنفيذ']) === 'جهاز جاهز');
+
+    const beforeOven = S.readTable_('الأجهزة').rows.length;
+    const originalUpdate2 = S.updateById_;
+    let needCalls = 0;
+    S.updateById_ = function (sheetName, keyField, id, values) {
+      if (sheetName === 'احتياجات المستفيدين') {
+        needCalls++;
+        // الاستدعاء الأول يخصّ احتياج التقدُّم الجماعي (الثلاجة الجاهزة
+        // سلفًا) — تفشيله يحاكي فشل جزء من خطة التقدُّم لا الاحتياج الأساسي.
+        if (needCalls === 1) throw new Error('فشل محاكى في تحديث احتياج التقدُّم الجماعي');
+      }
+      return originalUpdate2.apply(this, arguments);
+    };
+    let threwGroup = false;
+    try { S.saveDevice(admin.token, { name: 'فرن فشل تقدُّم جماعي', type: 'فرن', associationId: assoc.id, beneficiaryId: groupBeneficiary.id }); }
+    catch (error) { threwGroup = /تعذّر إتمام حفظ الجهاز/.test(error.message); }
+    finally { S.updateById_ = originalUpdate2; }
+    assert('(القسم 4) فشل تحديث احتياج التقدُّم الجماعي: العملية تُرفض', threwGroup === true);
+    assert('(القسم 4) الاحتياج الأول (كان جزءًا من خطة التقدُّم) يبقى "جهاز جاهز" كما كان — لا حالة جزئية',
+      String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', fridgeNeedId)['حالة التنفيذ']) === 'جهاز جاهز');
+    assert('(القسم 4) الاحتياج الثاني (الفرن) لم يتغيّر أصلًا (بقي "استحقاق معتمد")',
+      String(needRow(S, groupBeneficiary.id, 'فرن')['حالة التنفيذ']) === 'استحقاق معتمد');
+    assert('(القسم 4) فشل تحديث احتياج التقدُّم الجماعي: لا جهاز جديد (فرن) يُضاف إطلاقًا',
+      S.readTable_('الأجهزة').rows.length === beforeOven && !S.readTable_('الأجهزة').rows.some(r => r['اسم الجهاز'] === 'فرن فشل تقدُّم جماعي'));
+  }
+
+  // فشل append للجهاز نفسه (بعد نجاح كتابة الاحتياج): الاحتياج يعود لحالته السابقة، ولا جهاز جديد.
   {
     const beneficiary = readyBeneficiary_('ب');
-    const originalUpdate = S.updateById_;
     const originalAppend = S.appendObject_;
     S.appendObject_ = function (sheetName, values) {
       if (sheetName === 'الأجهزة') throw new Error('فشل محاكى في إنشاء الجهاز');
@@ -795,12 +834,14 @@ section('9) saveDevice: ربط الجهاز والاحتياج معاملة وا
     let threw = false;
     try { S.saveDevice(admin.token, { name: 'ثلاجة فشل جهاز', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiary.id }); }
     catch (error) { threw = true; }
-    finally { S.appendObject_ = originalAppend; S.updateById_ = originalUpdate; }
-    assert('فشل كتابة الجهاز نفسه: العملية تُرفض ولا يتغيّر الاحتياج إطلاقًا',
+    finally { S.appendObject_ = originalAppend; }
+    assert('(القسم 4) فشل append للجهاز: الاحتياج يعود لحالته السابقة ("استحقاق معتمد")',
       threw === true && String(needRow(S, beneficiary.id, 'ثلاجة')['حالة التنفيذ']) === 'استحقاق معتمد');
+    assert('(القسم 4) فشل append للجهاز: لا جهاز جديد موجود إطلاقًا (لا سجل باسمه في الجدول)',
+      !S.readTable_('الأجهزة').rows.some(r => r['اسم الجهاز'] === 'ثلاجة فشل جهاز'));
   }
 
-  // idempotency (القسم 3): opId مكرَّر على saveDevice لا يُنشئ جهازًا مزدوجًا.
+  // idempotency (القسم 3): opId مكرَّر على saveDevice لا يُنشئ جهازًا مزدوجًا (لا حتى بعد رفض أولي).
   {
     const beneficiary = readyBeneficiary_('ج');
     const before = S.readTable_('الأجهزة').rows.length;
@@ -811,6 +852,64 @@ section('9) saveDevice: ربط الجهاز والاحتياج معاملة وا
     assert('opId مكرَّر على saveDevice: لا جهاز مزدوج يُنشَأ', afterFirst === before + 1 && afterSecond === afterFirst);
     assert('opId مكرَّر: النتيجة الثانية مطابقة للأولى', second.id === first.id);
   }
+}
+
+/* ================================================================
+   9ب) Phase 2.3.2 القسم 5: توحيد linkDeviceToNeed مع معاملة saveDevice
+   ================================================================ */
+section('9ب) linkDeviceToNeed: نفس معاملة saveDevice حرفيًا، لا مسار مستقل');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+  const { assoc, assocSession } = seedAssociation(S, admin, 28);
+
+  const beneficiaryA = S.saveBeneficiary(assocSession.token, {
+    deviceTypes: ['ثلاجة'], name: 'مستفيد linkDeviceToNeed', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+    phone: nextPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+  });
+  approveBeneficiary_(S, admin, beneficiaryA.id, ['ثلاجة']);
+  const needIdA = String(needRow(S, beneficiaryA.id, 'ثلاجة')['رقم الاحتياج']);
+  const warehouseDeviceA = S.saveDevice(admin.token, { name: 'ثلاجة مستودع أ', type: 'ثلاجة', associationId: assoc.id });
+  const linkResult = S.linkDeviceToNeed(admin.token, warehouseDeviceA.id, needIdA);
+  assert('linkDeviceToNeed تنجح وتربط الجهاز بنفس قواعد saveDevice', linkResult.ok === true && linkResult.device.status === 'مخصص');
+  assert('linkDeviceToNeed تُنتج نفس نتيجة التقدُّم الفوري (اكتمال احتياج وحيد ← بانتظار تعيين مندوب) التي ينتجها saveDevice تمامًا لنفس الحالة',
+    String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', needIdA)['حالة التنفيذ']) === 'بانتظار تعيين مندوب');
+
+  // نفس السيناريو تمامًا عبر saveDevice المباشر — يجب أن تتطابق النتيجة حرفيًا.
+  const beneficiaryB = S.saveBeneficiary(assocSession.token, {
+    deviceTypes: ['ثلاجة'], name: 'مستفيد saveDevice مقابل', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+    phone: nextPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+  });
+  approveBeneficiary_(S, admin, beneficiaryB.id, ['ثلاجة']);
+  const needIdB = String(needRow(S, beneficiaryB.id, 'ثلاجة')['رقم الاحتياج']);
+  const viaSaveDevice = S.saveDevice(admin.token, { name: 'ثلاجة مباشرة ب', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiaryB.id });
+  assert('linkDeviceToNeed وsaveDevice ينتجان نفس الحالة النهائية لنفس السيناريو (بانتظار تعيين مندوب)',
+    viaSaveDevice.record.status === linkResult.device.status
+    && String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', needIdB)['حالة التنفيذ'])
+      === String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', needIdA)['حالة التنفيذ']));
+
+  // نفس rollback: فشل كتابة الاحتياج بعد استدعاء linkDeviceToNeed يُرجع الجهاز أيضًا (نفس معاملة commitDeviceWithNeed_).
+  const beneficiaryC = S.saveBeneficiary(assocSession.token, {
+    deviceTypes: ['ثلاجة'], name: 'مستفيد rollback link', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+    phone: nextPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+  });
+  approveBeneficiary_(S, admin, beneficiaryC.id, ['ثلاجة']);
+  const needIdC = String(needRow(S, beneficiaryC.id, 'ثلاجة')['رقم الاحتياج']);
+  const warehouseDeviceC = S.saveDevice(admin.token, { name: 'ثلاجة مستودع ج', type: 'ثلاجة', associationId: assoc.id });
+  const originalUpdateLink = S.updateById_;
+  S.updateById_ = function (sheetName, keyField, id, values) {
+    if (sheetName === 'احتياجات المستفيدين') throw new Error('فشل محاكى في تحديث الاحتياج عبر linkDeviceToNeed');
+    return originalUpdateLink.apply(this, arguments);
+  };
+  let linkThrew = false;
+  try { S.linkDeviceToNeed(admin.token, warehouseDeviceC.id, needIdC); }
+  catch (error) { linkThrew = /تعذّر إتمام حفظ الجهاز/.test(error.message); }
+  finally { S.updateById_ = originalUpdateLink; }
+  assert('linkDeviceToNeed: فشل تحديث الاحتياج يُرجع العملية بالكامل (نفس rollback معاملة saveDevice)', linkThrew === true);
+  assert('linkDeviceToNeed: الجهاز يبقى "بالمستودع" غير مرتبط بعد فشل الربط بالكامل',
+    String(S.findById_('الأجهزة', 'رقم الجهاز', warehouseDeviceC.id)['حالة الجهاز']) === 'بالمستودع'
+    && !String(S.findById_('الأجهزة', 'رقم الجهاز', warehouseDeviceC.id)['رقم الاحتياج'] || ''));
 }
 
 /* ================================================================
@@ -891,6 +990,122 @@ section('11) استيراد ADMIN: جمعية واحدة إلزامية على �
   assert('جمعية تحاول تمرير associationId لجمعية أخرى: يُتجاهَل — تُستخدَم جمعيتها الحقيقية دائمًا',
     assocImport.ok === true
     && String(S.readTable_('المستفيدون').rows.find(r => r['الاسم'] === 'صف جمعية بمحاولة انتحال')['رقم الجمعية']) === assoc.id);
+}
+
+/* ================================================================
+   12) Phase 2.3.2 القسم 1(د): صف جهاز — استعادة فعلية بعد فشل كتابته هو نفسه
+   ================================================================ */
+section('12) commitDeviceWithNeed_: صف الجهاز يُستعاد فعليًا حتى لو فشل استدعاؤه هو نفسه');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+  const { assoc, assocSession } = seedAssociation(S, admin, 29);
+  const beneficiary = S.saveBeneficiary(assocSession.token, {
+    deviceTypes: ['ثلاجة'], name: 'مستفيد صف جهاز', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+    phone: nextPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+  });
+  approveBeneficiary_(S, admin, beneficiary.id, ['ثلاجة']);
+  const device = S.saveDevice(admin.token, { name: 'ثلاجة صف', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiary.id });
+  // إرجاع الجهاز للمستودع (تحديث existing، لا append) — نفحص هنا استعادة
+  // "صف جهاز" تحديدًا (لا صف احتياج) عند فشل الاستدعاء الأول لتحديثه.
+  const originalUpdate = S.updateById_;
+  let deviceCalls = 0;
+  S.updateById_ = function (sheetName, keyField, id, values) {
+    if (sheetName === 'الأجهزة' && id === device.id) {
+      deviceCalls++;
+      if (deviceCalls === 1) throw new Error('فشل محاكى في أول تحديث لصف الجهاز نفسه');
+    }
+    return originalUpdate.apply(this, arguments);
+  };
+  let threw = false;
+  try { S.saveDevice(admin.token, { id: device.id, name: 'ثلاجة صف', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: '', status: 'بالمستودع' }); }
+  catch (error) { threw = /تعذّر إتمام حفظ الجهاز/.test(error.message); }
+  finally { S.updateById_ = originalUpdate; }
+  assert('فشل أول تحديث لصف الجهاز نفسه: العملية تُرفض', threw === true);
+  assert('صف الجهاز استُعيد فعليًا رغم أن استدعاءه هو نفسه من فشل (لا يُتجاهَل بصمت)',
+    deviceCalls === 2 && String(S.findById_('الأجهزة', 'رقم الجهاز', device.id)['رقم المستفيد']) === beneficiary.id
+    && String(S.findById_('الأجهزة', 'رقم الجهاز', device.id)['حالة الجهاز']) === 'مخصص');
+}
+
+/* ================================================================
+   13) Phase 2.3.2 القسم 6: مقاومة فشل ما بعد نجاح الكتابة (post-commit)
+   ================================================================ */
+section('13) فشل الإثراء بعد نجاح الكتابة الأساسية لا يُسقِط العملية');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+  const { assoc, assocSession } = seedAssociation(S, admin, 30);
+
+  // saveDevice: فشل computeCoreSummary_ بعد نجاح كتابة الجهاز فعليًا.
+  {
+    const beneficiary = S.saveBeneficiary(assocSession.token, {
+      deviceTypes: ['ثلاجة'], name: 'مستفيد post-commit جهاز', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: nextPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+    });
+    approveBeneficiary_(S, admin, beneficiary.id, ['ثلاجة']);
+    const originalSummary = S.computeCoreSummary_;
+    S.computeCoreSummary_ = function () { throw new Error('فشل محاكى في computeCoreSummary_ بعد نجاح الكتابة'); };
+    let result = null;
+    try { result = S.saveDevice(admin.token, { name: 'ثلاجة post-commit', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiary.id }); }
+    finally { S.computeCoreSummary_ = originalSummary; }
+    assert('saveDevice: فشل الملخّص بعد نجاح الكتابة يُعيد ok:true مع refreshRequired:true (لا استثناء)',
+      result && result.ok === true && result.refreshRequired === true);
+    assert('saveDevice: البيانات الأساسية كُتبت فعليًا رغم فشل الملخّص (الجهاز مرتبط فعلًا في الجدول)',
+      S.readTable_('الأجهزة').rows.some(r => r['اسم الجهاز'] === 'ثلاجة post-commit' && r['رقم المستفيد'] === beneficiary.id));
+  }
+
+  // assignDelegate: فشل computeCoreSummary_ بعد نجاح تعيين المندوب فعليًا.
+  {
+    const delegate = S.saveDelegate(assocSession.token, { name: 'مندوب post-commit', phone: nextPhone_() });
+    const beneficiary = S.saveBeneficiary(assocSession.token, {
+      deviceTypes: ['ثلاجة'], name: 'مستفيد post-commit تعيين', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: nextPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: [], lat: '24.7', lng: '46.6'
+    });
+    approveBeneficiary_(S, admin, beneficiary.id, ['ثلاجة']);
+    S.saveDevice(admin.token, { name: 'ثلاجة تعيين post-commit', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiary.id });
+    const originalSummary2 = S.computeCoreSummary_;
+    S.computeCoreSummary_ = function () { throw new Error('فشل محاكى في computeCoreSummary_ بعد نجاح التعيين'); };
+    let assignResult = null;
+    try { assignResult = S.assignDelegate(admin.token, beneficiary.id, delegate.id); }
+    finally { S.computeCoreSummary_ = originalSummary2; }
+    assert('assignDelegate: فشل الملخّص بعد نجاح الكتابة يُعيد ok:true مع refreshRequired:true (لا استثناء)',
+      assignResult && assignResult.ok === true && assignResult.refreshRequired === true);
+    assert('assignDelegate: رقم المندوب سُجِّل فعليًا رغم فشل الملخّص',
+      String(S.findById_('المستفيدون', 'رقم المستفيد', beneficiary.id)['رقم المندوب']) === delegate.id);
+
+    // opId على نفس المحاولة: لا تُعاد الكتابة مرة ثانية ولا audit مكرَّر
+    // — النتيجة الدنيا refreshRequired تُخزَّن أيضًا كنتيجة idempotency صالحة.
+    const delegate2 = S.saveDelegate(assocSession.token, { name: 'مندوب post-commit آخر', phone: nextPhone_() });
+    const auditBefore = S.readTable_('سجل العمليات').rows.length;
+    S.computeCoreSummary_ = function () { throw new Error('فشل محاكى دائم'); };
+    let firstOp = null, secondOp = null;
+    try {
+      firstOp = S.assignDelegate(admin.token, beneficiary.id, delegate2.id, 'op-postcommit-1');
+      secondOp = S.assignDelegate(admin.token, beneficiary.id, delegate2.id, 'op-postcommit-1');
+    } finally { S.computeCoreSummary_ = originalSummary2; }
+    const auditAfter = S.readTable_('سجل العمليات').rows.length;
+    assert('opId مع نتيجة refreshRequired: الاستدعاء الثاني لا يُعيد تنفيذ الكتابة (audit مرة واحدة فقط)',
+      firstOp.refreshRequired === true && secondOp.refreshRequired === true && auditAfter === auditBefore + 1);
+  }
+
+  // importBeneficiaries: فشل computeCoreSummary_ بعد نجاح كتابة الدفعة فعليًا.
+  {
+    const originalSummary3 = S.computeCoreSummary_;
+    S.computeCoreSummary_ = function () { throw new Error('فشل محاكى في computeCoreSummary_ بعد نجاح الاستيراد'); };
+    let importResult = null;
+    try {
+      importResult = S.importBeneficiaries(admin.token, [
+        { name: 'صف post-commit استيراد', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي', phone: nextPhone_(),
+          familyCount: 1, socialStatus: 'أخرى', needs: 'ثلاجة' }
+      ], true, assoc.id);
+    } finally { S.computeCoreSummary_ = originalSummary3; }
+    assert('importBeneficiaries: فشل الملخّص بعد نجاح الدفعة يُعيد ok:true مع refreshRequired:true (لا يظهر كفشل يستدعي إعادة الاستيراد)',
+      importResult && importResult.ok === true && importResult.refreshRequired === true && importResult.imported === 1);
+    assert('importBeneficiaries: السجل مكتوب فعليًا رغم فشل الملخّص',
+      S.readTable_('المستفيدون').rows.some(r => r['الاسم'] === 'صف post-commit استيراد'));
+  }
 }
 
 /* -------- النتيجة -------- */

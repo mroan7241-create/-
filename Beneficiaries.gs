@@ -486,8 +486,17 @@ function importBeneficiaries(token, rows, acceptedPledge, associationId) {
   }
   // لا تُعاد السجلات المستوردة كاملة (قد تصل لألف سجل) — الواجهة تُعيد
   // طلب صفحة المستفيدين الأولى بعد نجاح الاستيراد بدلًا من ذلك.
-  const summary = computeCoreSummary_(user.role === 'ASSOCIATION' ? user.associationId : null);
-  return {ok: true, imported: validBeneficiaries.length, summary: summary};
+  // Phase 2.3.2 (القسم 6): الدفعة كُتبت فعليًا ونجحت في هذه اللحظة —
+  // فشل computeCoreSummary_ بعدها لا يجوز أن يجعل المستخدم يظن أن
+  // الاستيراد فشل فيعيد رفع نفس الملف (تكرار غير ضروري)؛ تُعاد استجابة
+  // نجاح دنيا صريحة بدل رمي استثناء.
+  try {
+    const summary = computeCoreSummary_(user.role === 'ASSOCIATION' ? user.associationId : null);
+    return {ok: true, imported: validBeneficiaries.length, summary: summary};
+  } catch (summaryError) {
+    Logger.log('تحذير: نجح الاستيراد فعليًا لكن فشل حساب ملخّص لوحة التحكم بعده — traceId=' + requestMeta_().traceId + ' — ' + summaryError.message);
+    return {ok: true, imported: validBeneficiaries.length, refreshRequired: true};
+  }
 }
 
 /**
@@ -747,20 +756,25 @@ function assignDelegate_(user, beneficiaryId, delegateId) {
     needSnapshots[need.needId] = {'حالة التنفيذ': row['حالة التنفيذ'], 'آخر تحديث': row['آخر تحديث']};
   });
 
+  // Phase 2.3.2 (القسم 1): يُسجَّل كل سجل ضمن "written" **قبل** استدعاء
+  // updateById_ لا بعده — updateById_ تكتب عدة خلايا عبر setValue منفصلة،
+  // فقد تنجح خلية وتفشل التالية فيرمي الاستدعاء خطأً بعد أن أصبح الصف
+  // جزئيًا معدَّلًا فعليًا؛ لو انتظرنا نجاح الاستدعاء كاملًا لتسجيله، لن
+  // يُعتبر هذا الصف "مكتوبًا" فلن يُعاد رغم تعديله جزئيًا فعلًا.
   const written = []; // 'beneficiary' أو رقم احتياج
   try {
     readyNeeds.forEach(need => {
       if (need.fulfillmentStatus !== 'معيّن للمندوب — بانتظار التنفيذ') {
+        written.push(need.needId);
         updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', need.needId, {'حالة التنفيذ': 'معيّن للمندوب — بانتظار التنفيذ', 'آخر تحديث': now_()});
       }
-      written.push(need.needId);
     });
+    written.push('beneficiary');
     updateById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId, {
       'رقم المندوب': delegateId,
       'حالة التسليم': targetDeliveryStatus,
       'آخر تحديث': now_()
     });
-    written.push('beneficiary');
   } catch (writeError) {
     // تراجع best-effort: يُحاوَل إعادة **كل** سجل مكتوب فعليًا (لا يتوقف
     // عند أول فشل)، وتُجمَع كل معرّفات ما تعذّر تراجعه في رسالة واحدة —
@@ -798,10 +812,19 @@ function assignDelegate_(user, beneficiaryId, delegateId) {
     Logger.log('تحذير: فشل تسجيل العملية في سجل العمليات بعد نجاح تعيين المندوب فعليًا — traceId=' + requestMeta_().traceId + ' beneficiaryId=' + beneficiaryId + ' — ' + auditError.message);
   }
 
-  const record = normalizeBeneficiary_(findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId));
-  const updatedDevices = devicesForBeneficiary_(beneficiaryId);
-  const summary = computeCoreSummary_(user.role === 'ASSOCIATION' ? user.associationId : null);
-  return {ok: true, record: record, devices: updatedDevices, summary: summary};
+  // Phase 2.3.2 (القسم 6): البيانات الأساسية نجحت فعليًا في هذه اللحظة —
+  // فشل إثراء الاستجابة (تطبيع/قراءة أجهزة/ملخّص) بعد ذلك لا يجوز أن
+  // يُظهر للمستخدم أن التعيين فشل، ولا يمنع تخزين نتيجة opId (idempotency)،
+  // فتُعاد استجابة نجاح دنيا صريحة بدل رمي استثناء.
+  try {
+    const record = normalizeBeneficiary_(findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId));
+    const updatedDevices = devicesForBeneficiary_(beneficiaryId);
+    const summary = computeCoreSummary_(user.role === 'ASSOCIATION' ? user.associationId : null);
+    return {ok: true, record: record, devices: updatedDevices, summary: summary};
+  } catch (enrichError) {
+    Logger.log('تحذير: نجح تعيين المندوب فعليًا لكن فشل بناء استجابة مُثراة — traceId=' + requestMeta_().traceId + ' beneficiaryId=' + beneficiaryId + ' — ' + enrichError.message);
+    return {ok: true, beneficiaryId: beneficiaryId, refreshRequired: true};
+  }
 }
 
 /**

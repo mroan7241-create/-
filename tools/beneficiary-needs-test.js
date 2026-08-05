@@ -523,15 +523,26 @@ section('9) فشل كتابة وسطية → تراجع تعويضي كامل');
   const needs = needRows(S, beneficiaryId);
   const need1 = needs[0].id, need2 = needs[1].id;
 
+  // Phase 2.3.2 (القسم 1): يفشل الاستدعاء **الأول فقط** لهذا الصف (الكتابة
+  // الأصلية) ثم ينجح ما بعده (محاولة التراجع) — هذا بالضبط ما يثبت
+  // الإصلاح: "written" الآن يُسجَّل قبل الاستدعاء، فتُحاوَل استعادة
+  // need2 فعليًا رغم أن كتابته الأصلية هي التي فشلت (لا يُتجاهَل بصمت
+  // كما كان يحدث سابقًا حين كان التسجيل يتم بعد نجاح الاستدعاء فقط).
   const original = S.updateById_;
+  let need2Calls = 0;
   S.updateById_ = function (sheetName, idHeader, id, changes) {
-    if (sheetName === 'احتياجات المستفيدين' && id === need2) throw new Error('فشل كتابة الاحتياج الثاني محاكى');
+    if (sheetName === 'احتياجات المستفيدين' && id === need2) {
+      need2Calls++;
+      if (need2Calls === 1) throw new Error('فشل كتابة الاحتياج الثاني محاكى');
+    }
     return original(sheetName, idHeader, id, changes);
   };
   throws('فشل كتابة الاحتياج الثاني بعد نجاح المستفيد والاحتياج الأول يُعيد الكل لحالته السابقة',
     () => S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, { beneficiaryDecision: 'معتمد', needDecisions: [{ needId: need1, decision: 'معتمد' }, { needId: need2, decision: 'معتمد' }] }),
     'أُعيدت كل السجلات المتأثرة لحالتها السابقة');
   S.updateById_ = original;
+  assert('(القسم 1) الاحتياج الثاني (الذي فشلت كتابته الأصلية) استُعيد فعليًا أيضًا — لم يُتجاهَل رغم فشل استدعائه هو نفسه',
+    need2Calls === 2 && needRows(S, beneficiaryId).find(n => n.id === need2).decisionStatus === 'بانتظار المراجعة');
 
   assert('المستفيد عاد لحالة "تحت المراجعة" بعد التراجع (لا "معتمد" جزئي)', String(beneficiaryRow(S, beneficiaryId)['حالة مراجعة المستفيد']) === 'تحت المراجعة');
   const after = needRows(S, beneficiaryId);
@@ -566,8 +577,12 @@ section('11) فشل الكتابة الأخيرة يُتراجَع عنه أيض
   const [n1, n2, n3] = needs.map(n => n.id);
 
   const original = S.updateById_;
+  let n3Calls = 0;
   S.updateById_ = function (sheetName, idHeader, id, changes) {
-    if (sheetName === 'احتياجات المستفيدين' && id === n3) throw new Error('فشل كتابة الاحتياج الثالث محاكى');
+    if (sheetName === 'احتياجات المستفيدين' && id === n3) {
+      n3Calls++;
+      if (n3Calls === 1) throw new Error('فشل كتابة الاحتياج الثالث محاكى');
+    }
     return original(sheetName, idHeader, id, changes);
   };
   throws('فشل الاحتياج الثالث (الأخير) يُعيد المستفيد والاحتياجين الأولين لحالتهما السابقة',
@@ -577,6 +592,8 @@ section('11) فشل الكتابة الأخيرة يُتراجَع عنه أيض
   const after = needRows(S, beneficiaryId);
   assert('الاحتياج الأول والثاني عادا "بانتظار المراجعة"', after.find(n => n.id === n1).decisionStatus === 'بانتظار المراجعة' && after.find(n => n.id === n2).decisionStatus === 'بانتظار المراجعة');
   assert('المستفيد عاد "تحت المراجعة"', String(beneficiaryRow(S, beneficiaryId)['حالة مراجعة المستفيد']) === 'تحت المراجعة');
+  assert('(القسم 1) الاحتياج الثالث (فشلت كتابته الأصلية) استُعيد فعليًا أيضًا رغم أنه نفسه من فشل',
+    n3Calls === 2 && after.find(n => n.id === n3).decisionStatus === 'بانتظار المراجعة');
 }
 
 section('12) فشل التراجع نفسه يُبلَّغ كحالة حرجة صريحة');
