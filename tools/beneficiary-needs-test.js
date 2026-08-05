@@ -378,13 +378,27 @@ section('6) needsSummaryByDeviceType_ — مؤشرات دقيقة تعتمد ر�
   const withDelegate = S.saveDevice(admin.token, { name: 'ثلاجة مع مندوب', type: 'ثلاجة', associationId: assoc.id });
   S.linkDeviceToNeed(admin.token, withDelegate.id, need2Id);
   S.updateById_('الأجهزة', 'رقم الجهاز', withDelegate.id, { 'حالة الجهاز': 'مع المندوب' });
-  const delivered = S.saveDevice(admin.token, { name: 'ثلاجة مسلَّمة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiaryId });
-  S.updateById_('الأجهزة', 'رقم الجهاز', delivered.id, { 'حالة الجهاز': 'تم التسليم' });
+  // Phase 2.3: saveDevice لم يعد يقبل ربط جهاز بمستفيد دون احتياج معتمد
+  // متاح فعليًا — فلا يمكن بعد الآن محاكاة "مسار قديم بلا رقم احتياج"
+  // عبر الواجهة العامة نفسها؛ يُكتب الصفّان مباشرة في الجدول (كما يمثّل
+  // فعليًا سجلات موجودة سلفًا في الشيت الحي قبل تطبيق هذا المخطط).
+  const deliveredId = S.nextId_('DEV');
+  S.appendObject_('الأجهزة', {
+    'رقم الجهاز': deliveredId, 'اسم الجهاز': 'ثلاجة مسلَّمة', 'النوع': 'ثلاجة', 'رقم الجمعية': assoc.id,
+    'رقم المستفيد': beneficiaryId, 'رقم الاحتياج': '', 'حالة الجهاز': 'تم التسليم',
+    'تاريخ الإضافة': S.now_(), 'تاريخ التسليم': '', 'ملاحظات': ''
+  });
+  const delivered = {id: deliveredId};
   const broken = S.saveDevice(admin.token, { name: 'ثلاجة تالفة', type: 'ثلاجة', associationId: assoc.id });
   S.updateById_('الأجهزة', 'رقم الجهاز', broken.id, { 'حالة الجهاز': 'تالف' });
   // جهاز مخصص بمستفيد لكن **بلا ربط رقم احتياج** (محاكاة مسار قديم) — يجب ألا يُحسب في readyOrAllocated.
-  const legacyAllocated = S.saveDevice(admin.token, { name: 'ثلاجة مسار قديم', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiaryId });
-  S.updateById_('الأجهزة', 'رقم الجهاز', legacyAllocated.id, { 'حالة الجهاز': 'مخصص' });
+  const legacyAllocatedId = S.nextId_('DEV');
+  S.appendObject_('الأجهزة', {
+    'رقم الجهاز': legacyAllocatedId, 'اسم الجهاز': 'ثلاجة مسار قديم', 'النوع': 'ثلاجة', 'رقم الجمعية': assoc.id,
+    'رقم المستفيد': beneficiaryId, 'رقم الاحتياج': '', 'حالة الجهاز': 'مخصص',
+    'تاريخ الإضافة': S.now_(), 'تاريخ التسليم': '', 'ملاحظات': ''
+  });
+  const legacyAllocated = {id: legacyAllocatedId};
 
   const summary = S.needsSummaryByDeviceType_(assoc.id);
   assert('requestedTotal للثلاجة = 2 (مستفيدان)', summary['ثلاجة'].requestedTotal === 2);
@@ -397,6 +411,8 @@ section('6) needsSummaryByDeviceType_ — مؤشرات دقيقة تعتمد ر�
     summary['ثلاجة'].readyOrAllocated === 2);
   assert('shortage للثلاجة = 0 (معتمد معلَّق 2 ≤ متاح+جاهز 3)', summary['ثلاجة'].shortage === 0);
   assert('shortage للفرن = 0 (لا احتياج معتمد أصلًا)', summary['فرن'].shortage === 0);
+  assert('historicalUnlinkedCount للثلاجة = 1 (الجهاز المسار القديم المخصَّص بلا رقم احتياج فقط، لا المسلَّم ولا التالف)',
+    summary['ثلاجة'].historicalUnlinkedCount === 1);
 
   throws('ربط جهاز ثانٍ بنفس الاحتياج مرفوض (لا يجوز أكثر من جهاز واحد لكل استحقاق)',
     () => S.linkDeviceToNeed(admin.token, warehouse.id, fridgeNeedId), 'مرتبط بالفعل بجهاز آخر');

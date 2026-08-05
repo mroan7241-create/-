@@ -67,19 +67,31 @@ function listBeneficiaries_(user, options) {
  * فارغة/محايدة بدل رمي استثناء، عبر try/catch على قراءة الورقة فقط —
  * لا تُخفي أي خطأ آخر).
  */
+/**
+ * Phase 2.3 (القسم 5): يميّز صراحة بين حالتين كانتا مُعالَجتين بنفس
+ * catch(ignore) الواحد سابقًا — عدم وجود ورقة "احتياجات المستفيدين" بعد
+ * (متوقَّع تمامًا قبل تطبيق المخطط الجديد على المشروع الحي: getSheetByName
+ * تُعيد null صراحةً، فيعود needsSchemaReady:false لكل عنصر بلا أي رمي)،
+ * مقابل عطل قراءة حقيقي (رأس فاسد، صلاحيات، بيانات غير صالحة، أو خلل في
+ * normalizeNeedRow_) والورقة موجودة فعلًا — هذا الأخير لا يُبتلَع أبدًا:
+ * يُسجَّل تشخيصيًا بمعرّف تتبّع (بلا بيانات حساسة) ثم يُعاد رميه، فلا تُعرض
+ * قائمة مستفيدين فارغة الاحتياجات بصمت بينما هناك عطل فعلي يستحق الإصلاح.
+ */
 function attachNeedsSummaryToBeneficiaries_(items) {
   if (!items.length) return items;
-  let needsByBeneficiary = null;
-  try {
-    needsByBeneficiary = {};
-    readTable_(APP.sheets.beneficiaryNeeds).rows.forEach(row => {
-      const bId = String(row['رقم المستفيد']);
-      (needsByBeneficiary[bId] = needsByBeneficiary[bId] || []).push(normalizeNeedRow_(row));
-    });
-  } catch (ignore) {
-    // الورقة غير موجودة بعد على هذا المشروع (المخطط الجديد لم يُطبَّق) —
-    // سلوك متوقَّع، لا عطل. كل عنصر يعود بحقول فارغة أدناه.
-    needsByBeneficiary = {};
+  const sheetExists = !!SpreadsheetApp.getActiveSpreadsheet().getSheetByName(APP.sheets.beneficiaryNeeds);
+  let needsByBeneficiary = {};
+  if (sheetExists) {
+    try {
+      readTable_(APP.sheets.beneficiaryNeeds).rows.forEach(row => {
+        const bId = String(row['رقم المستفيد']);
+        (needsByBeneficiary[bId] = needsByBeneficiary[bId] || []).push(normalizeNeedRow_(row));
+      });
+    } catch (error) {
+      const traceId = requestMeta_().traceId;
+      Logger.log('عطل قراءة ورقة "احتياجات المستفيدين" (لا يُخفى) — traceId=' + traceId + ' — ' + error.message);
+      throw new Error('تعذّرت قراءة بيانات احتياجات المستفيدين — يلزم التحقق من سلامة الورقة (traceId: ' + traceId + ')');
+    }
   }
   const rawRowsById = {};
   readTable_(APP.sheets.beneficiaries).rows.forEach(row => { rawRowsById[String(row['رقم المستفيد'])] = row; });
@@ -87,6 +99,7 @@ function attachNeedsSummaryToBeneficiaries_(items) {
     const rawRow = rawRowsById[item.id];
     const needs = needsByBeneficiary[item.id] || [];
     return Object.assign({}, item, {
+      needsSchemaReady: sheetExists,
       reviewStatus: rawRow ? String(rawRow['حالة مراجعة المستفيد'] || '') : '',
       beneficiaryRejectReason: rawRow ? String(rawRow['سبب رفض المستفيد'] || '') : '',
       reviewedBy: rawRow ? String(rawRow['مراجع اعتماد المستفيد'] || '') : '',
@@ -153,6 +166,17 @@ function saveBeneficiary(token, payload) {
     // لسجل قائم تُدار حصرًا من مسارات BeneficiaryNeeds.gs المخصَّصة
     // (setBeneficiaryNeeds/updateBeneficiaryWithNeeds_)، لا من هنا.
     if (!payload.id) {
+      // Phase 2.3 (القسم 6) — طبقة توافق مؤقتة: Index.html الحالية لم
+      // تُعدَّل بعد وما زالت ترسل payload.needs (نص حر أو مصفوفة من شاشة
+      // إضافة المستفيد القديمة) بدل payload.deviceTypes المنظَّمة. تُحوَّل
+      // هنا خادميًا إلى deviceTypes عبر نفس المدقِّق الموحَّد المستخدَم في
+      // الاستيراد (parseDeviceTypesFromLegacyText_ + validateNewNeedDeviceTypes_)
+      // فلا تُقبل أي قيمة خارج الأنواع الثلاثة، ولا يُكتب الحقل النصي
+      // القديم إطلاقًا لسجل جديد. تُحذَف هذه الطبقة عند تحديث الواجهة
+      // لترسل deviceTypes مباشرة.
+      if ((!Array.isArray(payload.deviceTypes) || !payload.deviceTypes.length) && payload.needs) {
+        payload = Object.assign({}, payload, {deviceTypes: parseDeviceTypesFromLegacyText_(payload.needs)});
+      }
       if (!Array.isArray(payload.deviceTypes) || !payload.deviceTypes.length) {
         throw new Error('اختر احتياجًا واحدًا على الأقل من النموذج الجديد.');
       }
@@ -299,11 +323,26 @@ function saveBeneficiary_(user, payload, options) {
   return result;
 }
 
+/**
+ * Phase 2.3 (القسم 1): كل صف مستورد ينشئ احتياجات مستقلة "بانتظار
+ * المراجعة" من الأنواع الثلاثة المعتمدة فقط — لا يبقى مستفيد مستورد
+ * خارج دورة الاعتماد. عمود "الاحتياج" في الملف يُقرأ كما كان (نص حر
+ * بفواصل عربية/إنجليزية أو شرطات)، لكنه **لا يُكتب** في الحقل النصي
+ * القديم لأي سجل جديد (مصدر الحقيقة الوحيد بعد الاستيراد هو ورقة
+ * "احتياجات المستفيدين")، ولا تُكتب "حالة المستفيد" القديمة كمصدر قرار.
+ *
+ * الدفعة تبقى ذرّية بالكامل كما كانت (فحص شامل أولًا، ثم كتابة واحدة):
+ * التحقق الكامل (بما فيه صيغة الاحتياج) قبل أي كتابة؛ عند الكتابة،
+ * الاحتياجات أولًا فالمستفيدون أخيرًا (نفس ترتيب createBeneficiaryWithNeeds_
+ * الذرّي في BeneficiaryNeeds.gs)؛ فشل كتابة المستفيدين بعد نجاح
+ * الاحتياجات يزيل احتياجات هذه الدفعة فقط (لا يمس أي بيانات سابقة).
+ */
 function importBeneficiaries(token, rows, acceptedPledge) {
   const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
   if (acceptedPledge !== true) throw new Error('يجب الموافقة على التعهد قبل الاستيراد');
   if (!Array.isArray(rows) || rows.length === 0 || rows.length > 1000) throw new Error('الملف فارغ أو يتجاوز 1000 سجل');
-  const valid = [];
+  const validBeneficiaries = [];
+  const validRowMeta = []; // موازٍ لـvalidBeneficiaries: {associationId, deviceTypes}
   const errors = [];
   // يتتبّع أرقام الجوال ضمن الملف نفسه (لكل جمعية على حدة) لاكتشاف تكرار
   // بين صفوف الملف الواحد، بالإضافة إلى فحص السجلات الموجودة مسبقًا في الجدول.
@@ -312,6 +351,7 @@ function importBeneficiaries(token, rows, acceptedPledge) {
     try {
       const associationId = user.role === 'ASSOCIATION' ? user.associationId : cleanId_(row.associationId);
       if (!associationId) throw new Error('رقم الجمعية مطلوب');
+      if (!findById_(APP.sheets.associations, 'رقم الجمعية', associationId)) throw new Error('رقم جمعية غير موجود');
       const place = validateRegionCity_(row.region, row.city);
       const coordinates = optionalCoordinate_(row.lat, row.lng);
       const hasCoordinates = coordinates.lat !== '';
@@ -324,7 +364,11 @@ function importBeneficiaries(token, rows, acceptedPledge) {
         throw new Error('يوجد مستفيد بنفس رقم الجوال لدى هذه الجمعية بالفعل — لن يتم استيراد هذا الصف');
       }
       seenPhones[phoneKey] = index + 2;
-      valid.push({
+      // يرمي خطأً صريحًا باسم النوع ورقم الصف عند أي نوع غير معروف أو
+      // خارج الأنواع الثلاثة — لا يتجاهله ويقبل بقية الصف (نفس التحقق
+      // الموحَّد المستخدَم في كل مسارات الإنشاء الجديدة).
+      const deviceTypes = parseDeviceTypesFromLegacyText_(row.needs);
+      validBeneficiaries.push({
         'رقم المستفيد': '',
         'رقم الجمعية': associationId,
         'الاسم': requiredText_(row.name, 'الاسم', 120),
@@ -338,7 +382,6 @@ function importBeneficiaries(token, rows, acceptedPledge) {
         'ضمان اجتماعي': row.socialSecurity === true || row.socialSecurity === 'نعم' ? 'نعم' : 'لا',
         'الحالة الاجتماعية': validateSocialStatus_(row.socialStatus),
         'مبلغ الدخل': boundedNumber_(row.income || 0, 0, 1000000, 'مبلغ الدخل'),
-        'الاحتياج': normalizeNeeds_(row.needs),
         'حالة المستفيد': 'جديد',
         'حالة التسليم': 'لم يبدأ',
         'رقم المندوب': '',
@@ -350,37 +393,82 @@ function importBeneficiaries(token, rows, acceptedPledge) {
         'خط الطول': coordinates.lng,
         'علامة مميزة': cleanText_(row.landmark, 200),
         'مصدر الموقع': hasCoordinates ? 'استيراد' : '',
-        'تاريخ تحديث الموقع': hasCoordinates ? now_() : ''
+        'تاريخ تحديث الموقع': hasCoordinates ? now_() : '',
+        'حالة مراجعة المستفيد': 'تحت المراجعة'
       });
+      validRowMeta.push({associationId: associationId, deviceTypes: deviceTypes});
     } catch (error) {
       errors.push({row: index + 2, message: error.message});
     }
   });
-  if (errors.length) return {ok: false, validCount: valid.length, errorCount: errors.length, errors: errors.slice(0, 50)};
-  const beneficiaryIds = nextIds_('BEN', valid.length);
-  valid.forEach((record, index) => record['رقم المستفيد'] = beneficiaryIds[index]);
-  // إعادة فحص التكرار المؤكَّد داخل قفل واحد قبل الكتابة الفعلية مباشرة —
-  // يمنع استيرادَين متزامنَين (أو استيرادًا وإضافة فردية متزامنة) من إدخال
-  // نفس رقم الجوال مرتين رغم اجتياز الفحص الأول قبل القفل.
+  if (errors.length) return {ok: false, validCount: validBeneficiaries.length, errorCount: errors.length, errors: errors.slice(0, 50)};
+
   const lock = LockService.getScriptLock();
-  lock.waitLock(15000);
+  lock.waitLock(20000);
+  let generatedNeedIds = [];
   try {
     // إبطال ذاكرة الجدول المخزَّنة لهذا الطلب قبل إعادة الفحص: بدون هذا،
     // قد تُعاد قراءة لقطة سابقة على الانتظار للقفل نفسه، فيفوّت فحص
     // السباق تكرارًا كتبه تنفيذ آخر أثناء الانتظار.
     invalidateTableCache_(APP.sheets.beneficiaries);
-    const raceDuplicate = valid.find(record => findConfirmedDuplicateBeneficiary_(String(record['رقم الجمعية']), String(record['رقم الجوال']), null));
+    invalidateTableCache_(APP.sheets.beneficiaryNeeds);
+    const raceDuplicate = validBeneficiaries.find(record => findConfirmedDuplicateBeneficiary_(String(record['رقم الجمعية']), String(record['رقم الجوال']), null));
     if (raceDuplicate) throw new Error('تم اكتشاف تكرار في رقم الجوال أثناء الاستيراد؛ أعد المحاولة');
-    appendObjects_(APP.sheets.beneficiaries, valid);
+
+    const beneficiaryIds = nextIdsLocked_('BEN', validBeneficiaries.length);
+    const totalNeeds = validRowMeta.reduce((sum, meta) => sum + meta.deviceTypes.length, 0);
+    const needIds = nextIdsLocked_('NED', totalNeeds);
+    let needIdCursor = 0;
+    const nowStamp = now_();
+    const needRowsToWrite = [];
+    validBeneficiaries.forEach((record, i) => {
+      record['رقم المستفيد'] = beneficiaryIds[i];
+      const meta = validRowMeta[i];
+      meta.deviceTypes.forEach(deviceType => {
+        const needId = needIds[needIdCursor++];
+        generatedNeedIds.push(needId);
+        needRowsToWrite.push({
+          'رقم الاحتياج': needId, 'رقم المستفيد': beneficiaryIds[i], 'رقم الجمعية': meta.associationId,
+          'نوع الجهاز': deviceType, 'حالة القرار': 'بانتظار المراجعة', 'سبب الرفض': '', 'المراجع': '',
+          'تاريخ القرار': '', 'حالة التنفيذ': '', 'تاريخ الإنشاء': nowStamp, 'آخر تحديث': nowStamp
+        });
+      });
+    });
+
+    let needsWritten = false;
+    try {
+      appendObjects_(APP.sheets.beneficiaryNeeds, needRowsToWrite);
+      needsWritten = true;
+      appendObjects_(APP.sheets.beneficiaries, validBeneficiaries);
+    } catch (writeError) {
+      if (needsWritten) {
+        const cleanupErrors = [];
+        generatedNeedIds.forEach(id => {
+          try { deleteRowById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', id); }
+          catch (cleanupError) { cleanupErrors.push(id + ': ' + cleanupError.message); }
+        });
+        if (cleanupErrors.length) {
+          Logger.log('حرج جدًا: فشل تنظيف احتياجات دفعة استيراد بعد تعذّر كتابة المستفيدين — traceId=' + requestMeta_().traceId + ' — ' + cleanupErrors.join('؛ '));
+          throw new Error('تعذّر إتمام الاستيراد، وتعذّر تنظيف الاحتياجات المؤقتة أيضًا — يتطلب مراجعة يدوية فورية (traceId: ' + requestMeta_().traceId + ')');
+        }
+      }
+      throw new Error('تعذّر إتمام الاستيراد: ' + writeError.message + ' — لم يُكتب أي سجل من هذه الدفعة (لا نجاح جزئي).');
+    }
   } finally {
     lock.releaseLock();
   }
-  audit_(user, 'استيراد مستفيدين', 'المستفيدون', '', 'عدد السجلات: ' + valid.length);
   clearDashboardCache();
+  // فشل تسجيل audit بعد نجاح الاستيراد فعليًا لا يُعتبر فشلًا للعملية —
+  // البيانات الأساسية اكتملت وصحيحة؛ فقط سجل العمليات قد يفوّت هذه الحركة.
+  try {
+    audit_(user, 'استيراد مستفيدين', 'المستفيدون', '', 'عدد السجلات: ' + validBeneficiaries.length);
+  } catch (auditError) {
+    Logger.log('تحذير: فشل تسجيل العملية في سجل العمليات بعد نجاح الاستيراد فعليًا — traceId=' + requestMeta_().traceId + ' — ' + auditError.message);
+  }
   // لا تُعاد السجلات المستوردة كاملة (قد تصل لألف سجل) — الواجهة تُعيد
   // طلب صفحة المستفيدين الأولى بعد نجاح الاستيراد بدلًا من ذلك.
   const summary = computeCoreSummary_(user.role === 'ASSOCIATION' ? user.associationId : null);
-  return {ok: true, imported: valid.length, summary: summary};
+  return {ok: true, imported: validBeneficiaries.length, summary: summary};
 }
 
 /**
@@ -479,9 +567,15 @@ function inspectBeneficiaryExcel(token, payload) {
             row.possibleDuplicateId = String(possible['رقم المستفيد']);
           }
         }
+        // Phase 2.3 (القسم 1): يعرض الفحص المسبق أنواع الاحتياج المقروءة
+        // من عمود "الاحتياج" الحر وصلاحيتها — بنفس منطق التحقق الذي
+        // سيُنفَّذ فعليًا عند الاستيراد (parseDeviceTypesFromLegacyText_)،
+        // بدل ترك المستخدم يكتشف خطأ نوع الاحتياج فقط بعد الضغط على "استيراد".
+        row.deviceTypes = parseDeviceTypesFromLegacyText_(row.needs);
         row.valid = true;
       } catch (error) {
         row.valid = false;
+        row.deviceTypes = row.deviceTypes || [];
         row.error = error.message;
         errors.push({row: row.row, message: error.message});
       }
@@ -492,61 +586,122 @@ function inspectBeneficiaryExcel(token, payload) {
   }
 }
 
+/**
+ * Phase 2.3 (القسم 3): لم يعد يكفي أن تكون أجهزة المستفيد "مخصص" ليُسمح
+ * بتعيين مندوب — يجب أن يكون المستفيد نفسه معتمَدًا، وأن يملك احتياجًا
+ * معتمدًا واحدًا على الأقل، وأن يكون **كل** احتياج معتمد مرتبطًا فعليًا
+ * بجهاز صحيح (نوع مطابق، جمعية مطابقة، غير تالف/مُسلَّم) — لا يكفي وجود
+ * أي جهاز "مخصص" بصرف النظر عن ربطه الفعلي بالاستحقاق. كل الفحوصات
+ * العشرة والكتابة تتم داخل قفل واحد مع إعادة قراءة كاملة (لا فحص قبل
+ * القفل يُعاد استخدامه بعده).
+ */
 function assignDelegate(token, beneficiaryId, delegateId) {
   return perfTime_('assignDelegate', () => {
   const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
   beneficiaryId = cleanId_(beneficiaryId);
   delegateId = cleanId_(delegateId);
-  const beneficiary = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId);
-  const delegate = findById_(APP.sheets.delegates, 'رقم المندوب', delegateId);
-  if (!beneficiary || !delegate || String(delegate['الحالة']) !== 'نشط') throw new Error('المستفيد أو المندوب غير صالح');
-  if (String(beneficiary['رقم الجمعية']) !== String(delegate['رقم الجمعية'])) throw new Error('يجب أن يتبع المندوب والمستفيد الجمعية نفسها');
-  if (user.role === 'ASSOCIATION' && String(beneficiary['رقم الجمعية']) !== user.associationId) throw new Error('ليس لديك صلاحية');
-  // لا إحالة قبل تأكيد موقع المستفيد على الخريطة — "الحي" وحده حد أدنى
-  // لحفظ الطلب فقط، لا يكفي لإخراج المهمة لمندوب ميداني فعليًا.
-  if (!beneficiaryLocationConfirmed_(beneficiary)) {
-    throw new Error('لا يمكن إحالة هذا المستفيد قبل تأكيد موقعه على الخريطة — استكمل الموقع أولًا');
-  }
 
-  // يجب أن يتحقق كل شيء قبل أي كتابة: لا كتابة جزئية عند رفض العملية.
-  const currentDeliveryStatus = String(beneficiary['حالة التسليم'] || 'لم يبدأ');
-  assertDeliveryTransition_(currentDeliveryStatus, 'خرج مع المندوب');
-  const activeDevices = devicesForBeneficiary_(beneficiaryId).filter(d => ['مخصص', 'مع المندوب'].indexOf(d.status) >= 0);
-  if (!activeDevices.length) throw new Error('لا توجد أجهزة مخصَّصة لهذا المستفيد بعد؛ خصِّص جهازًا أولًا قبل تعيين مندوب');
-  activeDevices.forEach(device => assertDeviceTransition_(device.status, 'مع المندوب'));
-
-  const dispatchedNow = activeDevices.filter(device => device.status === 'مخصص');
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
+  let dispatchedNow = [];
+  let approvedNeedsCount = 0;
   try {
-    // إعادة القراءة والتحقق داخل القفل: الفحوصات أعلاه تمت قبل الانتظار
-    // على القفل، وقد يكون تنفيذ آخر غيّر حالة المستفيد أو الأجهزة أثناء
-    // ذلك الانتظار (مثل نقرتين متتاليتين أو تسليم مُتزامن).
     invalidateTableCache_(APP.sheets.beneficiaries);
     invalidateTableCache_(APP.sheets.devices);
-    const latestBeneficiary = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId);
-    if (!latestBeneficiary) throw new Error('المستفيد غير موجود');
-    if (!beneficiaryLocationConfirmed_(latestBeneficiary)) {
+    invalidateTableCache_(APP.sheets.delegates);
+    invalidateTableCache_(APP.sheets.beneficiaryNeeds);
+
+    // (1) المستفيد موجود، (10) المندوب نشط
+    const beneficiary = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId);
+    const delegate = findById_(APP.sheets.delegates, 'رقم المندوب', delegateId);
+    if (!beneficiary || !delegate || String(delegate['الحالة']) !== 'نشط') throw new Error('المستفيد أو المندوب غير صالح');
+    // (6) تطابق جمعية المندوب/المستفيد
+    if (String(beneficiary['رقم الجمعية']) !== String(delegate['رقم الجمعية'])) throw new Error('يجب أن يتبع المندوب والمستفيد الجمعية نفسها');
+    if (user.role === 'ASSOCIATION' && String(beneficiary['رقم الجمعية']) !== user.associationId) throw new Error('ليس لديك صلاحية');
+    // (9) تأكيد الموقع
+    if (!beneficiaryLocationConfirmed_(beneficiary)) {
       throw new Error('لا يمكن إحالة هذا المستفيد قبل تأكيد موقعه على الخريطة — استكمل الموقع أولًا');
     }
-    assertDeliveryTransition_(String(latestBeneficiary['حالة التسليم'] || 'لم يبدأ'), 'خرج مع المندوب');
-    const latestDevices = devicesForBeneficiary_(beneficiaryId).filter(d => ['مخصص', 'مع المندوب'].indexOf(d.status) >= 0);
-    if (!latestDevices.length) throw new Error('لا توجد أجهزة مخصَّصة لهذا المستفيد بعد؛ خصِّص جهازًا أولًا قبل تعيين مندوب');
-    latestDevices.forEach(device => assertDeviceTransition_(device.status, 'مع المندوب'));
-    const latestDispatchedNow = latestDevices.filter(device => device.status === 'مخصص');
-    latestDispatchedNow.forEach(device => {
-      updateById_(APP.sheets.devices, 'رقم الجهاز', device.id, {'حالة الجهاز': 'مع المندوب'});
+    // (2) المستفيد معتمد فعليًا (لا "تحت المراجعة" ولا "مرفوض")
+    if (String(beneficiary['حالة مراجعة المستفيد'] || '') !== 'معتمد') {
+      throw new Error('«المستفيد ما زال تحت المراجعة، ولا يمكن تعيين مندوب قبل اعتماد الإدارة.»');
+    }
+
+    const associationId = String(beneficiary['رقم الجمعية']);
+    // (3) احتياج معتمد واحد على الأقل
+    const approvedNeeds = readTable_(APP.sheets.beneficiaryNeeds).rows
+      .filter(row => String(row['رقم المستفيد']) === beneficiaryId && String(row['حالة القرار']) === 'معتمد');
+    if (!approvedNeeds.length) {
+      throw new Error('«لا يمكن تعيين مندوب؛ لم تجهز جميع الأجهزة المعتمدة لهذا المستفيد.»');
+    }
+    approvedNeedsCount = approvedNeeds.length;
+
+    const devicesById = {};
+    readTable_(APP.sheets.devices).rows.forEach(row => { devicesById[String(row['رقم الجهاز'])] = row; });
+    const deviceByNeed = {};
+    Object.keys(devicesById).forEach(id => {
+      const needId = String(devicesById[id]['رقم الاحتياج'] || '');
+      if (needId) deviceByNeed[needId] = devicesById[id];
     });
-    updateById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId, {
-      'رقم المندوب': delegateId,
-      'حالة المستفيد': 'جاري التسليم',
-      'حالة التسليم': 'خرج مع المندوب',
-      'آخر تحديث': now_()
+
+    // (4)+(5)+(6)+(7)+(8) كل احتياج معتمد مرتبط فعليًا بجهاز صحيح كامل الشروط
+    const readyDevices = approvedNeeds.map(need => {
+      const needId = String(need['رقم الاحتياج']);
+      const device = deviceByNeed[needId];
+      const deviceStatus = device ? String(device['حالة الجهاز']) : '';
+      const linkedCorrectly = device
+        && String(device['النوع']) === String(need['نوع الجهاز'])
+        && String(device['رقم الجمعية']) === associationId
+        && String(need['رقم الجمعية']) === associationId
+        && String(device['رقم المستفيد']) === beneficiaryId
+        && ['تالف', 'تم التسليم'].indexOf(deviceStatus) === -1
+        && ['مخصص', 'مع المندوب'].indexOf(deviceStatus) !== -1
+        && ['استحقاق معتمد', 'بانتظار توفر الجهاز'].indexOf(String(need['حالة التنفيذ'])) === -1;
+      if (!linkedCorrectly) {
+        throw new Error('«لا يمكن تعيين مندوب؛ لم تجهز جميع الأجهزة المعتمدة لهذا المستفيد.»');
+      }
+      return {id: String(device['رقم الجهاز']), status: deviceStatus, needId: needId};
     });
+
+    readyDevices.forEach(device => assertDeviceTransition_(device.status, 'مع المندوب'));
+    assertDeliveryTransition_(String(beneficiary['حالة التسليم'] || 'لم يبدأ'), 'خرج مع المندوب');
+    dispatchedNow = readyDevices.filter(device => device.status === 'مخصص');
+
+    // كتابة ذرّية واحدة، مع تراجع تعويضي كامل عند فشل جزئي في المنتصف.
+    const deviceSnapshots = [];
+    try {
+      dispatchedNow.forEach(device => {
+        deviceSnapshots.push({id: device.id, status: device.status});
+        updateById_(APP.sheets.devices, 'رقم الجهاز', device.id, {'حالة الجهاز': 'مع المندوب'});
+      });
+      updateById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId, {
+        'رقم المندوب': delegateId,
+        'حالة المستفيد': 'جاري التسليم',
+        'حالة التسليم': 'خرج مع المندوب',
+        'آخر تحديث': now_()
+      });
+      dispatchedNow.forEach(device => {
+        const need = findById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', device.needId);
+        if (need && String(need['حالة التنفيذ']) === 'جهاز جاهز') {
+          updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', device.needId, {'حالة التنفيذ': 'خرج مع المندوب', 'آخر تحديث': now_()});
+        }
+      });
+    } catch (writeError) {
+      const rollbackErrors = [];
+      deviceSnapshots.forEach(snap => {
+        try { updateById_(APP.sheets.devices, 'رقم الجهاز', snap.id, {'حالة الجهاز': snap.status}); }
+        catch (rollbackError) { rollbackErrors.push(snap.id + ': ' + rollbackError.message); }
+      });
+      if (rollbackErrors.length) {
+        Logger.log('حرج جدًا: فشل تراجع تعيين مندوب جزئي — traceId=' + requestMeta_().traceId + ' — ' + rollbackErrors.join('؛ '));
+        throw new Error('تعذّر إتمام تعيين المندوب، وتعذّر التراجع الكامل أيضًا — يتطلب مراجعة يدوية فورية (traceId: ' + requestMeta_().traceId + ')');
+      }
+      throw new Error('تعذّر تعيين المندوب: ' + writeError.message);
+    }
   } finally {
     lock.releaseLock();
   }
-  audit_(user, 'تعيين مندوب', 'المستفيدون', beneficiaryId, 'المندوب: ' + delegateId + ' — عدد الأجهزة: ' + activeDevices.length);
+  audit_(user, 'تعيين مندوب', 'المستفيدون', beneficiaryId, 'المندوب: ' + delegateId + ' — عدد الاحتياجات المعتمدة: ' + approvedNeedsCount);
   // سجل مستقل لكل جهاز خرج فعليًا مع المندوب الآن — هذا هو مصدر "تاريخ
   // الخروج مع المندوب" في صفحة تفاصيل الجهاز (سجل عمليات، لا عمود جديد
   // في الجدول، فلا حاجة لأي ترحيل مخطط بيانات).

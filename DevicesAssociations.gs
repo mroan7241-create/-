@@ -45,75 +45,168 @@ function listAssociations_(user, options) {
   return Object.assign({ok: true}, paginate_(items, options));
 }
 
+/**
+ * Phase 2.3 (القسم 2): saveDevice لم يعد يستطيع ربط جهاز بمستفيد دون
+ * المرور بنموذج الاعتماد الجديد. جهاز بلا مستفيد (مستودع) يبقى كما كان
+ * بلا أي شرط إضافي. جهاز بمستفيد: يُشتق رقم الاحتياج المناسب تلقائيًا
+ * من (رقم المستفيد + نوع الجهاز) — لا تحتاج الواجهة الحالية (Index.html
+ * غير المعدَّلة بعد) لإرسال needId يدويًا؛ الخادم يتحقق من اعتماد
+ * المستفيد، ووجود احتياج معتمد من النوع نفسه، وعدم ربط جهاز آخر بهذا
+ * الاحتياج من قبل، قبل أي كتابة. كل القراءات والكتابات هنا داخل قفل
+ * واحد مع إعادة قراءة كاملة (لا فحص قبل القفل يُعاد استخدامه بعده).
+ */
 function saveDevice(token, payload) {
   const user = requireSession_(token, ['ADMIN']);
   payload = payload || {};
-  const id = payload.id ? cleanId_(payload.id) : nextId_('DEV');
-  const existing = payload.id ? findById_(APP.sheets.devices, 'رقم الجهاز', id) : null;
-  if (payload.id && !existing) throw new Error('الجهاز غير موجود');
-
+  const isNew = !payload.id;
+  const id = isNew ? nextId_('DEV') : cleanId_(payload.id);
   const beneficiaryId = cleanId_(payload.beneficiaryId);
-  let associationId = cleanId_(payload.associationId);
-  const beneficiary = beneficiaryId ? findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId) : null;
-  if (beneficiaryId && !beneficiary) throw new Error('المستفيد المحدَّد غير موجود');
-  if (beneficiaryId) {
-    // جهاز مرتبط بمستفيد يتبع جمعية ذلك المستفيد دائمًا — يُشتَق هنا
-    // خادميًا بصرف النظر عمّا أُرسل من العميل، فلا يبقى أي مسار (فراغ
-    // الحقل، أو تعارض بين حقلين مستقلَّين في النموذج نفسه) يمكن أن ينتج
-    // عنه جهاز بجمعية فارغة أو مختلفة عن جمعية مستفيده الفعلية — هذا
-    // بالضبط ما كانت diagnoseStateIntegrity_ ترصده لاحقًا تحت
-    // DEVICE_ASSOCIATION_MISMATCH بدل مُنِع كتابته من الأصل.
-    associationId = String(beneficiary['رقم الجمعية']);
-  } else if (associationId && !findById_(APP.sheets.associations, 'رقم الجمعية', associationId)) {
-    throw new Error('اختر جمعية صحيحة');
-  }
 
-  const currentStatus = existing ? String(existing['حالة الجهاز']) : '';
-  const currentBeneficiaryId = existing ? String(existing['رقم المستفيد'] || '') : '';
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    invalidateTableCache_(APP.sheets.devices);
+    invalidateTableCache_(APP.sheets.beneficiaries);
+    invalidateTableCache_(APP.sheets.beneficiaryNeeds);
 
-  // منع تخصيص جهاز نشط لدى مستفيد لمستفيد آخر مباشرة — يجب إرجاعه
-  // للمستودع أولًا. هذا يمنع "سرقة" جهاز من مستفيد بصورة ضمنية.
-  if (currentBeneficiaryId && beneficiaryId && currentBeneficiaryId !== beneficiaryId
-    && ['مخصص', 'مع المندوب', 'تم التسليم'].indexOf(currentStatus) >= 0) {
-    throw new Error('هذا الجهاز مخصَّص لمستفيد آخر حاليًا؛ أعده إلى المستودع أولًا قبل تخصيصه لمستفيد جديد');
-  }
+    const existing = isNew ? null : findById_(APP.sheets.devices, 'رقم الجهاز', id);
+    if (!isNew && !existing) throw new Error('الجهاز غير موجود');
 
-  let status = payload.status;
-  if (status === currentStatus) {
-    // لا تغيير فعلي في الحالة (تعديل حقول أخرى كالاسم/الملاحظات فقط) —
-    // مسموح دائمًا حتى لو كانت الحالة نهائية (تم التسليم)، فهذا ليس
-    // إعادة تنفيذ للعملية بل مجرد تصحيح بيانات وصفية لا يمسّ الحالة.
-  } else {
-    if (DEVICE_MANUAL_STATUSES_.indexOf(status) === -1) {
-      if (DEVICE_STATUSES.indexOf(status) >= 0) {
-        throw new Error('لا يمكن ضبط حالة "' + status + '" يدويًا؛ تُحدَّث فقط عبر تعيين المندوب أو تأكيد التسليم');
-      }
-      // لم يُرسَل حقل حالة صالح: اشتقاق تلقائي من وجود مستفيد أو غيابه.
-      status = beneficiaryId ? 'مخصص' : 'بالمستودع';
+    const currentStatus = existing ? String(existing['حالة الجهاز']) : '';
+    const currentBeneficiaryId = existing ? String(existing['رقم المستفيد'] || '') : '';
+    const currentNeedId = existing ? String(existing['رقم الاحتياج'] || '') : '';
+    const currentType = existing ? String(existing['النوع'] || '') : '';
+    const type = validateDeviceType_(payload.type, currentType);
+
+    // جهاز مرتبط فعليًا باحتياج معتمد لا يمكن تغيير نوعه مباشرة — يجب
+    // إعادته إلى المستودع أولًا (يُفكّ الربط تلقائيًا هناك) ثم تغيير النوع.
+    if (currentNeedId && type !== currentType) {
+      throw new Error('هذا الجهاز مرتبط باستحقاق من نوع "' + currentType + '"؛ أعده إلى المستودع أولًا (يُفكّ الربط تلقائيًا) قبل تغيير نوعه');
     }
-    assertDeviceTransition_(currentStatus, status);
-  }
 
-  const values = {
-    'اسم الجهاز': requiredText_(payload.name, 'اسم الجهاز', 100),
-    'النوع': validateDeviceType_(payload.type, existing ? String(existing['النوع'] || '') : ''),
-    'رقم الجمعية': associationId,
-    'رقم المستفيد': beneficiaryId,
-    'حالة الجهاز': status,
-    'ملاحظات': cleanText_(payload.notes, 500)
-  };
-  if (existing) {
-    updateById_(APP.sheets.devices, 'رقم الجهاز', id, values);
-    audit_(user, 'تعديل جهاز', 'الأجهزة', id, 'الحالة: ' + (currentStatus || '—') + ' ← ' + status);
-  } else {
-    appendObject_(APP.sheets.devices, Object.assign({'رقم الجهاز': id, 'تاريخ الإضافة': now_(), 'تاريخ التسليم': ''}, values));
-    audit_(user, 'إضافة جهاز', 'الأجهزة', id, 'الحالة الابتدائية: ' + status);
+    let associationId = cleanId_(payload.associationId);
+    let status;
+    let finalBeneficiaryId;
+    let finalNeedId;
+
+    if (!beneficiaryId) {
+      // ------- بلا مستفيد: إضافة جهاز مستودع، أو إرجاع جهاز من مستفيد -------
+      if (associationId && !findById_(APP.sheets.associations, 'رقم الجمعية', associationId)) {
+        throw new Error('اختر جمعية صحيحة');
+      }
+      finalBeneficiaryId = '';
+      finalNeedId = '';
+
+      status = payload.status;
+      if (status === currentStatus) {
+        // لا تغيير فعلي — مسموح دائمًا (تعديل بيانات وصفية فقط).
+        finalNeedId = currentBeneficiaryId ? '' : currentNeedId;
+      } else {
+        if (DEVICE_MANUAL_STATUSES_.indexOf(status) === -1) {
+          if (DEVICE_STATUSES.indexOf(status) >= 0) {
+            throw new Error('لا يمكن ضبط حالة "' + status + '" يدويًا؛ تُحدَّث فقط عبر تعيين المندوب أو تأكيد التسليم');
+          }
+          status = 'بالمستودع';
+        }
+        assertDeviceTransition_(currentStatus, status);
+      }
+
+      // إرجاع جهاز كان مرتبطًا بنموذج الاحتياج الجديد إلى المستودع: يُعاد
+      // ضبط حالة تنفيذ الاحتياج المرتبط ("جهاز جاهز" ← "استحقاق معتمد")
+      // بدل تركها معلَّقة على جهاز لم يعد مرتبطًا فعليًا.
+      if (currentBeneficiaryId && currentNeedId) {
+        const releasedNeed = findById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', currentNeedId);
+        if (releasedNeed && String(releasedNeed['حالة التنفيذ']) === 'جهاز جاهز') {
+          updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', currentNeedId, {'حالة التنفيذ': 'استحقاق معتمد', 'آخر تحديث': now_()});
+        }
+      }
+    } else {
+      // ------- بمستفيد: تخصيص/ربط عبر نموذج الاحتياج المعتمد -------
+      const beneficiary = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId);
+      if (!beneficiary) throw new Error('المستفيد المحدَّد غير موجود');
+      associationId = String(beneficiary['رقم الجمعية']);
+
+      if (currentBeneficiaryId && currentBeneficiaryId !== beneficiaryId
+        && ['مخصص', 'مع المندوب', 'تم التسليم'].indexOf(currentStatus) >= 0) {
+        throw new Error('هذا الجهاز مخصَّص لمستفيد آخر حاليًا؛ أعده إلى المستودع أولًا قبل تخصيصه لمستفيد جديد');
+      }
+      // "مع المندوب"/"تم التسليم" تبقيان محظورتين يدويًا من هذا النموذج
+      // بصرف النظر عن مسار الربط — لا تُحدَّثان إلا عبر assignDelegate/confirmDelivery.
+      if (payload.status && payload.status !== currentStatus
+        && DEVICE_MANUAL_STATUSES_.indexOf(payload.status) === -1 && DEVICE_STATUSES.indexOf(payload.status) >= 0) {
+        throw new Error('لا يمكن ضبط حالة "' + payload.status + '" يدويًا؛ تُحدَّث فقط عبر تعيين المندوب أو تأكيد التسليم');
+      }
+
+      const sameBeneficiaryHistorical = currentBeneficiaryId === beneficiaryId && currentBeneficiaryId && !currentNeedId;
+      if (sameBeneficiaryHistorical) {
+        // سجل تاريخي: مرتبط بالفعل بنفس المستفيد بلا رقم احتياج معتمد.
+        // تعديل بيانات وصفية بلا تغيير الحالة يبقى مسموحًا لعدم كسر
+        // القراءة/العرض؛ أي محاولة تغيير حالة فعلية (إعادة تخصيص/تقدّم)
+        // تُرفض حتى يُربط الجهاز بالاستحقاق الصحيح أولًا (لا ربط تلقائي
+        // مع وجود لبس محتمل في أي احتياج يُقصَد).
+        if (payload.status && payload.status !== currentStatus) {
+          throw new Error('«هذا الجهاز مرتبط بسجل تاريخي دون رقم احتياج معتمد. يلزم ربطه بالاستحقاق قبل متابعة التنفيذ.»');
+        }
+        status = currentStatus;
+        finalBeneficiaryId = beneficiaryId;
+        finalNeedId = '';
+      } else {
+        if (String(beneficiary['حالة مراجعة المستفيد'] || '') !== 'معتمد') {
+          throw new Error('المستفيد ما زال تحت المراجعة أو غير معتمد، ولا يمكن تخصيص جهاز له قبل اعتماد الإدارة.');
+        }
+        const matchingNeed = readTable_(APP.sheets.beneficiaryNeeds).rows.find(row =>
+          String(row['رقم المستفيد']) === beneficiaryId && String(row['نوع الجهاز']) === type);
+        if (!matchingNeed || String(matchingNeed['حالة القرار']) !== 'معتمد') {
+          throw new Error('«لا يملك هذا المستفيد احتياجًا معتمدًا من نوع «' + type + '»، لذلك لا يمكن تخصيص هذا الجهاز له.»');
+        }
+        const needId = String(matchingNeed['رقم الاحتياج']);
+        const conflictingDevice = readTable_(APP.sheets.devices).rows.find(row =>
+          String(row['رقم الاحتياج'] || '') === needId && String(row['رقم الجهاز']) !== id);
+        if (conflictingDevice) {
+          throw new Error('«تم ربط جهاز فعلي سابقًا بهذا الاستحقاق، ولا يمكن ربط جهاز ثانٍ.»');
+        }
+        if (String(matchingNeed['رقم الجمعية']) !== associationId) {
+          throw new Error('جمعية الجهاز لا تطابق جمعية الاحتياج المعتمد');
+        }
+        finalBeneficiaryId = beneficiaryId;
+        finalNeedId = needId;
+        status = 'مخصص';
+        if (currentStatus !== status) assertDeviceTransition_(currentStatus || 'بالمستودع', status);
+      }
+    }
+
+    const values = {
+      'اسم الجهاز': requiredText_(payload.name, 'اسم الجهاز', 100),
+      'النوع': type,
+      'رقم الجمعية': associationId,
+      'رقم المستفيد': finalBeneficiaryId,
+      'رقم الاحتياج': finalNeedId,
+      'حالة الجهاز': status,
+      'ملاحظات': cleanText_(payload.notes, 500)
+    };
+    if (existing) {
+      updateById_(APP.sheets.devices, 'رقم الجهاز', id, values);
+      audit_(user, 'تعديل جهاز', 'الأجهزة', id, 'الحالة: ' + (currentStatus || '—') + ' ← ' + status);
+    } else {
+      appendObject_(APP.sheets.devices, Object.assign({'رقم الجهاز': id, 'تاريخ الإضافة': now_(), 'تاريخ التسليم': ''}, values));
+      audit_(user, 'إضافة جهاز', 'الأجهزة', id, 'الحالة الابتدائية: ' + status);
+    }
+    // ربط جهاز جديد باحتياج معتمد: يُحدَّث تنفيذ الاحتياج إلى "جهاز جاهز"
+    // إن كان بانتظار توفّر الجهاز (لا يمسّ حالات تنفيذ متقدّمة أخرى).
+    if (finalNeedId && finalNeedId !== currentNeedId) {
+      const linkedNeed = findById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', finalNeedId);
+      if (linkedNeed && ['استحقاق معتمد', 'بانتظار توفر الجهاز'].indexOf(String(linkedNeed['حالة التنفيذ'])) !== -1) {
+        updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', finalNeedId, {'حالة التنفيذ': 'جهاز جاهز', 'آخر تحديث': now_()});
+      }
+    }
+    clearDashboardCache();
+    const record = normalizeDevice_(findById_(APP.sheets.devices, 'رقم الجهاز', id));
+    // saveDevice للإدارة فقط — الملخّص دائمًا غير مُقيَّد بجمعية (يطابق لوحة الإدارة).
+    const summary = computeCoreSummary_(null);
+    return {ok: true, id: id, record: record, summary: summary};
+  } finally {
+    lock.releaseLock();
   }
-  clearDashboardCache();
-  const record = normalizeDevice_(findById_(APP.sheets.devices, 'رقم الجهاز', id));
-  // saveDevice للإدارة فقط — الملخّص دائمًا غير مُقيَّد بجمعية (يطابق لوحة الإدارة).
-  const summary = computeCoreSummary_(null);
-  return {ok: true, id: id, record: record, summary: summary};
 }
 
 /**

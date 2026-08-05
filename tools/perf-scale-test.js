@@ -228,6 +228,10 @@ function runScenario(count) {
   metrics.save = save.ms;
   const newBeneficiaryId = save.result.id;
 
+  const newBeneficiaryNeed = S.readTable_('احتياجات المستفيدين').rows.find(row => String(row['رقم المستفيد']) === newBeneficiaryId);
+  S.reviewBeneficiaryNeeds(admin.token, newBeneficiaryId, {
+    beneficiaryDecision: 'معتمد', needDecisions: [{needId: String(newBeneficiaryNeed['رقم الاحتياج']), decision: 'معتمد'}]
+  });
   S.saveDevice(admin.token, { name: 'ثلاجة قياس', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: newBeneficiaryId });
 
   resetPerCallCache();

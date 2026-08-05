@@ -777,20 +777,20 @@ assert('مستفيد بنفس الاسم والمدينة لكن جوال مخت
   dupPossible.ok === true && dupPossible.possibleDuplicateWarning && dupPossible.possibleDuplicateId === dupFirst.id);
 
 const dupImportWithinFile = S2.importBeneficiaries(adminSession.token, [
-  Object.assign({}, dupBase, {name: 'صف أول', phone: '0509990010'}),
-  Object.assign({}, dupBase, {name: 'صف ثانٍ بنفس الجوال', phone: '0509990010'})
+  Object.assign({}, dupBase, {name: 'صف أول', phone: '0509990010', needs: 'ثلاجة'}),
+  Object.assign({}, dupBase, {name: 'صف ثانٍ بنفس الجوال', phone: '0509990010', needs: 'ثلاجة'})
 ], true);
 assert('الاستيراد يرفض تكرارًا بين صفوف الملف نفسه (لا يستورد أي سجل من الدفعة)',
   dupImportWithinFile.ok === false && dupImportWithinFile.errorCount === 1 && /داخل الملف نفسه/.test(dupImportWithinFile.errors[0].message));
 
 const dupImportAgainstDb = S2.importBeneficiaries(adminSession.token, [
-  Object.assign({}, dupBase, {name: 'صف يطابق سجلًا موجودًا', phone: '0509990001'})
+  Object.assign({}, dupBase, {name: 'صف يطابق سجلًا موجودًا', phone: '0509990001', needs: 'ثلاجة'})
 ], true);
 assert('الاستيراد يرفض صفًا يطابق رقم جوال موجود مسبقًا في قاعدة البيانات',
   dupImportAgainstDb.ok === false && /لدى هذه الجمعية بالفعل/.test(dupImportAgainstDb.errors[0].message));
 
 const dupImportClean = S2.importBeneficiaries(adminSession.token, [
-  Object.assign({}, dupBase, {name: 'صف جديد سليم', phone: '0509990020'})
+  Object.assign({}, dupBase, {name: 'صف جديد سليم', phone: '0509990020', needs: 'ثلاجة'})
 ], true);
 assert('الاستيراد ينجح لصف جديد لا يطابق أي تكرار مؤكَّد', dupImportClean.ok === true && dupImportClean.imported === 1);
 
@@ -912,6 +912,10 @@ const detailBeneficiary = S2.saveBeneficiary(adminSession.token, { deviceTypes: 
   associationId: accepted.associationId, name: 'مستفيد تفاصيل الجهاز', region: 'الرياض', city: 'الرياض',
   address: 'حي', district: 'حي الاختبار', phone: '0509990030', familyCount: 2, socialStatus: 'أرملة', needs: [],
   lat: '24.7', lng: '46.6'
+});
+const detailNeed = S2.readTable_('احتياجات المستفيدين').rows.find(row => String(row['رقم المستفيد']) === detailBeneficiary.id);
+S2.reviewBeneficiaryNeeds(adminSession.token, detailBeneficiary.id, {
+  beneficiaryDecision: 'معتمد', needDecisions: [{needId: String(detailNeed['رقم الاحتياج']), decision: 'معتمد'}]
 });
 const detailDevice = S2.saveDevice(adminSession.token, {
   name: 'ثلاجة اختبار التفاصيل', type: 'ثلاجة', associationId: accepted.associationId,
@@ -1153,6 +1157,10 @@ section('23) انحدارات مؤكَّدة من الاختبار الحي 2026
   const ben = S3.saveBeneficiary(admin.token, { deviceTypes: ['ثلاجة'],name: 'مستفيد التعذّر', phone: '0505550002', region: 'الرياض',
     city: 'الرياض', address: 'حي النرجس', district: 'النرجس', familyCount: 4, socialStatus: 'أرملة', needs: [],
     associationId: assoc.id, lat: '24.7', lng: '46.6'});
+  const benRetryNeed = S3.readTable_('احتياجات المستفيدين').rows.find(row => String(row['رقم المستفيد']) === ben.id);
+  S3.reviewBeneficiaryNeeds(admin.token, ben.id, {
+    beneficiaryDecision: 'معتمد', needDecisions: [{needId: String(benRetryNeed['رقم الاحتياج']), decision: 'معتمد'}]
+  });
   const delegate = S3.saveDelegate(admin.token, {name: 'مندوب التعذّر', phone: '0505550003', associationId: assoc.id});
   const device = S3.saveDevice(admin.token, {name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: ben.id});
   S3.assignDelegate(admin.token, ben.id, delegate.id);
@@ -1459,6 +1467,10 @@ section('25) لوحة التحكم التنفيذية: صحة وحدات buildDa
     const withLoc = S2.saveBeneficiary(adminSession.token, { deviceTypes: ['ثلاجة'],associationId: accepted.associationId,
       name: 'بموقع وجهاز لوحة التحكم', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
       phone: '0501230002', familyCount: 1, socialStatus: 'أرملة', needs: [], lat: '24.7', lng: '46.6'});
+    const withLocNeed = S2.readTable_('احتياجات المستفيدين').rows.find(row => String(row['رقم المستفيد']) === withLoc.id);
+    S2.reviewBeneficiaryNeeds(adminSession.token, withLoc.id, {
+      beneficiaryDecision: 'معتمد', needDecisions: [{needId: String(withLocNeed['رقم الاحتياج']), decision: 'معتمد'}]
+    });
     S2.saveDevice(adminSession.token, {name: 'ثلاجة لوحة التحكم', type: 'ثلاجة', associationId: accepted.associationId, beneficiaryId: withLoc.id});
     const boot = S2.getBootstrapDataFor_(adminUser, false);
     const pendingList = S2.listBeneficiaries_(adminUser, {filter: 'بانتظار تحديد الموقع'});
@@ -1515,10 +1527,23 @@ const otherApp = S2.submitAssociationApplication(applicationFixture({
 }));
 const otherAssocForAudit = S2.reviewAssociationApplication(adminSession.token, otherApp.id, 'accept', '');
 
-const auditBeneficiary = S2.saveBeneficiary(adminSession.token, { deviceTypes: ['ثلاجة'],
-  associationId: accepted.associationId, name: 'مستفيد تدقيق الأجهزة', region: 'الرياض', city: 'الرياض',
-  address: 'حي', district: 'حي الاختبار', phone: '0509991111', familyCount: 2, socialStatus: 'أرملة', needs: []
-});
+function approveOneNeedBeneficiary_(name, phone) {
+  const created = S2.saveBeneficiary(adminSession.token, { deviceTypes: ['ثلاجة'],
+    associationId: accepted.associationId, name: name, region: 'الرياض', city: 'الرياض',
+    address: 'حي', district: 'حي الاختبار', phone: phone, familyCount: 2, socialStatus: 'أرملة', needs: []
+  });
+  const need = S2.readTable_('احتياجات المستفيدين').rows.find(row => String(row['رقم المستفيد']) === created.id);
+  S2.reviewBeneficiaryNeeds(adminSession.token, created.id, {
+    beneficiaryDecision: 'معتمد', needDecisions: [{needId: String(need['رقم الاحتياج']), decision: 'معتمد'}]
+  });
+  return created;
+}
+
+// كل جهاز يحتاج احتياجًا معتمدًا مستقلًا خاصًا به (رابطة واحد-لواحد بعد
+// Phase 2.3) — لذلك يُستخدم مستفيدان معتمدان منفصلان هنا، لا مستفيدًا
+// واحدًا لجهازين، حتى لا يصطدم الجهاز الثاني برسالة "احتياج مربوط سلفًا".
+const auditBeneficiary = approveOneNeedBeneficiary_('مستفيد تدقيق الأجهزة 1', '0509991111');
+const auditBeneficiary2 = approveOneNeedBeneficiary_('مستفيد تدقيق الأجهزة 2', '0509991112');
 
 const deviceNoAssoc = S2.saveDevice(adminSession.token, {
   name: 'جهاز بلا جمعية مُرسَلة', type: 'ثلاجة', associationId: '', beneficiaryId: auditBeneficiary.id
@@ -1527,7 +1552,7 @@ assert('جهاز مرتبط بمستفيد لكن بلا associationId مُرس�
   deviceNoAssoc.record.associationId === accepted.associationId);
 
 const deviceWrongAssoc = S2.saveDevice(adminSession.token, {
-  name: 'جهاز بجمعية مختلفة مُرسَلة خطأً', type: 'ثلاجة', associationId: otherAssocForAudit.associationId, beneficiaryId: auditBeneficiary.id
+  name: 'جهاز بجمعية مختلفة مُرسَلة خطأً', type: 'ثلاجة', associationId: otherAssocForAudit.associationId, beneficiaryId: auditBeneficiary2.id
 });
 assert('جهاز مرتبط بمستفيد مع associationId مختلف مُرسَل من العميل: يُصحَّح خادميًا لجمعية المستفيد الحقيقية — لا يبقى بجمعية أخرى أبدًا',
   deviceWrongAssoc.record.associationId === accepted.associationId && deviceWrongAssoc.record.associationId !== otherAssocForAudit.associationId);

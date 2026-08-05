@@ -232,7 +232,7 @@ assert('إضافة المستفيد الفردي تنجح مع بيانات ال
 section('6) استيراد مستفيدين بالجملة');
 const importResult = S.importBeneficiaries(assocToken, [
   { name: 'مستفيد مستورَد أول', region: 'الرياض', city: 'الرياض', address: 'حي الروضة', district: 'الروضة', phone: '0501110004', familyCount: 2, socialStatus: 'يتيم', needs: ['غسالة'] },
-  { name: 'مستفيد مستورَد ثانٍ', region: 'الرياض', city: 'الرياض', address: 'حي النخيل', district: 'النخيل', phone: '0501110005', familyCount: 1, socialStatus: 'أخرى', needs: [] }
+  { name: 'مستفيد مستورَد ثانٍ', region: 'الرياض', city: 'الرياض', address: 'حي النخيل', district: 'النخيل', phone: '0501110005', familyCount: 1, socialStatus: 'أخرى', needs: ['فرن'] }
 ], true);
 assert('الاستيراد الجماعي ينجح لصفَّين صحيحين', importResult.ok && importResult.imported === 2);
 throws('الاستيراد الجماعي بلا تعهّد صريح يُرفض', () => S.importBeneficiaries(assocToken, [
@@ -240,6 +240,10 @@ throws('الاستيراد الجماعي بلا تعهّد صريح يُرفض'
 ], false), 'التعهد');
 
 section('7) تخصيص جهاز للمستفيد');
+const beneficiaryNeed = S.readTable_('احتياجات المستفيدين').rows.find(row => String(row['رقم المستفيد']) === beneficiary.id);
+S.reviewBeneficiaryNeeds(admin.token, beneficiary.id, {
+  beneficiaryDecision: 'معتمد', needDecisions: [{needId: String(beneficiaryNeed['رقم الاحتياج']), decision: 'معتمد'}]
+});
 const device = S.saveDevice(admin.token, { name: 'ثلاجة الرحلة', type: 'ثلاجة', associationId: associationId, beneficiaryId: beneficiary.id });
 assert('إضافة الجهاز وتخصيصه للمستفيد ينجح', device.ok);
 assert('الجهاز المخصَّص لمستفيد يتحول تلقائيًا لحالة "مخصص"',
@@ -421,8 +425,8 @@ const PROOF_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC
   const del = J.saveDelegate(t, {name: 'مندوب الرحلة 2', phone: '0552220003'});
   assert('رحلة 2: الجمعية تضيف مندوبًا وتحصل على رمز دخوله مرة واحدة', del.ok && !!del.accessCode);
   const imported = J.importBeneficiaries(t, [
-    {name: 'مستورد أ', phone: '0552220004', region: 'الرياض', city: 'الخرج', address: 'حي', district: 'حي الاختبار', familyCount: 2, socialStatus: 'أرملة'},
-    {name: 'مستورد ب', phone: '0552220005', region: 'الرياض', city: 'الخرج', address: 'حي', district: 'حي الاختبار', familyCount: 5, socialStatus: 'يتيم'}
+    {name: 'مستورد أ', phone: '0552220004', region: 'الرياض', city: 'الخرج', address: 'حي', district: 'حي الاختبار', familyCount: 2, socialStatus: 'أرملة', needs: 'ثلاجة'},
+    {name: 'مستورد ب', phone: '0552220005', region: 'الرياض', city: 'الخرج', address: 'حي', district: 'حي الاختبار', familyCount: 5, socialStatus: 'يتيم', needs: 'فرن، غسالة'}
   ], true);
   assert('رحلة 2: الاستيراد الجماعي يضيف الصفوف الصحيحة', imported.ok === true && imported.imported === 2);
   assert('رحلة 2: القائمة تعكس الإجمالي الصحيح بعد الاستيراد', J.listBeneficiaries(t, {}).total === 3);
@@ -443,6 +447,10 @@ const PROOF_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC
     region: 'الرياض', city: 'الرياض', phone: '0553330001', email: 'j3@example.org', password: 'ZadJourney2026x'});
   const ben = J.saveBeneficiary(boot.token, { deviceTypes: ['ثلاجة'],name: 'مستفيد الرحلة 3', phone: '0553330002', region: 'الرياض',
     city: 'الرياض', address: 'حي', district: 'حي الاختبار', familyCount: 3, socialStatus: 'أرملة', needs: ['ثلاجة'], associationId: assoc.id});
+  const benNeed3 = J.readTable_('احتياجات المستفيدين').rows.find(row => String(row['رقم المستفيد']) === ben.id);
+  J.reviewBeneficiaryNeeds(boot.token, ben.id, {
+    beneficiaryDecision: 'معتمد', needDecisions: [{needId: String(benNeed3['رقم الاحتياج']), decision: 'معتمد'}]
+  });
   const dev = J.saveDevice(boot.token, {name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id});
   assert('رحلة 3: الجهاز الجديد يبدأ "بالمستودع"', dev.record.status === 'بالمستودع');
   const assigned = J.saveDevice(boot.token, {id: dev.id, name: 'ثلاجة', type: 'ثلاجة',
@@ -464,6 +472,10 @@ const PROOF_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC
   const ben = J.saveBeneficiary(boot.token, { deviceTypes: ['ثلاجة'],name: 'مستفيد الرحلة 4', phone: '0554440002', region: 'الرياض',
     city: 'الرياض', address: 'حي', district: 'حي الاختبار', familyCount: 3, socialStatus: 'أرملة', needs: ['ثلاجة'], associationId: assoc.id,
     lat: '24.7', lng: '46.6'});
+  const benNeed4 = J.readTable_('احتياجات المستفيدين').rows.find(row => String(row['رقم المستفيد']) === ben.id);
+  J.reviewBeneficiaryNeeds(boot.token, ben.id, {
+    beneficiaryDecision: 'معتمد', needDecisions: [{needId: String(benNeed4['رقم الاحتياج']), decision: 'معتمد'}]
+  });
   const del = J.saveDelegate(boot.token, {name: 'مندوب الرحلة 4', phone: '0554440003', associationId: assoc.id});
   J.saveDevice(boot.token, {name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: ben.id});
   J.assignDelegate(boot.token, ben.id, del.id);

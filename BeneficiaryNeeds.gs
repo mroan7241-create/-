@@ -61,6 +61,21 @@ function validateNewNeedDeviceTypes_(deviceTypes) {
 }
 
 /**
+ * تحوّل نص "الاحتياج" الحر من ملف استيراد Excel/CSV (Phase 2.3) إلى
+ * مصفوفة deviceTypes مُتحقَّق منها — تدعم الفواصل الواقعية الثلاث معًا
+ * في النص نفسه (، أو , أو -) بمسافات زائدة حولها، ثم تمر عبر نفس
+ * validateNewNeedDeviceTypes_ (مصدر تحقق واحد لا مصدرين). ترمي خطأً
+ * يسمّي النوع غير الصالح صراحة — لا تتجاهله بصمت وتقبل بقية الصف.
+ */
+function parseDeviceTypesFromLegacyText_(text) {
+  const tokens = String(text || '')
+    .split(/[،,\-]+/)
+    .map(t => t.trim())
+    .filter(Boolean);
+  return validateNewNeedDeviceTypes_(tokens);
+}
+
+/**
  * تسجّل/تُزامن احتياجات مستفيد (نوع جهاز واحد لكل صف). idempotent
  * بطبيعتها: استدعاؤها مرتين بنفس القائمة لا يُنشئ صفوفًا مكرَّرة (تضيف
  * الناقص فقط، ولا تحذف احتياجًا موجودًا وارد ضمن deviceTypes نفسها —
@@ -719,7 +734,8 @@ function needsSummaryByDeviceType_(associationId) {
   function blankBucket() {
     return {
       requestedTotal: 0, approvedTotal: 0, rejectedTotal: 0, deliveredTotal: 0,
-      outstandingApproved: 0, physicalAvailable: 0, readyOrAllocated: 0, shortage: 0
+      outstandingApproved: 0, physicalAvailable: 0, readyOrAllocated: 0, shortage: 0,
+      historicalUnlinkedCount: 0
     };
   }
   const summary = {};
@@ -755,10 +771,14 @@ function needsSummaryByDeviceType_(associationId) {
     } else if (linkedNeedId && needById[linkedNeedId] && String(needById[linkedNeedId]['حالة القرار']) === 'معتمد'
       && (status === 'مخصص' || status === 'مع المندوب')) {
       summary[type].readyOrAllocated++;
+    } else if (!linkedNeedId && linkedToBeneficiary && (status === 'مخصص' || status === 'مع المندوب')) {
+      // سجل تاريخي (Phase 2.3 القسم 4): جهاز مخصَّص لمستفيد من قبل النموذج
+      // الجديد، بلا رقم احتياج — لا يُحسَب في readyOrAllocated (لا يغطي
+      // عجزًا فعليًا حتى يُربط صراحة)، لكنه يُظهَر هنا كعدّاد منفصل حتى لا
+      // يحتاج فريق التسوية إلى تخمين عدد هذه السجلات يدويًا من الشيت.
+      summary[type].historicalUnlinkedCount++;
     }
     // 'تم التسليم' و'تالف': لا تُحسَب في أي من العدّادين — خرجت من التداول.
-    // جهاز مخصص/مع مندوب بلا رقم احتياج صحيح: لا يُحسَب هنا (لا يغطي
-    // عجزًا فعليًا حتى يُربط بشكل صريح وصحيح).
   });
 
   Object.keys(summary).forEach(type => {
@@ -935,12 +955,49 @@ function diagnoseNeedsIntegrity_(token) {
     }
   });
 
+  const needsByBeneficiaryId = {};
+  needs.forEach(row => {
+    const bId = String(row['رقم المستفيد']);
+    (needsByBeneficiaryId[bId] = needsByBeneficiaryId[bId] || []).push(row);
+  });
+
   beneficiaries.forEach(row => {
-    if (String(row['حالة مراجعة المستفيد']) !== 'معتمد') return;
     const beneficiaryId = String(row['رقم المستفيد']);
-    const hasApprovedNeed = needs.some(n => String(n['رقم المستفيد']) === beneficiaryId && String(n['حالة القرار']) === 'معتمد');
-    if (!hasApprovedNeed) {
-      report('critical', 'APPROVED_BENEFICIARY_WITHOUT_APPROVED_NEED', 'مستفيد معتمد بلا أي احتياج معتمد', {beneficiaryId: beneficiaryId});
+    const reviewStatus = String(row['حالة مراجعة المستفيد'] || '');
+    const ownNeeds = needsByBeneficiaryId[beneficiaryId] || [];
+
+    // Phase 2.3 (القسم 7): أي مستفيد — بصرف النظر عن حالة مراجعته — بلا
+    // أي صف احتياج إطلاقًا يعني أنه أُنشئ خارج دورة الاعتماد الجديدة
+    // (تجاوز فعلي لم يعد يجب أن يحدث بعد إغلاق كل نقاط الدخول القديمة).
+    if (!ownNeeds.length) {
+      report('critical', 'BENEFICIARY_WITHOUT_ANY_NEED', 'مستفيد بلا أي صف احتياج في ورقة "احتياجات المستفيدين" — خارج دورة الاعتماد الجديدة (يشمل حالة "تحت المراجعة")', {beneficiaryId: beneficiaryId, reviewStatus: reviewStatus});
+      // مؤشر إضافي محدَّد: يتكئ فعليًا على الحقل النصي القديم وحده كمصدر
+      // للاحتياج (استيراد قبل Phase 2.3، أو تجاوز آخر خارج هذا النظام).
+      if (String(row['الاحتياج'] || '').trim()) {
+        report('warning', 'LEGACY_TEXT_NEED_ONLY', 'مستفيد يتكئ على الحقل النصي القديم "الاحتياج" فقط بلا أي صف احتياج منظَّم', {beneficiaryId: beneficiaryId});
+      }
+    }
+
+    if (reviewStatus === 'معتمد') {
+      const hasApprovedNeed = ownNeeds.some(n => String(n['حالة القرار']) === 'معتمد');
+      if (!hasApprovedNeed) {
+        report('critical', 'APPROVED_BENEFICIARY_WITHOUT_APPROVED_NEED', 'مستفيد معتمد بلا أي احتياج معتمد', {beneficiaryId: beneficiaryId});
+      }
+    }
+
+    // مندوب مُسنَد فعليًا لمستفيد غير معتمد، أو معتمد لكن احتياجاته غير
+    // جاهزة بالكامل — لا يجب أن يحدث بعد تشديد assignDelegate، لكن يبقى
+    // فحصًا تشخيصيًا لأي بيانات قديمة/يدوية سابقة على هذا التعديل.
+    if (String(row['رقم المندوب'] || '').trim()) {
+      if (reviewStatus !== 'معتمد') {
+        report('critical', 'DELEGATE_ASSIGNED_UNAPPROVED_BENEFICIARY', 'مندوب مُسنَد لمستفيد غير معتمد', {beneficiaryId: beneficiaryId, reviewStatus: reviewStatus});
+      } else {
+        const approvedNeeds = ownNeeds.filter(n => String(n['حالة القرار']) === 'معتمد');
+        const notReady = approvedNeeds.some(n => ['استحقاق معتمد', 'بانتظار توفر الجهاز'].indexOf(String(n['حالة التنفيذ'])) !== -1);
+        if (approvedNeeds.length && notReady) {
+          report('critical', 'DELEGATE_ASSIGNED_NEEDS_NOT_READY', 'مندوب مُسنَد لمستفيد لم تُجهَّز جميع احتياجاته المعتمدة بعد', {beneficiaryId: beneficiaryId});
+        }
+      }
     }
   });
 

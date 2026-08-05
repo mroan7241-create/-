@@ -472,15 +472,15 @@ section('6) تقديم الجمعية + حفظ المستفيد + الاستير
   assert('importBeneficiaries يستورد صفًا بحالة اجتماعية معتمدة بنجاح', (() => {
     const result = S.importBeneficiaries(assocSession.token, [{
       name: 'مستورد مرجعي', region: 'الرياض', city: 'الخرج', address: 'حي', district: 'حي الاختبار',
-      phone: '0500000053', familyCount: 3, socialStatus: 'متزوج/متزوجة', needs: []
+      phone: '0500000053', familyCount: 3, socialStatus: 'متزوج/متزوجة', needs: 'ثلاجة'
     }], true);
     return result.ok && result.imported === 1;
   })());
 
   assert('importBeneficiaries يرفض صفًا بحالة اجتماعية غير معروفة كخطأ سطر واضح (لا يفشل الاستيراد كله بلا توضيح)', (() => {
     const result = S.importBeneficiaries(assocSession.token, [
-      { name: 'صف سليم', region: 'الرياض', city: 'الخرج', address: 'حي', district: 'حي الاختبار', phone: '0500000054', familyCount: 1, socialStatus: 'أخرى', needs: [] },
-      { name: 'صف فاسد', region: 'الرياض', city: 'الخرج', address: 'حي', district: 'حي الاختبار', phone: '0500000055', familyCount: 1, socialStatus: 'حالة غير موجودة', needs: [] }
+      { name: 'صف سليم', region: 'الرياض', city: 'الخرج', address: 'حي', district: 'حي الاختبار', phone: '0500000054', familyCount: 1, socialStatus: 'أخرى', needs: 'ثلاجة' },
+      { name: 'صف فاسد', region: 'الرياض', city: 'الخرج', address: 'حي', district: 'حي الاختبار', phone: '0500000055', familyCount: 1, socialStatus: 'حالة غير موجودة', needs: 'ثلاجة' }
     ], true);
     return result.ok === false && result.errorCount === 1 && result.validCount === 1
       && result.errors[0].message.includes('غير معروفة');

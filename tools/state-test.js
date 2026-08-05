@@ -188,10 +188,17 @@ function seedScenario(S) {
     phone: '0500000012', familyCount: 2, socialStatus: 'أرملة', needs: ['ثلاجة'],
     lat: '24.7', lng: '46.6'
   });
+  // Phase 2.3: saveDevice لا يربط جهازًا بمستفيد إلا عبر احتياج معتمد —
+  // يُعتمد المستفيد واحتياجه هنا فور الإنشاء حتى تبقى بقية سيناريوهات
+  // هذا الملف (تخصيص/تعيين مندوب/تسليم) كما كانت تمامًا.
+  const needRow = S.readTable_('احتياجات المستفيدين').rows.find(row => String(row['رقم المستفيد']) === beneficiary.id);
+  S.reviewBeneficiaryNeeds(admin.token, beneficiary.id, {
+    beneficiaryDecision: 'معتمد', needDecisions: [{needId: String(needRow['رقم الاحتياج']), decision: 'معتمد'}]
+  });
   const device = S.saveDevice(admin.token, {
     name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id
   });
-  return { S, admin, assoc, assocSession, delegateId: delegateResult.id, beneficiaryId: beneficiary.id, deviceId: device.id };
+  return { S, admin, assoc, assocSession, delegateId: delegateResult.id, beneficiaryId: beneficiary.id, needId: String(needRow['رقم الاحتياج']), deviceId: device.id };
 }
 
 function deviceRow(S, deviceId) { return S.findById_('الأجهزة', 'رقم الجهاز', deviceId); }
@@ -321,7 +328,7 @@ section('4) رفض الانتقالات غير الصحيحة عبر الدوا�
   const { S, assocSession, beneficiaryId, delegateId, assoc } = ctx;
 
   throws('تعيين مندوب لمستفيد بلا أي جهاز مخصَّص يُرفض', () =>
-    S.assignDelegate(assocSession.token, beneficiaryId, delegateId), 'لا توجد أجهزة مخصَّصة');
+    S.assignDelegate(assocSession.token, beneficiaryId, delegateId), 'لم تجهز جميع الأجهزة المعتمدة');
 
   const beforeAssign = beneficiaryRow(S, beneficiaryId);
   assert('رفض تعيين المندوب لا يترك أي أثر جزئي على سجل المستفيد', String(beforeAssign['حالة التسليم']) === 'لم يبدأ' && !beforeAssign['رقم المندوب']);
@@ -347,6 +354,10 @@ section('5) منع تخصيص جهاز نشط لمستفيد آخر دون تح�
   const otherBeneficiary = S.saveBeneficiary(assocSession.token, { deviceTypes: ['ثلاجة'],
     name: 'مستفيد آخر', region: 'الرياض', city: 'الرياض', address: 'حي آخر', district: 'حي آخر',
     phone: '0500000099', familyCount: 1, socialStatus: 'أرملة', needs: []
+  });
+  const otherNeed = S.readTable_('احتياجات المستفيدين').rows.find(row => String(row['رقم المستفيد']) === otherBeneficiary.id);
+  S.reviewBeneficiaryNeeds(admin.token, otherBeneficiary.id, {
+    beneficiaryDecision: 'معتمد', needDecisions: [{needId: String(otherNeed['رقم الاحتياج']), decision: 'معتمد'}]
   });
 
   throws('محاولة تخصيص جهاز "مخصص" أصلًا لمستفيد مختلف تُرفض دون تحريره', () =>

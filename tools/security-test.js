@@ -758,6 +758,10 @@ section('14) تأمين الوصول لصورة إثبات التسليم');
   });
   const delegateA = S.saveDelegate(userA.token, { name: 'مندوب إثبات أ', phone: '0501119002' });
   const otherDelegateA = S.saveDelegate(userA.token, { name: 'مندوب آخر لدى أ', phone: '0501119003' });
+  const beneficiaryANeed = S.readTable_('احتياجات المستفيدين').rows.find(row => String(row['رقم المستفيد']) === beneficiaryA.id);
+  S.reviewBeneficiaryNeeds(admin.token, beneficiaryA.id, {
+    beneficiaryDecision: 'معتمد', needDecisions: [{needId: String(beneficiaryANeed['رقم الاحتياج']), decision: 'معتمد'}]
+  });
   S.saveDevice(admin.token, { name: 'ثلاجة إثبات', type: 'ثلاجة', associationId: associationAId, beneficiaryId: beneficiaryA.id });
   S.assignDelegate(userA.token, beneficiaryA.id, delegateA.id);
 
