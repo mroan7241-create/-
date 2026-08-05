@@ -252,9 +252,19 @@ assert('الجهاز المخصَّص لمستفيد يتحول تلقائيًا
 section('8) تعيين المندوب للمستفيد');
 const assign = S.assignDelegate(assocToken, beneficiary.id, delegateResult.id);
 assert('تعيين المندوب ينجح', assign.ok);
-assert('حالة التسليم تصبح "خرج مع المندوب" وحالة الجهاز "مع المندوب"',
-  String(S.findById_('المستفيدون', 'رقم المستفيد', beneficiary.id)['حالة التسليم']) === 'خرج مع المندوب'
-  && String(S.findById_('الأجهزة', 'رقم الجهاز', device.id)['حالة الجهاز']) === 'مع المندوب');
+assert('حالة التسليم تصبح "جاري التجهيز" وحالة الجهاز تبقى "مخصص" (تعيين فقط — لا استلام فعلي بعد)',
+  String(S.findById_('المستفيدون', 'رقم المستفيد', beneficiary.id)['حالة التسليم']) === 'جاري التجهيز'
+  && String(S.findById_('الأجهزة', 'رقم الجهاز', device.id)['حالة الجهاز']) === 'مخصص');
+assert('حالة تنفيذ الاحتياج المرتبط أصبحت "معيّن للمندوب — بانتظار التنفيذ"',
+  String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', String(S.findById_('الأجهزة', 'رقم الجهاز', device.id)['رقم الاحتياج']))['حالة التنفيذ']) === 'معيّن للمندوب — بانتظار التنفيذ');
+
+// محاكاة الاستلام الفعلي (مسار startDelivery/confirmDevicePickup المستقل
+// لم يُبنَ بعد عمدًا — Phase 3): بقية هذه الرحلة (تعذّر/إعادة محاولة/تسليم)
+// تفحص منطقًا لاحقًا للاستلام فعليًا، بمعزل عن سلوك assignDelegate نفسه.
+const journeyNeedId = String(S.findById_('الأجهزة', 'رقم الجهاز', device.id)['رقم الاحتياج']);
+S.updateById_('الأجهزة', 'رقم الجهاز', device.id, {'حالة الجهاز': 'مع المندوب'});
+S.updateById_('احتياجات المستفيدين', 'رقم الاحتياج', journeyNeedId, {'حالة التنفيذ': 'خرج مع المندوب'});
+S.updateById_('المستفيدون', 'رقم المستفيد', beneficiary.id, {'حالة التسليم': 'خرج مع المندوب'});
 
 section('9) دخول المندوب برمزه');
 const delegateLogin = S.loginDelegate_(delegateResult.accessCode);
@@ -277,10 +287,12 @@ assert('إعادة المحاولة لم تغيّر المندوب ولا الج
   && String(S.findById_('الأجهزة', 'رقم الجهاز', device.id)['حالة الجهاز']) === 'مع المندوب');
 assert('سجل المحاولات يحفظ المحاولة المتعذّرة بسببها بعد الاستئناف',
   (retry.record.attempts || []).some(a => a.status === 'تعذر التسليم' && a.reason === 'لم يتم التواصل'));
-// المسار الالتفافي القديم ما زال مسموحًا للجمعية (تغيير مندوب فعلي)،
-// لكنه لم يعد الطريقة الوحيدة لاستئناف مهمة متعذّرة.
-assert('الجمعية ما زالت تستطيع تغيير المندوب فعليًا عند الحاجة (لم يُكسَر المسار القديم)',
-  S.assignDelegate(assocToken, beneficiary.id, delegateResult.id).ok === true);
+// Phase 2.3 (تصحيح): assignDelegate لم يعد يستطيع لمس مهمة بدأت عهدتها
+// الفعلية بالفعل (حالة التنفيذ "خرج مع المندوب") — تبديل المندوب بعد
+// هذه النقطة يحتاج مسارًا مستقلًا لاحقًا، لا إعادة استدعاء assignDelegate.
+throws('assignDelegate يرفض لمس مهمة بدأت عهدتها الفعلية (بعد الخروج مع المندوب)',
+  () => S.assignDelegate(assocToken, beneficiary.id, delegateResult.id),
+  'لم تجهز جميع الأجهزة المعتمدة لهذا المستفيد');
 
 section('11) إثبات التسليم');
 throws('confirmDelivery يرفض بلا صورة إثبات', () => S.confirmDelivery(delegateToken, { beneficiaryId: beneficiary.id, confirmed: true }), 'صورة إثبات');
@@ -477,8 +489,14 @@ const PROOF_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC
     beneficiaryDecision: 'معتمد', needDecisions: [{needId: String(benNeed4['رقم الاحتياج']), decision: 'معتمد'}]
   });
   const del = J.saveDelegate(boot.token, {name: 'مندوب الرحلة 4', phone: '0554440003', associationId: assoc.id});
-  J.saveDevice(boot.token, {name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: ben.id});
+  const j4Device = J.saveDevice(boot.token, {name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: ben.id});
   J.assignDelegate(boot.token, ben.id, del.id);
+  // محاكاة الاستلام الفعلي (مسار startDelivery/confirmDevicePickup المستقل
+  // لم يُبنَ بعد عمدًا — Phase 3) — بقية هذه الرحلة تفحص التعذّر/التسليم.
+  const j4NeedId = String(J.findById_('الأجهزة', 'رقم الجهاز', j4Device.id)['رقم الاحتياج']);
+  J.updateById_('الأجهزة', 'رقم الجهاز', j4Device.id, {'حالة الجهاز': 'مع المندوب'});
+  J.updateById_('احتياجات المستفيدين', 'رقم الاحتياج', j4NeedId, {'حالة التنفيذ': 'خرج مع المندوب'});
+  J.updateById_('المستفيدون', 'رقم المستفيد', ben.id, {'حالة التسليم': 'خرج مع المندوب'});
   const dLogin = J.loginDelegate_(del.accessCode);
   const dt = dLogin.token;
 

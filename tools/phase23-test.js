@@ -430,11 +430,42 @@ section('4) assignDelegate: لا تعيين مندوب إلا بعد اكتما�
     () => S.assignDelegate(admin.token, fullyReady.id, delegate.id),
     'لم تجهز جميع الأجهزة المعتمدة لهذا المستفيد');
   const dev2 = S.saveDevice(admin.token, { name: 'فرن كامل', type: 'فرن', associationId: assoc.id, beneficiaryId: fullyReady.id });
+  const needIdFridge = String(S.findById_('الأجهزة', 'رقم الجهاز', dev1.id)['رقم الاحتياج']);
+  const needIdOven = String(S.findById_('الأجهزة', 'رقم الجهاز', dev2.id)['رقم الاحتياج']);
   const assignResult = S.assignDelegate(admin.token, fullyReady.id, delegate.id);
-  assert('تعيين مندوب ينجح فقط عندما تكون كل الاحتياجات المعتمدة مرتبطة بأجهزة صحيحة',
-    assignResult.ok === true && assignResult.devices.every(d => d.status === 'مع المندوب'));
-  assert('حالة تسليم المستفيد أصبحت "خرج مع المندوب" بعد التعيين',
-    String(S.findById_('المستفيدون', 'رقم المستفيد', fullyReady.id)['حالة التسليم']) === 'خرج مع المندوب');
+  assert('تعيين مندوب ينجح فقط عندما تكون كل الاحتياجات المعتمدة مرتبطة بأجهزة صحيحة', assignResult.ok === true);
+
+  // ---- Phase 2.3 (تصحيح): تعيين المندوب هو "تعيين" فقط، لا "استلام" ----
+  assert('تعيين المندوب لا يغيّر حالة أي جهاز — تبقى "مخصص" كما كانت',
+    String(S.findById_('الأجهزة', 'رقم الجهاز', dev1.id)['حالة الجهاز']) === 'مخصص'
+    && String(S.findById_('الأجهزة', 'رقم الجهاز', dev2.id)['حالة الجهاز']) === 'مخصص');
+  assert('تعيين المندوب لا يضبط حالة تنفيذ الاحتياج على "خرج مع المندوب"',
+    String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', needIdFridge)['حالة التنفيذ']) !== 'خرج مع المندوب');
+  assert('حالة تنفيذ كل احتياج معتمد أصبحت "معيّن للمندوب — بانتظار التنفيذ" بالضبط',
+    String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', needIdFridge)['حالة التنفيذ']) === 'معيّن للمندوب — بانتظار التنفيذ'
+    && String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', needIdOven)['حالة التنفيذ']) === 'معيّن للمندوب — بانتظار التنفيذ');
+  assert('رقم المندوب سُجِّل على المستفيد', String(S.findById_('المستفيدون', 'رقم المستفيد', fullyReady.id)['رقم المندوب']) === delegate.id);
+  assert('حالة تسليم المستفيد "جاري التجهيز" لا "خرج مع المندوب" — لا عهدة ولا وقت خروج بعد',
+    String(S.findById_('المستفيدون', 'رقم المستفيد', fullyReady.id)['حالة التسليم']) === 'جاري التجهيز');
+
+  // إعادة تعيين مندوب آخر قبل بدء العهدة الفعلية: تحديث آمن، لا تغيير حالة.
+  const delegate2 = S.saveDelegate(assocSession.token, { name: 'مندوب 2.3 الثاني', phone: nextPhone_() });
+  const reassignResult = S.assignDelegate(admin.token, fullyReady.id, delegate2.id);
+  assert('إعادة تعيين مندوب آخر قبل بدء العهدة الفعلية تنجح وتحدّث رقم المندوب فقط',
+    reassignResult.ok === true && String(S.findById_('المستفيدون', 'رقم المستفيد', fullyReady.id)['رقم المندوب']) === delegate2.id);
+  assert('إعادة التعيين لا تغيّر حالة تنفيذ الاحتياج (تبقى "معيّن للمندوب — بانتظار التنفيذ")',
+    String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', needIdFridge)['حالة التنفيذ']) === 'معيّن للمندوب — بانتظار التنفيذ');
+  assert('إعادة التعيين لا تغيّر حالة الأجهزة', String(S.findById_('الأجهزة', 'رقم الجهاز', dev1.id)['حالة الجهاز']) === 'مخصص');
+
+  // محاكاة بدء العهدة الفعلية (مسار startDelivery/confirmDevicePickup المستقل
+  // لم يُبنَ بعد عمدًا — Phase 3) عبر تعديل مباشر لسجل الاحتياج/المستفيد،
+  // لإثبات أن assignDelegate ترفض إعادة التعيين بعد هذه النقطة تمامًا.
+  S.updateById_('احتياجات المستفيدين', 'رقم الاحتياج', needIdFridge, { 'حالة التنفيذ': 'خرج مع المندوب' });
+  S.updateById_('احتياجات المستفيدين', 'رقم الاحتياج', needIdOven, { 'حالة التنفيذ': 'خرج مع المندوب' });
+  S.updateById_('المستفيدون', 'رقم المستفيد', fullyReady.id, { 'حالة التسليم': 'خرج مع المندوب' });
+  throws('رفض إعادة التعيين بعد أن بدأت العهدة الفعلية (خرج مع المندوب) — يلزم مسار الاستلام المستقل لاحقًا',
+    () => S.assignDelegate(admin.token, fullyReady.id, delegate.id),
+    'لم تجهز جميع الأجهزة المعتمدة لهذا المستفيد');
 
   // جهاز تالف مرتبط باحتياج معتمد يمنع تعيين مندوب لمستفيد آخر مشابه.
   const damagedScenario = S.saveBeneficiary(assocSession.token, {

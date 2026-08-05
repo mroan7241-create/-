@@ -923,7 +923,15 @@ const detailDevice = S2.saveDevice(adminSession.token, {
 });
 const detailDelegate = S2.saveDelegate(adminSession.token, {name: 'مندوب اختبار التفاصيل', phone: '0509990031', associationId: accepted.associationId});
 const detailAssign = S2.assignDelegate(adminSession.token, detailBeneficiary.id, detailDelegate.id);
-assert('assignDelegate ينجح ويحوّل الجهاز إلى "مع المندوب"', detailAssign.ok === true);
+assert('assignDelegate ينجح (تعيين فقط — Phase 2.3 المصحَّحة)', detailAssign.ok === true);
+assert('assignDelegate لا يحوّل الجهاز إلى "مع المندوب" — يبقى "مخصص" حتى الاستلام الفعلي',
+  String(S2.findById_('الأجهزة', 'رقم الجهاز', detailDevice.id)['حالة الجهاز']) === 'مخصص');
+
+// محاكاة الاستلام الفعلي (مسار startDelivery/confirmDevicePickup المستقل لم
+// يُبنَ بعد عمدًا — Phase 3) لاختبار اشتقاق getDeviceDetail لتاريخ الخروج
+// من سجل العمليات كما كان مصمَّمًا، بمعزل عن سلوك assignDelegate نفسه.
+S2.updateById_('الأجهزة', 'رقم الجهاز', detailDevice.id, {'حالة الجهاز': 'مع المندوب'});
+S2.audit_({id: 'USR-ADMIN', name: 'مدير', role: 'ADMIN'}, 'تعديل جهاز', 'الأجهزة', detailDevice.id, 'الحالة: مخصص ← مع المندوب (محاكاة استلام لاختبار getDeviceDetail)');
 
 const deviceDetail = S2.getDeviceDetail(adminSession.token, detailDevice.id);
 assert('getDeviceDetail يعيد بيانات الجهاز الأساسية', deviceDetail.ok === true && deviceDetail.device.id === detailDevice.id);
@@ -1164,6 +1172,13 @@ section('23) انحدارات مؤكَّدة من الاختبار الحي 2026
   const delegate = S3.saveDelegate(admin.token, {name: 'مندوب التعذّر', phone: '0505550003', associationId: assoc.id});
   const device = S3.saveDevice(admin.token, {name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: ben.id});
   S3.assignDelegate(admin.token, ben.id, delegate.id);
+  // محاكاة الاستلام الفعلي (مسار startDelivery/confirmDevicePickup المستقل
+  // لم يُبنَ بعد عمدًا — Phase 3): assignDelegate الآن "تعيين" فقط، فيبقى
+  // الجهاز "مخصص" وحالة التسليم "جاري التجهيز" — بقية هذا الاختبار يفحص
+  // منطق التعذّر/إعادة المحاولة/التسليم نفسه، بمعزل عن سلوك التعيين.
+  S3.updateById_('الأجهزة', 'رقم الجهاز', device.id, {'حالة الجهاز': 'مع المندوب'});
+  S3.updateById_('احتياجات المستفيدين', 'رقم الاحتياج', String(benRetryNeed['رقم الاحتياج']), {'حالة التنفيذ': 'خرج مع المندوب'});
+  S3.updateById_('المستفيدون', 'رقم المستفيد', ben.id, {'حالة التسليم': 'خرج مع المندوب'});
   const delegateSession = S3.createSession_({id: delegate.id, name: 'مندوب التعذّر', role: 'DELEGATE', associationId: assoc.id});
 
   const failed = S3.updateDeliveryStatus(delegateSession.token, ben.id, 'لا يرد', 'لم يفتح الباب', 'op-fail-1');

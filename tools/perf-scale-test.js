@@ -232,11 +232,18 @@ function runScenario(count) {
   S.reviewBeneficiaryNeeds(admin.token, newBeneficiaryId, {
     beneficiaryDecision: 'معتمد', needDecisions: [{needId: String(newBeneficiaryNeed['رقم الاحتياج']), decision: 'معتمد'}]
   });
-  S.saveDevice(admin.token, { name: 'ثلاجة قياس', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: newBeneficiaryId });
+  const measureDevice = S.saveDevice(admin.token, { name: 'ثلاجة قياس', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: newBeneficiaryId });
 
   resetPerCallCache();
   const assign = timeIt(() => S.assignDelegate(token, newBeneficiaryId, delegate.id));
   metrics.assign = assign.ms;
+
+  // محاكاة الاستلام الفعلي (مسار startDelivery/confirmDevicePickup المستقل
+  // لم يُبنَ بعد عمدًا — Phase 3): assignDelegate الآن "تعيين" فقط.
+  const measureNeedId = String(S.findById_('الأجهزة', 'رقم الجهاز', measureDevice.id)['رقم الاحتياج']);
+  S.updateById_('الأجهزة', 'رقم الجهاز', measureDevice.id, {'حالة الجهاز': 'مع المندوب'});
+  S.updateById_('احتياجات المستفيدين', 'رقم الاحتياج', measureNeedId, {'حالة التنفيذ': 'خرج مع المندوب'});
+  S.updateById_('المستفيدون', 'رقم المستفيد', newBeneficiaryId, {'حالة التسليم': 'خرج مع المندوب'});
 
   const delegateSession = S.createSession_({ id: delegate.id, name: 'مندوب القياس', role: 'DELEGATE', associationId: assoc.id });
   resetPerCallCache();

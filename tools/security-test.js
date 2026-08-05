@@ -762,8 +762,14 @@ section('14) تأمين الوصول لصورة إثبات التسليم');
   S.reviewBeneficiaryNeeds(admin.token, beneficiaryA.id, {
     beneficiaryDecision: 'معتمد', needDecisions: [{needId: String(beneficiaryANeed['رقم الاحتياج']), decision: 'معتمد'}]
   });
-  S.saveDevice(admin.token, { name: 'ثلاجة إثبات', type: 'ثلاجة', associationId: associationAId, beneficiaryId: beneficiaryA.id });
+  const proofDevice = S.saveDevice(admin.token, { name: 'ثلاجة إثبات', type: 'ثلاجة', associationId: associationAId, beneficiaryId: beneficiaryA.id });
   S.assignDelegate(userA.token, beneficiaryA.id, delegateA.id);
+  // محاكاة الاستلام الفعلي (مسار startDelivery/confirmDevicePickup المستقل
+  // لم يُبنَ بعد عمدًا — Phase 3): assignDelegate الآن "تعيين" فقط.
+  const proofNeedId = String(S.findById_('الأجهزة', 'رقم الجهاز', proofDevice.id)['رقم الاحتياج']);
+  S.updateById_('الأجهزة', 'رقم الجهاز', proofDevice.id, {'حالة الجهاز': 'مع المندوب'});
+  S.updateById_('احتياجات المستفيدين', 'رقم الاحتياج', proofNeedId, {'حالة التنفيذ': 'خرج مع المندوب'});
+  S.updateById_('المستفيدون', 'رقم المستفيد', beneficiaryA.id, {'حالة التسليم': 'خرج مع المندوب'});
 
   const delegateSessionA = S.createSession_({ id: delegateA.id, name: 'مندوب إثبات أ', role: 'DELEGATE', associationId: associationAId });
   const otherDelegateSessionA = S.createSession_({ id: otherDelegateA.id, name: 'مندوب آخر لدى أ', role: 'DELEGATE', associationId: associationAId });

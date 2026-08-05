@@ -587,13 +587,20 @@ function inspectBeneficiaryExcel(token, payload) {
 }
 
 /**
- * Phase 2.3 (القسم 3): لم يعد يكفي أن تكون أجهزة المستفيد "مخصص" ليُسمح
- * بتعيين مندوب — يجب أن يكون المستفيد نفسه معتمَدًا، وأن يملك احتياجًا
- * معتمدًا واحدًا على الأقل، وأن يكون **كل** احتياج معتمد مرتبطًا فعليًا
- * بجهاز صحيح (نوع مطابق، جمعية مطابقة، غير تالف/مُسلَّم) — لا يكفي وجود
- * أي جهاز "مخصص" بصرف النظر عن ربطه الفعلي بالاستحقاق. كل الفحوصات
- * العشرة والكتابة تتم داخل قفل واحد مع إعادة قراءة كاملة (لا فحص قبل
- * القفل يُعاد استخدامه بعده).
+ * Phase 2.3 (القسم 3، مُصحَّح): assignDelegate يُنفِّذ مرحلة "التعيين"
+ * فقط — لا "الاستلام الفعلي". لا يعود ينقل أي جهاز إلى "مع المندوب"، ولا
+ * يضبط حالة تسليم المستفيد على "خرج مع المندوب"؛ هذان الانتقالان
+ * يخصّان مرحلة استلام المندوب للأجهزة فعليًا (endpoint مستقل لاحق مثل
+ * startDelivery/confirmDevicePickup — لم يُنشأ بعد عمدًا، فهو من نطاق
+ * مرحلة لاحقة). هنا فقط: يُسجَّل رقم المندوب، وتنتقل حالة تنفيذ كل
+ * احتياج معتمد جاهز من "جهاز جاهز" إلى "معيّن للمندوب — بانتظار التنفيذ"
+ * (عبر "بانتظار تعيين مندوب" الوسيطة، بنفس سلسلة NEED_FULFILLMENT_TRANSITIONS_
+ * المركزية — لا اختصار يتجاوزها)، وتنتقل حالة تسليم المستفيد من "لم
+ * يبدأ" إلى "جاري التجهيز" فقط (لا "خرج مع المندوب"). الأجهزة نفسها
+ * والاحتياجات المُعيَّنة مسبقًا (حالة "معيّن للمندوب — بانتظار التنفيذ"
+ * أصلًا) لا تتغيّر — يُعاد تعيين رقم المندوب فقط بأمان (حلقة ذاتية).
+ * لا يمكن إعادة التعيين بعد بدء العهدة الفعلية ("خرج مع المندوب" فما
+ * بعدها) من هذا المسار إطلاقًا — تُرفض بنفس رسالة عدم الجهوزية.
  */
 function assignDelegate(token, beneficiaryId, delegateId) {
   return perfTime_('assignDelegate', () => {
@@ -603,7 +610,6 @@ function assignDelegate(token, beneficiaryId, delegateId) {
 
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
-  let dispatchedNow = [];
   let approvedNeedsCount = 0;
   try {
     invalidateTableCache_(APP.sheets.beneficiaries);
@@ -644,53 +650,69 @@ function assignDelegate(token, beneficiaryId, delegateId) {
       if (needId) deviceByNeed[needId] = devicesById[id];
     });
 
-    // (4)+(5)+(6)+(7)+(8) كل احتياج معتمد مرتبط فعليًا بجهاز صحيح كامل الشروط
-    const readyDevices = approvedNeeds.map(need => {
+    // حالات تنفيذ الاحتياج المقبولة لعملية "تعيين" (لا "استلام"): جاهز
+    // للتعيين لأول مرة ("جهاز جاهز"/"بانتظار تعيين مندوب")، أو مُعيَّن
+    // بالفعل ولم تبدأ عهدته الفعلية بعد (حلقة ذاتية آمنة لإعادة التعيين).
+    // أي حالة أبعد من ذلك ("خرج مع المندوب" فما بعدها) تعني أن العهدة
+    // الفعلية بدأت بالفعل — لا يجوز لهذا المسار لمسها إطلاقًا.
+    const assignableFulfillments = ['جهاز جاهز', 'بانتظار تعيين مندوب', 'معيّن للمندوب — بانتظار التنفيذ'];
+
+    // (4)+(5)+(6)+(7)+(8) كل احتياج معتمد مرتبط فعليًا بجهاز صحيح كامل الشروط وجاهز للتعيين
+    const readyNeeds = approvedNeeds.map(need => {
       const needId = String(need['رقم الاحتياج']);
       const device = deviceByNeed[needId];
       const deviceStatus = device ? String(device['حالة الجهاز']) : '';
+      const fulfillmentStatus = String(need['حالة التنفيذ']);
       const linkedCorrectly = device
         && String(device['النوع']) === String(need['نوع الجهاز'])
         && String(device['رقم الجمعية']) === associationId
         && String(need['رقم الجمعية']) === associationId
         && String(device['رقم المستفيد']) === beneficiaryId
-        && ['تالف', 'تم التسليم'].indexOf(deviceStatus) === -1
-        && ['مخصص', 'مع المندوب'].indexOf(deviceStatus) !== -1
-        && ['استحقاق معتمد', 'بانتظار توفر الجهاز'].indexOf(String(need['حالة التنفيذ'])) === -1;
+        && deviceStatus === 'مخصص'
+        && assignableFulfillments.indexOf(fulfillmentStatus) !== -1;
       if (!linkedCorrectly) {
         throw new Error('«لا يمكن تعيين مندوب؛ لم تجهز جميع الأجهزة المعتمدة لهذا المستفيد.»');
       }
-      return {id: String(device['رقم الجهاز']), status: deviceStatus, needId: needId};
+      return {needId: needId, fulfillmentStatus: fulfillmentStatus};
     });
 
-    readyDevices.forEach(device => assertDeviceTransition_(device.status, 'مع المندوب'));
-    assertDeliveryTransition_(String(beneficiary['حالة التسليم'] || 'لم يبدأ'), 'خرج مع المندوب');
-    dispatchedNow = readyDevices.filter(device => device.status === 'مخصص');
+    // يتحقق من صحة سلسلة الانتقال الكاملة قبل أي كتابة (StateRules.gs
+    // المركزية — لا اختصار "جهاز جاهز" → "معيّن للمندوب" مباشرة).
+    readyNeeds.forEach(need => {
+      if (need.fulfillmentStatus === 'جهاز جاهز') {
+        assertNeedFulfillmentTransition_('جهاز جاهز', 'بانتظار تعيين مندوب');
+        assertNeedFulfillmentTransition_('بانتظار تعيين مندوب', 'معيّن للمندوب — بانتظار التنفيذ');
+      } else if (need.fulfillmentStatus === 'بانتظار تعيين مندوب') {
+        assertNeedFulfillmentTransition_('بانتظار تعيين مندوب', 'معيّن للمندوب — بانتظار التنفيذ');
+      } else {
+        assertNeedFulfillmentTransition_('معيّن للمندوب — بانتظار التنفيذ', 'معيّن للمندوب — بانتظار التنفيذ');
+      }
+    });
+    // حالة تسليم المستفيد: "لم يبدأ" → "جاري التجهيز" فقط (تعيين، لا
+    // خروج فعلي)، أو حلقة ذاتية إن كانت "جاري التجهيز" أصلًا (إعادة تعيين).
+    const currentDeliveryStatus = String(beneficiary['حالة التسليم'] || 'لم يبدأ');
+    const targetDeliveryStatus = 'جاري التجهيز';
+    assertDeliveryTransition_(currentDeliveryStatus, targetDeliveryStatus);
 
-    // كتابة ذرّية واحدة، مع تراجع تعويضي كامل عند فشل جزئي في المنتصف.
-    const deviceSnapshots = [];
+    // كتابة ذرّية واحدة: لا تحديث للأجهزة إطلاقًا في هذه المرحلة.
+    const needSnapshots = [];
     try {
-      dispatchedNow.forEach(device => {
-        deviceSnapshots.push({id: device.id, status: device.status});
-        updateById_(APP.sheets.devices, 'رقم الجهاز', device.id, {'حالة الجهاز': 'مع المندوب'});
+      readyNeeds.forEach(need => {
+        needSnapshots.push({needId: need.needId, fulfillmentStatus: need.fulfillmentStatus});
+        if (need.fulfillmentStatus !== 'معيّن للمندوب — بانتظار التنفيذ') {
+          updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', need.needId, {'حالة التنفيذ': 'معيّن للمندوب — بانتظار التنفيذ', 'آخر تحديث': now_()});
+        }
       });
       updateById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId, {
         'رقم المندوب': delegateId,
-        'حالة المستفيد': 'جاري التسليم',
-        'حالة التسليم': 'خرج مع المندوب',
+        'حالة التسليم': targetDeliveryStatus,
         'آخر تحديث': now_()
-      });
-      dispatchedNow.forEach(device => {
-        const need = findById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', device.needId);
-        if (need && String(need['حالة التنفيذ']) === 'جهاز جاهز') {
-          updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', device.needId, {'حالة التنفيذ': 'خرج مع المندوب', 'آخر تحديث': now_()});
-        }
       });
     } catch (writeError) {
       const rollbackErrors = [];
-      deviceSnapshots.forEach(snap => {
-        try { updateById_(APP.sheets.devices, 'رقم الجهاز', snap.id, {'حالة الجهاز': snap.status}); }
-        catch (rollbackError) { rollbackErrors.push(snap.id + ': ' + rollbackError.message); }
+      needSnapshots.forEach(snap => {
+        try { updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', snap.needId, {'حالة التنفيذ': snap.fulfillmentStatus}); }
+        catch (rollbackError) { rollbackErrors.push(snap.needId + ': ' + rollbackError.message); }
       });
       if (rollbackErrors.length) {
         Logger.log('حرج جدًا: فشل تراجع تعيين مندوب جزئي — traceId=' + requestMeta_().traceId + ' — ' + rollbackErrors.join('؛ '));
@@ -701,13 +723,7 @@ function assignDelegate(token, beneficiaryId, delegateId) {
   } finally {
     lock.releaseLock();
   }
-  audit_(user, 'تعيين مندوب', 'المستفيدون', beneficiaryId, 'المندوب: ' + delegateId + ' — عدد الاحتياجات المعتمدة: ' + approvedNeedsCount);
-  // سجل مستقل لكل جهاز خرج فعليًا مع المندوب الآن — هذا هو مصدر "تاريخ
-  // الخروج مع المندوب" في صفحة تفاصيل الجهاز (سجل عمليات، لا عمود جديد
-  // في الجدول، فلا حاجة لأي ترحيل مخطط بيانات).
-  dispatchedNow.forEach(device => {
-    audit_(user, 'تعديل جهاز', 'الأجهزة', device.id, 'الحالة: مخصص ← مع المندوب (تعيين مندوب: ' + delegateId + ')');
-  });
+  audit_(user, 'تعيين مندوب', 'المستفيدون', beneficiaryId, 'المندوب: ' + delegateId + ' — عدد الاحتياجات المعتمدة: ' + approvedNeedsCount + ' — بانتظار الاستلام الفعلي');
   clearDashboardCache();
   const record = normalizeBeneficiary_(findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId));
   const updatedDevices = devicesForBeneficiary_(beneficiaryId);

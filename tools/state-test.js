@@ -204,6 +204,20 @@ function seedScenario(S) {
 function deviceRow(S, deviceId) { return S.findById_('الأجهزة', 'رقم الجهاز', deviceId); }
 function beneficiaryRow(S, beneficiaryId) { return S.findById_('المستفيدون', 'رقم المستفيد', beneficiaryId); }
 
+/**
+ * محاكاة الاستلام الفعلي (مسار startDelivery/confirmDevicePickup المستقل
+ * لم يُبنَ بعد عمدًا — Phase 3): assignDelegate الآن "تعيين" فقط (حالة
+ * تنفيذ الاحتياج "معيّن للمندوب — بانتظار التنفيذ"، الجهاز يبقى "مخصص").
+ * تستخدمها الاختبارات التي تفحص منطقًا لاحقًا (تعذّر/تسليم) يفترض عهدة
+ * فعلية بدأت بالفعل — بمعزل تام عن سلوك assignDelegate نفسه.
+ */
+function simulatePickup_(S, beneficiaryId, deviceId) {
+  const needId = String(deviceRow(S, deviceId)['رقم الاحتياج']);
+  S.updateById_('الأجهزة', 'رقم الجهاز', deviceId, {'حالة الجهاز': 'مع المندوب'});
+  S.updateById_('احتياجات المستفيدين', 'رقم الاحتياج', needId, {'حالة التنفيذ': 'خرج مع المندوب'});
+  S.updateById_('المستفيدون', 'رقم المستفيد', beneficiaryId, {'حالة التسليم': 'خرج مع المندوب'});
+}
+
 /* ================================================================
    1) وحدة قواعد الانتقال (assertDeviceTransition_/assertDeliveryTransition_)
    ================================================================ */
@@ -254,15 +268,19 @@ section('2) الدورة الكاملة الناجحة: تخصيص → خروج 
 
   const delegateSession = S.createSession_({ id: delegateId, name: 'مندوب الحالات', role: 'DELEGATE', associationId: ctx.assoc.id });
 
-  assert('تعيين المندوب ينجح ويحوّل الجهاز إلى "مع المندوب" وحالة التسليم إلى "خرج مع المندوب"', (() => {
+  assert('تعيين المندوب ينجح، يُسجِّل رقم المندوب، ويُبقي الجهاز "مخصص" وحالة التسليم "جاري التجهيز" (تعيين فقط — لا استلام فعلي بعد)', (() => {
     const result = S.assignDelegate(assocSession.token, beneficiaryId, delegateId);
     const b = beneficiaryRow(S, beneficiaryId);
     const d = deviceRow(S, deviceId);
     return result.ok
-      && String(b['حالة التسليم']) === 'خرج مع المندوب'
-      && String(b['حالة المستفيد']) === 'جاري التسليم'
-      && String(d['حالة الجهاز']) === 'مع المندوب';
+      && String(b['رقم المندوب']) === delegateId
+      && String(b['حالة التسليم']) === 'جاري التجهيز'
+      && String(d['حالة الجهاز']) === 'مخصص';
   })());
+  assert('حالة تنفيذ الاحتياج المرتبط أصبحت "معيّن للمندوب — بانتظار التنفيذ" بعد التعيين',
+    String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', String(deviceRow(S, deviceId)['رقم الاحتياج']))['حالة التنفيذ']) === 'معيّن للمندوب — بانتظار التنفيذ');
+
+  simulatePickup_(S, beneficiaryId, deviceId);
 
   assert('تأكيد التسليم ينجح ويحوّل المستفيد وجميع أجهزته إلى "تم التسليم" كوحدة واحدة', (() => {
     const result = S.confirmDelivery(delegateSession.token, {
@@ -295,6 +313,7 @@ section('3) تعذر التسليم ثم إعادة المحاولة بنجاح'
   const { S, assocSession, beneficiaryId, deviceId, delegateId, assoc } = ctx;
   S.saveDevice(ctx.admin.token, { id: deviceId, name: 'ثلاجة', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiaryId });
   S.assignDelegate(assocSession.token, beneficiaryId, delegateId);
+  simulatePickup_(S, beneficiaryId, deviceId);
   const delegateSession = S.createSession_({ id: delegateId, name: 'مندوب الحالات', role: 'DELEGATE', associationId: assoc.id });
 
   assert('تعذر التسليم ينجح ويُبقي الجهاز "مع المندوب" (لا يتحول لتم التسليم)', (() => {
@@ -304,8 +323,15 @@ section('3) تعذر التسليم ثم إعادة المحاولة بنجاح'
     return result.ok && String(b['حالة التسليم']) === 'تعذر التسليم' && String(d['حالة الجهاز']) === 'مع المندوب';
   })());
 
-  assert('إعادة تعيين مندوب بعد التعذر تنجح (لا تكسر الأجهزة الموجودة أصلًا مع المندوب)', (() => {
-    const result = S.assignDelegate(assocSession.token, beneficiaryId, delegateId);
+  // Phase 2.3 (تصحيح): العهدة بدأت بالفعل (حالة تنفيذ الاحتياج "خرج مع
+  // المندوب") — assignDelegate لم تعد قادرة على لمس هذه المهمة إطلاقًا؛
+  // الاستئناف الصحيح بعد التعذّر هو retryDelivery الصريح من المندوب نفسه.
+  throws('assignDelegate ترفض لمس مهمة بدأت عهدتها الفعلية حتى بعد التعذّر',
+    () => S.assignDelegate(assocSession.token, beneficiaryId, delegateId),
+    'لم تجهز جميع الأجهزة المعتمدة لهذا المستفيد');
+
+  assert('إعادة المحاولة الصريحة (retryDelivery) بعد التعذر تنجح (لا تكسر الأجهزة الموجودة أصلًا مع المندوب)', (() => {
+    const result = S.retryDelivery(delegateSession.token, beneficiaryId, 'op-state-retry');
     const b = beneficiaryRow(S, beneficiaryId);
     return result.ok && String(b['حالة التسليم']) === 'خرج مع المندوب';
   })());
@@ -458,8 +484,11 @@ section('8) اتساق القواعد عبر كل المسارات (فحص ثا�
       !!body && /assertDeliveryTransition_\(/.test(body));
   });
   assert('saveDevice يستخدم assertDeviceTransition_', /assertDeviceTransition_\(/.test(extractFunctionBody_(source, 'saveDevice') || ''));
-  assert('assignDelegate يستخدم assertDeviceTransition_ (لأجهزة المستفيد أيضًا لا حالة التسليم فقط)',
-    /assertDeviceTransition_\(/.test(extractFunctionBody_(source, 'assignDelegate') || ''));
+  // Phase 2.3 (تصحيح): assignDelegate لم تعد تلمس حالة الجهاز إطلاقًا
+  // (تعيين فقط، لا استلام فعلي) — تستخدم بدلًا منها assertNeedFulfillmentTransition_
+  // للتحقق من سلسلة انتقال حالة تنفيذ الاحتياج المركزية.
+  assert('assignDelegate يستخدم assertNeedFulfillmentTransition_ (تعيين فقط، لا يمسّ حالة الجهاز)',
+    /assertNeedFulfillmentTransition_\(/.test(extractFunctionBody_(source, 'assignDelegate') || ''));
   assert('importBeneficiaries لا يكتب أي حالة جهاز أو تسليم (لا يتجاوز قواعد الحالة، يُنشئ سجلات جديدة فقط)',
     !/importBeneficiaries[\s\S]{0,3000}?'حالة الجهاز'/.test(source));
 }
