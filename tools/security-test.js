@@ -433,16 +433,20 @@ section('6) رفع الملفات والصور');
   assert('نص عادي بتوقيع png مزعوم يُرفض بنيويًا عبر verifyImageMagicBytes_',
     S.verifyImageMagicBytes_(Array.from(Buffer.from('hello world')), 'png') === false);
 
+  // بدور ASSOCIATION عمدًا هنا (لا ADMIN): تفحص هاتان الحالتان تحقُّق
+  // صيغة/حجم الملف حصرًا، وASSOCIATION تستخدم جمعيتها مباشرة بلا حاجة
+  // لقراءة ورقة الجمعيات إطلاقًا (Phase 2.3.1 القسم 10 يفرض على ADMIN
+  // تحديدًا associationId صحيحًا موجودًا فعليًا قبل أي فحص آخر — غير
+  // ذي صلة بما يُختبَر هنا، وقسم 6 هذا لا يزرع أي جمعية حقيقية أصلًا).
+  const assocRoleSession = S.createSession_({ id: 'USR-ASSOC-EXCEL', name: 'جمعية', role: 'ASSOCIATION', associationId: 'ASC-000001' });
   throws('ملف Excel بنوع MIME غير صحيح يُرفض', () => {
-    const A = adminSession(S);
-    S.inspectBeneficiaryExcel(A.token, { dataUrl: 'data:text/plain;base64,aGVsbG8=' });
+    S.inspectBeneficiaryExcel(assocRoleSession.token, { dataUrl: 'data:text/plain;base64,aGVsbG8=' });
   }, 'صيغة');
   // base64 يُوسِّع الحجم بنسبة 4/3 تقريبًا؛ يلزم أكثر من 8 ميجابايت × 4/3 من محارف base64
   // ليتجاوز فك الترميز الحدّ الفعلي 8 ميجابايت (خطأ حسابي سابق كان يُنتج بيانات أصغر من الحدّ فعليًا).
   const oversizedExcel = 'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,' + 'A'.repeat(12 * 1024 * 1024);
   throws('ملف Excel يتجاوز 8 ميجابايت يُرفض قبل أي رفع فعلي', () => {
-    const A = adminSession(S);
-    S.inspectBeneficiaryExcel(A.token, { dataUrl: oversizedExcel });
+    S.inspectBeneficiaryExcel(assocRoleSession.token, { dataUrl: oversizedExcel });
   }, 'حجم');
 }
 
@@ -551,8 +555,14 @@ section('9) سلامة سجل العمليات');
     'reviewAssociationApplication'
   ];
   mutatingFunctions.forEach(fnName => {
-    const body = extractFunctionBody_(source, fnName);
+    let body = extractFunctionBody_(source, fnName);
     if (!body) { assert(fnName + ' موجودة', false); return; }
+    // Phase 2.3.1: saveDevice_ تفوّض الكتابة الفعلية والـaudit إلى
+    // commitDeviceWithNeed_/saveDeviceDescriptiveOnly_ (مستوى تفويض ثانٍ
+    // لا يتبعه extractFunctionBody_ تلقائيًا — تُلحَق أجسامهما هنا صراحةً).
+    if (fnName === 'saveDevice') {
+      body += (extractFunctionBody_(source, 'commitDeviceWithNeed_') || '') + (extractFunctionBody_(source, 'saveDeviceDescriptiveOnly_') || '');
+    }
     assert(fnName + ' يسجّل العملية في audit_ عند النجاح', /audit_\(/.test(body));
   });
 }

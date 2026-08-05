@@ -337,10 +337,31 @@ function saveBeneficiary_(user, payload, options) {
  * الذرّي في BeneficiaryNeeds.gs)؛ فشل كتابة المستفيدين بعد نجاح
  * الاحتياجات يزيل احتياجات هذه الدفعة فقط (لا يمس أي بيانات سابقة).
  */
-function importBeneficiaries(token, rows, acceptedPledge) {
+/**
+ * Phase 2.3.1 (القسم 10): جمعية واحدة لكل عملية استيراد كاملة — تُحدَّد
+ * على مستوى الطلب (associationId)، لا على مستوى كل صف كما كان سابقًا،
+ * وتُحقَن في جميع الصفوف بلا استثناء. ADMIN يجب أن يمرّرها إلزاميًا،
+ * وتُتحقَّق (وجودًا ونشاطًا) **قبل قراءة أي صف** — فلا تُعرَض معاينة
+ * "صالحة" لصف يفشل لاحقًا فقط بسبب غياب الجمعية. ASSOCIATION تستخدم
+ * جمعيتها دائمًا؛ أي associationId آخر تُرسله يُتجاهَل كليًا — لا مسار
+ * لاستيراد نيابة عن جمعية أخرى.
+ */
+function importBeneficiaries(token, rows, acceptedPledge, associationId) {
   const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
   if (acceptedPledge !== true) throw new Error('يجب الموافقة على التعهد قبل الاستيراد');
   if (!Array.isArray(rows) || rows.length === 0 || rows.length > 1000) throw new Error('الملف فارغ أو يتجاوز 1000 سجل');
+
+  let resolvedAssociationId;
+  if (user.role === 'ASSOCIATION') {
+    resolvedAssociationId = user.associationId;
+  } else {
+    resolvedAssociationId = cleanId_(associationId);
+    if (!resolvedAssociationId) throw new Error('رقم الجمعية مطلوب لاستيراد الإدارة — اختر الجمعية أولًا قبل تحميل الملف');
+    const assocRow = findById_(APP.sheets.associations, 'رقم الجمعية', resolvedAssociationId);
+    if (!assocRow) throw new Error('رقم جمعية غير موجود');
+    if (String(assocRow['الحالة']) === 'غير نشطة') throw new Error('الجمعية المحدَّدة غير نشطة — لا يمكن الاستيراد لها');
+  }
+
   const validBeneficiaries = [];
   const validRowMeta = []; // موازٍ لـvalidBeneficiaries: {associationId, deviceTypes}
   const errors = [];
@@ -349,9 +370,7 @@ function importBeneficiaries(token, rows, acceptedPledge) {
   const seenPhones = Object.create(null);
   rows.forEach((row, index) => {
     try {
-      const associationId = user.role === 'ASSOCIATION' ? user.associationId : cleanId_(row.associationId);
-      if (!associationId) throw new Error('رقم الجمعية مطلوب');
-      if (!findById_(APP.sheets.associations, 'رقم الجمعية', associationId)) throw new Error('رقم جمعية غير موجود');
+      const associationId = resolvedAssociationId;
       const place = validateRegionCity_(row.region, row.city);
       const coordinates = optionalCoordinate_(row.lat, row.lng);
       const hasCoordinates = coordinates.lat !== '';
@@ -478,6 +497,19 @@ function importBeneficiaries(token, rows, acceptedPledge) {
 function inspectBeneficiaryExcel(token, payload) {
   const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
   payload = payload || {};
+  // Phase 2.3.1 (القسم 10): نفس قاعدة importBeneficiaries بالضبط — رسالة
+  // مبكرة وصريحة **قبل تحويل الملف نفسه** إن كانت الإدارة لم تُرسل جمعية
+  // صحيحة، بدل عرض معاينة "صالحة" تفشل لاحقًا عند الاستيراد الفعلي.
+  let resolvedAssociationId;
+  if (user.role === 'ASSOCIATION') {
+    resolvedAssociationId = user.associationId;
+  } else {
+    resolvedAssociationId = cleanId_(payload.associationId);
+    if (!resolvedAssociationId) throw new Error('رقم الجمعية مطلوب لمعاينة استيراد الإدارة — اختر الجمعية أولًا قبل رفع الملف');
+    const assocRow = findById_(APP.sheets.associations, 'رقم الجمعية', resolvedAssociationId);
+    if (!assocRow) throw new Error('رقم جمعية غير موجود');
+    if (String(assocRow['الحالة']) === 'غير نشطة') throw new Error('الجمعية المحدَّدة غير نشطة — لا يمكن الاستيراد لها');
+  }
   const match = String(payload.dataUrl || '').match(/^data:application\/(?:vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet|octet-stream);base64,([A-Za-z0-9+/=]+)$/);
   if (!match) throw new Error('ارفع ملف Excel بصيغة XLSX');
   const bytes = Utilities.base64Decode(match[1]);
@@ -527,7 +559,9 @@ function inspectBeneficiaryExcel(token, payload) {
       headers.forEach((header, colIndex) => {
         if (keyMap[header]) object[keyMap[header]] = row[colIndex];
       });
-      if (user.role === 'ASSOCIATION') object.associationId = user.associationId;
+      // Phase 2.3.1 (القسم 10): جمعية واحدة على مستوى الطلب تُحقَن في كل
+      // الصفوف المعروضة — لا اعتماد على عمود جمعية داخل الملف نفسه.
+      object.associationId = resolvedAssociationId;
       return object;
     });
     const errors = [];
@@ -546,7 +580,7 @@ function inspectBeneficiaryExcel(token, payload) {
         boundedNumber_(row.income || 0, 0, 1000000, 'مبلغ الدخل');
         optionalCoordinate_(row.lat, row.lng);
         validateSocialStatus_(row.socialStatus);
-        const associationId = row.associationId || (user.role === 'ADMIN' ? null : user.associationId);
+        const associationId = resolvedAssociationId;
         const phoneKey = (associationId || '') + '|' + phone;
         // مطابق مؤكَّد (تكرار داخل الملف نفسه أو مع سجل موجود): يُرفض الصف
         // ولا يُستورد أبدًا؛ مطابق محتمل (اسم+مدينة فقط): يُعرض للمراجعة
@@ -587,149 +621,187 @@ function inspectBeneficiaryExcel(token, payload) {
 }
 
 /**
- * Phase 2.3 (القسم 3، مُصحَّح): assignDelegate يُنفِّذ مرحلة "التعيين"
- * فقط — لا "الاستلام الفعلي". لا يعود ينقل أي جهاز إلى "مع المندوب"، ولا
- * يضبط حالة تسليم المستفيد على "خرج مع المندوب"؛ هذان الانتقالان
- * يخصّان مرحلة استلام المندوب للأجهزة فعليًا (endpoint مستقل لاحق مثل
- * startDelivery/confirmDevicePickup — لم يُنشأ بعد عمدًا، فهو من نطاق
- * مرحلة لاحقة). هنا فقط: يُسجَّل رقم المندوب، وتنتقل حالة تنفيذ كل
- * احتياج معتمد جاهز من "جهاز جاهز" إلى "معيّن للمندوب — بانتظار التنفيذ"
- * (عبر "بانتظار تعيين مندوب" الوسيطة، بنفس سلسلة NEED_FULFILLMENT_TRANSITIONS_
- * المركزية — لا اختصار يتجاوزها)، وتنتقل حالة تسليم المستفيد من "لم
- * يبدأ" إلى "جاري التجهيز" فقط (لا "خرج مع المندوب"). الأجهزة نفسها
- * والاحتياجات المُعيَّنة مسبقًا (حالة "معيّن للمندوب — بانتظار التنفيذ"
- * أصلًا) لا تتغيّر — يُعاد تعيين رقم المندوب فقط بأمان (حلقة ذاتية).
- * لا يمكن إعادة التعيين بعد بدء العهدة الفعلية ("خرج مع المندوب" فما
- * بعدها) من هذا المسار إطلاقًا — تُرفض بنفس رسالة عدم الجهوزية.
+ * Phase 2.3 (القسم 3) + Phase 2.3.1 (تصليب): assignDelegate يُنفِّذ
+ * مرحلة "التعيين" فقط — لا "الاستلام الفعلي". لا يعود ينقل أي جهاز إلى
+ * "مع المندوب"، ولا يضبط حالة تسليم المستفيد على "خرج مع المندوب"؛
+ * هذان الانتقالان يخصّان مرحلة استلام المندوب للأجهزة فعليًا (endpoint
+ * مستقل لاحق مثل startDelivery/confirmDevicePickup — لم يُنشأ بعد
+ * عمدًا). هنا فقط: يُسجَّل رقم المندوب، وتنتقل حالة تنفيذ كل احتياج
+ * معتمد جاهز إلى "معيّن للمندوب — بانتظار التنفيذ" عبر assertNeedFulfillmentChain_
+ * المركزية (لا اختصار)، وتنتقل حالة تسليم المستفيد إلى "جاري التجهيز"
+ * فقط. opId اختياري (Phase 2.3.1 القسم 3): يمرّ عبر runLockedIdempotent_
+ * بنطاق مُقيَّد بالمستفيد — إعادة الطلب نفسه بعد timeout تُعيد نفس
+ * النتيجة المخزَّنة بلا إعادة تنفيذ الكتابة ولا تكرار audit.
  */
-function assignDelegate(token, beneficiaryId, delegateId) {
+function assignDelegate(token, beneficiaryId, delegateId, opId) {
   return perfTime_('assignDelegate', () => {
-  const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
-  beneficiaryId = cleanId_(beneficiaryId);
-  delegateId = cleanId_(delegateId);
+    const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
+    beneficiaryId = cleanId_(beneficiaryId);
+    delegateId = cleanId_(delegateId);
+    return runLockedIdempotent_('assignDelegate:' + beneficiaryId, user.id, opId, () => assignDelegate_(user, beneficiaryId, delegateId));
+  });
+}
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(15000);
-  let approvedNeedsCount = 0;
-  try {
-    invalidateTableCache_(APP.sheets.beneficiaries);
-    invalidateTableCache_(APP.sheets.devices);
-    invalidateTableCache_(APP.sheets.delegates);
-    invalidateTableCache_(APP.sheets.beneficiaryNeeds);
+/**
+ * ⚠️ تفترض أن المستدعي يُمسك ScriptLock فعلًا (عبر runLockedIdempotent_
+ * في assignDelegate أعلاه) — لا تُمسك أي قفل بنفسها ولا تُستدعى مباشرة
+ * من أي مسار آخر.
+ */
+function assignDelegate_(user, beneficiaryId, delegateId) {
+  invalidateTableCache_(APP.sheets.beneficiaries);
+  invalidateTableCache_(APP.sheets.devices);
+  invalidateTableCache_(APP.sheets.delegates);
+  invalidateTableCache_(APP.sheets.beneficiaryNeeds);
 
-    // (1) المستفيد موجود، (10) المندوب نشط
-    const beneficiary = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId);
-    const delegate = findById_(APP.sheets.delegates, 'رقم المندوب', delegateId);
-    if (!beneficiary || !delegate || String(delegate['الحالة']) !== 'نشط') throw new Error('المستفيد أو المندوب غير صالح');
-    // (6) تطابق جمعية المندوب/المستفيد
-    if (String(beneficiary['رقم الجمعية']) !== String(delegate['رقم الجمعية'])) throw new Error('يجب أن يتبع المندوب والمستفيد الجمعية نفسها');
-    if (user.role === 'ASSOCIATION' && String(beneficiary['رقم الجمعية']) !== user.associationId) throw new Error('ليس لديك صلاحية');
-    // (9) تأكيد الموقع
-    if (!beneficiaryLocationConfirmed_(beneficiary)) {
-      throw new Error('لا يمكن إحالة هذا المستفيد قبل تأكيد موقعه على الخريطة — استكمل الموقع أولًا');
+  // (1) المستفيد موجود، (10) المندوب نشط
+  const beneficiary = findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId);
+  const delegate = findById_(APP.sheets.delegates, 'رقم المندوب', delegateId);
+  if (!beneficiary || !delegate || String(delegate['الحالة']) !== 'نشط') throw new Error('المستفيد أو المندوب غير صالح');
+  // (6) تطابق جمعية المندوب/المستفيد
+  if (String(beneficiary['رقم الجمعية']) !== String(delegate['رقم الجمعية'])) throw new Error('يجب أن يتبع المندوب والمستفيد الجمعية نفسها');
+  if (user.role === 'ASSOCIATION' && String(beneficiary['رقم الجمعية']) !== user.associationId) throw new Error('ليس لديك صلاحية');
+  // (9) تأكيد الموقع
+  if (!beneficiaryLocationConfirmed_(beneficiary)) {
+    throw new Error('لا يمكن إحالة هذا المستفيد قبل تأكيد موقعه على الخريطة — استكمل الموقع أولًا');
+  }
+  // (2) المستفيد معتمد فعليًا (لا "تحت المراجعة" ولا "مرفوض")
+  if (String(beneficiary['حالة مراجعة المستفيد'] || '') !== 'معتمد') {
+    throw new Error('«المستفيد ما زال تحت المراجعة، ولا يمكن تعيين مندوب قبل اعتماد الإدارة.»');
+  }
+
+  const associationId = String(beneficiary['رقم الجمعية']);
+  // (3) احتياج معتمد واحد على الأقل
+  const approvedNeeds = readTable_(APP.sheets.beneficiaryNeeds).rows
+    .filter(row => String(row['رقم المستفيد']) === beneficiaryId && String(row['حالة القرار']) === 'معتمد');
+  if (!approvedNeeds.length) {
+    throw new Error('«لا يمكن تعيين مندوب؛ لم تجهز جميع الأجهزة المعتمدة لهذا المستفيد.»');
+  }
+
+  // Phase 2.3.1 (القسم 9): يبني قائمة كل جهاز يشير لكل رقم احتياج — لا
+  // Map يكتب آخر جهاز بصمت عند وجود أكثر من جهاز واحد على نفس الاحتياج
+  // (بيانات فاسدة تاريخيًا). يُرفض التعيين صراحةً بدل اختيار جهاز عشوائي.
+  const allDevices = readTable_(APP.sheets.devices).rows;
+  const devicesByNeed = {};
+  allDevices.forEach(row => {
+    const needId = String(row['رقم الاحتياج'] || '');
+    if (!needId) return;
+    (devicesByNeed[needId] = devicesByNeed[needId] || []).push(row);
+  });
+
+  // حالات تنفيذ الاحتياج المقبولة لعملية "تعيين" (لا "استلام"):
+  // "بانتظار تعيين مندوب" هي الحالة الحقيقية المتوقَّعة (Phase 2.3.1
+  // القسم 8 — maybeAdvanceNeedsToPendingDelegate_ في BeneficiaryNeeds.gs
+  // تنقل إليها المجموعة كاملة عند اكتمال كل الأجهزة). قبول "جهاز جاهز"
+  // هنا أيضًا هو **مسار تعافٍ فقط** لبيانات انتقالية قديمة (سُجِّلت قبل
+  // Phase 2.3.1، أو أُصلحت يدويًا) لم تمرّ بعد بالتقدُّم التلقائي أعلاه —
+  // وليس مسارًا معتمدًا جديدًا يجب الاعتماد عليه. أو مُعيَّن بالفعل ولم
+  // تبدأ عهدته الفعلية بعد (حلقة ذاتية آمنة لإعادة التعيين). أي حالة
+  // أبعد من ذلك ("خرج مع المندوب" فما بعدها) تعني أن العهدة الفعلية
+  // بدأت بالفعل — لا يجوز لهذا المسار لمسها إطلاقًا.
+  const assignableFulfillments = ['جهاز جاهز', 'بانتظار تعيين مندوب', 'معيّن للمندوب — بانتظار التنفيذ'];
+
+  // (4)+(5)+(6)+(7)+(8)+(9) كل احتياج معتمد مرتبط بجهاز واحد بالضبط، صحيح كامل الشروط وجاهز للتعيين
+  const readyNeeds = approvedNeeds.map(need => {
+    const needId = String(need['رقم الاحتياج']);
+    const linkedDevices = devicesByNeed[needId] || [];
+    if (linkedDevices.length > 1) {
+      throw new Error('تعذّر تعيين المندوب: يوجد أكثر من جهاز مرتبط بالاستحقاق نفسه، ويلزم تصحيح سلامة البيانات.');
     }
-    // (2) المستفيد معتمد فعليًا (لا "تحت المراجعة" ولا "مرفوض")
-    if (String(beneficiary['حالة مراجعة المستفيد'] || '') !== 'معتمد') {
-      throw new Error('«المستفيد ما زال تحت المراجعة، ولا يمكن تعيين مندوب قبل اعتماد الإدارة.»');
-    }
-
-    const associationId = String(beneficiary['رقم الجمعية']);
-    // (3) احتياج معتمد واحد على الأقل
-    const approvedNeeds = readTable_(APP.sheets.beneficiaryNeeds).rows
-      .filter(row => String(row['رقم المستفيد']) === beneficiaryId && String(row['حالة القرار']) === 'معتمد');
-    if (!approvedNeeds.length) {
+    const device = linkedDevices[0];
+    const deviceStatus = device ? String(device['حالة الجهاز']) : '';
+    const fulfillmentStatus = String(need['حالة التنفيذ']);
+    const linkedCorrectly = device
+      && String(device['النوع']) === String(need['نوع الجهاز'])
+      && String(device['رقم الجمعية']) === associationId
+      && String(need['رقم الجمعية']) === associationId
+      && String(device['رقم المستفيد']) === beneficiaryId
+      && deviceStatus === 'مخصص'
+      && assignableFulfillments.indexOf(fulfillmentStatus) !== -1;
+    if (!linkedCorrectly) {
       throw new Error('«لا يمكن تعيين مندوب؛ لم تجهز جميع الأجهزة المعتمدة لهذا المستفيد.»');
     }
-    approvedNeedsCount = approvedNeeds.length;
+    return {needId: needId, fulfillmentStatus: fulfillmentStatus};
+  });
 
-    const devicesById = {};
-    readTable_(APP.sheets.devices).rows.forEach(row => { devicesById[String(row['رقم الجهاز'])] = row; });
-    const deviceByNeed = {};
-    Object.keys(devicesById).forEach(id => {
-      const needId = String(devicesById[id]['رقم الاحتياج'] || '');
-      if (needId) deviceByNeed[needId] = devicesById[id];
-    });
+  // يتحقق من صحة سلسلة الانتقال الكاملة قبل أي كتابة (StateRules.gs
+  // المركزية عبر assertNeedFulfillmentChain_ — لا اختصار يتجاوزها).
+  readyNeeds.forEach(need => {
+    assertNeedFulfillmentChain_(need.fulfillmentStatus, 'معيّن للمندوب — بانتظار التنفيذ');
+  });
+  // حالة تسليم المستفيد: "لم يبدأ" → "جاري التجهيز" فقط (تعيين، لا
+  // خروج فعلي)، أو حلقة ذاتية إن كانت "جاري التجهيز" أصلًا (إعادة تعيين).
+  const currentDeliveryStatus = String(beneficiary['حالة التسليم'] || 'لم يبدأ');
+  const targetDeliveryStatus = 'جاري التجهيز';
+  assertDeliveryTransition_(currentDeliveryStatus, targetDeliveryStatus);
 
-    // حالات تنفيذ الاحتياج المقبولة لعملية "تعيين" (لا "استلام"): جاهز
-    // للتعيين لأول مرة ("جهاز جاهز"/"بانتظار تعيين مندوب")، أو مُعيَّن
-    // بالفعل ولم تبدأ عهدته الفعلية بعد (حلقة ذاتية آمنة لإعادة التعيين).
-    // أي حالة أبعد من ذلك ("خرج مع المندوب" فما بعدها) تعني أن العهدة
-    // الفعلية بدأت بالفعل — لا يجوز لهذا المسار لمسها إطلاقًا.
-    const assignableFulfillments = ['جهاز جاهز', 'بانتظار تعيين مندوب', 'معيّن للمندوب — بانتظار التنفيذ'];
+  // -------- الكتابة الفعلية، بلقطة خام كاملة لكل سجل متأثر (Phase 2.3.1 القسم 1) --------
+  // القيم كما قُرئت من Sheets حرفيًا (بلا String(...))، لأجل تراجع دقيق.
+  const beneficiarySnapshot = {
+    'رقم المندوب': beneficiary['رقم المندوب'],
+    'حالة التسليم': beneficiary['حالة التسليم'],
+    'آخر تحديث': beneficiary['آخر تحديث']
+  };
+  const needSnapshots = {};
+  readyNeeds.forEach(need => {
+    const row = findById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', need.needId);
+    needSnapshots[need.needId] = {'حالة التنفيذ': row['حالة التنفيذ'], 'آخر تحديث': row['آخر تحديث']};
+  });
 
-    // (4)+(5)+(6)+(7)+(8) كل احتياج معتمد مرتبط فعليًا بجهاز صحيح كامل الشروط وجاهز للتعيين
-    const readyNeeds = approvedNeeds.map(need => {
-      const needId = String(need['رقم الاحتياج']);
-      const device = deviceByNeed[needId];
-      const deviceStatus = device ? String(device['حالة الجهاز']) : '';
-      const fulfillmentStatus = String(need['حالة التنفيذ']);
-      const linkedCorrectly = device
-        && String(device['النوع']) === String(need['نوع الجهاز'])
-        && String(device['رقم الجمعية']) === associationId
-        && String(need['رقم الجمعية']) === associationId
-        && String(device['رقم المستفيد']) === beneficiaryId
-        && deviceStatus === 'مخصص'
-        && assignableFulfillments.indexOf(fulfillmentStatus) !== -1;
-      if (!linkedCorrectly) {
-        throw new Error('«لا يمكن تعيين مندوب؛ لم تجهز جميع الأجهزة المعتمدة لهذا المستفيد.»');
-      }
-      return {needId: needId, fulfillmentStatus: fulfillmentStatus};
-    });
-
-    // يتحقق من صحة سلسلة الانتقال الكاملة قبل أي كتابة (StateRules.gs
-    // المركزية — لا اختصار "جهاز جاهز" → "معيّن للمندوب" مباشرة).
+  const written = []; // 'beneficiary' أو رقم احتياج
+  try {
     readyNeeds.forEach(need => {
-      if (need.fulfillmentStatus === 'جهاز جاهز') {
-        assertNeedFulfillmentTransition_('جهاز جاهز', 'بانتظار تعيين مندوب');
-        assertNeedFulfillmentTransition_('بانتظار تعيين مندوب', 'معيّن للمندوب — بانتظار التنفيذ');
-      } else if (need.fulfillmentStatus === 'بانتظار تعيين مندوب') {
-        assertNeedFulfillmentTransition_('بانتظار تعيين مندوب', 'معيّن للمندوب — بانتظار التنفيذ');
-      } else {
-        assertNeedFulfillmentTransition_('معيّن للمندوب — بانتظار التنفيذ', 'معيّن للمندوب — بانتظار التنفيذ');
+      if (need.fulfillmentStatus !== 'معيّن للمندوب — بانتظار التنفيذ') {
+        updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', need.needId, {'حالة التنفيذ': 'معيّن للمندوب — بانتظار التنفيذ', 'آخر تحديث': now_()});
+      }
+      written.push(need.needId);
+    });
+    updateById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId, {
+      'رقم المندوب': delegateId,
+      'حالة التسليم': targetDeliveryStatus,
+      'آخر تحديث': now_()
+    });
+    written.push('beneficiary');
+  } catch (writeError) {
+    // تراجع best-effort: يُحاوَل إعادة **كل** سجل مكتوب فعليًا (لا يتوقف
+    // عند أول فشل)، وتُجمَع كل معرّفات ما تعذّر تراجعه في رسالة واحدة —
+    // بلا بيانات شخصية، معرّفات وtraceId فقط.
+    const restored = [];
+    const failedToRestore = [];
+    written.forEach(id => {
+      try {
+        if (id === 'beneficiary') {
+          updateById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId, beneficiarySnapshot);
+          restored.push('beneficiary:' + beneficiaryId);
+        } else {
+          updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', id, needSnapshots[id]);
+          restored.push(id);
+        }
+      } catch (rollbackError) {
+        failedToRestore.push((id === 'beneficiary' ? 'beneficiary:' + beneficiaryId : id) + ' (' + rollbackError.message + ')');
       }
     });
-    // حالة تسليم المستفيد: "لم يبدأ" → "جاري التجهيز" فقط (تعيين، لا
-    // خروج فعلي)، أو حلقة ذاتية إن كانت "جاري التجهيز" أصلًا (إعادة تعيين).
-    const currentDeliveryStatus = String(beneficiary['حالة التسليم'] || 'لم يبدأ');
-    const targetDeliveryStatus = 'جاري التجهيز';
-    assertDeliveryTransition_(currentDeliveryStatus, targetDeliveryStatus);
-
-    // كتابة ذرّية واحدة: لا تحديث للأجهزة إطلاقًا في هذه المرحلة.
-    const needSnapshots = [];
-    try {
-      readyNeeds.forEach(need => {
-        needSnapshots.push({needId: need.needId, fulfillmentStatus: need.fulfillmentStatus});
-        if (need.fulfillmentStatus !== 'معيّن للمندوب — بانتظار التنفيذ') {
-          updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', need.needId, {'حالة التنفيذ': 'معيّن للمندوب — بانتظار التنفيذ', 'آخر تحديث': now_()});
-        }
-      });
-      updateById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId, {
-        'رقم المندوب': delegateId,
-        'حالة التسليم': targetDeliveryStatus,
-        'آخر تحديث': now_()
-      });
-    } catch (writeError) {
-      const rollbackErrors = [];
-      needSnapshots.forEach(snap => {
-        try { updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', snap.needId, {'حالة التنفيذ': snap.fulfillmentStatus}); }
-        catch (rollbackError) { rollbackErrors.push(snap.needId + ': ' + rollbackError.message); }
-      });
-      if (rollbackErrors.length) {
-        Logger.log('حرج جدًا: فشل تراجع تعيين مندوب جزئي — traceId=' + requestMeta_().traceId + ' — ' + rollbackErrors.join('؛ '));
-        throw new Error('تعذّر إتمام تعيين المندوب، وتعذّر التراجع الكامل أيضًا — يتطلب مراجعة يدوية فورية (traceId: ' + requestMeta_().traceId + ')');
-      }
-      throw new Error('تعذّر تعيين المندوب: ' + writeError.message);
+    const traceId = requestMeta_().traceId;
+    if (failedToRestore.length) {
+      Logger.log('حرج جدًا: فشل تراجع تعيين مندوب جزئي — traceId=' + traceId
+        + ' — أُعيدت: [' + restored.join('، ') + '] — تعذّر إعادة: [' + failedToRestore.join('، ') + '] — خطأ الكتابة الأصلي: ' + writeError.message);
+      throw new Error('تعذّر إتمام تعيين المندوب (traceId: ' + traceId + ') — تعذّر التراجع الكامل، يتطلب مراجعة يدوية فورية للسجلات: ' + failedToRestore.map(s => s.split(' (')[0]).join('، '));
     }
-  } finally {
-    lock.releaseLock();
+    throw new Error('تعذّر إتمام تعيين المندوب (traceId: ' + traceId + ') — أُعيدت كل السجلات المتأثرة لحالتها السابقة تلقائيًا.');
   }
-  audit_(user, 'تعيين مندوب', 'المستفيدون', beneficiaryId, 'المندوب: ' + delegateId + ' — عدد الاحتياجات المعتمدة: ' + approvedNeedsCount + ' — بانتظار الاستلام الفعلي');
+
+  // Phase 2.3.1 (القسم 2): البيانات الأساسية نجحت بالفعل — clearDashboardCache
+  // فورًا، وaudit في try/catch مستقل لا يُسقِط نجاح العملية إن فشل هو وحده.
   clearDashboardCache();
+  try {
+    audit_(user, 'تعيين مندوب', 'المستفيدون', beneficiaryId, 'المندوب: ' + delegateId + ' — عدد الاحتياجات المعتمدة: ' + readyNeeds.length + ' — بانتظار الاستلام الفعلي');
+  } catch (auditError) {
+    Logger.log('تحذير: فشل تسجيل العملية في سجل العمليات بعد نجاح تعيين المندوب فعليًا — traceId=' + requestMeta_().traceId + ' beneficiaryId=' + beneficiaryId + ' — ' + auditError.message);
+  }
+
   const record = normalizeBeneficiary_(findById_(APP.sheets.beneficiaries, 'رقم المستفيد', beneficiaryId));
   const updatedDevices = devicesForBeneficiary_(beneficiaryId);
   const summary = computeCoreSummary_(user.role === 'ASSOCIATION' ? user.associationId : null);
   return {ok: true, record: record, devices: updatedDevices, summary: summary};
-  });
 }
 
 /**

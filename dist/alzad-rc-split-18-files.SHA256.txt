@@ -1,4 +1,4 @@
 بصمة SHA-256 لأرشيف الحزمة alzad-rc-split-18-files.zip:
-  80bb41fb40cf03616e5b8eb7b28aa99096d26c37a4fda2bb1842158b4e649cbd  alzad-rc-split-18-files.zip
-الكوميت المصدر: 6f220f08022a87c141d3f344ebc24a1f16b8d0ce
+  cd1747c5d09a990fe5d5eed301f083790450feaf4ab4c6e00df117c7c21b4624  alzad-rc-split-18-files.zip
+الكوميت المصدر: f21f735544ce5c5808489045aa3fc713492da8f6
 تاريخ البناء: 2026-08-05

@@ -484,11 +484,13 @@ section('8) اتساق القواعد عبر كل المسارات (فحص ثا�
       !!body && /assertDeliveryTransition_\(/.test(body));
   });
   assert('saveDevice يستخدم assertDeviceTransition_', /assertDeviceTransition_\(/.test(extractFunctionBody_(source, 'saveDevice') || ''));
-  // Phase 2.3 (تصحيح): assignDelegate لم تعد تلمس حالة الجهاز إطلاقًا
-  // (تعيين فقط، لا استلام فعلي) — تستخدم بدلًا منها assertNeedFulfillmentTransition_
-  // للتحقق من سلسلة انتقال حالة تنفيذ الاحتياج المركزية.
-  assert('assignDelegate يستخدم assertNeedFulfillmentTransition_ (تعيين فقط، لا يمسّ حالة الجهاز)',
-    /assertNeedFulfillmentTransition_\(/.test(extractFunctionBody_(source, 'assignDelegate') || ''));
+  // Phase 2.3 (تصحيح) + Phase 2.3.1: assignDelegate لم تعد تلمس حالة
+  // الجهاز إطلاقًا (تعيين فقط، لا استلام فعلي) — المنطق الفعلي في
+  // assignDelegate_ الداخلية (يستدعيها assignDelegate العامة عبر
+  // runLockedIdempotent_)، وتستخدم assertNeedFulfillmentChain_ للتحقق
+  // من سلسلة انتقال حالة تنفيذ الاحتياج المركزية كاملة (لا اختصار).
+  assert('assignDelegate يستخدم assertNeedFulfillmentChain_ عبر assignDelegate_ الداخلية (تعيين فقط، لا يمسّ حالة الجهاز)',
+    /assertNeedFulfillmentChain_\(/.test(extractFunctionBody_(source, 'assignDelegate') || ''));
   assert('importBeneficiaries لا يكتب أي حالة جهاز أو تسليم (لا يتجاوز قواعد الحالة، يُنشئ سجلات جديدة فقط)',
     !/importBeneficiaries[\s\S]{0,3000}?'حالة الجهاز'/.test(source));
 }

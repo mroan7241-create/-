@@ -682,7 +682,7 @@ const importWithCoords = S2.importBeneficiaries(adminSession.token, [
     associationId: accepted.associationId, name: 'مستفيد استيراد بلا إحداثيات (ملف قديم)', region: 'الرياض', city: 'الرياض',
     address: 'حي الروضة', district: 'الروضة', phone: '0501113002', familyCount: 1, socialStatus: 'أرملة', needs: ['غسالة']
   }
-], true);
+], true, accepted.associationId);
 assert('importBeneficiaries ينجح لصفّين، أحدهما بإحداثيات والآخر بلا إحداثيات', importWithCoords.ok && importWithCoords.imported === 2);
 
 const importedRows = S2.readTable_('المستفيدون').rows.filter(row => String(row['رقم الجمعية']) === accepted.associationId);
@@ -703,7 +703,7 @@ const importRejected = S2.importBeneficiaries(adminSession.token, [
     address: 'حي', district: 'حي الاختبار', phone: '0501113003', familyCount: 1, socialStatus: 'أرملة', needs: [],
     lat: '999', lng: '46.6'
   }
-], true);
+], true, accepted.associationId);
 assert('صف بإحداثيات خارج النطاق يُرفض برسالة واضحة بدل قبوله صامتًا (لا يُستورَد الاستيراد كله بلا توضيح)',
   importRejected.ok === false && importRejected.errorCount === 1 && /بين -90 و90/.test(importRejected.errors[0].message));
 
@@ -712,7 +712,7 @@ const importPartialCoords = S2.importBeneficiaries(adminSession.token, [
     associationId: accepted.associationId, name: 'مستفيد بإحداثية واحدة فقط', region: 'الرياض', city: 'الرياض',
     address: 'حي', district: 'حي الاختبار', phone: '0501113004', familyCount: 1, socialStatus: 'أرملة', needs: [], lat: '24.7'
   }
-], true);
+], true, accepted.associationId);
 assert('صف بإحداثية واحدة فقط (دون الأخرى) يُرفض صراحة بدل إسقاطها بصمت',
   importPartialCoords.ok === false && importPartialCoords.errorCount === 1 && /معًا/.test(importPartialCoords.errors[0].message));
 
@@ -723,7 +723,9 @@ assert('inspectBeneficiaryExcel يتعرّف على عمودي "خط العرض"
   /'خط العرض':\s*'lat'/.test(source) && /'خط الطول':\s*'lng'/.test(source));
 assert('"خط العرض"/"خط الطول" ليسا ضمن الأعمدة الإلزامية "expected" (ملفات قديمة بلا إحداثيات تبقى مقبولة)', (() => {
   const start = source.indexOf('function inspectBeneficiaryExcel(');
-  const expectedLine = source.slice(start, start + 3000).match(/const expected = \[[^\]]*\];/);
+  const end = source.indexOf('\nfunction ', start + 10);
+  const body = source.slice(start, end === -1 ? start + 6000 : end);
+  const expectedLine = body.match(/const expected = \[[^\]]*\];/);
   return expectedLine && !expectedLine[0].includes('خط العرض') && !expectedLine[0].includes('خط الطول');
 })());
 assert('inspectBeneficiaryExcel يتحقق من صحة الإحداثيات لكل صف عبر optionalCoordinate_', (() => {
@@ -779,19 +781,19 @@ assert('مستفيد بنفس الاسم والمدينة لكن جوال مخت
 const dupImportWithinFile = S2.importBeneficiaries(adminSession.token, [
   Object.assign({}, dupBase, {name: 'صف أول', phone: '0509990010', needs: 'ثلاجة'}),
   Object.assign({}, dupBase, {name: 'صف ثانٍ بنفس الجوال', phone: '0509990010', needs: 'ثلاجة'})
-], true);
+], true, accepted.associationId);
 assert('الاستيراد يرفض تكرارًا بين صفوف الملف نفسه (لا يستورد أي سجل من الدفعة)',
   dupImportWithinFile.ok === false && dupImportWithinFile.errorCount === 1 && /داخل الملف نفسه/.test(dupImportWithinFile.errors[0].message));
 
 const dupImportAgainstDb = S2.importBeneficiaries(adminSession.token, [
   Object.assign({}, dupBase, {name: 'صف يطابق سجلًا موجودًا', phone: '0509990001', needs: 'ثلاجة'})
-], true);
+], true, accepted.associationId);
 assert('الاستيراد يرفض صفًا يطابق رقم جوال موجود مسبقًا في قاعدة البيانات',
   dupImportAgainstDb.ok === false && /لدى هذه الجمعية بالفعل/.test(dupImportAgainstDb.errors[0].message));
 
 const dupImportClean = S2.importBeneficiaries(adminSession.token, [
   Object.assign({}, dupBase, {name: 'صف جديد سليم', phone: '0509990020', needs: 'ثلاجة'})
-], true);
+], true, accepted.associationId);
 assert('الاستيراد ينجح لصف جديد لا يطابق أي تكرار مؤكَّد', dupImportClean.ok === true && dupImportClean.imported === 1);
 
 let dupImportNoLeak = null;

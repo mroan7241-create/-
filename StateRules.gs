@@ -250,8 +250,12 @@ const NEED_FULFILLMENT_STATUSES = [
 const NEED_FULFILLMENT_TRANSITIONS_ = Object.freeze({
   'استحقاق معتمد': ['استحقاق معتمد', 'بانتظار توفر الجهاز'],
   'بانتظار توفر الجهاز': ['بانتظار توفر الجهاز', 'جهاز جاهز'],
-  'جهاز جاهز': ['جهاز جاهز', 'بانتظار تعيين مندوب'],
-  'بانتظار تعيين مندوب': ['بانتظار تعيين مندوب', 'معيّن للمندوب — بانتظار التنفيذ'],
+  // Phase 2.3.1 (القسم 7): انتقالان عكسيان صريحان لإزالة جهاز مرتبط قبل
+  // تعيين مندوب — بلا هذين، لا يملك saveDevice أي وسيلة معتمدة لإعادة
+  // احتياج "جهاز جاهز"/"بانتظار تعيين مندوب" خطوة للخلف عبر assert
+  // حقيقي بدل الكتابة المباشرة القديمة.
+  'جهاز جاهز': ['جهاز جاهز', 'بانتظار تعيين مندوب', 'بانتظار توفر الجهاز'],
+  'بانتظار تعيين مندوب': ['بانتظار تعيين مندوب', 'معيّن للمندوب — بانتظار التنفيذ', 'بانتظار توفر الجهاز'],
   'معيّن للمندوب — بانتظار التنفيذ': ['معيّن للمندوب — بانتظار التنفيذ', 'خرج مع المندوب'],
   'خرج مع المندوب': ['خرج مع المندوب', 'تم التسليم', 'مؤجل', 'بانتظار تأكيد الإرجاع'],
   'مؤجل': ['مؤجل', 'خرج مع المندوب'],
@@ -300,4 +304,31 @@ function assertNeedFulfillmentTransition_(fromStatus, toStatus) {
     throw new Error('انتقال غير مسموح لحالة تنفيذ الاحتياج: من «' + fromStatus + '» إلى «' + toStatus + '»');
   }
   return true;
+}
+
+/**
+ * Phase 2.3.1 (القسم 7): يتحقق من سلسلة انتقال كاملة لحالة تنفيذ
+ * الاحتياج — قفزة واحدة مباشرة، أو قفزتان عبر حالة وسيطة واحدة معروفة
+ * ضمن NEED_FULFILLMENT_TRANSITIONS_ — بدل أن يكتب أي مسار في المشروع
+ * الحالة النهائية مباشرة متجاوزًا الحالات الوسيطة دون أي assert. يرمي
+ * إن لم يوجد مسار قصير (قفزة أو قفزتان) بين الحالتين — لا يبحث عن
+ * مسارات أطول عمدًا، فكل الاستخدامات الفعلية في هذا المشروع قفزة واحدة
+ * أو قفزتان فقط؛ مسار أطول يعني خطأً منطقيًا في الاستدعاء نفسه.
+ */
+function assertNeedFulfillmentChain_(fromStatus, toStatus) {
+  fromStatus = String(fromStatus || '');
+  toStatus = String(toStatus || '');
+  if (fromStatus === toStatus) { assertNeedFulfillmentTransition_(fromStatus, toStatus); return; }
+  const direct = NEED_FULFILLMENT_TRANSITIONS_[fromStatus] || [];
+  if (direct.indexOf(toStatus) !== -1) { assertNeedFulfillmentTransition_(fromStatus, toStatus); return; }
+  for (let i = 0; i < direct.length; i++) {
+    const mid = direct[i];
+    const midAllowed = NEED_FULFILLMENT_TRANSITIONS_[mid] || [];
+    if (midAllowed.indexOf(toStatus) !== -1) {
+      assertNeedFulfillmentTransition_(fromStatus, mid);
+      assertNeedFulfillmentTransition_(mid, toStatus);
+      return;
+    }
+  }
+  throw new Error('انتقال غير مسموح لحالة تنفيذ الاحتياج: من «' + fromStatus + '» إلى «' + toStatus + '» (لا مسار مباشر أو قصير معروف)');
 }

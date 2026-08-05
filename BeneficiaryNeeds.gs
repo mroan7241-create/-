@@ -725,6 +725,43 @@ function requiredIfRejected_(decision, reason, label) {
  * اختياري لتضييق النطاق لجمعية واحدة (عزل الجمعيات)؛ بلا تمرير قيمة
  * يُحسب على مستوى المشروع كله.
  */
+/**
+ * Phase 2.3.1 (القسم 8): "بانتظار تعيين مندوب" حالة حقيقية بين جاهزية
+ * الأجهزة وتعيين المندوب فعليًا — لا تظهر إلا إذا أصبحت **كل** احتياجات
+ * المستفيد المعتمدة مرتبطة بأجهزة صحيحة معًا في اللحظة نفسها؛ إن بقي
+ * احتياج واحد "بانتظار توفر الجهاز" (لا جهاز مرتبط أصلًا)، يبقى كل شيء
+ * آخر كما هو — لا "جاهزية جزئية" تُعرَض كاكتمال. تُستدعى من داخل قفل
+ * saveDevice القائم أصلًا (لا تُمسك قفلها الخاص).
+ */
+function maybeAdvanceNeedsToPendingDelegate_(beneficiaryId) {
+  const needs = readTable_(APP.sheets.beneficiaryNeeds).rows
+    .filter(row => String(row['رقم المستفيد']) === beneficiaryId && String(row['حالة القرار']) === 'معتمد');
+  if (!needs.length) return;
+  const deviceByNeed = {};
+  readTable_(APP.sheets.devices).rows.forEach(row => {
+    const needId = String(row['رقم الاحتياج'] || '');
+    if (needId) deviceByNeed[needId] = row;
+  });
+  const allReady = needs.every(need => {
+    const fulfillment = String(need['حالة التنفيذ']);
+    if (fulfillment === 'بانتظار تعيين مندوب') return true; // مكتمل بالفعل
+    if (fulfillment !== 'جهاز جاهز') return false;
+    const device = deviceByNeed[String(need['رقم الاحتياج'])];
+    return device
+      && String(device['النوع']) === String(need['نوع الجهاز'])
+      && String(device['رقم الجمعية']) === String(need['رقم الجمعية'])
+      && String(device['رقم المستفيد']) === beneficiaryId
+      && String(device['حالة الجهاز']) === 'مخصص';
+  });
+  if (!allReady) return;
+  needs.forEach(need => {
+    if (String(need['حالة التنفيذ']) === 'جهاز جاهز') {
+      assertNeedFulfillmentChain_('جهاز جاهز', 'بانتظار تعيين مندوب');
+      updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', String(need['رقم الاحتياج']), {'حالة التنفيذ': 'بانتظار تعيين مندوب', 'آخر تحديث': now_()});
+    }
+  });
+}
+
 function needsSummaryByDeviceType_(associationId) {
   const needs = readTable_(APP.sheets.beneficiaryNeeds).rows
     .filter(row => !associationId || String(row['رقم الجمعية']) === associationId);
@@ -866,7 +903,11 @@ function linkDeviceToNeed_(user, deviceId, needId) {
       'رقم الاحتياج': needId,
       'حالة الجهاز': nextStatus
     });
-    if (['استحقاق معتمد', 'بانتظار توفر الجهاز'].indexOf(String(need['حالة التنفيذ'])) !== -1) {
+    // Phase 2.3.1 (القسم 7): يمرّ عبر assertNeedFulfillmentChain_ المركزية
+    // (قفزة أو قفزتان معروفتان) بدل كتابة "جهاز جاهز" مباشرة.
+    const fulfillmentBeforeLink = String(need['حالة التنفيذ']);
+    if (['استحقاق معتمد', 'بانتظار توفر الجهاز'].indexOf(fulfillmentBeforeLink) !== -1) {
+      assertNeedFulfillmentChain_(fulfillmentBeforeLink, 'جهاز جاهز');
       updateById_(APP.sheets.beneficiaryNeeds, 'رقم الاحتياج', needId, {'حالة التنفيذ': 'جهاز جاهز', 'آخر تحديث': now_()});
     }
     clearDashboardCache();
