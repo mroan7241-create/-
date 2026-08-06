@@ -580,12 +580,16 @@ function receiptBatchDetail_(batchId) {
   const batch = findById_(APP.sheets.receiptBatches, 'رقم المحضر', batchId);
   if (!batch) throw new Error('محضر الاستلام غير موجود');
   const items = readTable_(APP.sheets.receiptItems).rows.filter(row => String(row['رقم المحضر']) === batchId);
-  const photoCountByItem = {};
+  // Phase 3.1.2 (القسم 3): تُعاد معرّفات الربط الآمنة (linkId = "رقم
+  // الربط") فقط — لا fileId ولا أي رابط Drive خام في أي استجابة. القراءة
+  // الفعلية للصورة تمر حصرًا عبر getReceiptEvidenceImage(token, batchId,
+  // 'damage', linkId) بعد كل تحقّق صلاحية هناك.
+  const damagePhotosByItem = {};
   readTable_(APP.sheets.receiptDamagePhotos).rows
     .filter(row => String(row['رقم المحضر']) === batchId)
     .forEach(row => {
       const itemId = String(row['رقم البند']);
-      photoCountByItem[itemId] = (photoCountByItem[itemId] || 0) + 1;
+      (damagePhotosByItem[itemId] = damagePhotosByItem[itemId] || []).push({linkId: String(row['رقم الربط'])});
     });
   return {
     id: String(batch['رقم المحضر']), associationId: String(batch['رقم الجمعية']),
@@ -605,7 +609,9 @@ function receiptBatchDetail_(batchId) {
       spec: String(row['المواصفة'] || ''), sentQty: Number(row['الكمية المرسلة']) || 0,
       receivedQty: Number(row['الكمية السليمة']) || 0, damagedQty: Number(row['الكمية التالفة']) || 0,
       missingQty: Number(row['الكمية الناقصة']) || 0, differenceReason: String(row['سبب الفرق'] || ''),
-      differenceNotes: String(row['ملاحظات الفرق'] || ''), damagePhotoCount: photoCountByItem[String(row['رقم البند'])] || 0
+      differenceNotes: String(row['ملاحظات الفرق'] || ''),
+      damagePhotos: damagePhotosByItem[String(row['رقم البند'])] || [],
+      damagePhotoCount: (damagePhotosByItem[String(row['رقم البند'])] || []).length
     }))
   };
 }

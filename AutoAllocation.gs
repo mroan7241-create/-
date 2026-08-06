@@ -91,7 +91,7 @@ function planAutoAllocation_(associationId) {
 
   // القسم 4.4: ترتيب ثابت تقني — أقل عدد احتياجات ناقصة أولًا (أقرب
   // لإكمال الطلبية)، ثم رقم المستفيد تصاعديًا عند التعادل. لا أولوية
-  // تجارية ولا FIFO.
+  // تجارية ولا FIFO. يُستخدَم فقط لترتيب المرحلة الجزئية الأخيرة أدناه.
   beneficiaryModels.forEach(bm => { bm.missingCount = bm.needs.filter(n => !n.linkedDevice).length; });
   beneficiaryModels.sort((a, b) => (a.missingCount - b.missingCount) || (a.beneficiaryId < b.beneficiaryId ? -1 : (a.beneficiaryId > b.beneficiaryId ? 1 : 0)));
 
@@ -105,44 +105,78 @@ function planAutoAllocation_(associationId) {
   const needPlans = [];
   const completedBeneficiaryIds = {};
 
-  // -------- Phase 3.1.1 (القسم 2): تعظيم عدد الطلبيات المكتملة فعليًا --------
-  // خوارزمية greedy السابقة (ترتيب حسب missingCount/id فقط) لم تكن تضمن
-  // أكبر عدد ممكن من الطلبيات المكتملة (مثال ب/ج الإلزامي في الطلب: كان
-  // من الممكن أن تُستهلك الثلاجة الوحيدة على "أ" فيبقى الفرن مهدورًا).
-  // بما أن كل مستفيد يطلب صفرًا أو واحدًا من كل نوع من الأنواع الثلاثة
-  // فقط (لا يوجد أكثر من صف احتياج واحد لكل نوع لكل مستفيد)، فإن نمط
-  // الطلب محصور في 7 أنماط غير فارغة كحد أقصى — هذا يجعل مسألة "أكبر
-  // عدد طلبيات مكتملة من المخزون الحرّ فقط (بلا استرجاع)" قابلة للحل
-  // حصريًا وحتميًا عبر برمجة ديناميكية 0/1 knapsack بثلاثة أبعاد (سعة كل
-  // نوع)، بدل التخمين الجشع. تُستخدَم فقط للمخزون الحرّ (لا استرجاع هنا
-  // — الاسترجاع يبقى مرحلة لاحقة منفصلة كما كان، انظر أدناه).
+  // -------- Phase 3.1.2 (القسم 1): هدف تخصيص عالمي واحد --------
+  // القرار "من يكتمل" قرار واحد يبني مجموعة الموارد القابلة لإعادة
+  // التوزيع من المخزون الحرّ **وكل جهاز "مخصص" لاحتياج جزئي "جهاز جاهز"**
+  // معًا، لا مرحلة حرّة أولًا ثم استرجاع جشع لاحقًا (كان يفوّت حلولًا
+  // أفضل عالميًا). بما أن مجموع (وحدات حرّة + وحدات جاهزة قابلة للاسترجاع)
+  // لكل نوع = العرض الكلي الفعلي لذلك النوع، ومطلب أي مستفيد لنوع ما
+  // (سواء كان جاهزًا له بالفعل أو ناقصًا) = طلب واحد على هذا العرض، فإن
+  // "أكبر عدد مستفيدين يكتمل الجميع" = مسألة 0/1 knapsack قياسية بثلاثة
+  // أبعاد (الأنواع الثلاثة فقط)، إذ لكل مستفيد نمط طلب واحد من 7 أنماط
+  // غير فارغة كحد أقصى (نفس مبدأ Phase 3.1.1 لكن الآن يشمل العرض/الطلب
+  // الكامل معًا في قرار واحد، لا مرحلتين منفصلتين).
   const typesOrder = NEW_NEED_DEVICE_TYPES; // ['ثلاجة', 'فرن', 'غسالة'] — ترتيب ثابت لأبعاد الخوارزمية
-  const dpItems = beneficiaryModels
-    .filter(bm => bm.needs.some(n => !n.linkedDevice))
-    .map(bm => {
-      const missingTypes = Array.from(new Set(bm.needs.filter(n => !n.linkedDevice).map(n => n.type)));
-      return {bm: bm, cost: typesOrder.map(t => (missingTypes.indexOf(t) !== -1 ? 1 : 0))};
-    })
-    .sort((x, y) => (x.bm.beneficiaryId < y.bm.beneficiaryId ? -1 : (x.bm.beneficiaryId > y.bm.beneficiaryId ? 1 : 0)));
 
-  const totalDemand = typesOrder.map((t, idx) => dpItems.reduce((sum, it) => sum + it.cost[idx], 0));
-  const caps = typesOrder.map((t, idx) => Math.min((freePool[t] || []).length, totalDemand[idx]));
-  // حارس أداء: حجم جدول DP محدود عمليًا (حجم الدفعات الواقعي لهذا
-  // المشروع صغير) — تجاوز هذا السقف (نادر جدًا) يتراجع بأمان لعدم تفعيل
-  // مرحلة DP إطلاقًا (لا يعطّل أي شيء، فقط يترك الإكمال بالكامل لمرحلة
-  // الاسترجاع الجشعة التالية القائمة أصلًا).
-  const dpFeasible = dpItems.length > 0 && (caps[0] + 1) * (caps[1] + 1) * (caps[2] + 1) * dpItems.length <= 2000000;
-  const dpSelectedIds = {};
-  if (dpFeasible) {
+  // مجمَّع الأجهزة "الجاهزة" القابلة لإعادة التوزيع (احتياج جزئي بحالة
+  // "جهاز جاهز" فقط) — عبر كل المستفيدين المرشَّحين، بلا استبعاد مسبق
+  // لأي أحد (الاستبعاد يأتي لاحقًا حسب اختيار DP الفعلي).
+  const readyPool = {};
+  beneficiaryModels.forEach(bm => {
+    bm.needs.forEach(n => {
+      if (n.fulfillment === 'جهاز جاهز' && n.linkedDevice) {
+        (readyPool[n.type] = readyPool[n.type] || []).push({device: n.linkedDevice, sourceBeneficiaryId: bm.beneficiaryId, sourceNeedId: n.needId, sourceNeedModel: n});
+      }
+    });
+  });
+  Object.keys(readyPool).forEach(t => readyPool[t].sort((a, b) => String(a.device['رقم الجهاز']).localeCompare(String(b.device['رقم الجهاز']))));
+
+  // موازين طلب مختلفة حسب السؤال المطروح — انظر solveMaxCompletion_ أدناه:
+  // fullCost: كل أنواع احتياجات المستفيد (الجاهزة والناقصة معًا) —
+  // يُستخدَم فقط عند فحص المخزون الحرّ+الجاهز معًا، لأن "الجاهز" حينها
+  // يُعتبَر مطالبًا بوحدة من عرض قابل لإعادة التوزيع مع الجميع.
+  // missingOnlyCost: الأنواع الناقصة فقط — يُستخدَم عند فحص المخزون
+  // الحرّ وحده (بلا استرجاع إطلاقًا)، لأن أي نوع يملكه المستفيد جاهزًا
+  // بالفعل لا يستهلك شيئًا من "الحرّ" في ذلك السيناريو (يبقى كما هو).
+  // moveCost = عدد الاحتياجات الناقصة فقط — هدف ثانوي (عدد النقلات).
+  const dpItems = beneficiaryModels.map(bm => {
+    const allTypes = Array.from(new Set(bm.needs.map(n => n.type)));
+    const missingTypes = Array.from(new Set(bm.needs.filter(n => !n.linkedDevice).map(n => n.type)));
+    return {
+      bm: bm,
+      fullCost: typesOrder.map(t => (allTypes.indexOf(t) !== -1 ? 1 : 0)),
+      missingOnlyCost: typesOrder.map(t => (missingTypes.indexOf(t) !== -1 ? 1 : 0)),
+      moveCost: missingTypes.length
+    };
+  }).sort((x, y) => (x.bm.beneficiaryId < y.bm.beneficiaryId ? -1 : (x.bm.beneficiaryId > y.bm.beneficiaryId ? 1 : 0)));
+
+  /**
+   * يحل "أكبر عدد مستفيدين مكتمل" ضمن سعات مُعطاة (0/1 knapsack بثلاثة
+   * أبعاد)، باستخدام دالة تكلفة مُختارة لكل عنصر (costOf)، بهدف ثانوي
+   * مُدمَج في دالة القيمة نفسها معجميًا: أكبر count أولًا، ثم أصغر مجموع
+   * moveCost. حارس أداء صريح — عند تجاوزه يرمي خطأً بدل أي fallback
+   * صامت لحل أقل من الأمثل (لا تُكتب خطة ناقصة إطلاقًا).
+   */
+  function solveMaxCompletion_(caps, costOf) {
     const capA = caps[0], capB = caps[1], capC = caps[2];
+    const dpCells = (capA + 1) * (capB + 1) * (capC + 1);
+    if (dpItems.length && dpCells * dpItems.length > 4000000) {
+      throw new Error('تعذّر حساب خطة التخصيص التلقائي الأمثل عالميًا لحجم البيانات الحالي (حارس أداء) — لن تُكتب أي خطة تخصيص أقل من الأمثل؛ يلزم تدخّل يدوي أو تقسيم الدفعة.');
+    }
+    const selected = {};
+    if (!dpItems.length) return {count: 0, selectedSet: selected};
     let dp = [];
     for (let a = 0; a <= capA; a++) {
       dp[a] = [];
-      for (let b = 0; b <= capB; b++) dp[a][b] = new Array(capC + 1).fill(0);
+      for (let b = 0; b <= capB; b++) {
+        dp[a][b] = [];
+        for (let c = 0; c <= capC; c++) dp[a][b][c] = {count: 0, cost: 0};
+      }
     }
     const choices = [];
     dpItems.forEach(item => {
-      const cA = item.cost[0], cB = item.cost[1], cC = item.cost[2];
+      const itemCost = costOf(item);
+      const cA = itemCost[0], cB = itemCost[1], cC = itemCost[2];
       const take = [];
       for (let a = 0; a <= capA; a++) {
         take[a] = [];
@@ -153,8 +187,12 @@ function planAutoAllocation_(associationId) {
           for (let c = capC; c >= 0; c--) {
             const na = a - cA, nb = b - cB, nc = c - cC;
             if (na >= 0 && nb >= 0 && nc >= 0) {
-              const withItem = dp[na][nb][nc] + 1;
-              if (withItem > dp[a][b][c]) { dp[a][b][c] = withItem; take[a][b][c] = true; }
+              const base = dp[na][nb][nc];
+              const candidateCount = base.count + 1;
+              const candidateCost = base.cost + item.moveCost;
+              const current = dp[a][b][c];
+              const better = candidateCount > current.count || (candidateCount === current.count && candidateCost < current.cost);
+              if (better) { dp[a][b][c] = {count: candidateCount, cost: candidateCost}; take[a][b][c] = true; }
             }
           }
         }
@@ -164,115 +202,88 @@ function planAutoAllocation_(associationId) {
     let a = capA, b = capB, c = capC;
     for (let i = dpItems.length - 1; i >= 0; i--) {
       if (choices[i][a][b][c]) {
-        dpSelectedIds[dpItems[i].bm.beneficiaryId] = true;
-        a -= dpItems[i].cost[0]; b -= dpItems[i].cost[1]; c -= dpItems[i].cost[2];
+        selected[dpItems[i].bm.beneficiaryId] = true;
+        a -= costOf(dpItems[i])[0]; b -= costOf(dpItems[i])[1]; c -= costOf(dpItems[i])[2];
       }
     }
+    return {count: dp[capA][capB][capC].count, selectedSet: selected};
   }
 
-  // إكمال المستفيدين الذين اختارتهم DP من المخزون الحرّ فقط — يحافظ هذا
-  // تلقائيًا على أي جهاز مرتبط أصلًا بالمستفيد (لا يُمَس إطلاقًا، فقط
-  // الاحتياجات الناقصة تأخذ أجهزة جديدة)، ويُقفَل هؤلاء المستفيدون خارج
-  // مرحلة الاسترجاع التالية (أجهزتهم — الجديدة والقديمة معًا — لم تعد
-  // قابلة للاسترجاع لغيرهم بعد اكتمال طلبيتهم بالكامل).
-  dpItems.forEach(item => {
-    if (!dpSelectedIds[item.bm.beneficiaryId]) return;
-    const bm = item.bm;
-    const missing = bm.needs.filter(n => !n.linkedDevice);
-    missing.forEach(n => {
-      const device = (freePool[n.type] || []).shift();
-      n.linkedDevice = device;
-      devicePlans.push({deviceId: String(device['رقم الجهاز']), type: n.type, toBeneficiaryId: bm.beneficiaryId, toNeedId: n.needId, reclaimed: false});
-      needPlans.push({needId: n.needId, fromStatus: n.fulfillment, toStatus: 'بانتظار تعيين مندوب', kind: 'link-complete'});
-    });
-    bm.needs.forEach(n => {
-      if (missing.indexOf(n) === -1 && n.fulfillment === 'جهاز جاهز') {
-        needPlans.push({needId: n.needId, fromStatus: 'جهاز جاهز', toStatus: 'بانتظار تعيين مندوب', kind: 'group-complete'});
-      }
-    });
-    completedBeneficiaryIds[bm.beneficiaryId] = true;
-  });
+  // Phase 3.1.2 (القسم 1ب) — تفضيل حاسم لا مجرد ترتيب: الحل الذي يكمل
+  // العدد نفسه بلا أي استرجاع أفضل دائمًا من حل يستخدم الاسترجاع، مهما
+  // كان moveCost متقاربًا (فكّ ربط جهاز "جاهز" عملية إضافية فعلية لا
+  // تُقاس بمجرد عدّ الفجوات). لذلك نحل المسألة مرتين: أولًا بالمخزون
+  // الحرّ فقط (تكلفة الناقص فقط ضد سعة المخزون الحرّ فقط — بلا أي وصول
+  // لـreadyPool)، ثم بالمخزون الحرّ+الجاهز معًا (تكلفة كل الأنواع ضد
+  // سعة الاثنين معًا). إن كان العددان متساويين، الاسترجاع لا يزيد شيئًا
+  // فعليًا — يُعتمَد حل المخزون الحرّ فقط (صفر استرجاع). لا يُلجَأ
+  // للاسترجاع إلا إن كان ضروريًا فعلًا لتحقيق عدد إكمال أعلى عالميًا
+  // (القسم 1أ له الأولوية المطلقة على القسم 1ب).
+  const missingDemand = typesOrder.map((t, idx) => dpItems.reduce((sum, it) => sum + it.missingOnlyCost[idx], 0));
+  const fullDemand = typesOrder.map((t, idx) => dpItems.reduce((sum, it) => sum + it.fullCost[idx], 0));
+  const freeOnlyCaps = typesOrder.map((t, idx) => Math.min((freePool[t] || []).length, missingDemand[idx]));
+  const combinedCaps = typesOrder.map((t, idx) => Math.min((freePool[t] || []).length + (readyPool[t] || []).length, fullDemand[idx]));
+  const freeOnlySolution = solveMaxCompletion_(freeOnlyCaps, item => item.missingOnlyCost);
+  const combinedSolution = solveMaxCompletion_(combinedCaps, item => item.fullCost);
+  const selectedSet = combinedSolution.count > freeOnlySolution.count ? combinedSolution.selectedSet : freeOnlySolution.selectedSet;
 
-  // -------- الاسترجاع (reclaim) بين طلبيات لم تكتمل من المخزون الحرّ وحده --------
-  // مبنية فقط من مستفيدين لم يكتملوا بعد عبر DP أعلاه — أجهزة المستفيدين
-  // المكتملين مقفَلة، لا تدخل مصدر استرجاع لأي أحد آخر بعد اكتمالهم.
-  const reclaimPool = {};
-  beneficiaryModels.forEach(bm => {
-    if (completedBeneficiaryIds[bm.beneficiaryId]) return;
-    bm.needs.forEach(n => {
-      if (n.fulfillment === 'جهاز جاهز' && n.linkedDevice) {
-        (reclaimPool[n.type] = reclaimPool[n.type] || []).push({device: n.linkedDevice, sourceBeneficiaryId: bm.beneficiaryId, sourceNeedId: n.needId, sourceNeedModel: n});
-      }
-    });
-  });
-  Object.keys(reclaimPool).forEach(t => reclaimPool[t].sort((a, b) => String(a.device['رقم الجهاز']).localeCompare(String(b.device['رقم الجهاز']))));
-
-  function pickDevice_(type, excludeBeneficiaryId) {
+  // -------- بناء الخطة الفعلية للمستفيدين المختارين (قرار عالمي واحد) --------
+  // لكل مستفيد مختار: الأنواع التي يحملها بالفعل ("جهاز جاهز") تبقى دون
+  // أي مسّ (القسم 1(ب) — حافظ على الروابط الحالية قدر الإمكان)؛ فقط
+  // الأنواع الناقصة تحتاج تخصيصًا: من المخزون الحرّ أولًا، وإلا من جهاز
+  // جاهز يخصّ مستفيدًا **غير مختار** فقط (البرهان الرياضي أعلاه يضمن أن
+  // هذا المصدر يكفي دائمًا لكل الفجوات بالضبط بلا نقص).
+  const selectedItems = dpItems.filter(it => selectedSet[it.bm.beneficiaryId]);
+  function pickForGap_(type) {
     const free = freePool[type] || [];
     if (free.length) return {device: free.shift(), reclaimed: false};
-    const reclaim = reclaimPool[type] || [];
-    for (let i = 0; i < reclaim.length; i++) {
-      if (reclaim[i].sourceBeneficiaryId === excludeBeneficiaryId) continue;
-      const candidate = reclaim.splice(i, 1)[0];
+    const ready = readyPool[type] || [];
+    for (let i = 0; i < ready.length; i++) {
+      if (selectedSet[ready[i].sourceBeneficiaryId]) continue; // محجوز لصاحبه المختار أصلًا — لا يُنتزع منه أبدًا
+      const candidate = ready.splice(i, 1)[0];
       return {device: candidate.device, reclaimed: true, sourceBeneficiaryId: candidate.sourceBeneficiaryId, sourceNeedId: candidate.sourceNeedId, sourceNeedModel: candidate.sourceNeedModel};
     }
     return null;
   }
-  function releaseDevice_(type, pick) {
-    if (pick.reclaimed) {
-      (reclaimPool[type] = reclaimPool[type] || []).unshift({device: pick.device, sourceBeneficiaryId: pick.sourceBeneficiaryId, sourceNeedId: pick.sourceNeedId, sourceNeedModel: pick.sourceNeedModel});
-    } else {
-      (freePool[type] = freePool[type] || []).unshift(pick.device);
-    }
-  }
 
-  // -------- المرحلة الأولى (استرجاع): إكمال طلبيات كاملة فقط (ذرّي لكل مستفيد) --------
-  beneficiaryModels.forEach(bm => {
-    if (completedBeneficiaryIds[bm.beneficiaryId]) return;
-    const missing = bm.needs.filter(n => !n.linkedDevice);
-    if (!missing.length) return;
-    const picks = [];
-    let ok = true;
-    for (let i = 0; i < missing.length; i++) {
-      const need = missing[i];
-      const pick = pickDevice_(need.type, bm.beneficiaryId);
-      if (!pick) { ok = false; break; }
-      picks.push({need: need, pick: pick});
-    }
-    if (!ok) {
-      picks.forEach(p => releaseDevice_(p.need.type, p.pick));
-      return;
-    }
-    picks.forEach(p => {
-      p.need.linkedDevice = p.pick.device;
-      devicePlans.push({
-        deviceId: String(p.pick.device['رقم الجهاز']), type: p.need.type,
-        toBeneficiaryId: bm.beneficiaryId, toNeedId: p.need.needId,
-        reclaimed: p.pick.reclaimed, sourceBeneficiaryId: p.pick.sourceBeneficiaryId, sourceNeedId: p.pick.sourceNeedId
-      });
-      if (p.pick.reclaimed) {
-        // Phase 3.1.1 (القسم 1): يجب تحديث نموذج احتياج المصدر فورًا —
-        // وإلا تبقى حالته القديمة "جهاز جاهز" ظاهرة لبقية هذه الدورة،
-        // فيُحسَب خطأً ضمن اكتمال جماعي (group-complete) رغم أن جهازه
-        // انتقل فعليًا لمستفيد آخر (بالضبط سيناريو أ/ب الإلزامي في الطلب).
-        p.pick.sourceNeedModel.linkedDevice = null;
-        p.pick.sourceNeedModel.fulfillment = 'بانتظار توفر الجهاز';
-        needPlans.push({needId: p.pick.sourceNeedId, fromStatus: 'جهاز جاهز', toStatus: 'بانتظار توفر الجهاز', kind: 'unlink'});
-      }
-      // القسم 4 مثال إلزامي: الاحتياج المُكمِل لطلبية مستفيد يصل مباشرة
-      // إلى "بانتظار تعيين مندوب" ضمن نفس الخطة — لا يتوقف عند "جهاز جاهز".
-      needPlans.push({needId: p.need.needId, fromStatus: p.need.fulfillment, toStatus: 'بانتظار تعيين مندوب', kind: 'link-complete'});
-    });
-    // بقية احتياجات المستفيد التي كانت "جهاز جاهز" مسبقًا (لم تحتج جهازًا جديدًا) تكتمل معه جماعيًا الآن أيضًا.
+  selectedItems.forEach(item => {
+    const bm = item.bm;
     bm.needs.forEach(n => {
-      if (missing.indexOf(n) === -1 && n.fulfillment === 'جهاز جاهز') {
-        needPlans.push({needId: n.needId, fromStatus: 'جهاز جاهز', toStatus: 'بانتظار تعيين مندوب', kind: 'group-complete'});
+      if (n.linkedDevice) {
+        // بالفعل "جهاز جاهز" لهذا المستفيد نفسه — يبقى كما هو، فقط
+        // ينتقل جماعيًا إلى "بانتظار تعيين مندوب" (ما لم يكن هناك أصلًا،
+        // حالة نظرية هامشية لا تحتاج خطة إطلاقًا).
+        if (n.fulfillment === 'جهاز جاهز') {
+          needPlans.push({needId: n.needId, fromStatus: 'جهاز جاهز', toStatus: 'بانتظار تعيين مندوب', kind: 'group-complete'});
+        }
+        return;
       }
+      const pick = pickForGap_(n.type);
+      if (!pick) {
+        // لن يحدث رياضيًا إن كانت DP صحيحة — خطأ سلامة داخلي دفاعي، لا كتابة جزئية.
+        throw new Error('عطل داخلي في محرك التخصيص: تعذّر إيجاد جهاز لفجوة مضمونة رياضيًا (نوع ' + n.type + ' للاحتياج ' + n.needId + ')');
+      }
+      n.linkedDevice = pick.device;
+      devicePlans.push({
+        deviceId: String(pick.device['رقم الجهاز']), type: n.type,
+        toBeneficiaryId: bm.beneficiaryId, toNeedId: n.needId,
+        reclaimed: pick.reclaimed, sourceBeneficiaryId: pick.sourceBeneficiaryId, sourceNeedId: pick.sourceNeedId
+      });
+      if (pick.reclaimed) {
+        // Phase 3.1.1 (القسم 1): تحديث نموذج احتياج المصدر فورًا — يمنع
+        // اعتباره جاهزًا خطأً لاحقًا رغم انتقال جهازه فعليًا لغيره.
+        pick.sourceNeedModel.linkedDevice = null;
+        pick.sourceNeedModel.fulfillment = 'بانتظار توفر الجهاز';
+        needPlans.push({needId: pick.sourceNeedId, fromStatus: 'جهاز جاهز', toStatus: 'بانتظار توفر الجهاز', kind: 'unlink'});
+      }
+      needPlans.push({needId: n.needId, fromStatus: n.fulfillment, toStatus: 'بانتظار تعيين مندوب', kind: 'link-complete'});
     });
     completedBeneficiaryIds[bm.beneficiaryId] = true;
   });
 
-  // -------- المرحلة الثانية: تخصيص جزئي للأجهزة المتبقية (بلا استرجاع) --------
+  // -------- المرحلة الأخيرة: تخصيص جزئي لمن لم يكتمل (مخزون حرّ متبقٍّ فقط، بلا استرجاع) --------
+  // القسم 5 (Phase 3.1 الأصلي): الاسترجاع مخصَّص حصرًا لتمكين إكمال —
+  // لا يُستخدَم إطلاقًا لتوزيع جزئي أعمى على من لم يُختَر ضمن الحل الأمثل.
   beneficiaryModels.forEach(bm => {
     if (completedBeneficiaryIds[bm.beneficiaryId]) return;
     bm.needs.forEach(n => {

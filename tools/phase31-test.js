@@ -1094,6 +1094,103 @@ section('30) addReferenceValue: فحص التكرار وتوليد المعرف 
   assert('صف واحد فقط أُنشئ فعليًا رغم تكرار opId', titleCount === 1);
 }
 
+/* ================================================================
+   31) Phase 3.1.2 القسم 1-2: تعظيم عالمي واحد (مخزون حر + أجهزة جزئية معًا)
+   ================================================================ */
+section('31) الاختبار الإلزامي: أ(ثلاجة فقط) وب(فرن فقط) يكتملان، لا يُختار ج (المخصَّص له جزئيًا ثلاجة+فرن) كطلبية واحدة');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+  const { assoc, assocSession } = seedAssociation(S, admin, 31);
+
+  const beneficiaryA = newApprovedBeneficiary_(S, admin, assocSession, ['ثلاجة'], 'أ تعظيم عالمي');
+  const beneficiaryB = newApprovedBeneficiary_(S, admin, assocSession, ['فرن'], 'ب تعظيم عالمي');
+  const beneficiaryC = newApprovedBeneficiary_(S, admin, assocSession, ['ثلاجة', 'فرن', 'غسالة'], 'ج تعظيم عالمي');
+  // ج مخصَّص له جزئيًا ثلاجة وفرن (جاهزان فعليًا)، ناقصه فقط الغسالة.
+  seedReadyDevice_(S, assoc, beneficiaryC.id, String(needRow(S, beneficiaryC.id, 'ثلاجة')['رقم الاحتياج']), 'ثلاجة', '16 قدم');
+  seedReadyDevice_(S, assoc, beneficiaryC.id, String(needRow(S, beneficiaryC.id, 'فرن')['رقم الاحتياج']), 'فرن', '5 شعلات');
+
+  // مخزون حر: غسالة واحدة فقط — يُحفَّز محرك التخصيص عبر تأكيد محضر استلامها.
+  const batchId = createSentBatch_(S, admin, assoc.id, [{ deviceType: 'غسالة', spec: 'أوتوماتيك 7 كجم', sentQty: 1 }]);
+  confirmFullReceipt_(S, assocSession, batchId);
+
+  const aFridgeNeed = needRow(S, beneficiaryA.id, 'ثلاجة');
+  const bOvenNeed = needRow(S, beneficiaryB.id, 'فرن');
+  const cFridgeNeed = needRow(S, beneficiaryC.id, 'ثلاجة');
+  const cOvenNeed = needRow(S, beneficiaryC.id, 'فرن');
+  const cWasherNeed = needRow(S, beneficiaryC.id, 'غسالة');
+
+  assert('أ اكتمل (ثلاجته وصلت "بانتظار تعيين مندوب")', aFridgeNeed['حالة التنفيذ'] === 'بانتظار تعيين مندوب');
+  assert('ب اكتمل (فرنه وصل "بانتظار تعيين مندوب")', bOvenNeed['حالة التنفيذ'] === 'بانتظار تعيين مندوب');
+  assert('ج لم يُختَر كطلبية واحدة مكتملة — لا ثلاجة ولا فرن له وصلا "بانتظار تعيين مندوب" معًا',
+    !(cFridgeNeed['حالة التنفيذ'] === 'بانتظار تعيين مندوب' && cOvenNeed['حالة التنفيذ'] === 'بانتظار تعيين مندوب'));
+  assert('لا أحد من احتياجات ج الثلاثة وصل "بانتظار تعيين مندوب" (لم يكتمل إطلاقًا كمستفيد)',
+    cFridgeNeed['حالة التنفيذ'] !== 'بانتظار تعيين مندوب'
+    && cOvenNeed['حالة التنفيذ'] !== 'بانتظار تعيين مندوب'
+    && cWasherNeed['حالة التنفيذ'] !== 'بانتظار تعيين مندوب');
+  assert('الغسالة خُصِّصت جزئيًا لج بعد مرحلة الإكمال (جهاز جاهز، لا اكتمال)', cWasherNeed['حالة التنفيذ'] === 'جهاز جاهز');
+
+  const devices = S.readTable_('الأجهزة').rows.filter(d => String(d['رقم الجمعية']) === assoc.id);
+  const deviceIds = devices.map(d => String(d['رقم الجهاز']));
+  assert('لا تكرار لأي رقم جهاز بين السجلات (لا خطط مكررة لنفس deviceId)', new Set(deviceIds).size === deviceIds.length);
+  devices.forEach(d => {
+    if (String(d['حالة الجهاز']) === 'مخصص') {
+      assert('كل جهاز "مخصص" مرتبط فعليًا بمستفيد واحد بلا غموض (device ' + d['رقم الجهاز'] + ')', !!String(d['رقم المستفيد'] || ''));
+    }
+  });
+  const needsAll = S.readTable_('احتياجات المستفيدين').rows.filter(n => String(n['رقم الجمعية']) === assoc.id);
+  needsAll.forEach(n => {
+    if (String(n['حالة التنفيذ']) === 'جهاز جاهز' || String(n['حالة التنفيذ']) === 'بانتظار تعيين مندوب') {
+      const linked = devices.filter(d => String(d['رقم الاحتياج']) === String(n['رقم الاحتياج']));
+      assert('لا حالة "جاهزة" بلا جهاز فعلي مرتبط (احتياج ' + n['رقم الاحتياج'] + ')', linked.length === 1);
+    }
+  });
+}
+
+/* ================================================================
+   32) Phase 3.1.2 القسم 3: معرّفات ربط صور التلف الآمنة (linkId)
+   ================================================================ */
+section('32) تفاصيل المحضر تعيد linkId آمنًا لكل صورة تلف، وgetReceiptEvidenceImage يعمل بها مع عزل صارم');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+  const { assoc, assocSession } = seedAssociation(S, admin, 32);
+  const { assocSession: otherAssocSession } = seedAssociation(S, admin, 320);
+
+  const batchId = createSentBatch_(S, admin, assoc.id, [{ deviceType: 'ثلاجة', spec: '16 قدم', sentQty: 2 }]);
+  const items = itemIdsOf_(S, batchId);
+  S.confirmReceiptBatch(assocSession.token, {
+    batchId: batchId, receiverTitle: 'مسؤول المستودع', signatureImage: pngDataUrl_(), quantityPhoto: pngDataUrl_(),
+    items: [{ itemId: items['ثلاجة'], receivedQty: 1, damagedQty: 1, missingQty: 0, differenceReason: 'تلف أثناء الشحن' }],
+    damagePhotos: [{ itemIds: [items['ثلاجة']], photo: pngDataUrl_() }]
+  });
+
+  const detail = S.receiptBatchDetail_(batchId);
+  const fridgeItem = detail.items.find(it => it.deviceType === 'ثلاجة');
+  assert('تفاصيل المحضر تعيد linkId واحدًا على الأقل لبند الثلاجة التالف', fridgeItem.damagePhotos.length === 1 && !!fridgeItem.damagePhotos[0].linkId);
+  assert('لا fileId ولا رابط Drive في استجابة التفاصيل إطلاقًا', JSON.stringify(detail).indexOf('FILE-') === -1 && JSON.stringify(detail).indexOf('drive.example') === -1);
+  const linkId = fridgeItem.damagePhotos[0].linkId;
+
+  const evidence = S.getReceiptEvidenceImage(assocSession.token, batchId, 'damage', linkId);
+  assert('getReceiptEvidenceImage يعمل باستخدام linkId المعاد من التفاصيل', evidence.ok === true && /^data:image\//.test(evidence.dataUrl));
+
+  // محضر آخر لجمعية أخرى — نتحقق أن linkId المحضر الأول مرفوض على المحضر الثاني.
+  const otherBatchId = createSentBatch_(S, admin, assoc.id, [{ deviceType: 'فرن', spec: '5 شعلات', sentQty: 1 }]);
+  const otherItems = itemIdsOf_(S, otherBatchId);
+  S.confirmReceiptBatch(assocSession.token, {
+    batchId: otherBatchId, receiverTitle: 'مسؤول المستودع', signatureImage: pngDataUrl_(), quantityPhoto: pngDataUrl_(),
+    items: [{ itemId: otherItems['فرن'], receivedQty: 0, damagedQty: 1, missingQty: 0, differenceReason: 'تلف أثناء الشحن' }],
+    damagePhotos: [{ itemIds: [otherItems['فرن']], photo: pngDataUrl_() }]
+  });
+  throws('linkId تابع لمحضر آخر يُرفض عند طلبه ضمن محضر مختلف',
+    () => S.getReceiptEvidenceImage(assocSession.token, otherBatchId, 'damage', linkId), 'غير تابعة');
+
+  throws('جمعية أخرى لا تستطيع عرض صورة تلف تخص محضر جمعية أخرى (حتى بمعرّف ربط صحيح)',
+    () => S.getReceiptEvidenceImage(otherAssocSession.token, batchId, 'damage', linkId), 'صلاحية');
+}
+
 /* -------- النتيجة -------- */
 
 console.log('\n' + '='.repeat(56));
