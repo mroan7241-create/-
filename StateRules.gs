@@ -409,3 +409,32 @@ function assertDelegateAssignFulfillment_(fromStatus) {
   }
   assertNeedFulfillmentPath_(fromStatus, ['معيّن للمندوب — بانتظار التنفيذ']);
 }
+
+// -------------------- Phase 3.1: محاضر استلام دفعات الأجهزة --------------------
+//
+// أربع حالات فقط، بلا أي مسار تصحيح لاحق بعد التأكيد (خارج نطاق هذه
+// المرحلة عمدًا). "مسودة" ينشئها ADMIN فقط ويمكنه إرسالها؛ الإرسال
+// ينقلها لـ"بانتظار تأكيد الجمعية"؛ تأكيد الجمعية (مرة واحدة فقط، غير
+// قابل للتكرار) ينقلها لإحدى الحالتين النهائيتين حسب وجود فروقات أم لا.
+// لا حلقة ذاتية على أي حالة — كل انتقال في هذا الجدول تقدُّمي فقط،
+// وإعادة تأكيد محضر مؤكَّد بالفعل يجب أن تُرفض دائمًا.
+const RECEIPT_BATCH_TRANSITIONS_ = Object.freeze({
+  'مسودة': ['بانتظار تأكيد الجمعية'],
+  'بانتظار تأكيد الجمعية': ['تم الاستلام كاملًا', 'تم الاستلام مع فروقات'],
+  'تم الاستلام كاملًا': [],
+  'تم الاستلام مع فروقات': []
+});
+
+/** يتحقق من انتقال حالة محضر استلام، بنفس مبدأ assertDeviceTransition_ أعلاه. */
+function assertReceiptBatchTransition_(fromStatus, toStatus) {
+  fromStatus = String(fromStatus || '');
+  toStatus = String(toStatus || '');
+  if (RECEIPT_BATCH_STATUSES.indexOf(toStatus) === -1) throw new Error('حالة محضر استلام غير معروفة: ' + toStatus);
+  if (!fromStatus) return true;
+  const allowed = RECEIPT_BATCH_TRANSITIONS_[fromStatus];
+  if (!allowed) throw new Error('حالة محضر استلام حالية غير معروفة: ' + fromStatus);
+  if (allowed.indexOf(toStatus) === -1) {
+    throw new Error('انتقال غير مسموح لحالة محضر الاستلام: من «' + fromStatus + '» إلى «' + toStatus + '»');
+  }
+  return true;
+}

@@ -536,9 +536,10 @@ section('9) سلامة سجل العمليات');
     const usesInsideDeleteRowById = (body.match(/\.deleteRow\(/g) || []).length;
     return allDeleteRowUses.length === usesInsideDeleteRowById && usesInsideDeleteRowById === 1;
   })());
-  assert('deleteRowById_ لا تُستدعى إطلاقًا على ورقة "المستفيدون" — كل استدعاءاتها (Phase 2.2: إزالة احتياج معلَّق، وتنظيف احتياجات معلَّقة عند فشل إنشاء مستفيد) تستهدف حصرًا ورقة "احتياجات المستفيدين" التي لا قيمة تاريخية لصفوفها قبل أي قرار', (() => {
+  assert('deleteRowById_ لا تُستدعى إطلاقًا على ورقة "المستفيدون" — كل استدعاءاتها (إزالة احتياج معلَّق أو تنظيف صفوف معلَّقة حديثة الإنشاء عند فشل معاملة ذرّية: احتياجات المستفيدين Phase 2.2، بنود/صور محضر استلام لم تُؤكَّد بعد Phase 3.1) تستهدف حصرًا أوراقًا لا قيمة تاريخية لصفوفها قبل نجاح المعاملة كاملة', (() => {
     const calls = [...source.matchAll(/(?<!function )deleteRowById_\(([^,]+),/g)].map(m => m[1].trim());
-    return calls.length >= 1 && calls.every(target => target === 'APP.sheets.beneficiaryNeeds');
+    const allowedTargets = ['APP.sheets.beneficiaryNeeds', 'APP.sheets.receiptItems', 'APP.sheets.receiptDamagePhotos'];
+    return calls.length >= 1 && calls.every(target => allowedTargets.indexOf(target) !== -1);
   })());
 
   const S = buildSandbox();

@@ -614,7 +614,11 @@ function reviewBeneficiaryNeeds_(user, beneficiaryId, payload) {
       throw new Error('قرار الاحتياج (' + row['نوع الجهاز'] + ') يجب أن يكون "معتمد" أو "مرفوض"');
     }
     assertNeedDecisionTransition_(String(row['حالة القرار']), decision);
-    const rejectReason = requiredIfRejected_(decision, entry && entry.rejectReason, 'سبب رفض الاحتياج (' + row['نوع الجهاز'] + ')');
+    // Phase 3.1 (القسم 0): سبب رفض الاحتياج الفردي اختياري دائمًا — لا
+    // يُرفض القرار لغيابه. عند رفض المستفيد نفسه، يُستخدم سببه الموحَّد
+    // لكل احتياجاته المرفوضة معًا بصرف النظر عمّا أُرسل هنا (أدناه)، فلا
+    // معنى لإلزام سبب فردي كان سيُستبدَل فورًا على أي حال.
+    const rejectReason = decision === 'مرفوض' ? cleanText_(entry && entry.rejectReason, 500) : '';
     resolvedDecisions.push({row: row, decision: decision, rejectReason: rejectReason});
   });
 
@@ -627,6 +631,13 @@ function reviewBeneficiaryNeeds_(user, beneficiaryId, payload) {
       throw new Error('يجب البتّ في كل احتياجات المستفيد المعلَّقة قبل اعتماده — لم يُذكر قرار للاحتياج: ' + row['نوع الجهاز']);
     }
   });
+
+  // Phase 3.1 (القسم 0): عند رفض المستفيد، سبب رفضه الموحَّد هو السبب
+  // المسجَّل لكل احتياجاته المغلَقة معه — بما فيها ما أُرسل له سبب فردي
+  // صراحةً ضمن needDecisions؛ سبب موحَّد واحد لا أسباب متفرقة.
+  if (beneficiaryDecision === 'مرفوض') {
+    resolvedDecisions.forEach(item => { item.rejectReason = beneficiaryRejectReason; });
+  }
 
   if (beneficiaryDecision === 'معتمد' && !resolvedDecisions.some(d => d.decision === 'معتمد')) {
     throw new Error('لا يمكن قبول المستفيد نهائيًا دون اعتماد احتياج واحد على الأقل');
@@ -724,6 +735,18 @@ function reviewBeneficiaryNeeds_(user, beneficiaryId, payload) {
   } catch (auditError) {
     Logger.log('تحذير: فشل تسجيل العملية في سجل العمليات بعد نجاح قرار المراجعة فعليًا — traceId=' + requestMeta_().traceId
       + ' beneficiaryId=' + beneficiaryId + ' — ' + auditError.message);
+  }
+
+  // Phase 3.1 (القسم 4): اعتماد احتياجات جديدة قد يفتح فرصة تخصيص تلقائي
+  // فورية (مخزون كان ينتظر احتياجًا معتمدًا). معزول تمامًا عن نجاح قرار
+  // المراجعة نفسه — فشله لا يجوز أن يُسقط قرارًا نجح فعليًا (نفس مبدأ عزل audit).
+  if (beneficiaryDecision === 'معتمد' && approvedCount > 0) {
+    try {
+      runAutoAllocation_(String(beneficiary['رقم الجمعية']), user);
+    } catch (allocationError) {
+      Logger.log('تحذير: نجح قرار المراجعة فعليًا لكن فشل محرك التخصيص التلقائي بعده — traceId=' + requestMeta_().traceId
+        + ' beneficiaryId=' + beneficiaryId + ' — ' + allocationError.message);
+    }
   }
 
   // Phase 2.3.3 (القسم 4): قرار المراجعة نجح فعليًا في هذه اللحظة — فشل

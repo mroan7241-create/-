@@ -39,8 +39,10 @@ const entries = fs.readdirSync(extractedDir);
 const codeFiles = entries.filter(name => name.endsWith('.gs') || name === 'Index.html');
 const sidecarFiles = entries.filter(name => ['INSTALL.txt', 'MANIFEST.txt', 'SHA256.txt'].indexOf(name) !== -1);
 
-assert('عدد ملفات الكود بالضبط 18 (17 .gs + Index.html واحد)، لا أكثر', codeFiles.length === 18);
-assert('عدد ملفات .gs بالضبط 17', codeFiles.filter(n => n.endsWith('.gs')).length === 17);
+// Phase 3.1: AutoAllocation.gs وReceiptBatches.gs جديدان (محرك التخصيص
+// التلقائي ومحاضر استلام الأجهزة) — العدد الثابت ارتفع من 17 إلى 19.
+assert('عدد ملفات الكود بالضبط 20 (19 .gs + Index.html واحد)، لا أكثر', codeFiles.length === 20);
+assert('عدد ملفات .gs بالضبط 19', codeFiles.filter(n => n.endsWith('.gs')).length === 19);
 assert('يوجد Index.html واحد بالضبط', codeFiles.filter(n => n === 'Index.html').length === 1);
 
 ALL_GS.forEach(name => {

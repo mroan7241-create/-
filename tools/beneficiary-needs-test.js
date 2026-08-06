@@ -311,9 +311,25 @@ section('4) قيود الاعتماد الإلزامية');
     () => S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, { beneficiaryDecision: 'معتمد', needDecisions: [] }),
     'يجب البتّ في كل احتياجات المستفيد المعلَّقة');
 
-  throws('احتياج مرفوض بلا سبب يُرفض',
-    () => S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, { beneficiaryDecision: 'معتمد', needDecisions: [{ needId: needId, decision: 'مرفوض' }] }),
-    'سبب رفض الاحتياج');
+  // Phase 3.1 (القسم 0): سبب رفض الاحتياج الفردي أصبح اختياريًا — رفض
+  // احتياج بلا سبب لا يُرفض لهذا السبب بذاته (يبقى الشرط الوحيد وجود
+  // احتياج معتمد واحد على الأقل لقبول المستفيد نفسه).
+  const beneficiaryTwoNeeds = S.saveBeneficiary(assocSession.token, {
+    deviceTypes: ['ثلاجة'], name: 'مستفيد سبب اختياري', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+    phone: freshPhone_(), familyCount: 1, socialStatus: 'أرملة', needs: []
+  });
+  S.saveBeneficiaryWithNeeds(assocSession.token, { id: beneficiaryTwoNeeds.id, name: 'مستفيد سبب اختياري', region: 'الرياض', city: 'الرياض',
+    address: 'حي', district: 'حي', phone: beneficiaryTwoNeeds.record.phone, familyCount: 1, socialStatus: 'أرملة', deviceTypes: ['ثلاجة', 'فرن'] });
+  const twoNeeds = needRows(S, beneficiaryTwoNeeds.id);
+  const fridgeNeedId = twoNeeds.find(n => n.deviceType === 'ثلاجة').id;
+  const ovenNeedId = twoNeeds.find(n => n.deviceType === 'فرن').id;
+  const optionalReasonResult = S.reviewBeneficiaryNeeds(admin.token, beneficiaryTwoNeeds.id, {
+    beneficiaryDecision: 'معتمد',
+    needDecisions: [{ needId: fridgeNeedId, decision: 'معتمد' }, { needId: ovenNeedId, decision: 'مرفوض' }]
+  });
+  assert('احتياج مرفوض بلا سبب: القرار ينجح دون أي خطأ (السبب اختياري)', optionalReasonResult.ok === true);
+  assert('احتياج مرفوض بلا سبب: سبب الرفض المخزَّن فارغ كما أُرسل',
+    String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', ovenNeedId)['سبب الرفض'] || '') === '');
 
   throws('احتياج غير موجود لهذا المستفيد يُرفض',
     () => S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, { beneficiaryDecision: 'معتمد', needDecisions: [{ needId: 'NED-999999', decision: 'معتمد' }] }),

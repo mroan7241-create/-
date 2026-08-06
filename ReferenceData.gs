@@ -27,6 +27,22 @@ const REFERENCE_SEED_ASSOCIATION_CATEGORIES = ['جمعية أهلية', 'جمع�
 /** مجال عمل الجمعية — حقل جديد في نموذج تقديم الجمعيات، مستقل عن "التصنيف". */
 const REFERENCE_SEED_ASSOCIATION_SECTORS = ['رعاية الأيتام', 'رعاية الأسر المنتجة', 'ذوو الإعاقة', 'رعاية كبار السن', 'الإغاثة والكوارث', 'التنمية المجتمعية', 'أخرى'];
 
+// Phase 3.1 — محاضر استلام دفعات الأجهزة: قوائم مرجعية بذرية بسيطة،
+// بلا أي نظام مشتريات أو موردين حقيقي. المواصفات (DEVICE_SPEC) تتبع نوع
+// جهاز محدَّد (يتبع=قيمة النوع)، تمامًا كمبدأ CITY يتبع REGION أعلاه.
+const REFERENCE_SEED_DEVICE_SPECS = Object.freeze({
+  'ثلاجة': ['16 قدم', '18 قدم', 'باب واحد', 'بابين'],
+  'فرن': ['5 شعلات', '6 شعلات', 'شعلتان'],
+  'غسالة': ['أوتوماتيك 7 كجم', 'أوتوماتيك 9 كجم', 'نصف أوتوماتيك']
+});
+const REFERENCE_SEED_DIFFERENCE_REASONS = ['تلف أثناء الشحن', 'تلف أثناء التفريغ', 'نقص من المورد', 'خطأ في العدّ', 'أخرى'];
+const REFERENCE_SEED_RECEIVER_TITLES = ['مدير الجمعية', 'مسؤول المستودع', 'منسّق المشروع', 'أخرى'];
+// لا بذور موردين افتراضية — قائمة موردين حقيقية تُضاف عبر addReferenceValue_
+// بمعرفة ADMIN فقط (لا نظام مشتريات، مجرد معلومة مرجعية). القائمة الفارغة
+// تعني قبول أي اسم مورد كنص حر حتى تُضاف قيم فعلية (نفس مبدأ التحقق اللين
+// المتبع في كل حقل مرجعي آخر في هذا الملف قبل seeding).
+const REFERENCE_SEED_SUPPLIERS = [];
+
 /**
  * ترحيل آمن وقابل لإعادة التشغيل: ينشئ ورقة "البيانات المرجعية" ويبذرها
  * بقيم ابتدائية فقط إن كانت فارغة تمامًا. لا يحذف ولا يكرر عند إعادة التشغيل.
@@ -69,6 +85,20 @@ function migrateReferenceData_(token) {
   REFERENCE_SEED_ASSOCIATION_SECTORS.forEach((value, index) => {
     rows.push([nextId_('REF'), 'ASSOCIATION_SECTOR', value, '', index + 1, 'نعم']);
   });
+  Object.keys(REFERENCE_SEED_DEVICE_SPECS).forEach(deviceType => {
+    REFERENCE_SEED_DEVICE_SPECS[deviceType].forEach((value, index) => {
+      rows.push([nextId_('REF'), 'DEVICE_SPEC', value, deviceType, index + 1, 'نعم']);
+    });
+  });
+  REFERENCE_SEED_DIFFERENCE_REASONS.forEach((value, index) => {
+    rows.push([nextId_('REF'), 'DIFFERENCE_REASON', value, '', index + 1, 'نعم']);
+  });
+  REFERENCE_SEED_RECEIVER_TITLES.forEach((value, index) => {
+    rows.push([nextId_('REF'), 'RECEIVER_TITLE', value, '', index + 1, 'نعم']);
+  });
+  REFERENCE_SEED_SUPPLIERS.forEach((value, index) => {
+    rows.push([nextId_('REF'), 'SUPPLIER', value, '', index + 1, 'نعم']);
+  });
 
   sheet.getRange(2, 1, rows.length, HEADERS[APP.sheets.referenceData].length).setValues(rows);
   invalidateTableCache_(APP.sheets.referenceData);
@@ -78,7 +108,7 @@ function migrateReferenceData_(token) {
 }
 
 function invalidateReferenceDataCache_() {
-  CacheService.getScriptCache().remove('refdata:v3');
+  CacheService.getScriptCache().remove('refdata:v4');
 }
 
 /**
@@ -338,6 +368,8 @@ function builtinReferenceData_() {
     socialStatuses: REFERENCE_SEED_SOCIAL_STATUSES.slice(),
     associationCategories: REFERENCE_SEED_ASSOCIATION_CATEGORIES.slice(),
     associationSectors: REFERENCE_SEED_ASSOCIATION_SECTORS.slice(),
+    deviceSpecsByType: {}, suppliers: REFERENCE_SEED_SUPPLIERS.slice(),
+    differenceReasons: REFERENCE_SEED_DIFFERENCE_REASONS.slice(), receiverTitles: REFERENCE_SEED_RECEIVER_TITLES.slice(),
     applicationQuestions: APPLICATION_QUESTIONS.map(q => ({key: q.key, label: q.label})),
     pledgeText: APPLICATION_PLEDGE_TEXT,
     ready: true, source: 'builtin'
@@ -346,14 +378,18 @@ function builtinReferenceData_() {
     result.regions.push(region);
     result.citiesByRegion[region] = REFERENCE_SEED_REGIONS_CITIES[region].slice();
   });
+  Object.keys(REFERENCE_SEED_DEVICE_SPECS).forEach(deviceType => {
+    result.deviceSpecsByType[deviceType] = REFERENCE_SEED_DEVICE_SPECS[deviceType].slice();
+  });
   return result;
 }
 
 function getReferenceData(token) {
   if (token) requireSession_(token);
-  // v3: أضيف نوع ASSOCIATION_SECTOR — رفع رقم الإصدار يمنع إعادة قيمة
-  // مخزَّنة مؤقتًا من نسخة سابقة لا تحمل associationSectors.
-  const cacheKey = 'refdata:v3';
+  // v4 (Phase 3.1): أضيفت deviceSpecsByType/suppliers/differenceReasons/
+  // receiverTitles — رفع رقم الإصدار يمنع إعادة قيمة مخزَّنة مؤقتًا من
+  // نسخة سابقة لا تحمل هذه الحقول الجديدة.
+  const cacheKey = 'refdata:v4';
   const cache = CacheService.getScriptCache();
   const cached = cache.get(cacheKey);
   if (cached) return JSON.parse(cached);
@@ -372,6 +408,7 @@ function getReferenceData(token) {
 
   const result = {regions: [], citiesByRegion: {}, deviceTypes: [], socialStatuses: [],
     associationCategories: [], associationSectors: [],
+    deviceSpecsByType: {}, suppliers: [], differenceReasons: [], receiverTitles: [],
     applicationQuestions: APPLICATION_QUESTIONS.map(q => ({key: q.key, label: q.label})),
     pledgeText: APPLICATION_PLEDGE_TEXT,
     ready: true, source: 'sheet'};
@@ -393,6 +430,16 @@ function getReferenceData(token) {
       result.associationCategories.push(value);
     } else if (type === 'ASSOCIATION_SECTOR') {
       result.associationSectors.push(value);
+    } else if (type === 'DEVICE_SPEC') {
+      const parent = String(row['يتبع']);
+      if (!result.deviceSpecsByType[parent]) result.deviceSpecsByType[parent] = [];
+      result.deviceSpecsByType[parent].push(value);
+    } else if (type === 'SUPPLIER') {
+      result.suppliers.push(value);
+    } else if (type === 'DIFFERENCE_REASON') {
+      result.differenceReasons.push(value);
+    } else if (type === 'RECEIVER_TITLE') {
+      result.receiverTitles.push(value);
     }
   });
 
@@ -491,6 +538,91 @@ function validateDeviceType_(value, previous) {
     throw new Error('نوع الجهاز "' + value + '" غير معروف. اختر من القائمة المعتمدة');
   }
   return value;
+}
+
+/** Phase 3.1 — مواصفة/مقاس/سعة جهاز، تتبع نوعًا محدَّدًا (نفس مبدأ المدينة تتبع المنطقة). */
+function validateDeviceSpec_(deviceType, value, previous) {
+  value = requiredText_(value, 'المواصفة', 120);
+  const data = getReferenceData();
+  const specsForType = (data.deviceSpecsByType && data.deviceSpecsByType[deviceType]) || [];
+  if (!data.ready || !specsForType.length) return value;
+  if (specsForType.indexOf(value) === -1 && !isGrandfatheredValue_(value, previous)) {
+    throw new Error('المواصفة "' + value + '" غير معروفة لنوع "' + deviceType + '". اختر من القائمة المعتمدة');
+  }
+  return value;
+}
+
+/** Phase 3.1 — اسم مورد مرجعي فقط (بلا نظام مشتريات) — نص حر ما لم تُبذر قائمة معتمدة. */
+function validateSupplier_(value, previous) {
+  value = requiredText_(value, 'اسم المورد', 150);
+  const data = getReferenceData();
+  if (!data.ready || !data.suppliers.length) return value;
+  if (data.suppliers.indexOf(value) === -1 && !isGrandfatheredValue_(value, previous)) {
+    throw new Error('المورد "' + value + '" غير معروف. اختر من القائمة المعتمدة أو أضِفه أولًا');
+  }
+  return value;
+}
+
+/** Phase 3.1 — سبب فرق كمية استلام (تلف/نقص) — مطلوب فقط عند وجود فرق فعلي في بند المحضر. */
+function validateDifferenceReason_(value) {
+  value = requiredText_(value, 'سبب الفرق', 150);
+  const data = getReferenceData();
+  if (!data.ready || !data.differenceReasons.length) return value;
+  if (data.differenceReasons.indexOf(value) === -1) {
+    throw new Error('سبب الفرق "' + value + '" غير معروف. اختر من القائمة المعتمدة');
+  }
+  return value;
+}
+
+/** Phase 3.1 — صفة مستلم محضر الاستلام لدى الجمعية. */
+function validateReceiverTitle_(value) {
+  value = requiredText_(value, 'صفة المستلم', 100);
+  const data = getReferenceData();
+  if (!data.ready || !data.receiverTitles.length) return value;
+  if (data.receiverTitles.indexOf(value) === -1) {
+    throw new Error('صفة المستلم "' + value + '" غير معروفة. اختر من القائمة المعتمدة');
+  }
+  return value;
+}
+
+/**
+ * Phase 3.1 (القسم 7) — يسمح لـADMIN بإضافة قيمة مرجعية جديدة لأي نوع
+ * موجود بالفعل ضمن هذا الملف (device_spec يتطلب "يتبع" نوع جهاز صالحًا؛
+ * بقية الأنواع تتجاهله). يرفض نوعًا غير معروف أو قيمة مكرَّرة (نصًا،
+ * ضمن نفس "يتبع" إن وُجد) قبل أي كتابة. لا ينشئ نوعًا جديدًا كليًا —
+ * فقط يضيف صفًا لأحد الأنواع المعروفة أصلًا، فيتجنّب "نوع مرجعي" عشوائي
+ * تخترعه الواجهة لاحقًا بلا مراجعة هنا أولًا.
+ */
+const REFERENCE_DATA_TYPES_ = Object.freeze([
+  'REGION', 'CITY', 'DEVICE_TYPE', 'SOCIAL_STATUS', 'ASSOCIATION_CATEGORY', 'ASSOCIATION_SECTOR',
+  'DEVICE_SPEC', 'SUPPLIER', 'DIFFERENCE_REASON', 'RECEIVER_TITLE'
+]);
+function addReferenceValue(token, payload) {
+  const user = requireSession_(token, ['ADMIN']);
+  payload = payload || {};
+  const type = requiredText_(payload.type, 'نوع القيمة المرجعية', 40);
+  if (REFERENCE_DATA_TYPES_.indexOf(type) === -1) {
+    throw new Error('نوع قيمة مرجعية غير معروف: ' + type);
+  }
+  const value = requiredText_(payload.value, 'القيمة', 150);
+  const parent = cleanText_(payload.parent, 80);
+
+  invalidateTableCache_(APP.sheets.referenceData);
+  const existing = readTable_(APP.sheets.referenceData).rows.filter(row => String(row['النوع']) === type);
+  const duplicate = existing.some(row => String(row['القيمة']) === value && String(row['يتبع'] || '') === parent);
+  if (duplicate) throw new Error('هذه القيمة موجودة بالفعل ضمن نفس النوع' + (parent ? ' والتبعية' : ''));
+
+  const nextOrder = existing.reduce((max, row) => Math.max(max, safeNumber_(row['الترتيب'])), 0) + 1;
+  const id = nextId_('REF');
+  appendObject_(APP.sheets.referenceData, {'المعرف': id, 'النوع': type, 'القيمة': value, 'يتبع': parent, 'الترتيب': nextOrder, 'نشط': 'نعم'});
+  invalidateTableCache_(APP.sheets.referenceData);
+  invalidateReferenceDataCache_();
+  try {
+    audit_(user, 'إضافة قيمة مرجعية', 'البيانات المرجعية', id, 'النوع: ' + type);
+  } catch (auditError) {
+    Logger.log('تحذير: فشل تسجيل العملية بعد نجاح إضافة القيمة المرجعية فعليًا — traceId=' + requestMeta_().traceId + ' — ' + auditError.message);
+  }
+  return {ok: true, id: id};
 }
 
 function doGet() {
