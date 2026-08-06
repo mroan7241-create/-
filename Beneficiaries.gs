@@ -161,10 +161,14 @@ function saveBeneficiary(token, payload) {
     // BeneficiaryNeeds.gs)، الذي يفرض احتياجًا واحدًا صالحًا على الأقل من
     // الأنواع الثلاثة الجديدة. بلا payload.deviceTypes صالحة، يُرفض
     // الإنشاء برسالة صريحة — المنع هنا خادمي بحت، لا يعتمد على تعديل
-    // Index.html كضابط أمان. **تعديل** سجل قائم (payload.id موجود) يبقى
-    // عبر saveBeneficiary_ التاريخية دون تغيير — الاحتياجات الجديدة
-    // لسجل قائم تُدار حصرًا من مسارات BeneficiaryNeeds.gs المخصَّصة
-    // (setBeneficiaryNeeds/updateBeneficiaryWithNeeds_)، لا من هنا.
+    // Index.html كضابط أمان.
+    //
+    // Phase 2.3.4 (القسم 1): **تعديل** سجل قائم (payload.id موجود) لم يعد
+    // يمر عبر saveBeneficiary_ القديمة إطلاقًا — كانت تسمح بكتابة الحقل
+    // النصي القديم "الاحتياج" وتغيير جمعية المستفيد دون تحديث احتياجاته.
+    // يمر الآن دائمًا عبر updateBeneficiaryWithNeeds_ (BeneficiaryNeeds.gs)
+    // — نفس المعاملة المترابطة المستخدَمة من saveBeneficiaryWithNeeds،
+    // فيبقى كل سجل مُدارًا بمسار واحد فقط بصرف النظر عن نقطة الدخول.
     if (!payload.id) {
       // Phase 2.3 (القسم 6) — طبقة توافق مؤقتة: Index.html الحالية لم
       // تُعدَّل بعد وما زالت ترسل payload.needs (نص حر أو مصفوفة من شاشة
@@ -185,7 +189,10 @@ function saveBeneficiary(token, payload) {
       // حتى تُعامَل إعادة المحاولة بنفس opId من أي من المسارين كعملية واحدة.
       return runLockedIdempotent_('createBeneficiaryWithNeeds', user.id, payload.opId, () => createBeneficiaryWithNeeds_(user, payload));
     }
-    return saveBeneficiary_(user, payload);
+    // Phase 2.3.4 (القسم 1): نفس نطاق العملية المستخدَم في saveBeneficiaryWithNeeds
+    // (BeneficiaryNeeds.gs) — إعادة محاولة بنفس opId من أي من المسارين تُعامَل كعملية واحدة.
+    const beneficiaryId = cleanId_(payload.id);
+    return runLockedIdempotent_('updateBeneficiaryWithNeeds:' + beneficiaryId, user.id, payload.opId, () => updateBeneficiaryWithNeeds_(user, payload));
   });
 }
 
@@ -246,11 +253,15 @@ function buildBeneficiaryFieldValues_(payload, place, phone, existing, associati
 }
 
 /**
- * النسخة الداخلية لتعديل سجل **قائم فقط** الآن (Phase 2.2 حوّلت مسار
- * الإنشاء الجديد إلى createBeneficiaryWithNeeds_). ما زالت تُستدعى
- * مباشرة من importBeneficiaries وبعض مسارات الصيانة الداخلية، ومن
- * updateBeneficiaryWithNeeds_ (BeneficiaryNeeds.gs) لتعديل سجل قائم مع
- * مزامنة احتياجاته معًا.
+ * ⚠️ Phase 2.3.4 (القسم 4): دالة **قديمة غير مُستخدَمة من أي نقطة دخول
+ * عامة بعد الآن**. كانت تُستدعى من saveBeneficiary العامة لتعديل سجل
+ * قائم؛ استُبدلت بـupdateBeneficiaryWithNeeds_ (BeneficiaryNeeds.gs)
+ * لإغلاق قدرتها على كتابة الحقل النصي القديم "الاحتياج" أو تغيير جمعية
+ * المستفيد دون تحديث احتياجاته. أُبقيت في المصدر فقط لأن اختبارات آلية
+ * تاريخية (tools/*-test.js) ما زالت تستدعيها مباشرة عبر sandbox الاختبار
+ * للتحقق من سلوك مسار "تعديل وصفي بحت" القديم دون مزامنة احتياجات —
+ * **لا تُستدعى من saveBeneficiary أو أي endpoint آخر إطلاقًا**؛ لا تضِف
+ * استدعاءً جديدًا لها من أي مسار عام.
  *
  * options.skipLegacyNeedsWrite (افتراضيًا false): true يمنع إدراج مفتاح
  * "الاحتياج" في القيم المكتوبة إطلاقًا — لا يُكتب حرفٌ واحد إليه، فتبقى

@@ -392,14 +392,18 @@ section('5) التحقق من أحجام وأنواع المدخلات');
   throws('رقم جوال بصيغة غير سعودية يُرفض', () => S.saveBeneficiary(userA.token, { deviceTypes: ['ثلاجة'],
     name: 'مستفيد', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار', phone: '0112345678', familyCount: 1
   }), 'غير صحيح');
-  assert('معرّف يشبه محاولة حقن (لا يوجد SQL فعليًا، المطابقة نصية حرفية) لا يطابق أي سجل حقيقي فيُعامَل بأمان كإنشاء جديد لا كتعديل غير مصرَّح', (() => {
-    const result = S.saveBeneficiary(userA.token, {
+  // Phase 2.3.4 (القسم 1): saveBeneficiary لتعديل سجل قائم يمر الآن عبر
+  // updateBeneficiaryWithNeeds_ حصرًا، التي ترفض أي معرّف لا يطابق صيغة
+  // التخزين الصارمة (cleanId_) فورًا بخطأ واضح قبل أي قراءة أو كتابة —
+  // لا "سقوط آمن" ضمني بإنشاء سجل جديد بدل التعديل المطلوب كما كان في
+  // المسار القديم؛ الرفض الصريح المبكر هو الخاصية الأمنية الأصح هنا.
+  const beforeCount = S.readTable_('المستفيدون').rows.length;
+  throws('معرّف يشبه محاولة حقن (لا يوجد SQL فعليًا، المطابقة نصية حرفية) يُرفض فورًا بخطأ صريح — لا تعديل لسجل عشوائي ولا إنشاء بديل صامت',
+    () => S.saveBeneficiary(userA.token, {
       id: "BEN-000001' OR '1'='1", name: 'مستفيد', region: 'الرياض', city: 'الرياض',
       address: 'حي', district: 'حي الاختبار', phone: '0501234576', familyCount: 1, socialStatus: 'أرملة', needs: []
-    });
-    // يجب أن يُنشَأ برقم مستفيد نظيف جديد (BEN-NNNNNN)، لا بالقيمة المُحقَنة نفسها.
-    return /^BEN-\d{6}$/.test(result.id);
-  })());
+    }), 'رقم مستفيد غير صالح');
+  assert('محاولة الحقن لم تُنشئ أي سجل مستفيد جديد ولم تُعدّل أي سجل قائم', S.readTable_('المستفيدون').rows.length === beforeCount);
 }
 
 /* ================================================================
@@ -562,6 +566,13 @@ section('9) سلامة سجل العمليات');
     // لا يتبعه extractFunctionBody_ تلقائيًا — تُلحَق أجسامهما هنا صراحةً).
     if (fnName === 'saveDevice') {
       body += (extractFunctionBody_(source, 'commitDeviceWithNeed_') || '') + (extractFunctionBody_(source, 'saveDeviceDescriptiveOnly_') || '');
+    }
+    // Phase 2.3.4 (القسم 1): saveBeneficiary تفوّض الكتابة الفعلية والـaudit
+    // إلى createBeneficiaryWithNeeds_ (إنشاء) وupdateBeneficiaryWithNeeds_
+    // (تعديل) بدل saveBeneficiary_ القديمة — أسماء لا يتبعها extractFunctionBody_
+    // تلقائيًا (لا تطابق نمط fnName + '_')، فتُلحَق أجسامهما هنا صراحةً.
+    if (fnName === 'saveBeneficiary') {
+      body += (extractFunctionBody_(source, 'createBeneficiaryWithNeeds_') || '') + (extractFunctionBody_(source, 'updateBeneficiaryWithNeeds_') || '');
     }
     assert(fnName + ' يسجّل العملية في audit_ عند النجاح', /audit_\(/.test(body));
   });

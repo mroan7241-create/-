@@ -1525,6 +1525,228 @@ section('19) opId اختياري: إنشاء/تعديل مستفيد واستي�
   }
 }
 
+/* ================================================================
+   20) Phase 2.3.4: إغلاق مسار تعديل المستفيد القديم
+   ================================================================ */
+section('20) Phase 2.3.4: saveBeneficiary للتعديل يمر عبر updateBeneficiaryWithNeeds_ حصرًا');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+  const { assoc, assocSession } = seedAssociation(S, admin, 50);
+  const { assoc: assoc2 } = seedAssociation(S, admin, 51);
+
+  // 1) saveBeneficiary لتعديل سجل قائم يمر عبر updateBeneficiaryWithNeeds_
+  // (النتيجة تحمل حقل needs — لا تحمله saveBeneficiary_ القديمة إطلاقًا).
+  {
+    const beneficiary = S.saveBeneficiary(assocSession.token, {
+      deviceTypes: ['ثلاجة'], name: 'مستفيد §1 عام', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: nextPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+    });
+    const edited = S.saveBeneficiary(assocSession.token, {
+      id: beneficiary.id, name: 'مستفيد §1 عام مُعدَّل', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: beneficiary.record.phone, familyCount: 3, socialStatus: 'أرملة'
+    });
+    assert('(القسم 1) تعديل عبر saveBeneficiary العام يمر عبر updateBeneficiaryWithNeeds_ (النتيجة تحمل needs)',
+      edited.ok === true && Array.isArray(edited.needs));
+    assert('(القسم 1) الاسم المُعدَّل مكتوب فعليًا',
+      String(S.findById_('المستفيدون', 'رقم المستفيد', beneficiary.id)['الاسم']) === 'مستفيد §1 عام مُعدَّل');
+  }
+
+  // 2+3+4) payload.needs عند التعديل لا يكتب الحقل القديم، ولا يضيف/يحذف احتياجًا، والقيمة التاريخية تبقى كما هي.
+  {
+    const beneficiary = S.saveBeneficiary(assocSession.token, {
+      deviceTypes: ['ثلاجة'], name: 'مستفيد §2 توافق', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: nextPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+    });
+    // قيمة تاريخية يدوية مباشرة في الحقل القديم (تحاكي سجلًا مستوردًا قديمًا) لإثبات عدم مسحها.
+    S.updateById_('المستفيدون', 'رقم المستفيد', beneficiary.id, { 'الاحتياج': 'قيمة تاريخية قديمة' });
+    const beforeNeedsCount = S.readTable_('احتياجات المستفيدين').rows.filter(r => String(r['رقم المستفيد']) === beneficiary.id).length;
+    const edited = S.saveBeneficiary(assocSession.token, {
+      id: beneficiary.id, name: 'مستفيد §2 توافق', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: beneficiary.record.phone, familyCount: 2, socialStatus: 'أرملة', needs: ['فرن', 'غسالة']
+    });
+    assert('(القسم 2) payload.needs عند التعديل لا يُكتب في الحقل النصي القديم (يبقى كما هو حرفيًا)',
+      edited.ok === true && String(S.findById_('المستفيدون', 'رقم المستفيد', beneficiary.id)['الاحتياج']) === 'قيمة تاريخية قديمة');
+    assert('(القسم 4) payload.needs عند التعديل لا يضيف أو يحذف أي صف احتياج',
+      S.readTable_('احتياجات المستفيدين').rows.filter(r => String(r['رقم المستفيد']) === beneficiary.id).length === beforeNeedsCount);
+  }
+
+  // 5) deviceTypes الصريحة تُزامن الاحتياجات تحت المراجعة.
+  {
+    const beneficiary = S.saveBeneficiary(assocSession.token, {
+      deviceTypes: ['ثلاجة'], name: 'مستفيد §5 مزامنة', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: nextPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+    });
+    const edited = S.saveBeneficiary(assocSession.token, {
+      id: beneficiary.id, name: 'مستفيد §5 مزامنة', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: beneficiary.record.phone, familyCount: 2, socialStatus: 'أرملة', deviceTypes: ['ثلاجة', 'فرن']
+    });
+    assert('(القسم 5) deviceTypes الصريحة تُضيف احتياجًا جديدًا "بانتظار المراجعة"',
+      edited.ok === true && edited.needs.some(n => n.deviceType === 'فرن' && n.decisionStatus === 'بانتظار المراجعة'));
+  }
+
+  // 6) deviceTypes تُرفض بعد القرار النهائي.
+  {
+    const beneficiary = S.saveBeneficiary(assocSession.token, {
+      deviceTypes: ['ثلاجة'], name: 'مستفيد §6 بعد القرار', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: nextPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+    });
+    approveBeneficiary_(S, admin, beneficiary.id, ['ثلاجة']);
+    throws('(القسم 6) deviceTypes صريحة بعد القرار النهائي تُرفض',
+      () => S.saveBeneficiary(admin.token, {
+        id: beneficiary.id, name: 'مستفيد §6 بعد القرار', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+        phone: beneficiary.record.phone, familyCount: 2, socialStatus: 'أرملة', deviceTypes: ['ثلاجة', 'فرن']
+      }), 'قرار مراجعة نهائي');
+  }
+
+  // 7) تغيير associationId يُرفض قبل أي كتابة.
+  {
+    const beneficiary = S.saveBeneficiary(assocSession.token, {
+      deviceTypes: ['ثلاجة'], name: 'مستفيد §7 نقل جمعية', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: nextPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+    });
+    const beforeAssoc = String(S.findById_('المستفيدون', 'رقم المستفيد', beneficiary.id)['رقم الجمعية']);
+    const beforeNeeds = S.readTable_('احتياجات المستفيدين').rows.filter(r => String(r['رقم المستفيد']) === beneficiary.id).map(r => Object.assign({}, r));
+    throws('(القسم 7) ADMIN يرسل associationId مختلفًا في saveBeneficiary: العملية تُرفض قبل أي كتابة',
+      () => S.saveBeneficiary(admin.token, {
+        id: beneficiary.id, name: 'مستفيد §7 نقل جمعية', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+        phone: beneficiary.record.phone, familyCount: 2, socialStatus: 'أرملة', associationId: assoc2.id
+      }), 'لا يمكن تغيير جمعية المستفيد');
+    assert('(القسم 7) جمعية المستفيد لم تتغيّر',
+      String(S.findById_('المستفيدون', 'رقم المستفيد', beneficiary.id)['رقم الجمعية']) === beforeAssoc);
+    const afterNeeds = S.readTable_('احتياجات المستفيدين').rows.filter(r => String(r['رقم المستفيد']) === beneficiary.id);
+    assert('(القسم 7) احتياجات المستفيد لم تتغيّر', afterNeeds.length === beforeNeeds.length
+      && afterNeeds.every(r => String(r['رقم الجمعية']) === beforeAssoc));
+  }
+
+  // 8) فشل جزئي (partial setValue) أثناء التعديل عبر saveBeneficiary يتراجع كاملًا.
+  {
+    const beneficiary = S.saveBeneficiary(assocSession.token, {
+      deviceTypes: ['ثلاجة'], name: 'مستفيد §8 فشل جزئي', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: nextPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+    });
+    const beforeName = String(S.findById_('المستفيدون', 'رقم المستفيد', beneficiary.id)['الاسم']);
+    const originalUpdate = S.updateById_;
+    S.updateById_ = function (sheetName, keyField, id, values) {
+      if (sheetName === 'المستفيدون' && id === beneficiary.id) throw new Error('فشل محاكى في تحديث صف المستفيد عبر saveBeneficiary');
+      return originalUpdate.apply(this, arguments);
+    };
+    let threw = false;
+    try {
+      S.saveBeneficiary(assocSession.token, {
+        id: beneficiary.id, name: 'اسم لن يُكتب', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+        phone: beneficiary.record.phone, familyCount: 5, socialStatus: 'أرملة'
+      });
+    } catch (error) { threw = /تعذّر إتمام تعديل المستفيد/.test(error.message); }
+    finally { S.updateById_ = originalUpdate; }
+    assert('(القسم 8) فشل جزئي أثناء التعديل عبر saveBeneficiary: العملية تُرفض', threw === true);
+    assert('(القسم 8) الاسم عاد لقيمته السابقة (تراجع كامل)',
+      String(S.findById_('المستفيدون', 'رقم المستفيد', beneficiary.id)['الاسم']) === beforeName);
+  }
+
+  // 9) opId عبر saveBeneficiary للتعديل: لا تنفيذ مزدوج ولا audit ثانٍ.
+  {
+    const beneficiary = S.saveBeneficiary(assocSession.token, {
+      deviceTypes: ['ثلاجة'], name: 'مستفيد §9 opId', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: nextPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+    });
+    const auditBefore = S.readTable_('سجل العمليات').rows.length;
+    const payload = {
+      id: beneficiary.id, name: 'مستفيد §9 opId مُعدَّل', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: beneficiary.record.phone, familyCount: 4, socialStatus: 'أرملة', opId: 'op-legacy-edit-1'
+    };
+    const first = S.saveBeneficiary(assocSession.token, payload);
+    const second = S.saveBeneficiary(assocSession.token, payload);
+    const auditAfter = S.readTable_('سجل العمليات').rows.length;
+    assert('(القسم 9) opId عبر saveBeneficiary للتعديل: audit مرة واحدة فقط، نتيجة مطابقة',
+      auditAfter === auditBefore + 1 && first.id === second.id);
+  }
+}
+
+/* ================================================================
+   21) Phase 2.3.4 القسم 6: رفض صريح عند بيانات رجوع جماعي فاسدة
+   ================================================================ */
+section('21) رجوع جماعي فاسد: رفض حاسم قبل أي كتابة (لا تخمين، لا إصلاح صامت)');
+{
+  function setup_(seedNum) {
+    const S = buildSandbox();
+    seedSheets(S);
+    const admin = adminSession(S);
+    const { assoc, assocSession } = seedAssociation(S, admin, seedNum);
+    const beneficiary = S.saveBeneficiary(assocSession.token, {
+      deviceTypes: ['ثلاجة', 'فرن'], name: 'مستفيد §6 فساد ' + seedNum, region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: nextPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+    });
+    approveBeneficiary_(S, admin, beneficiary.id, ['ثلاجة', 'فرن']);
+    const fridge = S.saveDevice(admin.token, { name: 'ثلاجة §6-' + seedNum, type: 'ثلاجة', associationId: assoc.id, beneficiaryId: beneficiary.id });
+    const oven = S.saveDevice(admin.token, { name: 'فرن §6-' + seedNum, type: 'فرن', associationId: assoc.id, beneficiaryId: beneficiary.id });
+    const fridgeNeedId = String(needRow(S, beneficiary.id, 'ثلاجة')['رقم الاحتياج']);
+    const ovenNeedId = String(needRow(S, beneficiary.id, 'فرن')['رقم الاحتياج']);
+    return { S, admin, assoc, assocSession, beneficiary, fridge, oven, fridgeNeedId, ovenNeedId };
+  }
+
+  function unlinkFridge_(S, admin, assoc, fridge) {
+    return S.saveDevice(admin.token, { id: fridge.id, name: 'ثلاجة فُكَّت', type: 'ثلاجة', associationId: assoc.id, beneficiaryId: '' });
+  }
+
+  // أخ صحيح تمامًا: يرجع فعليًا إلى "جهاز جاهز" (سلوك مرجعي مقارن — مغطّى
+  // أيضًا في القسم 15، مُعاد هنا لضمان تجاوره مباشرة مع حالات الرفض أدناه).
+  {
+    const { S, admin, assoc, fridge, fridgeNeedId, ovenNeedId } = setup_(60);
+    const result = unlinkFridge_(S, admin, assoc, fridge);
+    assert('(القسم 6) أخ صحيح: فكّ ربط الثلاجة ينجح', result.ok === true);
+    assert('(القسم 6) أخ صحيح: الفرن يرجع فعليًا إلى "جهاز جاهز"',
+      String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', ovenNeedId)['حالة التنفيذ']) === 'جهاز جاهز');
+    assert('(القسم 6) أخ صحيح: الثلاجة نفسها أصبحت "بانتظار توفر الجهاز"',
+      String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', fridgeNeedId)['حالة التنفيذ']) === 'بانتظار توفر الجهاز');
+  }
+
+  // أخ بلا جهاز إطلاقًا (فُكَّ ربط الفرن يدويًا خارج المسار الرسمي — بيانات فاسدة).
+  {
+    const { S, admin, assoc, fridge, oven, fridgeNeedId, ovenNeedId } = setup_(61);
+    S.updateById_('الأجهزة', 'رقم الجهاز', oven.id, { 'رقم الاحتياج': '', 'رقم المستفيد': '', 'حالة الجهاز': 'بالمستودع' });
+    const beforeFridgeStatus = String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', fridgeNeedId)['حالة التنفيذ']);
+    const beforeOvenStatus = String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', ovenNeedId)['حالة التنفيذ']);
+    throws('(القسم 6) أخ بلا جهاز صالح: رفض حاسم برسالة تتضمن needId فقط',
+      () => unlinkFridge_(S, admin, assoc, fridge), ovenNeedId);
+    assert('(القسم 6) أخ بلا جهاز: لا كتابة إطلاقًا — الثلاجة والفرن كما كانا',
+      String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', fridgeNeedId)['حالة التنفيذ']) === beforeFridgeStatus
+      && String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', ovenNeedId)['حالة التنفيذ']) === beforeOvenStatus);
+    assert('(القسم 6) أخ بلا جهاز: جهاز الثلاجة نفسه لم يُفكّ ربطه (لا كتابة جزئية)',
+      String(S.findById_('الأجهزة', 'رقم الجهاز', fridge.id)['رقم الاحتياج']) === fridgeNeedId);
+  }
+
+  // أخ بجهاز غير مطابق (لا يزال مرتبطًا اسميًا بالاحتياج لكن حالته ليست "مخصص").
+  {
+    const { S, admin, assoc, fridge, oven, fridgeNeedId, ovenNeedId } = setup_(62);
+    S.updateById_('الأجهزة', 'رقم الجهاز', oven.id, { 'حالة الجهاز': 'بالمستودع' });
+    const beforeFridgeStatus = String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', fridgeNeedId)['حالة التنفيذ']);
+    throws('(القسم 6) أخ بجهاز غير مطابق (حالة ≠ مخصص): رفض حاسم برسالة تتضمن needId فقط',
+      () => unlinkFridge_(S, admin, assoc, fridge), ovenNeedId);
+    assert('(القسم 6) أخ بجهاز غير مطابق: لا كتابة إطلاقًا',
+      String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', fridgeNeedId)['حالة التنفيذ']) === beforeFridgeStatus
+      && String(S.findById_('الأجهزة', 'رقم الجهاز', fridge.id)['رقم الاحتياج']) === fridgeNeedId);
+  }
+
+  // أخ بجهازين معًا (تكرار تاريخي فاسد).
+  {
+    const { S, admin, assoc, beneficiary, fridge, oven, fridgeNeedId, ovenNeedId } = setup_(63);
+    const dupId = S.nextId_('DEV');
+    S.appendObject_('الأجهزة', {
+      'رقم الجهاز': dupId, 'اسم الجهاز': 'فرن مكرَّر', 'النوع': 'فرن', 'رقم الجمعية': assoc.id,
+      'رقم المستفيد': beneficiary.id, 'رقم الاحتياج': ovenNeedId, 'حالة الجهاز': 'مخصص', 'ملاحظات': '',
+      'تاريخ الإضافة': S.now_(), 'تاريخ التسليم': ''
+    });
+    const beforeFridgeStatus = String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', fridgeNeedId)['حالة التنفيذ']);
+    throws('(القسم 6) أخ بجهازين معًا: رفض حاسم بخلل سلامة بيانات صريح',
+      () => unlinkFridge_(S, admin, assoc, fridge), 'يوجد أكثر من جهاز مرتبط بالاستحقاق');
+    assert('(القسم 6) أخ بجهازين: لا كتابة إطلاقًا',
+      String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', fridgeNeedId)['حالة التنفيذ']) === beforeFridgeStatus
+      && String(S.findById_('الأجهزة', 'رقم الجهاز', fridge.id)['رقم الاحتياج']) === fridgeNeedId);
+  }
+}
+
 /* -------- النتيجة -------- */
 
 console.log('\n' + '='.repeat(56));

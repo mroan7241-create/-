@@ -708,12 +708,21 @@ section('14) saveBeneficiaryWithNeeds — مصدر حقيقة واحد، بلا 
   });
   assert('إنشاء ناجح لاحق يعمل بلا مشاكل بعد اختبارات الفشل أعلاه', succeeded.ok && succeeded.needs.length === 1);
 
+  // Phase 2.3.4 (القسم 1): saveBeneficiary العامة لتعديل سجل قائم لم تعد
+  // تكتب الحقل النصي القديم "الاحتياج" ولا تتأثر بـpayload.needs إطلاقًا —
+  // تمر الآن عبر updateBeneficiaryWithNeeds_ حصرًا (نفس معاملة saveBeneficiaryWithNeeds).
+  const beforeLegacyField = String(beneficiaryRow(S, beneficiaryId)['الاحتياج'] || '');
+  const beforeNeedsCount = needRows(S, beneficiaryId).length;
   const editedLegacy = S.saveBeneficiary(assocSession.token, {
     id: beneficiaryId, name: 'مستفيد الاحتياجات (مُعدَّل)', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي الاختبار',
     phone: '0500000021', familyCount: 3, socialStatus: 'أرملة', needs: ['ثلاجة', 'فرن'], lat: '24.7', lng: '46.6'
   });
-  assert('تعديل سجل قائم عبر saveBeneficiary العام (مسار قديم لا يزال يعمل للتعديل فقط) يكتب الحقل النصي القديم كما كان',
-    String(beneficiaryRow(S, editedLegacy.id)['الاحتياج']) === 'ثلاجة، فرن');
+  assert('تعديل سجل قائم عبر saveBeneficiary العام ينجح عبر updateBeneficiaryWithNeeds_ (الاسم يُحدَّث فعليًا)',
+    editedLegacy.ok === true && String(beneficiaryRow(S, editedLegacy.id)['الاسم']) === 'مستفيد الاحتياجات (مُعدَّل)');
+  assert('الحقل النصي القديم "الاحتياج" لم يتغيّر رغم payload.needs المُرسَل (يبقى كما كان حرفيًا)',
+    String(beneficiaryRow(S, editedLegacy.id)['الاحتياج'] || '') === beforeLegacyField);
+  assert('payload.needs عند التعديل لا يضيف أو يحذف أي صف احتياج (لا deviceTypes صريحة أُرسلت)',
+    needRows(S, beneficiaryId).length === beforeNeedsCount);
 }
 
 /* ================================================================
