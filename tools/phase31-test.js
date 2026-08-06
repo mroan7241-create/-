@@ -1191,6 +1191,63 @@ section('32) تفاصيل المحضر تعيد linkId آمنًا لكل صور�
     () => S.getReceiptEvidenceImage(otherAssocSession.token, batchId, 'damage', linkId), 'صلاحية');
 }
 
+/* ================================================================
+   33) Phase 3.1.2a: التعادل الثالث — تقليل عدد الأجهزة المسترجعة فعليًا
+   ================================================================ */
+section('33) الاختبار الإلزامي: أحمد+بدر (استرجاع واحد) أفضل من بدر+داود (استرجاعان) رغم تعادل العدد والناقص');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+  const { assoc, assocSession } = seedAssociation(S, admin, 33);
+
+  const ahmad = newApprovedBeneficiary_(S, admin, assocSession, ['ثلاجة', 'فرن'], 'أحمد تعادل');
+  const bader = newApprovedBeneficiary_(S, admin, assocSession, ['غسالة'], 'بدر تعادل');
+  const khaled = newApprovedBeneficiary_(S, admin, assocSession, ['ثلاجة', 'غسالة'], 'خالد تعادل');
+  const dawood = newApprovedBeneficiary_(S, admin, assocSession, ['ثلاجة'], 'داود تعادل');
+
+  // أحمد: ثلاجته جاهزة فعلًا، فرنه ناقص. خالد: غسالته جاهزة فعلًا، ثلاجته ناقصة.
+  seedReadyDevice_(S, assoc, ahmad.id, String(needRow(S, ahmad.id, 'ثلاجة')['رقم الاحتياج']), 'ثلاجة', '16 قدم');
+  seedReadyDevice_(S, assoc, khaled.id, String(needRow(S, khaled.id, 'غسالة')['رقم الاحتياج']), 'غسالة', 'أوتوماتيك 7 كجم');
+
+  // المخزون الحر: فرن واحد فقط.
+  const batchId = createSentBatch_(S, admin, assoc.id, [{ deviceType: 'فرن', spec: '5 شعلات', sentQty: 1 }]);
+  confirmFullReceipt_(S, assocSession, batchId);
+
+  const ahmadFridgeNeed = needRow(S, ahmad.id, 'ثلاجة');
+  const ahmadOvenNeed = needRow(S, ahmad.id, 'فرن');
+  const baderWasherNeed = needRow(S, bader.id, 'غسالة');
+  const khaledFridgeNeed = needRow(S, khaled.id, 'ثلاجة');
+  const khaledWasherNeed = needRow(S, khaled.id, 'غسالة');
+  const dawoodFridgeNeed = needRow(S, dawood.id, 'ثلاجة');
+
+  assert('أحمد اكتمل: ثلاجته وفرنه وصلا "بانتظار تعيين مندوب"',
+    ahmadFridgeNeed['حالة التنفيذ'] === 'بانتظار تعيين مندوب' && ahmadOvenNeed['حالة التنفيذ'] === 'بانتظار تعيين مندوب');
+  assert('ثلاجة أحمد بقيت مرتبطة به فعليًا — نفس الجهاز الأصلي (لا نقل)',
+    String(S.findById_('الأجهزة', 'رقم الجهاز', S.readTable_('الأجهزة').rows.find(d => String(d['رقم الاحتياج']) === String(ahmadFridgeNeed['رقم الاحتياج']))['رقم الجهاز'])['رقم المستفيد']) === ahmad.id);
+  assert('بدر اكتمل: غسالته وصلت "بانتظار تعيين مندوب"', baderWasherNeed['حالة التنفيذ'] === 'بانتظار تعيين مندوب');
+  assert('غسالة خالد انتقلت فعليًا إلى بدر (احتياج خالد للغسالة عاد "بانتظار توفر الجهاز")',
+    khaledWasherNeed['حالة التنفيذ'] === 'بانتظار توفر الجهاز');
+  assert('خالد لم يكتمل ولم تُمسّ ثلاجته (لا تزال بلا جهاز كما كانت)',
+    khaledFridgeNeed['حالة التنفيذ'] !== 'جهاز جاهز' && khaledFridgeNeed['حالة التنفيذ'] !== 'بانتظار تعيين مندوب');
+  assert('داود لم يُمَسّ إطلاقًا — لم يُختَر ضمن الحل الأمثل (استرجاعان بدل واحد لو اختير)',
+    dawoodFridgeNeed['حالة التنفيذ'] !== 'جهاز جاهز' && dawoodFridgeNeed['حالة التنفيذ'] !== 'بانتظار تعيين مندوب');
+
+  const devices = S.readTable_('الأجهزة').rows.filter(d => String(d['رقم الجمعية']) === assoc.id);
+  const deviceIds = devices.map(d => String(d['رقم الجهاز']));
+  assert('لا تكرار لأي رقم جهاز (لا خطط مكررة لنفس deviceId)', new Set(deviceIds).size === deviceIds.length);
+  const needsAll = S.readTable_('احتياجات المستفيدين').rows.filter(n => String(n['رقم الجمعية']) === assoc.id);
+  needsAll.forEach(n => {
+    if (String(n['حالة التنفيذ']) === 'جهاز جاهز' || String(n['حالة التنفيذ']) === 'بانتظار تعيين مندوب') {
+      const linked = devices.filter(d => String(d['رقم الاحتياج']) === String(n['رقم الاحتياج']));
+      assert('لا حالة "جاهزة" بلا جهاز فعلي مرتبط (احتياج ' + n['رقم الاحتياج'] + ')', linked.length === 1);
+    }
+  });
+
+  const auditNotes = S.readTable_('سجل العمليات').rows.filter(r => String(r['العملية']) === 'إعادة موازنة تخصيص تلقائي');
+  assert('reclaimCount = 1 بالضبط (عملية إعادة موازنة واحدة فقط في سجل العمليات، لا اثنتان)', auditNotes.length === 1);
+}
+
 /* -------- النتيجة -------- */
 
 console.log('\n' + '='.repeat(56));

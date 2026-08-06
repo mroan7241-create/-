@@ -131,101 +131,132 @@ function planAutoAllocation_(associationId) {
   });
   Object.keys(readyPool).forEach(t => readyPool[t].sort((a, b) => String(a.device['رقم الجهاز']).localeCompare(String(b.device['رقم الجهاز']))));
 
-  // موازين طلب مختلفة حسب السؤال المطروح — انظر solveMaxCompletion_ أدناه:
-  // fullCost: كل أنواع احتياجات المستفيد (الجاهزة والناقصة معًا) —
-  // يُستخدَم فقط عند فحص المخزون الحرّ+الجاهز معًا، لأن "الجاهز" حينها
-  // يُعتبَر مطالبًا بوحدة من عرض قابل لإعادة التوزيع مع الجميع.
-  // missingOnlyCost: الأنواع الناقصة فقط — يُستخدَم عند فحص المخزون
-  // الحرّ وحده (بلا استرجاع إطلاقًا)، لأن أي نوع يملكه المستفيد جاهزًا
-  // بالفعل لا يستهلك شيئًا من "الحرّ" في ذلك السيناريو (يبقى كما هو).
-  // moveCost = عدد الاحتياجات الناقصة فقط — هدف ثانوي (عدد النقلات).
+  // Phase 3.1.2a (القسم 1-4) — كل مستفيد مرشَّح: fullCost (الأنواع
+  // الجاهزة+الناقصة معًا، لضبط سعة الموارد القابلة لإعادة التوزيع) و
+  // gapCost (الأنواع الناقصة فقط، لضبط عدد الاحتياجات التي تحتاج جهازًا
+  // جديدًا فعليًا — لا يمكن أن يتجاوز fullCost لنفس النوع أبدًا).
   const dpItems = beneficiaryModels.map(bm => {
     const allTypes = Array.from(new Set(bm.needs.map(n => n.type)));
     const missingTypes = Array.from(new Set(bm.needs.filter(n => !n.linkedDevice).map(n => n.type)));
     return {
       bm: bm,
       fullCost: typesOrder.map(t => (allTypes.indexOf(t) !== -1 ? 1 : 0)),
-      missingOnlyCost: typesOrder.map(t => (missingTypes.indexOf(t) !== -1 ? 1 : 0)),
-      moveCost: missingTypes.length
+      gapCost: typesOrder.map(t => (missingTypes.indexOf(t) !== -1 ? 1 : 0))
     };
   }).sort((x, y) => (x.bm.beneficiaryId < y.bm.beneficiaryId ? -1 : (x.bm.beneficiaryId > y.bm.beneficiaryId ? 1 : 0)));
 
-  /**
-   * يحل "أكبر عدد مستفيدين مكتمل" ضمن سعات مُعطاة (0/1 knapsack بثلاثة
-   * أبعاد)، باستخدام دالة تكلفة مُختارة لكل عنصر (costOf)، بهدف ثانوي
-   * مُدمَج في دالة القيمة نفسها معجميًا: أكبر count أولًا، ثم أصغر مجموع
-   * moveCost. حارس أداء صريح — عند تجاوزه يرمي خطأً بدل أي fallback
-   * صامت لحل أقل من الأمثل (لا تُكتب خطة ناقصة إطلاقًا).
-   */
-  function solveMaxCompletion_(caps, costOf) {
-    const capA = caps[0], capB = caps[1], capC = caps[2];
-    const dpCells = (capA + 1) * (capB + 1) * (capC + 1);
-    if (dpItems.length && dpCells * dpItems.length > 4000000) {
-      throw new Error('تعذّر حساب خطة التخصيص التلقائي الأمثل عالميًا لحجم البيانات الحالي (حارس أداء) — لن تُكتب أي خطة تخصيص أقل من الأمثل؛ يلزم تدخّل يدوي أو تقسيم الدفعة.');
-    }
-    const selected = {};
-    if (!dpItems.length) return {count: 0, selectedSet: selected};
-    let dp = [];
-    for (let a = 0; a <= capA; a++) {
-      dp[a] = [];
-      for (let b = 0; b <= capB; b++) {
-        dp[a][b] = [];
-        for (let c = 0; c <= capC; c++) dp[a][b][c] = {count: 0, cost: 0};
-      }
-    }
-    const choices = [];
-    dpItems.forEach(item => {
-      const itemCost = costOf(item);
-      const cA = itemCost[0], cB = itemCost[1], cC = itemCost[2];
-      const take = [];
-      for (let a = 0; a <= capA; a++) {
-        take[a] = [];
-        for (let b = 0; b <= capB; b++) take[a][b] = new Array(capC + 1).fill(false);
-      }
-      for (let a = capA; a >= 0; a--) {
-        for (let b = capB; b >= 0; b--) {
-          for (let c = capC; c >= 0; c--) {
-            const na = a - cA, nb = b - cB, nc = c - cC;
-            if (na >= 0 && nb >= 0 && nc >= 0) {
-              const base = dp[na][nb][nc];
-              const candidateCount = base.count + 1;
-              const candidateCost = base.cost + item.moveCost;
-              const current = dp[a][b][c];
-              const better = candidateCount > current.count || (candidateCount === current.count && candidateCost < current.cost);
-              if (better) { dp[a][b][c] = {count: candidateCount, cost: candidateCost}; take[a][b][c] = true; }
-            }
-          }
-        }
-      }
-      choices.push(take);
-    });
-    let a = capA, b = capB, c = capC;
-    for (let i = dpItems.length - 1; i >= 0; i--) {
-      if (choices[i][a][b][c]) {
-        selected[dpItems[i].bm.beneficiaryId] = true;
-        a -= costOf(dpItems[i])[0]; b -= costOf(dpItems[i])[1]; c -= costOf(dpItems[i])[2];
-      }
-    }
-    return {count: dp[capA][capB][capC].count, selectedSet: selected};
+  const freeByType = typesOrder.map(t => (freePool[t] || []).length);
+  const readyByType = typesOrder.map(t => (readyPool[t] || []).length);
+  const fullDemandByType = typesOrder.map((t, idx) => dpItems.reduce((sum, it) => sum + it.fullCost[idx], 0));
+  const gapDemandByType = typesOrder.map((t, idx) => dpItems.reduce((sum, it) => sum + it.gapCost[idx], 0));
+  // سعة كل نوع: الطلب الكلي (جاهز+ناقص) مقابل العرض الكلي (حرّ+جاهز قابل
+  // لإعادة التوزيع)، وسعة "الناقص" (لا يمكن أن تتجاوز سعة الكلي لنفس النوع).
+  const demandCap = typesOrder.map((t, idx) => Math.min(freeByType[idx] + readyByType[idx], fullDemandByType[idx]));
+  const gapCap = typesOrder.map((t, idx) => Math.min(gapDemandByType[idx], demandCap[idx]));
+
+  // أبعاد حالة DP الستّة: [طلب_0، ناقص_0، طلب_1، ناقص_1، طلب_2، ناقص_2] —
+  // مُدمَجتان معًا (لا 3 أبعاد فقط) لأن "الاسترجاع الفعلي لكل نوع" =
+  // max(0, ناقص_ذلك_النوع − الحرّ_له) يعتمد على القيمة الدقيقة للناقص لكل
+  // نوع على حدة، لا مجموعها الكلي فقط. هذا ما يسمح بحساب قيمة الاسترجاع
+  // الحقيقية للمقارنة الدقيقة بين الحلول (القسم 3 من الطلب) بدل الاكتفاء
+  // بعدّ missingTypes.length كما في الإصدار السابق.
+  const dims = [];
+  typesOrder.forEach((t, idx) => { dims.push(demandCap[idx] + 1); dims.push(gapCap[idx] + 1); });
+  const strides = new Array(dims.length);
+  strides[dims.length - 1] = 1;
+  for (let k = dims.length - 2; k >= 0; k--) strides[k] = strides[k + 1] * dims[k + 1];
+  const totalStates = strides[0] * dims[0];
+
+  // حارس أداء صريح — لا fallback صامت لأي حل أقل من الأمثل. تجاوز هذا
+  // السقف (نادر جدًا عمليًا لحجم دفعة واحدة) يرمي خطأً يوقف التخطيط
+  // بالكامل بلا أي كتابة (معزول أصلًا لدى كل مستدعٍ خارجي).
+  if (dpItems.length && totalStates * dpItems.length > 4000000) {
+    throw new Error('تعذّر حساب خطة التخصيص التلقائي الأمثل عالميًا لحجم البيانات الحالي (حارس أداء) — لن تُكتب أي خطة تخصيص أقل من الأمثل؛ يلزم تدخّل يدوي أو تقسيم الدفعة.');
   }
 
-  // Phase 3.1.2 (القسم 1ب) — تفضيل حاسم لا مجرد ترتيب: الحل الذي يكمل
-  // العدد نفسه بلا أي استرجاع أفضل دائمًا من حل يستخدم الاسترجاع، مهما
-  // كان moveCost متقاربًا (فكّ ربط جهاز "جاهز" عملية إضافية فعلية لا
-  // تُقاس بمجرد عدّ الفجوات). لذلك نحل المسألة مرتين: أولًا بالمخزون
-  // الحرّ فقط (تكلفة الناقص فقط ضد سعة المخزون الحرّ فقط — بلا أي وصول
-  // لـreadyPool)، ثم بالمخزون الحرّ+الجاهز معًا (تكلفة كل الأنواع ضد
-  // سعة الاثنين معًا). إن كان العددان متساويين، الاسترجاع لا يزيد شيئًا
-  // فعليًا — يُعتمَد حل المخزون الحرّ فقط (صفر استرجاع). لا يُلجَأ
-  // للاسترجاع إلا إن كان ضروريًا فعلًا لتحقيق عدد إكمال أعلى عالميًا
-  // (القسم 1أ له الأولوية المطلقة على القسم 1ب).
-  const missingDemand = typesOrder.map((t, idx) => dpItems.reduce((sum, it) => sum + it.missingOnlyCost[idx], 0));
-  const fullDemand = typesOrder.map((t, idx) => dpItems.reduce((sum, it) => sum + it.fullCost[idx], 0));
-  const freeOnlyCaps = typesOrder.map((t, idx) => Math.min((freePool[t] || []).length, missingDemand[idx]));
-  const combinedCaps = typesOrder.map((t, idx) => Math.min((freePool[t] || []).length + (readyPool[t] || []).length, fullDemand[idx]));
-  const freeOnlySolution = solveMaxCompletion_(freeOnlyCaps, item => item.missingOnlyCost);
-  const combinedSolution = solveMaxCompletion_(combinedCaps, item => item.fullCost);
-  const selectedSet = combinedSolution.count > freeOnlySolution.count ? combinedSolution.selectedSet : freeOnlySolution.selectedSet;
+  function decodeState_(z) {
+    const vals = new Array(dims.length);
+    let rem = z;
+    for (let k = 0; k < dims.length; k++) { vals[k] = Math.floor(rem / strides[k]); rem -= vals[k] * strides[k]; }
+    return vals;
+  }
+  function itemOffset_(item) {
+    let off = 0;
+    typesOrder.forEach((t, idx) => {
+      off += item.fullCost[idx] * strides[2 * idx];
+      off += item.gapCost[idx] * strides[2 * idx + 1];
+    });
+    return off;
+  }
+  function itemContribution_(item) {
+    const c = new Array(dims.length).fill(0);
+    typesOrder.forEach((t, idx) => { c[2 * idx] = item.fullCost[idx]; c[2 * idx + 1] = item.gapCost[idx]; });
+    return c;
+  }
+
+  // القسم 1-2-3-4 (بترتيب صارم): DP بمجموع دقيق (exact-sum، لا "بحد
+  // أقصى") — dp[z] = أكبر عدد مستفيدين تصل مجموع مساهماتهم بالضبط إلى
+  // الحالة z (أو -1 إن تعذّر الوصول إليها). لا حاجة لتتبّع "تكلفة" منفصلة
+  // في كل خلية: بما أن كل بُعد ناقص جزء من الحالة نفسها، مجموع الأبعاد
+  // الناقصة لأي حالة z يُعطي عدد الاحتياجات الناقصة بدقة (القسم 2)، وقيمة
+  // الاسترجاع الفعلية تُحسَب مباشرة من هذه الأبعاد (القسم 3) — كلاهما
+  // خاصية للحالة ذاتها لا تحتاج تتبعًا إضافيًا أثناء التحديث.
+  const selectedSet = {};
+  if (dpItems.length && totalStates > 0) {
+    const dp = new Array(totalStates).fill(-1);
+    dp[0] = 0;
+    const takeTables = [];
+    dpItems.forEach(item => {
+      const offset = itemOffset_(item);
+      const contribution = itemContribution_(item);
+      const take = new Array(totalStates).fill(false);
+      // نمر على كل الحالات تنازليًا (يمنع إعادة استخدام نفس العنصر مرتين
+      // — نفس أسلوب 0/1 knapsack القياسي، هنا بفهرس مسطَّح بدل حلقات متداخلة).
+      for (let z = totalStates - 1; z >= 0; z--) {
+        const state = decodeState_(z);
+        let feasible = true;
+        for (let k = 0; k < dims.length; k++) {
+          if (state[k] < contribution[k]) { feasible = false; break; }
+        }
+        if (!feasible) continue;
+        const sourceZ = z - offset;
+        if (dp[sourceZ] === -1) continue;
+        const candidate = dp[sourceZ] + 1;
+        if (candidate > dp[z]) { dp[z] = candidate; take[z] = true; }
+      }
+      takeTables.push(take);
+    });
+
+    // البحث عن أفضل حالة نهائية: أكبر عدد إكمال أولًا (1)، ثم أصغر مجموع
+    // الأبعاد الناقصة (2)، ثم أصغر قيمة استرجاع فعلية محسوبة من نفس
+    // الحالة (3)، ثم ترتيب ثابت (فهرس أصغر) عند استمرار التعادل (4).
+    let bestZ = -1, bestCount = -1, bestGaps = Infinity, bestReclaim = Infinity;
+    for (let z = 0; z < totalStates; z++) {
+      if (dp[z] === -1) continue;
+      const state = decodeState_(z);
+      let totalGaps = 0;
+      let reclaim = 0;
+      typesOrder.forEach((t, idx) => {
+        const gapsOfType = state[2 * idx + 1];
+        totalGaps += gapsOfType;
+        reclaim += Math.max(0, gapsOfType - freeByType[idx]);
+      });
+      const better = dp[z] > bestCount
+        || (dp[z] === bestCount && totalGaps < bestGaps)
+        || (dp[z] === bestCount && totalGaps === bestGaps && reclaim < bestReclaim);
+      if (better) { bestZ = z; bestCount = dp[z]; bestGaps = totalGaps; bestReclaim = reclaim; }
+    }
+
+    if (bestZ !== -1) {
+      let cur = bestZ;
+      for (let i = dpItems.length - 1; i >= 0; i--) {
+        if (takeTables[i][cur]) {
+          selectedSet[dpItems[i].bm.beneficiaryId] = true;
+          cur -= itemOffset_(dpItems[i]);
+        }
+      }
+    }
+  }
 
   // -------- بناء الخطة الفعلية للمستفيدين المختارين (قرار عالمي واحد) --------
   // لكل مستفيد مختار: الأنواع التي يحملها بالفعل ("جهاز جاهز") تبقى دون
