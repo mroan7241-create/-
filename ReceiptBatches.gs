@@ -16,12 +16,21 @@
 // "الأجهزة" غير موجودة على أي شيت حي حتى يُشغَّل applyReleaseSchema_
 // يدويًا خارج هذه الجلسة — لم يُشغَّل ولن يُشغَّل من هنا.
 
-/** يتحقق أن الجمعية موجودة ونشطة — الجمعيات المرفوضة/المحذوفة أصلًا لا تُنشأ كصف في هذا الجدول (تُستبعد ببساطة بعدم وجودها). */
+/**
+ * Phase 3.1.1 (القسم 7) — يتحقق أن الجمعية موجودة **ونشطة صراحة**
+ * (assoc['الحالة'] === 'نشطة' بالضبط، لا مجرد "ليست غير نشطة") — أي قيمة
+ * أخرى (فارغة، غير معروفة، أو أي شيء غير 'نشطة' حرفيًا) تُرفض. يُستدعى
+ * **داخل القفل الممسوك مسبقًا** في كل نقطة تمس دورة الاستلام/التخصيص:
+ * createReceiptBatch_، sendReceiptBatch_، confirmReceiptBatch_،
+ * runAutoAllocation_ — لا يكفي التحقق عند الإنشاء فقط، فحالة الجمعية قد
+ * تتغيّر بين إنشاء المحضر وإرساله أو تأكيده. الجمعيات المرفوضة/المحذوفة
+ * أصلًا لا تُنشأ كصف في هذا الجدول (تُستبعد ببساطة بعدم وجودها).
+ */
 function assertActiveAssociationForReceipt_(associationId) {
   const assoc = findById_(APP.sheets.associations, 'رقم الجمعية', associationId);
   if (!assoc) throw new Error('الجمعية المحدَّدة غير موجودة');
-  if (String(assoc['الحالة']) === 'غير نشطة') {
-    throw new Error('الجمعية المحدَّدة غير نشطة — لا يمكن إنشاء محضر استلام لها');
+  if (String(assoc['الحالة']) !== 'نشطة') {
+    throw new Error('الجمعية المحدَّدة غير نشطة — لا يمكن إتمام عمليات محاضر الاستلام أو التخصيص التلقائي لها');
   }
   return assoc;
 }
@@ -58,6 +67,28 @@ function saveReceiptImage_(dataUrl) {
   const folder = receiptProofFolder_();
   const file = folder.createFile(Utilities.newBlob(bytes, mime, filename));
   return {fileId: file.getId(), fileName: filename, fileType: mime, fileSize: bytes.length};
+}
+
+/**
+ * Phase 3.1.1 (القسم 5) — نقل ملفات Drive المرفوعة فعلًا إلى المهملات
+ * best-effort عند فشل العملية **قبل** نجاح الالتزام (commit) بالكامل:
+ * صورة كمية/تلف/توقيع رُفعت بنجاح ثم فشلت العملية لاحقًا (صورة تالية،
+ * كتابة البنود/الرأس/الأجهزة) يجب ألا تبقى يتيمة في Drive بلا أي سجل
+ * يشير إليها. لا تُستدعى إطلاقًا بعد نجاح commit — الملفات الناجحة تبقى
+ * دائمًا (حتى لو فشل التخصيص التلقائي أو الإثراء اللاحق، فتلك مرحلة
+ * ما بعد النجاح ولا علاقة لها بهذه الدالة). فشل نقل ملف بعينه لا يُخفي
+ * معرّفه ولا يُسقط محاولة البقية — يُسجَّل بمعرّف الملف فقط، بلا أي بيانات
+ * شخصية (لا اسم مستخدم ولا محتوى الصورة).
+ */
+function trashReceiptImages_(fileIds) {
+  (fileIds || []).forEach(fileId => {
+    if (!fileId) return;
+    try {
+      DriveApp.getFileById(fileId).setTrashed(true);
+    } catch (trashError) {
+      Logger.log('تحذير: تعذّر نقل ملف صورة استلام غير مُلتزَم به إلى المهملات — traceId=' + requestMeta_().traceId + ' fileId=' + fileId + ' — ' + trashError.message);
+    }
+  });
 }
 
 /** كمية صحيحة غير سالبة إلزامية (لا كسور، لا سالب) — أدقّ من boundedNumber_ العامة التي تقبل الكسور. */
@@ -139,8 +170,9 @@ function createReceiptBatch_(user, payload) {
     appendObject_(APP.sheets.receiptBatches, {
       'رقم المحضر': batchId, 'رقم الجمعية': associationId, 'اسم المورد': supplierName, 'تاريخ الإرسال': sentDate,
       'رقم المستخدم المنشئ': user.id, 'الحالة': 'مسودة', 'الملاحظات': notes,
-      'اسم المستلم': '', 'صفة المستلم': '', 'توقيع المستلم': '', 'تاريخ ووقت التأكيد': '',
+      'اسم المستلم': '', 'صفة المستلم': '', 'تاريخ ووقت التأكيد': '',
       'معرف صورة الكمية العامة': '', 'اسم ملف صورة الكمية العامة': '', 'نوع ملف صورة الكمية العامة': '', 'حجم ملف صورة الكمية العامة': '',
+      'معرف ملف توقيع المستلم': '', 'اسم ملف توقيع المستلم': '', 'نوع ملف توقيع المستلم': '', 'حجم ملف توقيع المستلم': '',
       'تاريخ الإنشاء': nowStamp, 'آخر تحديث': nowStamp
     });
   } catch (writeError) {
@@ -183,8 +215,13 @@ function sendReceiptBatch(token, batchId) {
 
 function sendReceiptBatch_(user, batchId) {
   invalidateTableCache_(APP.sheets.receiptBatches);
+  invalidateTableCache_(APP.sheets.associations);
   const batch = findById_(APP.sheets.receiptBatches, 'رقم المحضر', batchId);
   if (!batch) throw new Error('محضر الاستلام غير موجود');
+  // Phase 3.1.1 (القسم 7): إعادة التحقق من نشاط الجمعية داخل القفل عند
+  // الإرسال أيضًا — قد تصبح الجمعية غير نشطة بعد إنشاء المحضر (مسودة)
+  // وقبل إرساله فعليًا.
+  assertActiveAssociationForReceipt_(String(batch['رقم الجمعية']));
   const currentStatus = String(batch['الحالة']);
   assertReceiptBatchTransition_(currentStatus, 'بانتظار تأكيد الجمعية');
   const snapshot = {'الحالة': batch['الحالة'], 'آخر تحديث': batch['آخر تحديث']};
@@ -249,12 +286,16 @@ function confirmReceiptBatch_(user, payload) {
   invalidateTableCache_(APP.sheets.receiptItems);
   invalidateTableCache_(APP.sheets.receiptDamagePhotos);
   invalidateTableCache_(APP.sheets.devices);
+  invalidateTableCache_(APP.sheets.associations);
 
   const batch = findById_(APP.sheets.receiptBatches, 'رقم المحضر', batchId);
   if (!batch) throw new Error('محضر الاستلام غير موجود');
   if (String(batch['رقم الجمعية']) !== user.associationId) {
     throw new Error('ليس لديك صلاحية لتأكيد هذا المحضر');
   }
+  // Phase 3.1.1 (القسم 7): إعادة التحقق من نشاط الجمعية داخل القفل عند
+  // التأكيد أيضًا — قد تصبح غير نشطة بين الإرسال والتأكيد الفعلي.
+  assertActiveAssociationForReceipt_(String(batch['رقم الجمعية']));
   if (String(batch['الحالة']) !== 'بانتظار تأكيد الجمعية') {
     throw new Error('لا يمكن تأكيد محضر بحالته الحالية «' + String(batch['الحالة']) + '» — يجب أن يكون «بانتظار تأكيد الجمعية»');
   }
@@ -305,8 +346,11 @@ function confirmReceiptBatch_(user, payload) {
   assertReceiptBatchTransition_(String(batch['الحالة']), finalStatus);
 
   // -------- بيانات التأكيد الإلزامية --------
+  // Phase 3.1.1 (القسم 6): التوقيع إثبات صورة حقيقي إلزامي — لا نص، ولا
+  // يُقبَل أي بديل عنه (لا توقيع نصي، لا مستند آخر) — يُرفَع ويُخزَّن
+  // بنفس مسار صورة الكمية العامة تمامًا.
   const receiverTitle = validateReceiverTitle_(payload.receiverTitle);
-  const signature = requiredText_(payload.signature, 'توقيع المستلم', 150);
+  if (!payload.signatureImage) throw new Error('توقيع المستلم (صورة) إلزامي قبل التأكيد');
   if (!payload.quantityPhoto) throw new Error('صورة الكمية المستلمة كاملة عن المحضر إلزامية قبل التأكيد');
 
   // -------- صور التلف: تحقّق العدد حسب إجمالي التالف قبل أي كتابة --------
@@ -320,22 +364,43 @@ function confirmReceiptBatch_(user, payload) {
   if (totalDamaged === 0 && rawDamagePhotos.length > 0) {
     throw new Error('لا يمكن إرفاق صور تلف دون تسجيل أي كمية تالفة في بنود المحضر');
   }
+  // Phase 3.1.1 (القسم 4): كل itemId مرتبط بصورة تلف يجب أن يتبع هذا
+  // المحضر **وأن يحمل كمية تالفة فعليًا (damagedQty > 0)**، لا يجوز تكرار
+  // نفس itemId داخل الصورة نفسها، ثم — بعد بناء كل الخطط — يجب أن يظهر
+  // كل بند بكمية تالفة فعلية في صورة واحدة على الأقل. كل ذلك قبل أي كتابة.
+  const itemPlanById = {};
+  itemPlans.forEach(plan => { itemPlanById[plan.itemId] = plan; });
   const damagePhotoPlans = rawDamagePhotos.map((entry, index) => {
     const itemIds = Array.isArray(entry && entry.itemIds) ? entry.itemIds.map(String) : [];
     if (!itemIds.length) throw new Error('كل صورة تلف يجب أن تُربَط ببند واحد على الأقل');
+    const seenInThisPhoto = {};
     itemIds.forEach(itemId => {
       if (!itemById[itemId]) throw new Error('صورة تلف مرتبطة ببند غير تابع لهذا المحضر: ' + itemId);
+      if (itemPlanById[itemId].damagedQty <= 0) {
+        throw new Error('صورة تلف مرتبطة ببند لا يحمل أي كمية تالفة فعلية: ' + itemId);
+      }
+      if (seenInThisPhoto[itemId]) throw new Error('البند «' + itemId + '» مكرَّر أكثر من مرة ضمن نفس صورة التلف');
+      seenInThisPhoto[itemId] = true;
     });
     if (!entry || !entry.photo) throw new Error('صورة التلف رقم ' + (index + 1) + ' مفقودة');
     return {itemIds: itemIds, dataUrl: entry.photo};
+  });
+  const damagedItemIdsCovered = {};
+  damagePhotoPlans.forEach(plan => plan.itemIds.forEach(itemId => { damagedItemIdsCovered[itemId] = true; }));
+  itemPlans.forEach(plan => {
+    if (plan.damagedQty > 0 && !damagedItemIdsCovered[plan.itemId]) {
+      throw new Error('البند «' + plan.itemId + '» يحمل كمية تالفة بلا أي صورة تلف تغطيه');
+    }
   });
 
   // -------- لقطات خام قبل أي كتابة --------
   const batchSnapshot = {
     'الحالة': batch['الحالة'], 'اسم المستلم': batch['اسم المستلم'], 'صفة المستلم': batch['صفة المستلم'],
-    'توقيع المستلم': batch['توقيع المستلم'], 'تاريخ ووقت التأكيد': batch['تاريخ ووقت التأكيد'],
+    'تاريخ ووقت التأكيد': batch['تاريخ ووقت التأكيد'],
     'معرف صورة الكمية العامة': batch['معرف صورة الكمية العامة'], 'اسم ملف صورة الكمية العامة': batch['اسم ملف صورة الكمية العامة'],
     'نوع ملف صورة الكمية العامة': batch['نوع ملف صورة الكمية العامة'], 'حجم ملف صورة الكمية العامة': batch['حجم ملف صورة الكمية العامة'],
+    'معرف ملف توقيع المستلم': batch['معرف ملف توقيع المستلم'], 'اسم ملف توقيع المستلم': batch['اسم ملف توقيع المستلم'],
+    'نوع ملف توقيع المستلم': batch['نوع ملف توقيع المستلم'], 'حجم ملف توقيع المستلم': batch['حجم ملف توقيع المستلم'],
     'آخر تحديث': batch['آخر تحديث']
   };
   const itemSnapshots = {};
@@ -346,9 +411,30 @@ function confirmReceiptBatch_(user, payload) {
     };
   });
 
-  // -------- رفع الصور (خارج الكتابة الجدولية — فشلها يمنع أي كتابة أصلًا) --------
-  const quantityPhotoMeta = saveReceiptImage_(payload.quantityPhoto);
-  const damagePhotoMetas = damagePhotoPlans.map(plan => Object.assign({}, plan, saveReceiptImage_(plan.dataUrl)));
+  // -------- رفع الصور (خارج الكتابة الجدولية) --------
+  // Phase 3.1.1 (القسم 5): كل ملف يُرفع فعليًا بنجاح إلى Drive يُسجَّل
+  // معرّفه فورًا في uploadedFileIds — فشل رفع صورة **لاحقة** بعد نجاح
+  // سابقة (مثال: صورة الكمية نجحت، ثم صورة تلف تالية فشلت) يجب ألا يترك
+  // الصورة الناجحة يتيمة في Drive بلا أي سجل يشير إليها؛ best-effort نقل
+  // كل ما نجح فعلًا إلى المهملات قبل رفع الاستثناء.
+  const uploadedFileIds = [];
+  let quantityPhotoMeta;
+  let signatureMeta;
+  let damagePhotoMetas;
+  try {
+    quantityPhotoMeta = saveReceiptImage_(payload.quantityPhoto);
+    uploadedFileIds.push(quantityPhotoMeta.fileId);
+    signatureMeta = saveReceiptImage_(payload.signatureImage);
+    uploadedFileIds.push(signatureMeta.fileId);
+    damagePhotoMetas = damagePhotoPlans.map(plan => {
+      const meta = Object.assign({}, plan, saveReceiptImage_(plan.dataUrl));
+      uploadedFileIds.push(meta.fileId);
+      return meta;
+    });
+  } catch (uploadError) {
+    trashReceiptImages_(uploadedFileIds);
+    throw uploadError;
+  }
 
   // -------- الكتابة: البنود أولًا، ثم صور التلف، ثم رأس المحضر، والأجهزة آخر كتابة --------
   const itemsAttempted = [];
@@ -365,22 +451,37 @@ function confirmReceiptBatch_(user, payload) {
       });
     });
 
-    if (damagePhotoMetas.length) {
-      photoIds = nextIdsLocked_('RCD', damagePhotoMetas.length);
-      const photoRows = damagePhotoMetas.map((meta, index) => meta.itemIds.map(itemId => ({
-        'رقم الصورة': photoIds[index], 'رقم المحضر': batchId, 'رقم البند': itemId,
-        'معرف الملف': meta.fileId, 'اسم الملف': meta.fileName, 'نوع الملف': meta.fileType, 'حجم الملف': meta.fileSize,
-        'تاريخ الرفع': nowStamp
-      }))).reduce((all, rows) => all.concat(rows), []);
+    // Phase 3.1.1 (القسم 4): معرّف فريد مستقل لكل صف ربط (صورة↔بند) — لا
+    // معرّف واحد يتكرر بين عدة صفوف. معرف الملف (fileId) نفسه يتكرر بحرّية
+    // بين صفوف الصورة الواحدة المرتبطة بأكثر من بند (نفس الصورة، بنود
+    // متعددة)، لكن العمود الأساسي "رقم الربط" لا يتكرر أبدًا بين الصفوف.
+    const totalLinkRows = damagePhotoMetas.reduce((sum, meta) => sum + meta.itemIds.length, 0);
+    if (totalLinkRows) {
+      const linkIds = nextIdsLocked_('RCD', totalLinkRows);
+      let linkCursor = 0;
+      const photoRows = [];
+      damagePhotoMetas.forEach(meta => {
+        meta.itemIds.forEach(itemId => {
+          const linkId = linkIds[linkCursor++];
+          photoIds.push(linkId);
+          photoRows.push({
+            'رقم الربط': linkId, 'رقم المحضر': batchId, 'رقم البند': itemId,
+            'معرف الملف': meta.fileId, 'اسم الملف': meta.fileName, 'نوع الملف': meta.fileType, 'حجم الملف': meta.fileSize,
+            'تاريخ الرفع': nowStamp
+          });
+        });
+      });
       appendObjects_(APP.sheets.receiptDamagePhotos, photoRows);
     }
 
     batchAttempted = true;
     updateById_(APP.sheets.receiptBatches, 'رقم المحضر', batchId, {
-      'الحالة': finalStatus, 'اسم المستلم': user.name, 'صفة المستلم': receiverTitle, 'توقيع المستلم': signature,
+      'الحالة': finalStatus, 'اسم المستلم': user.name, 'صفة المستلم': receiverTitle,
       'تاريخ ووقت التأكيد': nowStamp,
       'معرف صورة الكمية العامة': quantityPhotoMeta.fileId, 'اسم ملف صورة الكمية العامة': quantityPhotoMeta.fileName,
       'نوع ملف صورة الكمية العامة': quantityPhotoMeta.fileType, 'حجم ملف صورة الكمية العامة': quantityPhotoMeta.fileSize,
+      'معرف ملف توقيع المستلم': signatureMeta.fileId, 'اسم ملف توقيع المستلم': signatureMeta.fileName,
+      'نوع ملف توقيع المستلم': signatureMeta.fileType, 'حجم ملف توقيع المستلم': signatureMeta.fileSize,
       'آخر تحديث': nowStamp
     });
 
@@ -401,20 +502,45 @@ function confirmReceiptBatch_(user, payload) {
   } catch (writeError) {
     const restored = [];
     const failedToRestore = [];
-    // القسم 4 (Phase 2.3.2): الأجهزة آخر كتابة أساسية — فشل أي خطوة قبلها
-    // يعني عدم إنشاء أي جهاز أصلًا (deviceIds تبقى فارغة)، فلا حاجة لحذفها.
+    // Phase 3.1.1 (القسم 3): الأجهزة آخر كتابة أساسية، لكن هذا لا يعني أن
+    // appendObjects_ لم تكتب فعليًا لمجرد أنها رمت استثناءً — قد تكتب
+    // Sheets الصفوف فعليًا ثم يفشل استدعاء لاحق (مثال: invalidateTableCache_
+    // أو أي كود بعدها ضمن نفس try) دون أن يعني ذلك عدم كتابة. deviceIds
+    // تحمل كل معرّف "حاولنا" إنشاءه (وُلِّد قبل appendObjects_ مباشرة)،
+    // فتُفحَص كل واحدة فعليًا: إن وُجد صفها فعلًا وكان لا يزال بحالته
+    // الابتدائية النظيفة (بالمستودع، بلا مستفيد، بلا احتياج) — أي لم
+    // يُلمَس بعد بأي عملية لاحقة — يُحذَف؛ إن لم يوجد الصف أصلًا فلا شيء
+    // للتنظيف (ليس فشلًا). لا نفترض أبدًا عدم الكتابة بلا تحقّق فعلي.
+    deviceIds.forEach(id => {
+      try {
+        const deviceRow = findById_(APP.sheets.devices, 'رقم الجهاز', id);
+        if (deviceRow
+          && String(deviceRow['حالة الجهاز']) === 'بالمستودع'
+          && !String(deviceRow['رقم المستفيد'] || '')
+          && !String(deviceRow['رقم الاحتياج'] || '')) {
+          deleteRowById_(APP.sheets.devices, 'رقم الجهاز', id);
+          restored.push('device:' + id);
+        }
+      } catch (e) {
+        failedToRestore.push('device:' + id + ' (' + e.message + ')');
+      }
+    });
     if (batchAttempted) {
       try { updateById_(APP.sheets.receiptBatches, 'رقم المحضر', batchId, batchSnapshot); restored.push('batch:' + batchId); }
       catch (e) { failedToRestore.push('batch:' + batchId + ' (' + e.message + ')'); }
     }
     photoIds.forEach(id => {
-      try { deleteRowById_(APP.sheets.receiptDamagePhotos, 'رقم الصورة', id); restored.push('photo:' + id); }
+      try { deleteRowById_(APP.sheets.receiptDamagePhotos, 'رقم الربط', id); restored.push('photo:' + id); }
       catch (e) { failedToRestore.push('photo:' + id + ' (' + e.message + ')'); }
     });
     itemsAttempted.forEach(itemId => {
       try { updateById_(APP.sheets.receiptItems, 'رقم البند', itemId, itemSnapshots[itemId]); restored.push('item:' + itemId); }
       catch (e) { failedToRestore.push('item:' + itemId + ' (' + e.message + ')'); }
     });
+    // Phase 3.1.1 (القسم 5): فشل الكتابة الجدولية يعني عدم اكتمال العملية
+    // إطلاقًا رغم أن الصور رُفعت فعلًا في الخطوة السابقة — best-effort نقل
+    // كل ما رُفع لهذا المحضر إلى المهملات بدل تركه يتيمًا في Drive بلا سجل.
+    trashReceiptImages_(uploadedFileIds);
     const traceId = requestMeta_().traceId;
     if (failedToRestore.length) {
       Logger.log('حرج جدًا: فشل تراجع جزئي في تأكيد محضر استلام — traceId=' + traceId
@@ -468,9 +594,14 @@ function receiptBatchDetail_(batchId) {
     notes: String(batch['الملاحظات'] || ''), receiverName: String(batch['اسم المستلم'] || ''),
     receiverTitle: String(batch['صفة المستلم'] || ''), confirmedAt: formatDateTime_(parseDate_(batch['تاريخ ووقت التأكيد'])),
     hasQuantityPhoto: !!String(batch['معرف صورة الكمية العامة'] || ''),
+    hasSignature: !!String(batch['معرف ملف توقيع المستلم'] || ''),
     createdAt: formatDateTime_(parseDate_(batch['تاريخ الإنشاء'])), updatedAt: formatDateTime_(parseDate_(batch['آخر تحديث'])),
     items: items.map(row => ({
-      id: String(row['رقم البند']), deviceType: String(row['النوع']) || String(row['نوع الجهاز'] || ''),
+      // Phase 3.1.1 (القسم 9): إصلاح مباشر — نوع الجهاز يُقرأ حصرًا من
+      // عمود "نوع الجهاز" في بند المحضر نفسه، لا من عمود "النوع" (الذي
+      // لا وجود له إطلاقًا في ورقة "بنود محضر الاستلام" — كان هذا يعتمد
+      // خطأً على undefined يتراجع صامتًا للقيمة الصحيحة الثانية).
+      id: String(row['رقم البند']), deviceType: String(row['نوع الجهاز'] || ''),
       spec: String(row['المواصفة'] || ''), sentQty: Number(row['الكمية المرسلة']) || 0,
       receivedQty: Number(row['الكمية السليمة']) || 0, damagedQty: Number(row['الكمية التالفة']) || 0,
       missingQty: Number(row['الكمية الناقصة']) || 0, differenceReason: String(row['سبب الفرق'] || ''),
@@ -506,4 +637,50 @@ function getReceiptBatchDetail(token, batchId) {
     }
     return withMeta_({ok: true, batch: receiptBatchDetail_(batchId)});
   });
+}
+
+/**
+ * Phase 3.1.1 (القسم 6) — endpoint قراءة محروس لإثباتات محضر استلام
+ * (صورة الكمية العامة، صورة التوقيع، أو صورة تلف واحدة بمعرّف ربطها)،
+ * على غرار getDeliveryProofImage (Delegates.gs) حرفيًا: ADMIN يرى إثباتات
+ * أي محضر، ASSOCIATION يرى إثباتات محاضرها فقط، ويُعاد دائمًا data URL
+ * بعد قراءة المحتوى الفعلي من Drive — لا رابط Drive عام في أي استجابة.
+ * evidenceType ∈ 'quantity' | 'signature' | 'damage' (الأخيرة تتطلب
+ * photoLinkId — معرّف صف الربط في "صور تلف الاستلام").
+ */
+function getReceiptEvidenceImage(token, batchId, evidenceType, photoLinkId) {
+  const user = requireSession_(token, ['ADMIN', 'ASSOCIATION']);
+  return withMeta_(perfTime_('getReceiptEvidenceImage', () => {
+    batchId = cleanId_(batchId);
+    const batch = findById_(APP.sheets.receiptBatches, 'رقم المحضر', batchId);
+    if (!batch) throw new Error('محضر الاستلام غير موجود');
+    if (user.role === 'ASSOCIATION' && String(batch['رقم الجمعية']) !== user.associationId) {
+      throw new Error('ليس لديك صلاحية لعرض إثباتات هذا المحضر');
+    }
+    let fileId = '';
+    if (evidenceType === 'quantity') {
+      fileId = String(batch['معرف صورة الكمية العامة'] || '');
+    } else if (evidenceType === 'signature') {
+      fileId = String(batch['معرف ملف توقيع المستلم'] || '');
+    } else if (evidenceType === 'damage') {
+      const linkId = cleanId_(photoLinkId);
+      if (!linkId) throw new Error('معرّف صورة التلف مطلوب');
+      const link = findById_(APP.sheets.receiptDamagePhotos, 'رقم الربط', linkId);
+      if (!link || String(link['رقم المحضر']) !== batchId) throw new Error('صورة تلف غير تابعة لهذا المحضر');
+      fileId = String(link['معرف الملف'] || '');
+    } else {
+      throw new Error('نوع إثبات غير معروف: ' + evidenceType);
+    }
+    if (!fileId) throw new Error('لا توجد صورة إثبات مرفقة بهذا النوع');
+    let file;
+    try {
+      file = DriveApp.getFileById(fileId);
+    } catch (error) {
+      throw new Error('تعذّر الوصول إلى صورة الإثبات — قد تكون محذوفة');
+    }
+    const blob = file.getBlob();
+    const base64 = Utilities.base64Encode(blob.getBytes());
+    audit_(user, 'عرض إثبات محضر استلام', 'محاضر الاستلام', batchId, 'النوع: ' + evidenceType);
+    return {ok: true, dataUrl: 'data:' + blob.getContentType() + ';base64,' + base64};
+  }));
 }

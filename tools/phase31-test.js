@@ -102,6 +102,8 @@ function buildSandbox() {
   const mockSs = buildMockSpreadsheet();
   const lockService = buildLockService_();
   let fileSeq = 0;
+  const trashedFiles = new Set();
+  const filesById = {};
   const sandbox = {
     console, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp, Error,
     isNaN, isFinite, parseInt, parseFloat, Set,
@@ -145,17 +147,36 @@ function buildSandbox() {
     DriveApp: {
       createFolder: () => ({
         getId: () => 'folder-id', getUrl: () => 'https://drive.example/folder',
-        createFile: blob => { fileSeq++; return { getId: () => 'FILE-' + fileSeq, getUrl: () => 'https://drive.example/file/' + fileSeq, getBlob: () => blob }; }
+        createFile: blob => {
+          fileSeq++;
+          const id = 'FILE-' + fileSeq;
+          filesById[id] = blob;
+          return { getId: () => id, getUrl: () => 'https://drive.example/file/' + fileSeq, getBlob: () => blob };
+        }
       }),
       getFolderById: () => ({
-        createFile: blob => { fileSeq++; return { getId: () => 'FILE-' + fileSeq, getUrl: () => 'https://drive.example/file/' + fileSeq, getBlob: () => blob }; }
-      })
+        createFile: blob => {
+          fileSeq++;
+          const id = 'FILE-' + fileSeq;
+          filesById[id] = blob;
+          return { getId: () => id, getUrl: () => 'https://drive.example/file/' + fileSeq, getBlob: () => blob };
+        }
+      }),
+      getFileById: fileId => {
+        if (!filesById[fileId] || trashedFiles.has(fileId)) throw new Error('الملف غير موجود أو محذوف (محاكاة)');
+        return {
+          getBlob: () => filesById[fileId],
+          setTrashed: trashed => { if (trashed) trashedFiles.add(fileId); }
+        };
+      }
     },
     UrlFetchApp: {}, Logger: { log: msg => { logs.push(String(msg)); } }
   };
   sandbox.globalThis = sandbox;
   sandbox.__logs = logs;
   sandbox.__lock = lockService;
+  sandbox.__trashedFiles = trashedFiles;
+  sandbox.__filesById = filesById;
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox, { filename: 'gs-merged(phase31)' });
   return sandbox;
@@ -225,8 +246,29 @@ function itemIdsOf_(S, batchId) {
 
 function confirmFullReceipt_(S, assocSession, batchId) {
   return S.confirmReceiptBatch(assocSession.token, {
-    batchId: batchId, receiverTitle: 'مسؤول المستودع', signature: 'توقيع تجريبي', quantityPhoto: pngDataUrl_()
+    batchId: batchId, receiverTitle: 'مسؤول المستودع', signatureImage: pngDataUrl_(), quantityPhoto: pngDataUrl_()
   });
+}
+
+/** يستخرج رمز وصول صيانة صالح — نفس نمط grantToken_ في reference-test.js. */
+function grantMaintenance_(S) {
+  S.__logs.length = 0;
+  S.grantMaintenanceAccess_();
+  const line = S.__logs.find(l => l.indexOf('رمز وصول الصيانة') >= 0);
+  if (!line) throw new Error('لم يُطبع رمز وصول الصيانة في السجل (اختبار)');
+  return line.split(': ').pop();
+}
+
+/** يزرع جهازًا "جاهزًا" (مخصَّصًا فعليًا) مباشرة على السجلات لاختبار حالة ابتدائية محدَّدة بدقة، بلا المرور بمحرك التخصيص. */
+function seedReadyDevice_(S, assoc, beneficiaryId, needId, type, spec) {
+  const id = S.nextId_('DEV');
+  S.appendObject_('الأجهزة', {
+    'رقم الجهاز': id, 'اسم الجهاز': type + ' — ' + spec, 'النوع': type,
+    'رقم الجمعية': assoc.id, 'رقم المستفيد': beneficiaryId, 'حالة الجهاز': 'مخصص',
+    'تاريخ الإضافة': '2026/01/01', 'تاريخ التسليم': '', 'ملاحظات': '', 'رقم الاحتياج': needId, 'رقم بند الاستلام': ''
+  });
+  S.updateById_('احتياجات المستفيدين', 'رقم الاحتياج', needId, {'حالة التنفيذ': 'جهاز جاهز'});
+  return id;
 }
 
 /* ================================================================
@@ -349,7 +391,7 @@ section('6) تأكيد استلام مع فروقات (سليم + تالف + ن�
   const batchId = createSentBatch_(S, admin, assoc.id, [{ deviceType: 'ثلاجة', spec: '16 قدم', sentQty: 5 }]);
   const items = itemIdsOf_(S, batchId);
   const result = S.confirmReceiptBatch(assocSession.token, {
-    batchId: batchId, receiverTitle: 'مسؤول المستودع', signature: 'توقيع', quantityPhoto: pngDataUrl_(),
+    batchId: batchId, receiverTitle: 'مسؤول المستودع', signatureImage: pngDataUrl_(), quantityPhoto: pngDataUrl_(),
     items: [{ itemId: items['ثلاجة'], receivedQty: 3, damagedQty: 1, missingQty: 1, differenceReason: 'نقص من المورد' }],
     damagePhotos: [{ itemIds: [items['ثلاجة']], photo: pngDataUrl_() }]
   });
@@ -371,7 +413,7 @@ section('7) رفض معادلة كميات غير متوازنة قبل أي ك�
   const items = itemIdsOf_(S, batchId);
   throws('سليم+تالف+ناقص ≠ مرسل يُرفض',
     () => S.confirmReceiptBatch(assocSession.token, {
-      batchId: batchId, receiverTitle: 'مسؤول المستودع', signature: 'توقيع', quantityPhoto: pngDataUrl_(),
+      batchId: batchId, receiverTitle: 'مسؤول المستودع', signatureImage: pngDataUrl_(), quantityPhoto: pngDataUrl_(),
       items: [{ itemId: items['ثلاجة'], receivedQty: 3, damagedQty: 1, missingQty: 2 }]
     }), 'معادلة الكميات غير متوازنة');
   assert('المحضر بقي "بانتظار تأكيد الجمعية" (لا كتابة جزئية)',
@@ -389,7 +431,7 @@ section('8) إلزام صورة الكمية العامة والتوقيع قب�
   const { assoc, assocSession } = seedAssociation(S, admin, 8);
   const batchId1 = createSentBatch_(S, admin, assoc.id, [{ deviceType: 'ثلاجة', spec: '16 قدم', sentQty: 1 }]);
   throws('تأكيد بلا صورة كمية عامة يُرفض',
-    () => S.confirmReceiptBatch(assocSession.token, { batchId: batchId1, receiverTitle: 'مسؤول المستودع', signature: 'توقيع' }),
+    () => S.confirmReceiptBatch(assocSession.token, { batchId: batchId1, receiverTitle: 'مسؤول المستودع', signatureImage: pngDataUrl_() }),
     'صورة الكمية المستلمة');
   const batchId2 = createSentBatch_(S, admin, assoc.id, [{ deviceType: 'فرن', spec: '5 شعلات', sentQty: 1 }]);
   throws('تأكيد بلا توقيع يُرفض',
@@ -410,11 +452,11 @@ section('9) تلف جهاز واحد يتطلب صورة تلف واحدة با�
   const items = itemIdsOf_(S, batchId);
   throws('تلف واحد بلا أي صورة يُرفض',
     () => S.confirmReceiptBatch(assocSession.token, {
-      batchId: batchId, receiverTitle: 'مسؤول المستودع', signature: 'توقيع', quantityPhoto: pngDataUrl_(),
+      batchId: batchId, receiverTitle: 'مسؤول المستودع', signatureImage: pngDataUrl_(), quantityPhoto: pngDataUrl_(),
       items: [{ itemId: items['ثلاجة'], receivedQty: 2, damagedQty: 1, missingQty: 0, differenceReason: 'تلف أثناء الشحن' }]
     }), 'صورة تلف واحدة بالضبط');
   const result = S.confirmReceiptBatch(assocSession.token, {
-    batchId: batchId, receiverTitle: 'مسؤول المستودع', signature: 'توقيع', quantityPhoto: pngDataUrl_(),
+    batchId: batchId, receiverTitle: 'مسؤول المستودع', signatureImage: pngDataUrl_(), quantityPhoto: pngDataUrl_(),
     items: [{ itemId: items['ثلاجة'], receivedQty: 2, damagedQty: 1, missingQty: 0, differenceReason: 'تلف أثناء الشحن' }],
     damagePhotos: [{ itemIds: [items['ثلاجة']], photo: pngDataUrl_() }]
   });
@@ -434,11 +476,11 @@ section('10) تلف أكثر من جهاز يتطلب صورة واحدة على
   const items = itemIdsOf_(S, batchId);
   throws('تلف اثنين بلا أي صورة يُرفض',
     () => S.confirmReceiptBatch(assocSession.token, {
-      batchId: batchId, receiverTitle: 'مسؤول المستودع', signature: 'توقيع', quantityPhoto: pngDataUrl_(),
+      batchId: batchId, receiverTitle: 'مسؤول المستودع', signatureImage: pngDataUrl_(), quantityPhoto: pngDataUrl_(),
       items: [{ itemId: items['ثلاجة'], receivedQty: 3, damagedQty: 2, missingQty: 0, differenceReason: 'تلف أثناء الشحن' }]
     }), 'صورة تلف واحدة على الأقل');
   const result = S.confirmReceiptBatch(assocSession.token, {
-    batchId: batchId, receiverTitle: 'مسؤول المستودع', signature: 'توقيع', quantityPhoto: pngDataUrl_(),
+    batchId: batchId, receiverTitle: 'مسؤول المستودع', signatureImage: pngDataUrl_(), quantityPhoto: pngDataUrl_(),
     items: [{ itemId: items['ثلاجة'], receivedQty: 3, damagedQty: 2, missingQty: 0, differenceReason: 'تلف أثناء الشحن' }],
     damagePhotos: [{ itemIds: [items['ثلاجة']], photo: pngDataUrl_() }, { itemIds: [items['ثلاجة']], photo: pngDataUrl_() }]
   });
@@ -458,7 +500,7 @@ section('11) إنشاء سجلات الأجهزة بعدد الكمية السل
   const items = itemIdsOf_(S, batchId);
   const beforeDeviceCount = S.readTable_('الأجهزة').rows.length;
   S.confirmReceiptBatch(assocSession.token, {
-    batchId: batchId, receiverTitle: 'مسؤول المستودع', signature: 'توقيع', quantityPhoto: pngDataUrl_(),
+    batchId: batchId, receiverTitle: 'مسؤول المستودع', signatureImage: pngDataUrl_(), quantityPhoto: pngDataUrl_(),
     items: [{ itemId: items['ثلاجة'], receivedQty: 3, damagedQty: 1, missingQty: 1, differenceReason: 'نقص من المورد' }],
     damagePhotos: [{ itemIds: [items['ثلاجة']], photo: pngDataUrl_() }]
   });
@@ -479,7 +521,7 @@ section('12) إعادة نفس opId على تأكيد المحضر لا تُنش
   const { assoc, assocSession } = seedAssociation(S, admin, 12);
   const batchId = createSentBatch_(S, admin, assoc.id, [{ deviceType: 'ثلاجة', spec: '16 قدم', sentQty: 2 }]);
   const beforeDeviceCount = S.readTable_('الأجهزة').rows.length;
-  const payload = { batchId: batchId, receiverTitle: 'مسؤول المستودع', signature: 'توقيع', quantityPhoto: pngDataUrl_(), opId: 'op-receipt-confirm-1' };
+  const payload = { batchId: batchId, receiverTitle: 'مسؤول المستودع', signatureImage: pngDataUrl_(), quantityPhoto: pngDataUrl_(), opId: 'op-receipt-confirm-1' };
   const first = S.confirmReceiptBatch(assocSession.token, payload);
   const afterFirst = S.readTable_('الأجهزة').rows.length;
   const second = S.confirmReceiptBatch(assocSession.token, payload);
@@ -689,6 +731,367 @@ section('20) فشل الإثراء بعد نجاح الكتابة الأساسي
     String(S.findById_('محاضر استلام الأجهزة', 'رقم المحضر', batchId)['الحالة']) === 'تم الاستلام كاملًا');
   assert('الأجهزة أُنشئت فعليًا رغم فشل الإثراء',
     S.readTable_('الأجهزة').rows.some(d => String(d['رقم بند الاستلام']) === itemIdsOf_(S, batchId)['ثلاجة']));
+}
+
+/* ================================================================
+   21) Phase 3.1.1 القسم 1: لا يُنقل جهاز جاهز خطأً مع اعتبار مصدره مكتملًا
+   ================================================================ */
+section('21) لا يُنقل جهاز جاهز لمستفيد آخر ثم يُعتبر صاحبه الأصلي مكتملًا زورًا بالجهاز المتبقي وحده');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+  const { assoc, assocSession } = seedAssociation(S, admin, 21);
+  const ahmad = newApprovedBeneficiary_(S, admin, assocSession, ['ثلاجة', 'فرن'], 'أحمد قسم1');
+  const saleh = newApprovedBeneficiary_(S, admin, assocSession, ['فرن', 'غسالة'], 'صالح قسم1');
+
+  // أ لديه ثلاجة جاهزة ويحتاج فرنًا؛ ب لديه فرن جاهز ويحتاج غسالة — حالة ابتدائية مضبوطة مباشرة.
+  seedReadyDevice_(S, assoc, ahmad.id, String(needRow(S, ahmad.id, 'ثلاجة')['رقم الاحتياج']), 'ثلاجة', '16 قدم');
+  seedReadyDevice_(S, assoc, saleh.id, String(needRow(S, saleh.id, 'فرن')['رقم الاحتياج']), 'فرن', '5 شعلات');
+
+  // تصل غسالة واحدة فقط.
+  const batchId = createSentBatch_(S, admin, assoc.id, [{ deviceType: 'غسالة', spec: 'أوتوماتيك 7 كجم', sentQty: 1 }]);
+  confirmFullReceipt_(S, assocSession, batchId);
+
+  const ahmadOvenNeed = needRow(S, ahmad.id, 'فرن');
+  const salehOvenNeed = needRow(S, saleh.id, 'فرن');
+  const salehWasherNeed = needRow(S, saleh.id, 'غسالة');
+
+  assert('لم يُنقَل فرن صالح إلى أحمد — احتياج أحمد للفرن بقي بلا أي جهاز',
+    ahmadOvenNeed['حالة التنفيذ'] !== 'جهاز جاهز' && ahmadOvenNeed['حالة التنفيذ'] !== 'بانتظار تعيين مندوب');
+  assert('فرن صالح بقي معه فعليًا (لم يُفكّ ربطه دون سبب)', salehOvenNeed['حالة التنفيذ'] === 'جهاز جاهز' || salehOvenNeed['حالة التنفيذ'] === 'بانتظار تعيين مندوب');
+  assert('صالح لا يُعتبر مكتملًا إلا إذا كان فرنه فعليًا لا يزال معه (لا اكتمال زائف بجهاز منقول لغيره)',
+    salehWasherNeed['حالة التنفيذ'] !== 'بانتظار تعيين مندوب' || salehOvenNeed['حالة التنفيذ'] === 'بانتظار تعيين مندوب');
+}
+
+/* ================================================================
+   22) Phase 3.1.1 القسم 2: تعظيم عدد الطلبيات المكتملة فعليًا
+   ================================================================ */
+section('22) تعظيم عدد الطلبيات المكتملة: يُفضَّل إكمال طلبيتين بدل طلبية واحدة عند تعارض الموارد');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+  const { assoc, assocSession } = seedAssociation(S, admin, 22);
+  // المخزون: ثلاجة=1، فرن=2، غسالة=1.
+  // أ: ثلاجة+غسالة | ب: ثلاجة+فرن | ج: فرن+غسالة.
+  // النتيجة الصحيحة: اكتمال ب وج معًا (طلبيتان) لا أ وحده (طلبية واحدة).
+  const a = newApprovedBeneficiary_(S, admin, assocSession, ['ثلاجة', 'غسالة'], 'أ تعظيم');
+  const b = newApprovedBeneficiary_(S, admin, assocSession, ['ثلاجة', 'فرن'], 'ب تعظيم');
+  const c = newApprovedBeneficiary_(S, admin, assocSession, ['فرن', 'غسالة'], 'ج تعظيم');
+
+  const batchId = createSentBatch_(S, admin, assoc.id, [
+    { deviceType: 'ثلاجة', spec: '16 قدم', sentQty: 1 },
+    { deviceType: 'فرن', spec: '5 شعلات', sentQty: 2 },
+    { deviceType: 'غسالة', spec: 'أوتوماتيك 7 كجم', sentQty: 1 }
+  ]);
+  confirmFullReceipt_(S, assocSession, batchId);
+
+  const bComplete = needRow(S, b.id, 'ثلاجة')['حالة التنفيذ'] === 'بانتظار تعيين مندوب' && needRow(S, b.id, 'فرن')['حالة التنفيذ'] === 'بانتظار تعيين مندوب';
+  const cComplete = needRow(S, c.id, 'فرن')['حالة التنفيذ'] === 'بانتظار تعيين مندوب' && needRow(S, c.id, 'غسالة')['حالة التنفيذ'] === 'بانتظار تعيين مندوب';
+  const aComplete = needRow(S, a.id, 'ثلاجة')['حالة التنفيذ'] === 'بانتظار تعيين مندوب' && needRow(S, a.id, 'غسالة')['حالة التنفيذ'] === 'بانتظار تعيين مندوب';
+
+  assert('طلبية ب اكتملت بالكامل', bComplete);
+  assert('طلبية ج اكتملت بالكامل', cComplete);
+  assert('طلبية أ لم تكتمل (المخزون كان يكفي طلبيتين فقط من الثلاث)', !aComplete);
+}
+
+/* ================================================================
+   23) Phase 3.1.1 القسم 3: تراجع الأجهزة حتى لو كُتبت فعليًا قبل الاستثناء
+   ================================================================ */
+section('23) استثناء بعد كتابة أجهزة المحضر فعليًا: لا يبقى أي جهاز، والمحضر/البنود تعود لحالتها السابقة');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+  const { assoc, assocSession } = seedAssociation(S, admin, 23);
+  const batchId = createSentBatch_(S, admin, assoc.id, [{ deviceType: 'ثلاجة', spec: '16 قدم', sentQty: 2 }]);
+  const beforeDeviceCount = S.readTable_('الأجهزة').rows.length;
+  const beforeBatchStatus = String(S.findById_('محاضر استلام الأجهزة', 'رقم المحضر', batchId)['الحالة']);
+  const originalAppendObjects = S.appendObjects_;
+  // محاكاة الحالة التي يحذّر منها الطلب صراحةً: appendObjects_ تكتب صفوف
+  // الأجهزة فعليًا على الشيت (لا نفترض عدم الكتابة)، ثم يُرمى استثناء
+  // بعدها مباشرة (يحاكي أي عطل لاحق ضمن نفس try) — التراجع يجب أن يحذف
+  // هذه الصفوف الحقيقية المكتوبة فعلًا، لا أن يفترض عدم وجودها أصلًا.
+  S.appendObjects_ = function (sheetName, objects) {
+    const result = originalAppendObjects.call(this, sheetName, objects);
+    if (sheetName === 'الأجهزة') throw new Error('عطل محاكى بعد كتابة الأجهزة فعليًا على الشيت');
+    return result;
+  };
+  let threw = false;
+  try { confirmFullReceipt_(S, assocSession, batchId); }
+  catch (error) { threw = /تعذّر إتمام تأكيد المحضر/.test(error.message); }
+  finally { S.appendObjects_ = originalAppendObjects; }
+  assert('العملية تُرفض فعليًا', threw === true);
+  assert('لا يبقى أي جهاز جديد — الصفوف المكتوبة فعليًا حُذفت في التراجع', S.readTable_('الأجهزة').rows.length === beforeDeviceCount);
+  assert('المحضر عاد لحالته السابقة "بانتظار تأكيد الجمعية"',
+    String(S.findById_('محاضر استلام الأجهزة', 'رقم المحضر', batchId)['الحالة']) === beforeBatchStatus);
+  const items = itemIdsOf_(S, batchId);
+  assert('كميات البند عادت لحالتها السابقة (صفر)', Number(S.findById_('بنود محضر الاستلام', 'رقم البند', items['ثلاجة'])['الكمية السليمة']) === 0);
+}
+
+/* ================================================================
+   24) Phase 3.1.1 القسم 4: صورة واحدة تغطي صنفين تالفين معًا
+   ================================================================ */
+section('24) صورة تلف واحدة مرتبطة بصنفين تالفين معًا تغطيهما كليهما');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+  const { assoc, assocSession } = seedAssociation(S, admin, 24);
+  const batchId = createSentBatch_(S, admin, assoc.id, [
+    { deviceType: 'ثلاجة', spec: '16 قدم', sentQty: 2 }, { deviceType: 'فرن', spec: '5 شعلات', sentQty: 2 }
+  ]);
+  const items = itemIdsOf_(S, batchId);
+  const result = S.confirmReceiptBatch(assocSession.token, {
+    batchId: batchId, receiverTitle: 'مسؤول المستودع', signatureImage: pngDataUrl_(), quantityPhoto: pngDataUrl_(),
+    items: [
+      { itemId: items['ثلاجة'], receivedQty: 1, damagedQty: 1, missingQty: 0, differenceReason: 'تلف أثناء الشحن' },
+      { itemId: items['فرن'], receivedQty: 1, damagedQty: 1, missingQty: 0, differenceReason: 'تلف أثناء الشحن' }
+    ],
+    damagePhotos: [{ itemIds: [items['ثلاجة'], items['فرن']], photo: pngDataUrl_() }]
+  });
+  assert('صورة واحدة تغطي صنفين تالفين تنجح', result.ok === true);
+  const links = S.readTable_('صور تلف الاستلام').rows.filter(r => String(r['رقم المحضر']) === batchId);
+  assert('صفّان مستقلان بمعرّف فريد لكل منهما (صف لكل ربط صورة↔بند)',
+    links.length === 2 && String(links[0]['رقم الربط']) !== String(links[1]['رقم الربط']));
+  assert('معرف الملف (fileId) نفسه مكرَّر بين الصفّين (نفس الصورة الفعلية)',
+    String(links[0]['معرف الملف']) === String(links[1]['معرف الملف']) && !!String(links[0]['معرف الملف']));
+  assert('كلا البندين مذكور ضمن صفوف الربط (ثلاجة وفرن معًا)',
+    links.some(r => String(r['رقم البند']) === items['ثلاجة']) && links.some(r => String(r['رقم البند']) === items['فرن']));
+}
+
+/* ================================================================
+   25) Phase 3.1.1 القسم 4: بند تالف بلا أي صورة تغطيه يُرفض
+   ================================================================ */
+section('25) بند يحمل كمية تالفة فعلية ولا تغطيه أي صورة تلف يُرفض قبل أي كتابة');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+  const { assoc, assocSession } = seedAssociation(S, admin, 25);
+  const batchId = createSentBatch_(S, admin, assoc.id, [
+    { deviceType: 'ثلاجة', spec: '16 قدم', sentQty: 2 }, { deviceType: 'فرن', spec: '5 شعلات', sentQty: 2 }
+  ]);
+  const items = itemIdsOf_(S, batchId);
+  const beforeDeviceCount = S.readTable_('الأجهزة').rows.length;
+  throws('صورة تغطي بند الثلاجة فقط بينما الفرن أيضًا تالف بلا صورة تُرفض',
+    () => S.confirmReceiptBatch(assocSession.token, {
+      batchId: batchId, receiverTitle: 'مسؤول المستودع', signatureImage: pngDataUrl_(), quantityPhoto: pngDataUrl_(),
+      items: [
+        { itemId: items['ثلاجة'], receivedQty: 1, damagedQty: 1, missingQty: 0, differenceReason: 'تلف أثناء الشحن' },
+        { itemId: items['فرن'], receivedQty: 1, damagedQty: 1, missingQty: 0, differenceReason: 'تلف أثناء الشحن' }
+      ],
+      damagePhotos: [{ itemIds: [items['ثلاجة']], photo: pngDataUrl_() }]
+    }), 'بلا أي صورة تلف تغطيه');
+  assert('لا أجهزة أُنشئت من محاولة مرفوضة', S.readTable_('الأجهزة').rows.length === beforeDeviceCount);
+  assert('المحضر بقي بانتظار تأكيد الجمعية (لم يُلمَس)',
+    String(S.findById_('محاضر استلام الأجهزة', 'رقم المحضر', batchId)['الحالة']) === 'بانتظار تأكيد الجمعية');
+}
+
+/* ================================================================
+   26) Phase 3.1.1 القسم 6: توقيع حقيقي بصورة + endpoint إثباتات محروس
+   ================================================================ */
+section('26) التوقيع إثبات صورة حقيقي (لا نص)، وendpoint الإثباتات محروس بعزل الجمعية');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+  const { assoc, assocSession } = seedAssociation(S, admin, 26);
+  const { assocSession: otherAssocSession } = seedAssociation(S, admin, 260);
+  const batchId = createSentBatch_(S, admin, assoc.id, [{ deviceType: 'ثلاجة', spec: '16 قدم', sentQty: 1 }]);
+  throws('توقيع نصي (لا صورة) يُرفض — signature النصية القديمة لم تعد كافية',
+    () => S.confirmReceiptBatch(assocSession.token, {
+      batchId: batchId, receiverTitle: 'مسؤول المستودع', signature: 'توقيع نصي قديم', quantityPhoto: pngDataUrl_()
+    }), 'توقيع المستلم');
+  const result = confirmFullReceipt_(S, assocSession, batchId);
+  assert('التأكيد بصورة توقيع حقيقية ينجح', result.ok === true);
+  const detail = S.receiptBatchDetail_(batchId);
+  assert('hasSignature صحيح في تفاصيل المحضر', detail.hasSignature === true);
+  assert('لا يوجد عمود "توقيع المستلم" النصي القديم في السجل الخام — فقط معرّف ملف',
+    !!String(S.findById_('محاضر استلام الأجهزة', 'رقم المحضر', batchId)['معرف ملف توقيع المستلم']));
+
+  const ownEvidence = S.getReceiptEvidenceImage(assocSession.token, batchId, 'signature');
+  assert('الجمعية صاحبة المحضر تقرأ صورة توقيعها (data URL، لا رابط Drive عام)',
+    ownEvidence.ok === true && /^data:image\//.test(ownEvidence.dataUrl));
+  const quantityEvidence = S.getReceiptEvidenceImage(admin.token, batchId, 'quantity');
+  assert('ADMIN يقرأ صورة الكمية العامة لأي محضر', quantityEvidence.ok === true && /^data:image\//.test(quantityEvidence.dataUrl));
+  throws('جمعية أخرى لا تستطيع قراءة إثباتات محضر ليس لها',
+    () => S.getReceiptEvidenceImage(otherAssocSession.token, batchId, 'signature'), 'صلاحية');
+}
+
+/* ================================================================
+   27) Phase 3.1.1 القسم 5: تنظيف ملفات Drive عند فشل الرفع أو الكتابة قبل commit
+   ================================================================ */
+section('27) ملفات Drive المرفوعة تُنقَل للمهملات عند فشل العملية قبل commit، وتبقى بعد نجاحه');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+  const { assoc, assocSession } = seedAssociation(S, admin, 27);
+
+  // أ) فشل رفع صورة لاحقة (صورة تلف) بعد نجاح صورة سابقة (الكمية+التوقيع) —
+  // يجب نقل الصور الناجحة إلى المهملات.
+  {
+    const batchId = createSentBatch_(S, admin, assoc.id, [{ deviceType: 'ثلاجة', spec: '16 قدم', sentQty: 2 }]);
+    const items = itemIdsOf_(S, batchId);
+    const before = S.__trashedFiles.size;
+    const filesBeforeCount = Object.keys(S.__filesById).length;
+    throws('فشل رفع صورة التلف بعد نجاح صورتي الكمية والتوقيع يُرفَض',
+      () => S.confirmReceiptBatch(assocSession.token, {
+        batchId: batchId, receiverTitle: 'مسؤول المستودع', signatureImage: pngDataUrl_(), quantityPhoto: pngDataUrl_(),
+        items: [{ itemId: items['ثلاجة'], receivedQty: 1, damagedQty: 1, missingQty: 0, differenceReason: 'تلف أثناء الشحن' }],
+        damagePhotos: [{ itemIds: [items['ثلاجة']], photo: 'data:image/png;base64,ليست-صورة-صالحة' }]
+      }));
+    const newFilesCount = Object.keys(S.__filesById).length - filesBeforeCount;
+    assert('رُفعت صورتان فعليًا قبل فشل الصورة الثالثة (كمية + توقيع)', newFilesCount === 2);
+    assert('كلا الملفين الناجحين نُقلا إلى المهملات بعد فشل الرفع الثالث', S.__trashedFiles.size === before + 2);
+  }
+
+  // ب) نجاح رفع كل الصور، ثم فشل كتابة الأجهزة (آخر كتابة) — يجب نقل كل الصور المرفوعة إلى المهملات أيضًا.
+  {
+    const batchId = createSentBatch_(S, admin, assoc.id, [{ deviceType: 'فرن', spec: '5 شعلات', sentQty: 1 }]);
+    const before = S.__trashedFiles.size;
+    const filesBeforeCount = Object.keys(S.__filesById).length;
+    const originalAppendObjects = S.appendObjects_;
+    S.appendObjects_ = function (sheetName, objects) {
+      if (sheetName === 'الأجهزة') throw new Error('فشل محاكى في إنشاء أجهزة المخزون');
+      return originalAppendObjects.call(this, sheetName, objects);
+    };
+    try {
+      throws('فشل كتابة الأجهزة بعد نجاح كل الرفع يُرفَض', () => confirmFullReceipt_(S, assocSession, batchId));
+    } finally { S.appendObjects_ = originalAppendObjects; }
+    const newFilesCount = Object.keys(S.__filesById).length - filesBeforeCount;
+    assert('صورتان رُفعتا فعليًا (كمية + توقيع، بلا صور تلف هنا)', newFilesCount === 2);
+    assert('كلا الملفين نُقلا إلى المهملات بعد فشل كتابة الأجهزة', S.__trashedFiles.size === before + 2);
+  }
+
+  // ج) نجاح كامل — لا يُنقَل أي ملف إلى المهملات إطلاقًا.
+  {
+    const batchId = createSentBatch_(S, admin, assoc.id, [{ deviceType: 'غسالة', spec: 'أوتوماتيك 7 كجم', sentQty: 1 }]);
+    const before = S.__trashedFiles.size;
+    const result = confirmFullReceipt_(S, assocSession, batchId);
+    assert('التأكيد الناجح يمر دون أي خطأ', result.ok === true);
+    assert('لا مِلف واحد يُنقَل إلى المهملات بعد نجاح commit كامل', S.__trashedFiles.size === before);
+  }
+}
+
+/* ================================================================
+   28) Phase 3.1.1 القسم 7: إعادة تحقق نشاط الجمعية عند الإرسال والتأكيد والتخصيص
+   ================================================================ */
+section('28) جمعية تصبح غير نشطة بعد إنشاء المحضر: لا يُرسَل لها ولا يُؤكَّد ولا يُشغَّل لها تخصيص');
+function deactivate_(S, admin, assoc) {
+  S.saveAssociation(admin.token, {
+    id: assoc.id, name: assoc.record.name, category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
+    phone: assoc.record.phone, email: assoc.record.email, status: 'غير نشطة'
+  });
+}
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+
+  // أ) تصبح غير نشطة بعد الإنشاء (مسودة) وقبل الإرسال.
+  {
+    const { assoc } = seedAssociation(S, admin, 281);
+    const created = S.createReceiptBatch(admin.token, {
+      associationId: assoc.id, supplierName: 'مورد', sentDate: '2026/01/01', items: [{ deviceType: 'ثلاجة', spec: '16 قدم', sentQty: 1 }]
+    });
+    deactivate_(S, admin, assoc);
+    throws('إرسال محضر لجمعية أصبحت غير نشطة يُرفض', () => S.sendReceiptBatch(admin.token, created.id), 'غير نشطة');
+  }
+
+  // ب) تصبح غير نشطة بعد الإرسال وقبل التأكيد.
+  {
+    const { assoc, assocSession } = seedAssociation(S, admin, 282);
+    const batchId = createSentBatch_(S, admin, assoc.id, [{ deviceType: 'فرن', spec: '5 شعلات', sentQty: 1 }]);
+    deactivate_(S, admin, assoc);
+    throws('تأكيد محضر لجمعية أصبحت غير نشطة يُرفض', () => confirmFullReceipt_(S, assocSession, batchId), 'غير نشطة');
+  }
+
+  // ج) محرك التخصيص التلقائي لا يعمل لجمعية غير نشطة حتى لو اعتُمد احتياج مستفيدها.
+  {
+    const { assoc, assocSession } = seedAssociation(S, admin, 283);
+    const beneficiary = newApprovedBeneficiary_(S, admin, assocSession, ['ثلاجة'], 'مستفيد قسم7');
+    const batchId = createSentBatch_(S, admin, assoc.id, [{ deviceType: 'ثلاجة', spec: '16 قدم', sentQty: 1 }]);
+    // إتمام التأكيد أثناء نشاط الجمعية (مسموح)، ثم تعطيلها قبل اعتماد أي احتياج جديد يُشغِّل محاولة تخصيص لاحقة.
+    confirmFullReceipt_(S, assocSession, batchId);
+    const fridgeNeed = needRow(S, beneficiary.id, 'ثلاجة');
+    assert('اكتمل التخصيص أثناء نشاط الجمعية كالمتوقع', fridgeNeed['حالة التنفيذ'] === 'بانتظار تعيين مندوب');
+
+    const beneficiary2 = S.saveBeneficiary(assocSession.token, {
+      deviceTypes: ['فرن'], name: 'مستفيد قسم7ب', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: nextPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+    });
+    deactivate_(S, admin, assoc);
+    // اعتماد احتياج مستفيد جديد لجمعية غير نشطة الآن — يُشغَّل runAutoAllocation_ داخليًا
+    // لكن يجب أن يتخطى الجمعية غير النشطة صامتًا بلا أي حركة أجهزة.
+    approveBeneficiary_(S, admin, beneficiary2.id, ['فرن']);
+    const ovenNeed2 = needRow(S, beneficiary2.id, 'فرن');
+    assert('لا يُشغَّل تخصيص تلقائي لجمعية غير نشطة — الاحتياج الجديد يبقى بلا أي جهاز',
+      ovenNeed2['حالة التنفيذ'] !== 'جهاز جاهز' && ovenNeed2['حالة التنفيذ'] !== 'بانتظار تعيين مندوب');
+  }
+}
+
+/* ================================================================
+   29) Phase 3.1.1 القسم 8: migrateReferenceData_ seeding إضافي idempotent
+   ================================================================ */
+section('29) migrateReferenceData_ يضيف الناقص فقط ولا يتوقف لوجود صفوف قديمة ولا يكرر عند إعادة التشغيل');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const maintenanceToken = grantMaintenance_(S);
+  const first = S.migrateReferenceData_(maintenanceToken);
+  assert('التشغيل الأول يُدرج بذورًا فعلية', first.ok === true && first.inserted > 0);
+
+  const rowsAfterFirst = S.readTable_('البيانات المرجعية').rows.length;
+  const second = S.migrateReferenceData_(maintenanceToken);
+  assert('التشغيل الثاني (الجدول ممتلئ بالفعل) لا يضيف أي شيء جديدًا — لا تكرار', second.inserted === 0);
+  assert('عدد الصفوف لم يتغيّر بعد التشغيل الثاني', S.readTable_('البيانات المرجعية').rows.length === rowsAfterFirst);
+
+  // إضافة صف "قديم" يدويًا (يحاكي بيانات قديمة موجودة مسبقًا) ثم تشغيل الترحيل: يجب ألا يتوقف، ويضيف الباقي الناقص فقط.
+  S.appendObject_('البيانات المرجعية', {'المعرف': S.nextId_('REF'), 'النوع': 'CUSTOM_LEGACY', 'القيمة': 'قيمة قديمة يدوية', 'يتبع': '', 'الترتيب': 999, 'نشط': 'نعم'});
+  const third = S.migrateReferenceData_(maintenanceToken);
+  assert('وجود صف قديم غريب لا يوقف الترحيل — لا يزال يضيف الناقص (لا شيء هنا لأن البذور مكتملة أصلًا) بلا خطأ', third.ok === true);
+}
+
+/* ================================================================
+   30) Phase 3.1.1 القسم 8: addReferenceValue محمي بقفل مع تحقق يتبع
+   ================================================================ */
+section('30) addReferenceValue: فحص التكرار وتوليد المعرف داخل نفس القفل، وتحقق صحة "يتبع" حسب النوع');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+  const maintenanceToken = grantMaintenance_(S);
+  S.migrateReferenceData_(maintenanceToken);
+
+  const addedSpec = S.addReferenceValue(admin.token, {type: 'DEVICE_SPEC', value: '12 قدم', parent: 'ثلاجة'});
+  assert('DEVICE_SPEC بنوع جهاز صحيح (من الأنواع الثلاثة) ينجح', addedSpec.ok === true);
+  throws('DEVICE_SPEC بنوع جهاز غير صالح (ليس من الثلاثة) يُرفض',
+    () => S.addReferenceValue(admin.token, {type: 'DEVICE_SPEC', value: 'حجم غريب', parent: 'مكيف'}), 'نوع الجهاز');
+  throws('DEVICE_SPEC بلا يتبع إطلاقًا يُرفض',
+    () => S.addReferenceValue(admin.token, {type: 'DEVICE_SPEC', value: 'حجم آخر', parent: ''}), 'يتبع');
+
+  const addedCity = S.addReferenceValue(admin.token, {type: 'CITY', value: 'مدينة اختبار جديدة', parent: 'الرياض'});
+  assert('CITY بمنطقة موجودة فعلًا (يتبع صالح) ينجح', addedCity.ok === true);
+  throws('CITY بمنطقة غير موجودة في القائمة المرجعية يُرفض',
+    () => S.addReferenceValue(admin.token, {type: 'CITY', value: 'مدينة يتيمة', parent: 'منطقة غير موجودة أصلًا'}), 'غير موجودة');
+
+  throws('نوع غير تابع (SUPPLIER) مع "يتبع" غير فارغة يُرفض',
+    () => S.addReferenceValue(admin.token, {type: 'SUPPLIER', value: 'مورد جديد', parent: 'شيء ما'}), 'لا يقبل');
+  const addedSupplier = S.addReferenceValue(admin.token, {type: 'SUPPLIER', value: 'مورد جديد بلا يتبع'});
+  assert('SUPPLIER بلا "يتبع" ينجح', addedSupplier.ok === true);
+
+  throws('قيمة مكرَّرة ضمن نفس النوع والتبعية تُرفض',
+    () => S.addReferenceValue(admin.token, {type: 'DEVICE_SPEC', value: '12 قدم', parent: 'ثلاجة'}), 'موجودة بالفعل');
+
+  const payload = {type: 'RECEIVER_TITLE', value: 'صفة اختبار opId', opId: 'op-ref-add-1'};
+  const first = S.addReferenceValue(admin.token, payload);
+  const second = S.addReferenceValue(admin.token, payload);
+  assert('نفس opId يُعيد نفس المعرّف دون إنشاء صف جديد', first.id === second.id);
+  const titleCount = S.readTable_('البيانات المرجعية').rows.filter(r => String(r['النوع']) === 'RECEIVER_TITLE' && String(r['القيمة']) === 'صفة اختبار opId').length;
+  assert('صف واحد فقط أُنشئ فعليًا رغم تكرار opId', titleCount === 1);
 }
 
 /* -------- النتيجة -------- */

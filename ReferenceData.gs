@@ -44,8 +44,12 @@ const REFERENCE_SEED_RECEIVER_TITLES = ['مدير الجمعية', 'مسؤول �
 const REFERENCE_SEED_SUPPLIERS = [];
 
 /**
- * ترحيل آمن وقابل لإعادة التشغيل: ينشئ ورقة "البيانات المرجعية" ويبذرها
- * بقيم ابتدائية فقط إن كانت فارغة تمامًا. لا يحذف ولا يكرر عند إعادة التشغيل.
+ * Phase 3.1.1 (القسم 8) — ترحيل seeding إضافي idempotent: لا يتوقف لمجرد
+ * أن الجدول يحتوي صفوفًا (قديمة أو من تشغيل سابق) — بل يقرأ كل القيم
+ * الموجودة فعليًا، ويضيف فقط الـ tuples الناقصة (النوع + القيمة + يتبع)
+ * غير الموجودة أصلًا. لا يكرر أي قيمة قائمة إطلاقًا مهما تكررت المحاولة.
+ * ترتيب الصفوف الجديدة يُكمل الترتيب الأعلى الموجود فعليًا لكل مجموعة
+ * (النوع + يتبع)، لا يُعيد ترقيمًا من الصفر. لا يحذف ولا يعدّل أي صف قائم.
  *
  * ⚠️ لم يُستدعَ هذا الترحيل تلقائيًا من أي مكان في المشروع.
  * يجب تشغيله يدويًا من محرر Apps Script بعد المراجعة والموافقة،
@@ -57,54 +61,57 @@ function migrateReferenceData_(token) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ensureSheet_(ss, APP.sheets.referenceData, HEADERS[APP.sheets.referenceData]);
 
-  if (sheet.getLastRow() > 1) {
-    return {ok: true, skipped: true, message: 'الجدول موجود ومُعبّأ مسبقًا — لم تُضف بذور جديدة.'};
+  invalidateTableCache_(APP.sheets.referenceData);
+  const existingRows = readTable_(APP.sheets.referenceData).rows;
+  const existingKeys = {};
+  const maxOrderByGroup = {};
+  existingRows.forEach(row => {
+    const type = String(row['النوع']);
+    const parent = String(row['يتبع'] || '');
+    const value = String(row['القيمة']);
+    existingKeys[type + '|' + parent + '|' + value] = true;
+    const groupKey = type + '|' + parent;
+    maxOrderByGroup[groupKey] = Math.max(maxOrderByGroup[groupKey] || 0, safeNumber_(row['الترتيب']));
+  });
+
+  function nextOrder_(type, parent) {
+    const key = type + '|' + parent;
+    maxOrderByGroup[key] = (maxOrderByGroup[key] || 0) + 1;
+    return maxOrderByGroup[key];
   }
 
   const rows = [];
-  let order = 0;
+  function addIfMissing_(type, value, parent) {
+    parent = parent || '';
+    const key = type + '|' + parent + '|' + value;
+    if (existingKeys[key]) return;
+    existingKeys[key] = true;
+    rows.push([nextId_('REF'), type, value, parent, nextOrder_(type, parent), 'نعم']);
+  }
 
   Object.keys(REFERENCE_SEED_REGIONS_CITIES).forEach(region => {
-    order += 1;
-    rows.push([nextId_('REF'), 'REGION', region, '', order, 'نعم']);
-    let cityOrder = 0;
-    REFERENCE_SEED_REGIONS_CITIES[region].forEach(city => {
-      cityOrder += 1;
-      rows.push([nextId_('REF'), 'CITY', city, region, cityOrder, 'نعم']);
-    });
+    addIfMissing_('REGION', region, '');
+    REFERENCE_SEED_REGIONS_CITIES[region].forEach(city => addIfMissing_('CITY', city, region));
   });
-  REFERENCE_SEED_DEVICE_TYPES.forEach((value, index) => {
-    rows.push([nextId_('REF'), 'DEVICE_TYPE', value, '', index + 1, 'نعم']);
-  });
-  REFERENCE_SEED_SOCIAL_STATUSES.forEach((value, index) => {
-    rows.push([nextId_('REF'), 'SOCIAL_STATUS', value, '', index + 1, 'نعم']);
-  });
-  REFERENCE_SEED_ASSOCIATION_CATEGORIES.forEach((value, index) => {
-    rows.push([nextId_('REF'), 'ASSOCIATION_CATEGORY', value, '', index + 1, 'نعم']);
-  });
-  REFERENCE_SEED_ASSOCIATION_SECTORS.forEach((value, index) => {
-    rows.push([nextId_('REF'), 'ASSOCIATION_SECTOR', value, '', index + 1, 'نعم']);
-  });
+  REFERENCE_SEED_DEVICE_TYPES.forEach(value => addIfMissing_('DEVICE_TYPE', value, ''));
+  REFERENCE_SEED_SOCIAL_STATUSES.forEach(value => addIfMissing_('SOCIAL_STATUS', value, ''));
+  REFERENCE_SEED_ASSOCIATION_CATEGORIES.forEach(value => addIfMissing_('ASSOCIATION_CATEGORY', value, ''));
+  REFERENCE_SEED_ASSOCIATION_SECTORS.forEach(value => addIfMissing_('ASSOCIATION_SECTOR', value, ''));
   Object.keys(REFERENCE_SEED_DEVICE_SPECS).forEach(deviceType => {
-    REFERENCE_SEED_DEVICE_SPECS[deviceType].forEach((value, index) => {
-      rows.push([nextId_('REF'), 'DEVICE_SPEC', value, deviceType, index + 1, 'نعم']);
-    });
+    REFERENCE_SEED_DEVICE_SPECS[deviceType].forEach(value => addIfMissing_('DEVICE_SPEC', value, deviceType));
   });
-  REFERENCE_SEED_DIFFERENCE_REASONS.forEach((value, index) => {
-    rows.push([nextId_('REF'), 'DIFFERENCE_REASON', value, '', index + 1, 'نعم']);
-  });
-  REFERENCE_SEED_RECEIVER_TITLES.forEach((value, index) => {
-    rows.push([nextId_('REF'), 'RECEIVER_TITLE', value, '', index + 1, 'نعم']);
-  });
-  REFERENCE_SEED_SUPPLIERS.forEach((value, index) => {
-    rows.push([nextId_('REF'), 'SUPPLIER', value, '', index + 1, 'نعم']);
-  });
+  REFERENCE_SEED_DIFFERENCE_REASONS.forEach(value => addIfMissing_('DIFFERENCE_REASON', value, ''));
+  REFERENCE_SEED_RECEIVER_TITLES.forEach(value => addIfMissing_('RECEIVER_TITLE', value, ''));
+  REFERENCE_SEED_SUPPLIERS.forEach(value => addIfMissing_('SUPPLIER', value, ''));
 
-  sheet.getRange(2, 1, rows.length, HEADERS[APP.sheets.referenceData].length).setValues(rows);
+  if (!rows.length) {
+    return {ok: true, skipped: true, inserted: 0, message: 'كل القيم البذرية موجودة فعلًا — لا تكرار، لا تعديل.'};
+  }
+  sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, HEADERS[APP.sheets.referenceData].length).setValues(rows);
   invalidateTableCache_(APP.sheets.referenceData);
   invalidateReferenceDataCache_();
   return {ok: true, skipped: false, inserted: rows.length,
-    message: 'تم إنشاء ' + rows.length + ' سجلًا مرجعيًا (مناطق، مدن، أنواع أجهزة، حالات اجتماعية، تصنيفات ومجالات جمعيات).'};
+    message: 'أُضيف ' + rows.length + ' سجلًا مرجعيًا ناقصًا (مناطق/مدن/أنواع أجهزة/حالات اجتماعية/تصنيفات/مواصفات/موردين/أسباب فرق/صفات مستلم) بلا أي تكرار لقيمة موجودة أصلًا.'};
 }
 
 function invalidateReferenceDataCache_() {
@@ -597,9 +604,28 @@ const REFERENCE_DATA_TYPES_ = Object.freeze([
   'REGION', 'CITY', 'DEVICE_TYPE', 'SOCIAL_STATUS', 'ASSOCIATION_CATEGORY', 'ASSOCIATION_SECTOR',
   'DEVICE_SPEC', 'SUPPLIER', 'DIFFERENCE_REASON', 'RECEIVER_TITLE'
 ]);
+/** الأنواع التي تتطلب "يتبع" غير فارغ إلزاميًا — بقية الأنواع ترفض أي قيمة "يتبع" غير فارغة صراحة. */
+const REFERENCE_DATA_CHILD_TYPES_ = Object.freeze(['CITY', 'DEVICE_SPEC']);
+
+/**
+ * Phase 3.1.1 (القسم 8) — public wrapper: يفحص الجلسة ثم يمرّر التنفيذ
+ * كاملًا (فحص التكرار + توليد المعرّف + الكتابة) داخل runLockedIdempotent_
+ * — نفس نمط بقية نقاط الدخول في المشروع. opId اختياري لحماية إعادة
+ * المحاولة المتزامنة القصيرة المدى (نفس مبدأ بقية العمليات الحساسة).
+ */
 function addReferenceValue(token, payload) {
   const user = requireSession_(token, ['ADMIN']);
   payload = payload || {};
+  return runLockedIdempotent_('addReferenceValue', user.id, payload.opId, () => addReferenceValue_(user, payload));
+}
+
+/**
+ * ⚠️ تفترض أن المستدعي يُمسك ScriptLock فعلًا (عبر runLockedIdempotent_
+ * في addReferenceValue أعلاه) — لا تُمسك أي قفل بنفسها. فحص التكرار
+ * وتوليد المعرّف عبر nextIdsLocked_ والكتابة كلها ضمن نفس القفل الواحد،
+ * فلا يمكن لطلبين متزامنين إنشاء نفس (النوع + القيمة + يتبع) معًا.
+ */
+function addReferenceValue_(user, payload) {
   const type = requiredText_(payload.type, 'نوع القيمة المرجعية', 40);
   if (REFERENCE_DATA_TYPES_.indexOf(type) === -1) {
     throw new Error('نوع قيمة مرجعية غير معروف: ' + type);
@@ -608,12 +634,28 @@ function addReferenceValue(token, payload) {
   const parent = cleanText_(payload.parent, 80);
 
   invalidateTableCache_(APP.sheets.referenceData);
-  const existing = readTable_(APP.sheets.referenceData).rows.filter(row => String(row['النوع']) === type);
+  const allRows = readTable_(APP.sheets.referenceData).rows;
+
+  if (REFERENCE_DATA_CHILD_TYPES_.indexOf(type) !== -1) {
+    if (!parent) throw new Error('هذا النوع يتطلب "يتبع" غير فارغ');
+    if (type === 'CITY') {
+      const regionExists = allRows.some(row => String(row['النوع']) === 'REGION' && String(row['القيمة']) === parent);
+      if (!regionExists) throw new Error('المنطقة «' + parent + '» غير موجودة ضمن القائمة المرجعية — أضِفها أولًا كـREGION');
+    } else if (type === 'DEVICE_SPEC') {
+      if (NEW_NEED_DEVICE_TYPES.indexOf(parent) === -1) {
+        throw new Error('نوع الجهاز «' + parent + '» غير صالح — يجب أن يكون أحد: ' + NEW_NEED_DEVICE_TYPES.join('، '));
+      }
+    }
+  } else if (parent) {
+    throw new Error('هذا النوع لا يقبل "يتبع" — يجب أن تكون فارغة');
+  }
+
+  const existing = allRows.filter(row => String(row['النوع']) === type);
   const duplicate = existing.some(row => String(row['القيمة']) === value && String(row['يتبع'] || '') === parent);
   if (duplicate) throw new Error('هذه القيمة موجودة بالفعل ضمن نفس النوع' + (parent ? ' والتبعية' : ''));
 
   const nextOrder = existing.reduce((max, row) => Math.max(max, safeNumber_(row['الترتيب'])), 0) + 1;
-  const id = nextId_('REF');
+  const id = nextIdsLocked_('REF', 1)[0];
   appendObject_(APP.sheets.referenceData, {'المعرف': id, 'النوع': type, 'القيمة': value, 'يتبع': parent, 'الترتيب': nextOrder, 'نشط': 'نعم'});
   invalidateTableCache_(APP.sheets.referenceData);
   invalidateReferenceDataCache_();
