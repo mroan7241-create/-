@@ -774,6 +774,64 @@ function reviewBeneficiaryNeeds_(user, beneficiaryId, payload) {
   }
 }
 
+/**
+ * Phase 3.2A (القسم 3) — wrapper بالجملة فوق reviewBeneficiaryNeeds
+ * الموجودة حرفيًا، بلا أي تكرار لقواعد المراجعة نفسها: كل عنصر يُمرَّر
+ * كما هو إلى reviewBeneficiaryNeeds (نقطة الدخول العامة الكاملة —
+ * requireSession_ + runLockedIdempotent_ + reviewBeneficiaryNeeds_ بكل
+ * تحقّقاتها وتراجعها الحالي دون تغيير سطر واحد فيها)، فيُمسك قفل مستقل
+ * قصير لكل مستفيد على حدة (مفتاح القفل بالفعل مرتبط برقم المستفيد —
+ * runLockedIdempotent_ في reviewBeneficiaryNeeds — فلا تعارض بين عناصر
+ * دفعة واحدة، ولا قفل متداخل). فشل عنصر واحد (سبب رفض ناقص، احتياج
+ * محسوم مسبقًا، تعارض حالة، إلخ) يُلتقَط ويُصنَّف فورًا دون إيقاف بقية
+ * الدفعة — قاعدة "كل شيء أو لا شيء" تبقى محصورة **داخل** كل عنصر مفرد
+ * (كما في reviewBeneficiaryNeeds_ نفسها)، لا عبر عناصر الدفعة كاملة.
+ *
+ * payload = {
+ *   items: [{beneficiaryId, beneficiaryDecision, beneficiaryRejectReason, needDecisions, opId}],
+ * }
+ * يعيد {ok, success: [{beneficiaryId, approvedCount, rejectedCount}], failed: [{beneficiaryId, error}], skipped: [{beneficiaryId, reason}]}.
+ */
+function bulkReviewBeneficiaries(token, payload) {
+  return perfTime_('bulkReviewBeneficiaries', () => {
+    const user = requireSession_(token, ['ADMIN']);
+    payload = payload || {};
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    if (!items.length) throw new Error('لا توجد عناصر لمراجعتها بالجملة');
+
+    const success = [];
+    const failed = [];
+    const skipped = [];
+    items.forEach(entry => {
+      const beneficiaryId = cleanId_(entry && entry.beneficiaryId);
+      if (!beneficiaryId) {
+        skipped.push({beneficiaryId: String((entry && entry.beneficiaryId) || ''), reason: 'رقم مستفيد غير صالح'});
+        return;
+      }
+      try {
+        const result = reviewBeneficiaryNeeds(token, beneficiaryId, {
+          beneficiaryDecision: entry.beneficiaryDecision,
+          beneficiaryRejectReason: entry.beneficiaryRejectReason,
+          needDecisions: entry.needDecisions,
+          opId: entry.opId
+        });
+        success.push({beneficiaryId: beneficiaryId, approvedCount: result.approvedCount, rejectedCount: result.rejectedCount});
+      } catch (error) {
+        failed.push({beneficiaryId: beneficiaryId, error: error.message});
+      }
+    });
+
+    try {
+      audit_(user, 'مراجعة مستفيدين بالجملة', 'المستفيدون', '',
+        'محاولات: ' + items.length + ' — نجح: ' + success.length + '، فشل: ' + failed.length + '، تُجوهِل: ' + skipped.length);
+    } catch (auditError) {
+      Logger.log('تحذير: فشل تسجيل العملية بعد اكتمال المراجعة بالجملة فعليًا — traceId=' + requestMeta_().traceId + ' — ' + auditError.message);
+    }
+
+    return {ok: true, success: success, failed: failed, skipped: skipped};
+  });
+}
+
 function requiredIfRejected_(decision, reason, label) {
   const clean = cleanText_(reason, 500);
   if (decision === 'مرفوض' && !clean) throw new Error(label + ' إلزامي عند الرفض');

@@ -810,5 +810,78 @@ section('17) diagnoseNeedsIntegrity_ — قراءة فقط، تكتشف الأع
   assert('لا يُصلح أي شيء تلقائيًا (القيم الفاسدة ما زالت كما هي)', S.beneficiaryNeeds_(scenario.beneficiaryId)[0].deviceType === 'مكيف صحراوي');
 }
 
+/* ================================================================
+   18) Phase 3.2A — bulkReviewBeneficiaries (wrapper الاعتماد بالجملة)
+   ================================================================ */
+section('18) bulkReviewBeneficiaries: يعيد success/failed/skipped بدقة، ADMIN فقط، بلا تكرار قواعد المراجعة');
+{
+  const ctx = seedScenario(buildSandbox());
+  const { S, admin, assoc, assocSession, beneficiaryId } = ctx;
+  S.setBeneficiaryNeeds(assocSession.token, beneficiaryId, ['ثلاجة']);
+  const needId1 = needRows(S, beneficiaryId)[0].id;
+
+  const beneficiary2 = S.saveBeneficiary(assocSession.token, {
+    deviceTypes: ['فرن'], name: 'مستفيد دفعة 2', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+    phone: freshPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+  });
+  const needId2 = needRows(S, beneficiary2.id)[0].id;
+
+  // مستفيد ثالث: كل احتياجاته سترفض (يفشل شرط "احتياج معتمد واحد على الأقل" عمدًا لاختبار فشل عنصر واحد بلا إفساد البقية).
+  const beneficiary3 = S.saveBeneficiary(assocSession.token, {
+    deviceTypes: ['غسالة'], name: 'مستفيد دفعة 3 فاشل', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+    phone: freshPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+  });
+  const needId3 = needRows(S, beneficiary3.id)[0].id;
+
+  const otherAssocSession = S.createSession_({ id: 'USR-OTHER-BULK', name: 'جمعية أخرى', role: 'ASSOCIATION', associationId: 'ASC-999999' });
+  throws('ASSOCIATION لا يستطيع استدعاء bulkReviewBeneficiaries إطلاقًا',
+    () => S.bulkReviewBeneficiaries(otherAssocSession.token, { items: [{ beneficiaryId: beneficiaryId, beneficiaryDecision: 'معتمد', needDecisions: [{ needId: needId1, decision: 'معتمد' }] }] }),
+    'صلاحية');
+
+  const result = S.bulkReviewBeneficiaries(admin.token, {
+    items: [
+      { beneficiaryId: beneficiaryId, beneficiaryDecision: 'معتمد', needDecisions: [{ needId: needId1, decision: 'معتمد' }] },
+      { beneficiaryId: beneficiary2.id, beneficiaryDecision: 'معتمد', needDecisions: [{ needId: needId2, decision: 'معتمد' }] },
+      { beneficiaryId: beneficiary3.id, beneficiaryDecision: 'معتمد', needDecisions: [{ needId: needId3, decision: 'مرفوض', rejectReason: 'غير مؤهل' }] },
+      { beneficiaryId: '', beneficiaryDecision: 'معتمد', needDecisions: [] }
+    ]
+  });
+  assert('success يحمل بالضبط العنصرين الناجحين', result.success.length === 2
+    && result.success.some(s => s.beneficiaryId === beneficiaryId) && result.success.some(s => s.beneficiaryId === beneficiary2.id));
+  assert('failed يحمل العنصر الثالث (لا احتياج معتمد متبقٍّ) برسالة الخطأ', result.failed.length === 1
+    && result.failed[0].beneficiaryId === beneficiary3.id && /دون اعتماد احتياج واحد/.test(result.failed[0].error));
+  assert('skipped يحمل العنصر الرابع (رقم مستفيد فارغ)', result.skipped.length === 1);
+
+  assert('المستفيد الأول اعتُمد فعليًا', String(beneficiaryRow(S, beneficiaryId)['حالة مراجعة المستفيد']) === 'معتمد');
+  assert('المستفيد الثاني اعتُمد فعليًا', String(beneficiaryRow(S, beneficiary2.id)['حالة مراجعة المستفيد']) === 'معتمد');
+  assert('فشل المستفيد الثالث لم يُنتج أي اعتماد خاطئ له — حالته لا تزال تحت المراجعة كما كانت',
+    String(beneficiaryRow(S, beneficiary3.id)['حالة مراجعة المستفيد']) === 'تحت المراجعة');
+  assert('احتياج المستفيد الثالث لم يُمَسّ (لا يزال بانتظار المراجعة)',
+    String(S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', needId3)['حالة القرار']) === 'بانتظار المراجعة');
+}
+
+/* ================================================================
+   19) Phase 3.2A — فتح شاشة المراجعة لا يكتب شيئًا (Default checked واجهة فقط)
+   ================================================================ */
+section('19) استدعاء listBeneficiaries لا يكتب أي شيء — التحديد الافتراضي في الواجهة فقط، لا أثر خادمي');
+{
+  const ctx = seedScenario(buildSandbox());
+  const { S, admin, assocSession, beneficiaryId } = ctx;
+  S.setBeneficiaryNeeds(assocSession.token, beneficiaryId, ['ثلاجة']);
+  const beforeNeed = Object.assign({}, S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', needRows(S, beneficiaryId)[0].id));
+  const beforeBeneficiary = Object.assign({}, beneficiaryRow(S, beneficiaryId));
+  const auditCountBefore = S.readTable_('سجل العمليات').rows.length;
+
+  const list = S.listBeneficiaries(admin.token, { page: 1, pageSize: 25 });
+  assert('listBeneficiaries تنجح وتعيد المستفيد مع احتياجه بانتظار المراجعة (proposed-accepted لاحقًا في الواجهة فقط)',
+    list.ok && list.items.some(i => i.id === beneficiaryId && (i.pendingNeeds || []).length === 1));
+
+  const afterNeed = S.findById_('احتياجات المستفيدين', 'رقم الاحتياج', needRows(S, beneficiaryId)[0].id);
+  const afterBeneficiary = beneficiaryRow(S, beneficiaryId);
+  assert('صف الاحتياج لم يتغيّر إطلاقًا بمجرد القراءة/العرض', JSON.stringify(beforeNeed) === JSON.stringify(afterNeed));
+  assert('صف المستفيد لم يتغيّر إطلاقًا بمجرد القراءة/العرض', JSON.stringify(beforeBeneficiary) === JSON.stringify(afterBeneficiary));
+  assert('لا سجل عمليات جديد نتيجة القراءة وحدها', S.readTable_('سجل العمليات').rows.length === auditCountBefore);
+}
+
 console.log(failures === 0 ? '\n=== ALL PASS ===' : '\n=== ' + failures + ' FAILURE(S) ===');
 process.exit(failures === 0 ? 0 : 1);

@@ -474,6 +474,18 @@
     .review-answers{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 16px}
     .review-answers .tag.no{background:var(--canvas);color:var(--ink-soft)}
 
+    /* -------- جدول مراجعة المستفيدين واعتمادهم بالجملة (ADMIN) -------- */
+    .beneficiaries-table td,.beneficiaries-table th{vertical-align:top}
+    .beneficiaries-table .col-select{width:38px;text-align:center}
+    .beneficiaries-table input[type=checkbox]{width:18px;height:18px;accent-color:var(--zad-700);cursor:pointer}
+    .bulk-review-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;background:var(--gold-100);border:1px solid var(--gold-200);border-radius:var(--r-md);padding:12px 16px;margin-bottom:14px;font-size:13px}
+    .bulk-review-bar strong{color:var(--zad-800)}
+    .bulk-review-bar .btn{margin-inline-start:auto}
+    .review-needs-list{display:flex;flex-direction:column;gap:10px;margin:10px 0 18px}
+    .review-need-row{border:1px solid var(--line);border-radius:var(--r-md);padding:10px 12px;background:var(--surface)}
+    .review-need-row .reject-reason-field{margin-top:8px}
+    @media (max-width:640px){.bulk-review-bar .btn{margin-inline-start:0;width:100%}}
+
     /* -------- شارات صلاحية الترخيص وملف المرفق -------- */
     .badge{display:inline-flex;align-items:center;gap:5px;border-radius:var(--r-pill);padding:3px 10px;font-size:11px;font-weight:700}
     .badge-ok{background:#E7F5EC;color:#1E7B45}
@@ -955,6 +967,11 @@
       // أقسام "ثقيلة" لم تعد ضمن Bootstrap — تُجلب فقط عند فتح صفحتها.
       // null = لم تُجلَب بعد؛ كائن {loading,...} بعد أول طلب.
       lazy: {audit: null, activities: null, applications: null, beneficiaries: null, associations: null, devices: null, delegates: null},
+      // Phase 3.2A — استبعاد يدوي من دفعة الاعتماد الجماعي للمستفيدين
+      // (تحديد الواجهة فقط، لا يُكتب شيء أبدًا): {beneficiaryId: true}
+      // لمن استبعده الأدمن من "اعتماد القائمة" — أي مستفيد قابل للمراجعة
+      // لا يظهر مفتاحه هنا يُعتبر محدَّدًا افتراضيًا (Default checked).
+      beneficiaryReviewExcluded: {},
       // نموذج تقديم الجمعية (3 مراحل، بلا جلسة): step فقط في الذاكرة،
       // أما clientRequestId فيُحفظ أيضًا في localStorage (safeSession)
       // كي ينجو من إعادة تحميل الصفحة أثناء انتظار طويل غير مؤكَّد —
@@ -1231,10 +1248,25 @@
       for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i].name;
       return 'غير معيّن';
     }
+    /**
+     * تُفضِّل نسخة state.lazy.beneficiaries (مصدرها listBeneficiaries) إن
+     * كانت محمَّلة — هي وحدها التي تحمل حقول المراجعة/الاحتياجات الجديدة
+     * (reviewStatus/requestedNeeds/...، عبر attachNeedsSummaryToBeneficiaries_)
+     * — وإلا تتراجع لمصفوفة Bootstrap العادية (normalizeBeneficiary_ فقط،
+     * تكفي لصفحات أخرى كالأجهزة/المناديب التي لا تحتاج حقول المراجعة).
+     */
     function findBeneficiary(id) {
+      var lazyList = (state.lazy.beneficiaries && state.lazy.beneficiaries.items) || [];
+      for (var i = 0; i < lazyList.length; i++) if (lazyList[i].id === id) return lazyList[i];
       var list = state.data.beneficiaries || [];
-      for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+      for (var j = 0; j < list.length; j++) if (list[j].id === id) return list[j];
       return null;
+    }
+
+    /** مستفيد "قابل للمراجعة" الآن: لم يُحسَم قراره بعد وله احتياج واحد على الأقل بانتظار المراجعة فعليًا. */
+    function isBeneficiaryReviewable(item) {
+      var status = item.reviewStatus || '';
+      return (status === '' || status === 'تحت المراجعة') && !!(item.pendingNeeds && item.pendingNeeds.length);
     }
 
     /**
@@ -2317,8 +2349,9 @@
     /** مُرقَّمة خادميًا (listBeneficiaries) — بحث/فلترة حالة/فلتر جمعية (إدارة)/ترتيب كلها من الخادم، لا محليًا. */
     function renderBeneficiaries() {
       var bundle = state.lazy.beneficiaries || {};
-      var canManage = state.data.role === 'ASSOCIATION' || state.data.role === 'ADMIN';
-      var extra = state.data.role === 'ASSOCIATION'
+      var role = state.data.role;
+      var canManage = role === 'ASSOCIATION' || role === 'ADMIN';
+      var extra = role === 'ASSOCIATION'
         ? '<button class="btn btn-soft" data-act="bulk-import">⇧ إضافة بالجملة</button>' : '';
 
       if (bundle.loading) return skeletonCards(4);
@@ -2336,7 +2369,12 @@
       }
 
       var items = bundle.items || [];
-      var body = '<div class="cards">' + items.map(beneficiaryCard).join('') + '</div>';
+      // Phase 3.2A (القسم 1): جدول Responsive لدى ADMIN بدل البطاقات —
+      // الجمعية تبقى على البطاقات كما كانت (لا صلاحية اعتماد لها أصلًا).
+      var body = role === 'ADMIN'
+        ? beneficiariesTable(items)
+        : '<div class="cards">' + items.map(beneficiaryCard).join('') + '</div>';
+      var bulkBar = role === 'ADMIN' ? beneficiaryBulkReviewBar(items) : '';
 
       return toolbar({
         placeholder: 'ابحث بالاسم أو الرقم أو الجوال أو المنطقة/المدينة…',
@@ -2345,9 +2383,10 @@
         sortFields: [['name', 'الاسم'], ['city', 'المدينة'], ['createdAt', 'تاريخ الإضافة']],
         extra: extra,
         count: fmt(bundle.total || 0) + ' سجلًا'
-      }) + body + pagerControls('beneficiaries', bundle);
+      }) + bulkBar + body + pagerControls('beneficiaries', bundle);
     }
 
+    /** بطاقة مستفيد — تبقى مستخدَمة لدور الجمعية فقط الآن (ADMIN انتقل إلى جدول)، مُثراة بحالة المراجعة (القسم 5). */
     function beneficiaryCard(item) {
       var canManage = state.data.role === 'ASSOCIATION' || state.data.role === 'ADMIN';
       var canAssign = canManage && item.deliveryStatus !== 'تم التسليم';
@@ -2359,6 +2398,7 @@
           : '<button class="btn btn-soft btn-sm" data-act="assign-delegate" data-id="' + esc(item.id) + '">'
             + (item.delegateId ? 'تغيير المندوب' : 'تعيين مندوب') + '</button>';
       }
+      var reviewChip = item.needsSchemaReady ? ' ' + statusChip(item.reviewStatus || 'تحت المراجعة') : '';
       return '<article class="card"><div class="card-head"><div>'
         + '<h3>' + esc(item.name) + '</h3><p class="mono">' + esc(item.id) + '</p></div>'
         + statusChip(item.deliveryStatus) + '</div>'
@@ -2367,10 +2407,98 @@
         + (item.district ? ' · ' + esc(item.district) : '') + '</strong></div>'
         + '<div class="meta"><small>الأسرة</small><strong>' + fmt(item.familyCount) + ' أفراد'
         + (item.socialSecurity ? '، ضمان' : '') + '</strong></div></div>'
-        + '<div class="tags">' + needTags(item.needs) + ' ' + locationStatusChip(item) + '</div>'
+        + '<div class="tags">' + needTags(item.needs) + ' ' + locationStatusChip(item) + reviewChip + '</div>'
         + '<div class="card-actions">'
         + '<button class="btn btn-ghost btn-sm" data-act="view-beneficiary" data-id="' + esc(item.id) + '">التفاصيل</button>'
         + assignBtn + '</div></article>';
+    }
+
+    /**
+     * Phase 3.2A (القسم 1) — جدول مراجعة/إدارة المستفيدين لدى ADMIN.
+     * الأعمدة: تحديد (بلا تأثير إلا عند اعتماد القائمة صراحة)، المستفيد،
+     * الجمعية، حالة المراجعة، الاحتياجات (الأنواع المطلوبة)، قرارات
+     * الاحتياجات (حالة كل احتياج على حدة)، حالة التنفيذ (تجميع حالة
+     * التنفيذ للاحتياجات المعتمدة)، حالة التسليم، المندوب، ثم إجراء واحد
+     * (مراجعة لمن لا يزال قابلًا للمراجعة، تفاصيل لغيره).
+     */
+    function beneficiariesTable(items) {
+      if (!items.length) return emptyState({glyph: '⌕', title: 'لا نتائج مطابقة', body: 'جرّب تعديل كلمة البحث أو الفلتر.'});
+      var anyReviewable = items.some(isBeneficiaryReviewable);
+      var allSelected = anyReviewable && items.every(function (item) {
+        return !isBeneficiaryReviewable(item) || !state.beneficiaryReviewExcluded[item.id];
+      });
+      var rows = items.map(beneficiaryTableRow).join('');
+      return '<div class="table-wrap"><table class="data beneficiaries-table">'
+        + '<thead><tr>'
+        + '<th class="col-select"><label class="sr-only" for="selectAllReview">تحديد كل القابل للمراجعة</label>'
+        + '<input type="checkbox" id="selectAllReview" data-act="toggle-select-all-review"'
+        + (anyReviewable ? (allSelected ? ' checked' : '') : ' disabled') + '></th>'
+        + '<th>المستفيد</th><th>الجمعية</th><th>حالة المراجعة</th><th>الاحتياجات</th>'
+        + '<th>قرارات الاحتياجات</th><th>حالة التنفيذ</th><th>حالة التسليم</th><th>المندوب</th><th></th>'
+        + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+    }
+
+    function needFulfillmentCell(item) {
+      var approved = item.approvedNeeds || [];
+      if (!approved.length) return '<span class="muted">—</span>';
+      var order = [], counts = {};
+      approved.forEach(function (n) {
+        var status = n.fulfillmentStatus || 'استحقاق معتمد';
+        if (!counts[status]) { counts[status] = 0; order.push(status); }
+        counts[status]++;
+      });
+      return order.map(function (status) {
+        return '<span class="tag plain">' + esc(status) + (counts[status] > 1 ? ' ×' + fmt(counts[status]) : '') + '</span>';
+      }).join(' ');
+    }
+
+    /** شارة لكل احتياج مطلوب بحالة قراره الفعلية (معتمد/مرفوض/بانتظار المراجعة) — لا الاحتياج النصي القديم فقط. */
+    function needDecisionChips(item) {
+      if (!item.needsSchemaReady) return '<span class="muted">نظام الاحتياجات الجديد غير مُفعَّل بعد</span>';
+      var needs = item.requestedNeeds || [];
+      if (!needs.length) return '<span class="muted">لا يوجد</span>';
+      return needs.map(function (n) {
+        var label = (n.decisionStatus || 'بانتظار المراجعة');
+        return '<span class="tag' + (n.decisionStatus === 'مرفوض' ? ' no' : '') + '">'
+          + needGlyph(n.deviceType) + ' ' + esc(n.deviceType) + ' — ' + esc(label) + '</span>';
+      }).join(' ');
+    }
+
+    function beneficiaryTableRow(item) {
+      var reviewable = isBeneficiaryReviewable(item);
+      var selected = reviewable && !state.beneficiaryReviewExcluded[item.id];
+      var checkbox = reviewable
+        ? '<input type="checkbox" data-act="toggle-beneficiary-review" data-id="' + esc(item.id) + '"' + (selected ? ' checked' : '') + '>'
+        : '';
+      var actionBtn = reviewable
+        ? '<button class="btn btn-primary btn-sm" data-act="review-beneficiary" data-id="' + esc(item.id) + '">مراجعة</button>'
+        : '<button class="btn btn-ghost btn-sm" data-act="view-beneficiary" data-id="' + esc(item.id) + '">التفاصيل</button>';
+      return '<tr>'
+        + '<td class="col-select">' + checkbox + '</td>'
+        + '<td><strong>' + esc(item.name) + '</strong><br><span class="mono">' + esc(item.id) + '</span></td>'
+        + '<td>' + esc(associationName(item.associationId)) + '</td>'
+        + '<td>' + statusChip(item.needsSchemaReady ? (item.reviewStatus || 'تحت المراجعة') : item.status) + '</td>'
+        + '<td>' + needTags(item.needs) + '</td>'
+        + '<td>' + needDecisionChips(item) + '</td>'
+        + '<td>' + needFulfillmentCell(item) + '</td>'
+        + '<td>' + statusChip(item.deliveryStatus) + '</td>'
+        + '<td>' + esc(delegateName(item.delegateId)) + '</td>'
+        + '<td>' + actionBtn + '</td>'
+        + '</tr>';
+    }
+
+    /** شريط ملخّص حيّ فوق الجدول — بلا أي كتابة، يُحدَّث فور تبديل أي تحديد (القسم 3). */
+    function beneficiaryBulkReviewBar(items) {
+      var reviewable = items.filter(isBeneficiaryReviewable);
+      if (!reviewable.length) return '';
+      var selected = reviewable.filter(function (item) { return !state.beneficiaryReviewExcluded[item.id]; });
+      var approvingNeeds = selected.reduce(function (sum, item) { return sum + (item.pendingNeeds || []).length; }, 0);
+      return '<div class="bulk-review-bar">'
+        + '<span>محدَّدون للاعتماد: <strong>' + fmt(selected.length) + '</strong></span>'
+        + '<span>مستبعدون من هذه الدفعة: <strong>' + fmt(reviewable.length - selected.length) + '</strong></span>'
+        + '<span>احتياجات ستُعتمد: <strong>' + fmt(approvingNeeds) + '</strong></span>'
+        + '<button type="button" class="btn btn-primary btn-sm" data-act="bulk-approve-beneficiaries"' + (selected.length ? '' : ' disabled') + '>اعتماد القائمة</button>'
+        + '</div>';
     }
 
     function viewBeneficiary(id) {
@@ -2405,6 +2533,15 @@
         + '<div class="meta"><small>حالة التسليم</small><strong>' + esc(item.deliveryStatus) + '</strong></div>'
         + '<div class="meta"><small>المندوب</small><strong>' + esc(delegateName(item.delegateId)) + '</strong></div>'
         + '</div>'
+        // Phase 3.2A (القسم 5): حالة المراجعة وقرار كل احتياج — قراءة فقط
+        // هنا (لا صلاحية اعتماد إلا من جدول ADMIN عبر مراجعة مستفيد
+        // مخصَّصة)؛ تظهر لكل من ADMIN وASSOCIATION بلا تمييز، بلا أي
+        // حقل كتابة، فقط ما يخصّ الجمعية أصلًا (عزلها محفوظ في listBeneficiaries_).
+        + (item.needsSchemaReady ? '<h4 style="margin:18px 0 8px;color:var(--zad-800)">حالة المراجعة والاعتماد</h4>'
+          + '<div class="tags">' + statusChip(item.reviewStatus || 'تحت المراجعة') + '</div>'
+          + (item.reviewStatus === 'مرفوض' && item.beneficiaryRejectReason
+            ? '<p class="muted" style="font-size:13px;margin-top:8px">سبب الرفض: ' + esc(item.beneficiaryRejectReason) + '</p>' : '')
+          + '<div class="tags" style="margin-top:8px">' + needDecisionChips(item) + '</div>' : '')
         + '<h4 style="margin:18px 0 8px;color:var(--zad-800)">الاحتياج والأجهزة</h4>'
         + '<div class="tags">' + needTags(item.needs) + '</div>' + deviceTable
         + '<h4 style="margin:18px 0 8px;color:var(--zad-800)">التواريخ والملاحظات</h4>'
@@ -2428,6 +2565,217 @@
             + '" title="أكمل الإحداثيات على الخريطة أولًا">استكمال الموقع لتفعيل الإحالة</button>';
       }
       openModal('ملف المستفيد', body, footer, canSeeDelivery ? function () { loadDeliveryAttempts(item.id); } : null);
+    }
+
+    /**
+     * Phase 3.2A (القسم 2) — نافذة مراجعة مستفيد واحد لدى ADMIN فقط.
+     * كل احتياج بانتظار المراجعة يظهر مُحدَّدًا (proposed accepted)
+     * افتراضيًا — تحديد الواجهة فقط، بلا أي كتابة قبل الضغط الصريح على
+     * "حفظ القرار" (decideReviewBeneficiary). الاستدعاء الفعلي يمر حصرًا
+     * عبر reviewBeneficiaryNeeds الموجودة — Backend هو مصدر الحقيقة
+     * لقواعد الاعتماد/الرفض (سبب الرفض الإلزامي، الاحتياج المعتمد
+     * الواحد على الأقل...)، هذه النافذة لا تكرر تلك القواعد، فقط تمنع
+     * إرسالًا واضح الفشل مسبقًا لتجربة أوضح (الخادم يبقى الحكم النهائي).
+     */
+    function reviewBeneficiaryModal(id) {
+      var item = findBeneficiary(id);
+      if (!item) { toast('تعذر العثور على ملف المستفيد.', 'error'); return; }
+      if (!isBeneficiaryReviewable(item)) {
+        toast('لا توجد احتياجات بانتظار المراجعة لهذا المستفيد.', 'error');
+        return;
+      }
+
+      var needsHtml = item.pendingNeeds.map(function (n) {
+        return '<div class="review-need-row" data-need-id="' + esc(n.id) + '">'
+          + '<label class="choice"><input type="checkbox" data-act="toggle-need-approve" data-need="' + esc(n.id) + '" checked> '
+          + needGlyph(n.deviceType) + ' ' + esc(n.deviceType) + '</label>'
+          + '<div class="field reject-reason-field" style="display:none">'
+          + '<label>سبب استبعاد هذا الاحتياج (اختياري)</label>'
+          + '<textarea class="control" data-need-reason="' + esc(n.id) + '" maxlength="500"></textarea></div>'
+          + '</div>';
+      }).join('');
+
+      var decidedHtml = '';
+      var decided = (item.approvedNeeds || []).concat(item.rejectedNeeds || []);
+      if (decided.length) {
+        decidedHtml = '<h4 style="margin:18px 0 8px;color:var(--zad-800)">احتياجات محسومة سابقًا</h4>'
+          + '<div class="tags">' + decided.map(function (n) {
+            return '<span class="tag' + (n.decisionStatus === 'مرفوض' ? ' no' : '') + '">'
+              + needGlyph(n.deviceType) + ' ' + esc(n.deviceType) + ' — ' + esc(n.decisionStatus) + '</span>';
+          }).join('') + '</div>';
+      }
+
+      var body = '<div class="card-head"><div><h3>' + esc(item.name) + '</h3>'
+        + '<p class="mono">' + esc(item.id) + '</p></div>' + statusChip(item.reviewStatus || 'تحت المراجعة') + '</div>'
+        + '<div class="metas">'
+        + '<div class="meta"><small>الجمعية</small><strong>' + esc(associationName(item.associationId)) + '</strong></div>'
+        + '<div class="meta"><small>المنطقة والمدينة والحي</small><strong>' + esc(item.region) + ' · ' + esc(item.city)
+        + (item.district ? ' · ' + esc(item.district) : '') + '</strong></div>'
+        + '<div class="meta"><small>عدد الأفراد</small><strong>' + fmt(item.familyCount) + ' أفراد، '
+        + (item.socialSecurity ? 'مستفيد ضمان' : 'غير مستفيد ضمان') + '</strong></div>'
+        + '<div class="meta"><small>الحالة الاجتماعية</small><strong>' + esc(item.socialStatus || '—') + '</strong></div>'
+        + '<div class="meta"><small>الدخل الشهري</small><strong>' + money(item.income) + '</strong></div>'
+        + '</div>'
+        + '<h4 style="margin:18px 0 8px;color:var(--zad-800)">الاحتياجات المطلوبة (بانتظار المراجعة)</h4>'
+        + '<p class="hint">كل احتياج محدَّد افتراضيًا للاعتماد — أزل التحديد لاستبعاده (رفضه فرديًا)؛ لا يُكتب أي شيء حتى تضغط "حفظ القرار".</p>'
+        + '<div class="review-needs-list">' + needsHtml + '</div>'
+        + decidedHtml
+        + '<h4 style="margin:18px 0 8px;color:var(--zad-800)">قرار المستفيد</h4>'
+        + '<form id="reviewBeneficiaryForm" class="form-grid" novalidate>'
+        + '<div class="field span-2"><label>القرار النهائي</label><div class="choice-grid">'
+        + '<label class="choice"><input type="radio" name="beneficiaryDecision" value="معتمد" checked data-act="beneficiary-decision-radio"> اعتماد</label>'
+        + '<label class="choice"><input type="radio" name="beneficiaryDecision" value="مرفوض" data-act="beneficiary-decision-radio"> رفض المستفيد كليًا</label>'
+        + '</div></div>'
+        + '<div class="field span-2" id="beneficiaryRejectReasonField" style="display:none">'
+        + '<label for="f_beneficiaryRejectReason">سبب رفض المستفيد (إلزامي عند الرفض)</label>'
+        + '<textarea class="control" id="f_beneficiaryRejectReason" maxlength="500"></textarea></div>'
+        + '</form>';
+
+      var footer = '<button class="btn btn-ghost" data-act="close-modal">إلغاء</button>'
+        + '<button class="btn btn-primary" data-act="save-review-beneficiary" data-id="' + esc(item.id) + '">حفظ القرار</button>';
+      openModal('مراجعة مستفيد: ' + item.name, body, footer);
+    }
+
+    /** تُظهر/تُخفي حقل سبب استبعاد احتياج واحد فور تبديل تحديده — بلا أي كتابة. */
+    function toggleNeedApproveUI(checkbox) {
+      var row = checkbox.closest('.review-need-row');
+      if (!row) return;
+      var reasonField = row.querySelector('.reject-reason-field');
+      if (reasonField) reasonField.style.display = checkbox.checked ? 'none' : '';
+    }
+
+    /** عند اختيار "رفض المستفيد كليًا": يظهر سبب الرفض الإلزامي، وتُعطَّل مربّعات الاحتياجات (سيُرفض الجميع بالسبب الموحَّد بصرف النظر عنها — نفس قاعدة Backend). */
+    function toggleBeneficiaryDecisionUI(radio) {
+      var rejected = radio.value === 'مرفوض';
+      var field = $('#beneficiaryRejectReasonField');
+      if (field) field.style.display = rejected ? '' : 'none';
+      $$('.review-need-row input[type=checkbox]').forEach(function (cb) { cb.disabled = rejected; });
+    }
+
+    /**
+     * يبني payload تطابق reviewBeneficiaryNeeds تمامًا ويُرسله — كل
+     * التحقق الحاسم (سبب الرفض الإلزامي، احتياج معتمد واحد على الأقل)
+     * يُعاد فحصه هنا فقط لتجربة أوضح فورية؛ الخادم (reviewBeneficiaryNeeds_)
+     * هو من يفرضه فعليًا بصرف النظر عمّا يصل من هنا.
+     */
+    function decideReviewBeneficiary(id) {
+      var item = findBeneficiary(id);
+      if (!item) return;
+      var decisionRadio = $('input[name="beneficiaryDecision"]:checked');
+      var decision = decisionRadio ? decisionRadio.value : 'معتمد';
+      var rejectReasonField = $('#f_beneficiaryRejectReason');
+      var rejectReason = rejectReasonField ? rejectReasonField.value.trim() : '';
+      if (decision === 'مرفوض' && !rejectReason) {
+        if (rejectReasonField) { rejectReasonField.closest('.field').classList.add('invalid'); rejectReasonField.focus(); }
+        toast('سبب رفض المستفيد إلزامي.', 'error');
+        return;
+      }
+      var needDecisions = item.pendingNeeds.map(function (n) {
+        var checkbox = $('.review-need-row[data-need-id="' + n.id + '"] input[type=checkbox]');
+        var approved = checkbox ? checkbox.checked : true;
+        var reasonEl = $('[data-need-reason="' + n.id + '"]');
+        return {needId: n.id, decision: approved ? 'معتمد' : 'مرفوض', rejectReason: reasonEl ? reasonEl.value.trim() : ''};
+      });
+      if (decision === 'معتمد' && !needDecisions.some(function (d) { return d.decision === 'معتمد'; })) {
+        toast('لا يمكن اعتماد المستفيد دون إبقاء احتياج معتمد واحد على الأقل.', 'error');
+        return;
+      }
+      var opKey = 'review-beneficiary:' + id;
+      var opId = opIdFor(opKey);
+      busy(true);
+      api('reviewBeneficiaryNeeds', state.token, id, {
+        beneficiaryDecision: decision, beneficiaryRejectReason: rejectReason,
+        needDecisions: needDecisions, opId: opId
+      }).then(function () {
+        clearOpId(opKey);
+        delete state.beneficiaryReviewExcluded[id];
+        closeModal();
+        toast('تم حفظ قرار المراجعة.', 'success');
+        fetchLazyPage('beneficiaries', 'listBeneficiaries', (state.lazy.beneficiaries && state.lazy.beneficiaries.page) || 1);
+      }, reportError).finally(function () { busy(false); });
+    }
+
+    /**
+     * Phase 3.2A (القسم 3) — نافذة ملخّص إلزامية قبل أي كتابة فعلية:
+     * تُبنى من نفس القائمة المعروضة حاليًا (صفحة واحدة مُرقَّمة)، وتعرض
+     * الأعداد الأربعة المطلوبة بالضبط. "تأكيد اعتماد القائمة" هو الضغط
+     * الصريح الوحيد الذي يستدعي الخادم فعليًا.
+     */
+    function bulkApproveBeneficiariesModal() {
+      var items = (state.lazy.beneficiaries && state.lazy.beneficiaries.items) || [];
+      var reviewable = items.filter(isBeneficiaryReviewable);
+      var selected = reviewable.filter(function (item) { return !state.beneficiaryReviewExcluded[item.id]; });
+      if (!selected.length) { toast('لا يوجد مستفيدون محدَّدون للاعتماد.', 'error'); return; }
+      var excludedCount = reviewable.length - selected.length;
+      var approvingNeeds = selected.reduce(function (s, i) { return s + (i.pendingNeeds || []).length; }, 0);
+      var excludedNeeds = reviewable.reduce(function (s, i) { return s + (i.pendingNeeds || []).length; }, 0) - approvingNeeds;
+      var listHtml = '<ul class="review-list">' + selected.map(function (item) {
+        return '<li><b>' + esc(item.name) + '</b>' + esc(item.id) + ' — ' + fmt((item.pendingNeeds || []).length) + ' احتياج بانتظار الاعتماد</li>';
+      }).join('') + '</ul>';
+      var body = '<p>سيُعتمَد المستفيدون التالية أسماؤهم فورًا مع كل احتياجاتهم المعلَّقة حاليًا (لا رفض ضمن هذا الإجراء):</p>'
+        + listHtml
+        + '<div class="metas" style="margin-top:14px">'
+        + '<div class="meta"><small>مستفيدون سيُعتمدون</small><strong>' + fmt(selected.length) + '</strong></div>'
+        + '<div class="meta"><small>مستبعدون من هذه الدفعة</small><strong>' + fmt(excludedCount) + '</strong></div>'
+        + '<div class="meta"><small>احتياجات ستُعتمد</small><strong>' + fmt(approvingNeeds) + '</strong></div>'
+        + '<div class="meta"><small>احتياجات لن تُعتمد الآن</small><strong>' + fmt(excludedNeeds) + '</strong></div>'
+        + '</div>';
+      var footer = '<button class="btn btn-ghost" data-act="close-modal">إلغاء</button>'
+        + '<button class="btn btn-primary" data-act="confirm-bulk-approve-beneficiaries">تأكيد اعتماد القائمة</button>';
+      openModal('اعتماد قائمة المستفيدين (' + fmt(selected.length) + ')', body, footer);
+    }
+
+    /**
+     * الضغط الصريح الوحيد الذي يكتب فعليًا — يستدعي bulkReviewBeneficiaries
+     * (البند 3 من الطلب: wrapper صغير يعيد استخدام reviewBeneficiaryNeeds
+     * لكل عنصر، بلا تكرار أي قاعدة مراجعة). فشل عنصر واحد لا يمنع البقية،
+     * والنتيجة تُعرض success/failed بدقة.
+     */
+    function confirmBulkApproveBeneficiaries() {
+      var items = (state.lazy.beneficiaries && state.lazy.beneficiaries.items) || [];
+      var reviewable = items.filter(isBeneficiaryReviewable);
+      var selected = reviewable.filter(function (item) { return !state.beneficiaryReviewExcluded[item.id]; });
+      if (!selected.length) { closeModal(); return; }
+      var payloadItems = selected.map(function (item) {
+        return {
+          beneficiaryId: item.id, beneficiaryDecision: 'معتمد',
+          needDecisions: (item.pendingNeeds || []).map(function (n) { return {needId: n.id, decision: 'معتمد'}; }),
+          opId: opIdFor('bulk-review:' + item.id)
+        };
+      });
+      busy(true);
+      api('bulkReviewBeneficiaries', state.token, {items: payloadItems}).then(function (result) {
+        payloadItems.forEach(function (p) { clearOpId('bulk-review:' + p.beneficiaryId); });
+        (result.success || []).forEach(function (s) { delete state.beneficiaryReviewExcluded[s.beneficiaryId]; });
+        closeModal();
+        var successCount = (result.success || []).length;
+        var failedCount = (result.failed || []).length;
+        if (failedCount) {
+          toast('اعتُمد ' + fmt(successCount) + ' وفشل ' + fmt(failedCount) + ' — راجع القائمة للتفاصيل.', successCount ? 'warn' : 'error');
+        } else {
+          toast('تم اعتماد ' + fmt(successCount) + ' مستفيدًا بنجاح.', 'success');
+        }
+        fetchLazyPage('beneficiaries', 'listBeneficiaries', (state.lazy.beneficiaries && state.lazy.beneficiaries.page) || 1);
+      }, reportError).finally(function () { busy(false); });
+    }
+
+    /** تبديل تحديد مستفيد واحد ضمن دفعة الاعتماد الجماعي — تحديد واجهة فقط. */
+    function toggleBeneficiaryReviewSelection(checkbox) {
+      var id = checkbox.getAttribute('data-id');
+      if (checkbox.checked) delete state.beneficiaryReviewExcluded[id];
+      else state.beneficiaryReviewExcluded[id] = true;
+      render();
+    }
+
+    /** تحديد/إلغاء تحديد كل المستفيدين القابلين للمراجعة في الصفحة الحالية دفعة واحدة. */
+    function toggleSelectAllReview(checkbox) {
+      var items = (state.lazy.beneficiaries && state.lazy.beneficiaries.items) || [];
+      items.forEach(function (item) {
+        if (!isBeneficiaryReviewable(item)) return;
+        if (checkbox.checked) delete state.beneficiaryReviewExcluded[item.id];
+        else state.beneficiaryReviewExcluded[item.id] = true;
+      });
+      render();
     }
 
     /**
@@ -4946,6 +5294,10 @@
       'edit-beneficiary': function (el) { closeModal(); beneficiaryForm(el.getAttribute('data-id')); },
       'view-beneficiary': function (el) { viewBeneficiary(el.getAttribute('data-id')); },
       'save-beneficiary': saveBeneficiary,
+      'review-beneficiary': function (el) { reviewBeneficiaryModal(el.getAttribute('data-id')); },
+      'save-review-beneficiary': function (el) { decideReviewBeneficiary(el.getAttribute('data-id')); },
+      'bulk-approve-beneficiaries': bulkApproveBeneficiariesModal,
+      'confirm-bulk-approve-beneficiaries': confirmBulkApproveBeneficiaries,
       'assign-delegate': function (el) { closeModal(); assignDelegateModal(el.getAttribute('data-id')); },
       'save-assign': function (el) { saveAssign(el.getAttribute('data-id')); },
       'bulk-import': bulkImportModal,
@@ -5069,7 +5421,9 @@
       if (!el) return;
       var action = el.getAttribute('data-act');
       if (action === 'backdrop' || action === 'set-search' || action === 'set-filter'
-        || action === 'bulk-file' || action === 'proof-file' || action === 'license-file') return;
+        || action === 'bulk-file' || action === 'proof-file' || action === 'license-file'
+        || action === 'toggle-need-approve' || action === 'beneficiary-decision-radio'
+        || action === 'toggle-beneficiary-review' || action === 'toggle-select-all-review') return;
       if (action === 'call-fallback') { handleCallFallback(el.getAttribute('data-phone')); return; }
       var handler = CLICK_ACTIONS[action];
       if (!handler) return;
@@ -5133,6 +5487,10 @@
       if (action === 'license-file') { handleLicenseFile(el); return; }
       if (action === 'email-domain') { toggleEmailOtherDomain(); return; }
       if (action === 'pledge-gate') { updatePledgeGate(); return; }
+      if (action === 'toggle-need-approve') { toggleNeedApproveUI(el); return; }
+      if (action === 'beneficiary-decision-radio') { toggleBeneficiaryDecisionUI(el); return; }
+      if (action === 'toggle-beneficiary-review') { toggleBeneficiaryReviewSelection(el); return; }
+      if (action === 'toggle-select-all-review') { toggleSelectAllReview(el); return; }
     });
 
     /**
