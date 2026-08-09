@@ -1,5 +1,5 @@
 // ============================================================
-// منصة جمعية الزاد — Prisma schema (NODE-0)
+// منصة جمعية الزاد — Prisma schema (NODE-0 + NODE-0.1 Hardening)
 // ============================================================
 // هذا الملف هو Source of Truth الوحيد لبنية قاعدة البيانات. أي تعديل
 // على البنية يمر عبر migration جديدة هنا — ممنوع أي تعديل يدوي مباشر
@@ -8,14 +8,24 @@
 //
 // قرار معماري: Domain Model علائقي حقيقي، وليس نسخة حرفية من أوراق
 // Google Sheets القديمة. كل كيان يحمل Internal PK من نوع UUID
-// (uuidv7() — PostgreSQL 18 يدعمها أصلًا؛ ترتيب زمني قابل للفرز خلافًا
-// لـuuid v4 العشوائي)، وحقل publicCode منفصل تمامًا يحمل الرقم البشري
-// القديم (BEN-000001 ...) للعرض وربط بيانات الهجرة القديمة فقط — لا
-// يُستخدم أبدًا كـForeign Key.
+// (uuidv7()) — ترتيب زمني قابل للفرز خلافًا لـuuid v4 العشوائي — وحقل
+// publicCode منفصل تمامًا يحمل الرقم البشري القديم (BEN-000001 ...)
+// للعرض وربط بيانات الهجرة القديمة فقط — لا يُستخدم أبدًا كـForeign Key.
 //
-// النطاق: NODE-0 يصمم كل الكيانات المطلوبة لموازاة الميزات الحالية،
-// لكن لا يُطبَّق عليها أي منطق أعمال بعد (راجع platform/docs/
-// FEATURE_PARITY.md لحالة كل نطاق).
+// ملاحظة uuidv7() (NODE-0.1): PostgreSQL 18 يوفّرها كدالة مدمجة في
+// pg_catalog. لضمان التوافق مع أي نسخة PostgreSQL أقدم (بيئات تطوير/CI
+// قد لا تشغّل 18 بعد)، تُنشئ الـmigration الأولى أيضًا دالة توافقية
+// public.uuidv7() (polyfill قياسي عبر gen_random_uuid() + overlay
+// الطابع الزمني). على PostgreSQL 18 الدالة المدمجة في pg_catalog تُستدعى
+// أولًا تلقائيًا (search_path يضع pg_catalog قبل public ضمنيًا) فتُشِلّ
+// النسخة التوافقية بصمت (لا تعارض تسمية — مخطَّطان مختلفان)، وعلى أي
+// نسخة أقدم تُستخدم النسخة التوافقية. راجع migration.sql للتفاصيل.
+//
+// النطاق: NODE-0 صمّم كل الكيانات المطلوبة لموازاة الميزات الحالية.
+// NODE-0.1 (هذه المراجعة) تُقوّي القيود البنيوية (Source of Truth
+// وحيد للتخصيص، عزل tenant حقيقي بقيود DB، صحة enum لنوع الجهاز، صحة
+// موقع الجهاز) — لا يزال بلا أي منطق أعمال مُطبَّق (راجع
+// platform/docs/FEATURE_PARITY.md).
 
 generator client {
   provider = "prisma-client-js"
@@ -93,7 +103,11 @@ enum NeedFulfillmentStatus {
   DELIVERED
 }
 
-enum NeedDeviceType {
+/// وحّدت (NODE-0.1) لتكون enum داخلي واحد ثابت مستخدَم حرفيًا عبر ثلاثة
+/// كيانات معًا: BeneficiaryNeed.deviceType (إلزامي)، وReceiptItem.deviceType
+/// وDeviceUnit.deviceType (اختياري + legacyDeviceTypeText — راجع تعليق كل
+/// حقل). لا نص حر لأي سجل تشغيلي جديد.
+enum DeviceType {
   REFRIGERATOR
   OVEN
   WASHING_MACHINE
@@ -295,7 +309,7 @@ model Association {
 }
 
 // ============================================================
-// 5) association_applications + application_answers
+// 5) association_applications
 // ============================================================
 model AssociationApplication {
   id                     String            @id @default(dbgenerated("uuidv7()")) @db.Uuid
@@ -330,6 +344,9 @@ model AssociationApplication {
   @@map("association_applications")
 }
 
+// ============================================================
+// 6) application_answers
+// ============================================================
 /// أسئلة القبول الثمانية (Config.gs APPLICATION_QUESTIONS) — صف لكل سؤال بدل أعمدة ثابتة، حتى تُضاف/تُعدَّل الأسئلة مستقبلًا دون migration بنيوية.
 model ApplicationAnswer {
   id            String                  @id @default(dbgenerated("uuidv7()")) @db.Uuid
@@ -344,7 +361,7 @@ model ApplicationAnswer {
 }
 
 // ============================================================
-// 6) reference_values
+// 7) reference_values
 // ============================================================
 model ReferenceValue {
   id       String              @id @default(dbgenerated("uuidv7()")) @db.Uuid
@@ -357,12 +374,18 @@ model ReferenceValue {
   parent   ReferenceValue?     @relation("ReferenceValueHierarchy", fields: [parentId], references: [id])
   children ReferenceValue[]    @relation("ReferenceValueHierarchy")
 
-  @@unique([type, value, parentId])
+  /// NODE-0.1: القيد البسيط `@@unique([type, value, parentId])` كان غير
+  /// كافٍ — PostgreSQL يعتبر كل NULL مختلفًا عن غيره في UNIQUE عادي، فلا
+  /// يمنع تكرار جذور (parentId IS NULL) بنفس (type, value). استُبدل
+  /// بـpartial unique indexes حقيقية في migration.sql:
+  ///   ux_reference_values_root  ON (type, value) WHERE parent_id IS NULL
+  ///   ux_reference_values_child ON (type, value, parent_id) WHERE parent_id IS NOT NULL
+  @@index([type, active, sortOrder])
   @@map("reference_values")
 }
 
 // ============================================================
-// 7) beneficiaries
+// 8) beneficiaries
 // ============================================================
 model Beneficiary {
   id                     String                  @id @default(dbgenerated("uuidv7()")) @db.Uuid
@@ -404,20 +427,25 @@ model Beneficiary {
   deliveryMissions            DeliveryMission[]
   deliveryAttempts             DeliveryAttempt[]
 
+  /// NODE-0.1: مفتاح فريد مركَّب (id, associationId) — يسمح لكيانات تابعة
+  /// (BeneficiaryNeed, DeviceAllocation, DeliveryMission...) بالإشارة إلى
+  /// هذا المستفيد عبر composite foreign key يفرض تطابق association_id
+  /// حقيقيًا على مستوى قاعدة البيانات، لا فقط عبر Service validation.
+  @@unique([id, associationId])
   @@index([associationId, reviewStatus])
   @@index([phone])
   @@map("beneficiaries")
 }
 
 // ============================================================
-// 8) beneficiary_needs
+// 9) beneficiary_needs
 // ============================================================
 model BeneficiaryNeed {
   id                String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
   publicCode        String                 @unique @map("public_code")
   beneficiaryId     String                 @map("beneficiary_id") @db.Uuid
   associationId     String                 @map("association_id") @db.Uuid
-  deviceType        NeedDeviceType         @map("device_type")
+  deviceType        DeviceType             @map("device_type")
 
   decisionStatus    NeedDecisionStatus     @default(PENDING) @map("decision_status")
   rejectReason      String?                @map("reject_reason")
@@ -429,12 +457,19 @@ model BeneficiaryNeed {
   createdAt         DateTime               @default(now()) @map("created_at")
   updatedAt         DateTime               @updatedAt @map("updated_at")
 
-  beneficiary       Beneficiary            @relation(fields: [beneficiaryId], references: [id])
+  /// NODE-0.1: composite FK (beneficiaryId, associationId) → beneficiaries(id, associationId)
+  /// يمنع DB-level أن يشير احتياج جمعية A إلى مستفيد جمعية B — لا يكفي
+  /// وجود association_id على الصف نفسه، بل يجب أن يطابق association_id
+  /// الفعلي للمستفيد المُشار إليه، وإلا رفض PostgreSQL الإدراج/التحديث.
+  beneficiary       Beneficiary            @relation(fields: [beneficiaryId, associationId], references: [id, associationId])
   association       Association            @relation(fields: [associationId], references: [id])
   reviewedBy        Account?               @relation("NeedReviewedBy", fields: [reviewedById], references: [id])
-  deviceUnits       DeviceUnit[]
   allocations       DeviceAllocation[]
 
+  /// NODE-0.1: composite unique إضافي — يتيح composite FK من
+  /// device_allocations إليه (device_allocations.beneficiary_need_id +
+  /// association_id → beneficiary_needs.id + association_id).
+  @@unique([id, associationId])
   /// القيد الحالي: مستفيد واحد لا يملك أكثر من احتياج واحد من نفس device_type.
   @@unique([beneficiaryId, deviceType])
   @@index([beneficiaryId])
@@ -443,7 +478,7 @@ model BeneficiaryNeed {
 }
 
 // ============================================================
-// 9) files
+// 10) files
 // ============================================================
 model FileObject {
   id              String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
@@ -474,7 +509,7 @@ model FileObject {
 }
 
 // ============================================================
-// 10) receipt_batches
+// 11) receipt_batches
 // ============================================================
 model ReceiptBatch {
   id                  String             @id @default(dbgenerated("uuidv7()")) @db.Uuid
@@ -511,14 +546,24 @@ model ReceiptBatch {
 }
 
 // ============================================================
-// 11) receipt_items
+// 12) receipt_items
 // ============================================================
 model ReceiptItem {
   id               String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
   publicCode       String       @unique @map("public_code")
   receiptBatchId   String       @map("receipt_batch_id") @db.Uuid
 
-  deviceType       String       @map("device_type")
+  /// NODE-0.1: وُحِّد إلى enum DeviceType — اختياري فقط لاستيعاب سجلات
+  /// تاريخية مستوردة (NODE-8) بنوع خارج الثلاثة المعتمدة؛ كل بند جديد
+  /// يُنشأ من خدمة apps/api (لا استيراد) **يجب** أن يحمل deviceType غير
+  /// فارغ — يُفرض ذلك على مستوى Service (DTO validation)، لا عبر NOT
+  /// NULL في DB لأن DB نفسها تستضيف كلا الحالتين. راجع CHECK constraint
+  /// ck_receipt_items_device_type_present في migration.sql (يفرض على
+  /// الأقل حقلًا واحدًا من الاثنين غير فارغ دائمًا).
+  deviceType        DeviceType? @map("device_type")
+  /// نص تاريخي حر خارج enum الثلاثة — أرشيف هجرة فقط، ليس Source of
+  /// Truth لأي سجل تشغيلي جديد (راجع platform/docs/LEGACY_DATA_MIGRATION.md).
+  legacyDeviceTypeText String?   @map("legacy_device_type_text")
   spec             String?
 
   sentQty          Int          @map("sent_qty")
@@ -541,7 +586,7 @@ model ReceiptItem {
 }
 
 // ============================================================
-// 12) receipt_damage_photos
+// 13) receipt_damage_photos
 // ============================================================
 model ReceiptDamagePhoto {
   id            String      @id @default(dbgenerated("uuidv7()")) @db.Uuid
@@ -558,19 +603,37 @@ model ReceiptDamagePhoto {
 }
 
 // ============================================================
-// 13) device_units
+// 14) device_units
 // ============================================================
 model DeviceUnit {
   id                 String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
   publicCode         String        @unique @map("public_code")
 
   associationId      String        @map("association_id") @db.Uuid
-  deviceType         String        @map("device_type")
+  /// NODE-0.1: نفس مبدأ ReceiptItem.deviceType أعلاه — enum اختياري +
+  /// legacyDeviceTypeText للأرشيف التاريخي فقط، إلزامي منطقيًا لأي جهاز
+  /// جديد على مستوى Service. راجع ck_device_units_device_type_present.
+  deviceType         DeviceType?   @map("device_type")
+  legacyDeviceTypeText String?     @map("legacy_device_type_text")
   spec               String?
   receiptItemId      String?       @map("receipt_item_id") @db.Uuid
 
   status             DeviceStatus  @default(WAREHOUSE)
 
+  /// NODE-0.1 — القاعدة الحاكمة: "لا يوجد جهاز بموقع مجهول". Invariant
+  /// موثَّق ومفروض جزئيًا عبر CHECK constraint (ck_device_units_location_ref_by_type
+  /// في migration.sql):
+  ///   WAREHOUSE / DAMAGED_HOLDING → currentLocationRef يجب أن يكون NULL
+  ///     (الموقع معروف بالفعل عبر association_id على هذا السجل نفسه —
+  ///     لا كيان "مستودع"/"حجز تلف" مستقل بعد في NODE-0.1؛ لا Custody
+  ///     workflow جديدة تُبنى هنا)
+  ///   DELEGATE / BENEFICIARY → currentLocationRef إلزامي (NOT NULL)
+  /// ما لا تفرضه DB (polymorphic FK غير ممكن بعمود واحد يشير لجدولين
+  /// مختلفين حسب النوع): أن currentLocationRef يشير فعليًا لصف موجود في
+  /// accounts (دور DELEGATE) أو beneficiaries حسب النوع، وأن ذلك الحساب/
+  /// المستفيد ينتمي لنفس associationId. هذا يبقى Service-level validation
+  /// صريحًا يُطبَّق عند تفعيل InventoryModule/DeliveriesModule فعليًا
+  /// (NODE-4/NODE-6) — موثَّق أيضًا في platform/docs/ARCHITECTURE.md.
   currentLocationType DeviceMovementLocationType @map("current_location_type")
   currentLocationRef  String?      @map("current_location_ref") @db.Uuid
 
@@ -582,15 +645,21 @@ model DeviceUnit {
   receiptItem          ReceiptItem? @relation(fields: [receiptItemId], references: [id])
   allocations           DeviceAllocation[]
   movements              DeviceMovement[]
-  beneficiaryNeed          BeneficiaryNeed? @relation(fields: [beneficiaryNeedId], references: [id])
-  beneficiaryNeedId          String?  @map("beneficiary_need_id") @db.Uuid
 
+  /// NODE-0.1 (القسم 1): أُزيل الربط المباشر deviceUnit → beneficiaryNeed
+  /// (beneficiaryNeedId/beneficiaryNeed) الذي كان موجودًا في NODE-0 —
+  /// كان يمثّل مصدر حقيقة مزدوجًا للتخصيص إلى جانب DeviceAllocation. الآن
+  /// DeviceAllocation (بحقلها status=ACTIVE الفريد جزئيًا لكل device)
+  /// هي المصدر الوحيد لمعرفة أي احتياج/مستفيد مخصَّص له هذا الجهاز
+  /// حاليًا؛ لا beneficiaryId مباشر أيضًا على DeviceUnit لنفس السبب. حالة
+  /// الجهاز (status) + وجود DeviceAllocation نشطة هي ما يحدِّد التخصيص.
+  @@unique([id, associationId])
   @@index([associationId, deviceType, status])
   @@map("device_units")
 }
 
 // ============================================================
-// 14) device_allocations
+// 15) device_allocations
 // ============================================================
 model DeviceAllocation {
   id               String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
@@ -607,9 +676,13 @@ model DeviceAllocation {
   createdById               String?        @map("created_by") @db.Uuid
   source                     String?        /// اسم العملية المصدر (allocator/manual/rebalance) — للتتبع فقط
 
-  device               DeviceUnit          @relation(fields: [deviceId], references: [id])
-  beneficiaryNeed        BeneficiaryNeed   @relation(fields: [beneficiaryNeedId], references: [id])
-  beneficiary              Beneficiary     @relation(fields: [beneficiaryId], references: [id])
+  /// NODE-0.1 (القسم 2): composite FKs تفرض أن الجهاز/الاحتياج/المستفيد
+  /// الثلاثة المشار إليهم من هذا التخصيص ينتمون فعليًا لنفس associationId
+  /// المسجَّل على صف التخصيص نفسه — لا drift ممكن على مستوى DB، لا فقط
+  /// Service validation.
+  device               DeviceUnit          @relation(fields: [deviceId, associationId], references: [id, associationId])
+  beneficiaryNeed        BeneficiaryNeed   @relation(fields: [beneficiaryNeedId, associationId], references: [id, associationId])
+  beneficiary              Beneficiary     @relation(fields: [beneficiaryId, associationId], references: [id, associationId])
   association                Association   @relation(fields: [associationId], references: [id])
   createdBy                    Account?    @relation("AllocationCreatedBy", fields: [createdById], references: [id])
 
@@ -619,7 +692,7 @@ model DeviceAllocation {
 }
 
 // ============================================================
-// 15) device_movements (append-only)
+// 16) device_movements (append-only)
 // ============================================================
 model DeviceMovement {
   id               String                     @id @default(dbgenerated("uuidv7()")) @db.Uuid
@@ -638,7 +711,8 @@ model DeviceMovement {
   performedById    String?                    @map("performed_by") @db.Uuid
   createdAt        DateTime                   @default(now()) @map("created_at")
 
-  device           DeviceUnit                 @relation(fields: [deviceId], references: [id])
+  /// NODE-0.1 (القسم 2): composite FK يمنع تسجيل حركة لجهاز لا ينتمي فعليًا لنفس associationId المسجَّل على صف الحركة.
+  device           DeviceUnit                 @relation(fields: [deviceId, associationId], references: [id, associationId])
   association      Association                @relation(fields: [associationId], references: [id])
   performedBy      Account?                   @relation("MovementPerformedBy", fields: [performedById], references: [id])
 
@@ -647,7 +721,7 @@ model DeviceMovement {
 }
 
 // ============================================================
-// 16) delivery_missions
+// 17) delivery_missions
 // ============================================================
 model DeliveryMission {
   id                String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
@@ -664,8 +738,13 @@ model DeliveryMission {
   createdAt         DateTime        @default(now()) @map("created_at")
   updatedAt         DateTime        @updatedAt @map("updated_at")
 
-  beneficiary       Beneficiary     @relation(fields: [beneficiaryId], references: [id])
+  /// NODE-0.1 (القسم 2): composite FK يمنع مهمة تسليم لجمعية A تشير إلى مستفيد جمعية B.
+  beneficiary       Beneficiary     @relation(fields: [beneficiaryId, associationId], references: [id, associationId])
   association       Association     @relation(fields: [associationId], references: [id])
+  /// NOTE: مطابقة الجمعية للمندوب المُعيَّن (delegateAccountId) تبقى
+  /// Service-level فقط (لم تُطلَب composite FK لها صراحة في هذه المرحلة؛
+  /// accounts.association_id nullable أصلًا لأن ADMIN بلا جمعية) — راجع
+  /// بند 8 في تقرير الإغلاق.
   delegate          Account?        @relation("MissionDelegate", fields: [delegateAccountId], references: [id])
   attempts          DeliveryAttempt[]
 
@@ -675,7 +754,7 @@ model DeliveryMission {
 }
 
 // ============================================================
-// 17) delivery_attempts (append-only، تمثل ورقة "التسليمات")
+// 18) delivery_attempts (append-only، تمثل ورقة "التسليمات")
 // ============================================================
 model DeliveryAttempt {
   id                        String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
@@ -705,7 +784,7 @@ model DeliveryAttempt {
 }
 
 // ============================================================
-// 18) activities
+// 19) activities
 // ============================================================
 model Activity {
   id               String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
@@ -730,7 +809,7 @@ model Activity {
 }
 
 // ============================================================
-// 19) activity_evidence
+// 20) activity_evidence
 // ============================================================
 model ActivityEvidence {
   id               String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
@@ -748,7 +827,7 @@ model ActivityEvidence {
 }
 
 // ============================================================
-// 20) audit_logs (append-only)
+// 21) audit_logs (append-only)
 // ============================================================
 model AuditLog {
   id              String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
@@ -773,7 +852,7 @@ model AuditLog {
 }
 
 // ============================================================
-// 21) idempotency_keys
+// 22) idempotency_keys
 // ============================================================
 model IdempotencyKey {
   id            String               @id @default(dbgenerated("uuidv7()")) @db.Uuid
@@ -793,7 +872,7 @@ model IdempotencyKey {
 }
 
 // ============================================================
-// 22) system_settings
+// 23) system_settings
 // ============================================================
 model SystemSetting {
   key       String   @id
@@ -804,7 +883,7 @@ model SystemSetting {
 }
 
 // ============================================================
-// 23) outbox_events (Transactional Outbox)
+// 24) outbox_events (Transactional Outbox)
 // ============================================================
 model OutboxEvent {
   id           String            @id @default(dbgenerated("uuidv7()")) @db.Uuid

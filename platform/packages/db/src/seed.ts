@@ -3,7 +3,7 @@
  * هنا. تُشغَّل عبر `npm run db:seed` من جذر platform/ (أو `prisma db
  * seed` داخل packages/db). آمنة لإعادة التشغيل (upsert بكل مكان).
  */
-import { PrismaClient, AccountRole, AccountStatus, AssociationStatus, AuthCredentialType, BeneficiaryReviewStatus, NeedDecisionStatus, NeedDeviceType } from '../generated/client';
+import { PrismaClient, AccountRole, AccountStatus, AssociationStatus, AuthCredentialType, BeneficiaryReviewStatus, NeedDecisionStatus, DeviceType } from '../generated/client';
 import { randomBytes, scryptSync } from 'node:crypto';
 
 const prisma = new PrismaClient();
@@ -113,13 +113,13 @@ async function main() {
     });
 
     await prisma.beneficiaryNeed.upsert({
-      where: { beneficiaryId_deviceType: { beneficiaryId: beneficiary.id, deviceType: NeedDeviceType.REFRIGERATOR } },
+      where: { beneficiaryId_deviceType: { beneficiaryId: beneficiary.id, deviceType: DeviceType.REFRIGERATOR } },
       update: {},
       create: {
         publicCode: `NED-${seedAssoc.code.slice(-6)}`,
         beneficiaryId: beneficiary.id,
         associationId: association.id,
-        deviceType: NeedDeviceType.REFRIGERATOR,
+        deviceType: DeviceType.REFRIGERATOR,
         decisionStatus: NeedDecisionStatus.PENDING,
       },
     });

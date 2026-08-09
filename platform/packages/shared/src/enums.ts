@@ -72,8 +72,14 @@ export enum NeedFulfillmentStatus {
   DELIVERED = 'DELIVERED',
 }
 
-/** أنواع الاحتياج الجديدة المعتمدة فقط — Config.gs NEW_NEED_DEVICE_TYPES. */
-export enum NeedDeviceType {
+/**
+ * أنواع الجهاز المعتمدة فقط — Config.gs NEW_NEED_DEVICE_TYPES. enum
+ * داخلي واحد موحَّد (NODE-0.1) عبر BeneficiaryNeed.deviceType (إلزامي)
+ * وReceiptItem.deviceType/DeviceUnit.deviceType (اختياري + حقل
+ * legacyDeviceTypeText نصي منفصل للأرشيف التاريخي فقط — راجع
+ * platform/packages/db/prisma/schema.prisma وplatform/docs/STATE_MAPPING.md).
+ */
+export enum DeviceType {
   REFRIGERATOR = 'REFRIGERATOR',
   OVEN = 'OVEN',
   WASHING_MACHINE = 'WASHING_MACHINE',

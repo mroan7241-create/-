@@ -12,7 +12,7 @@
   "scripts": {
     "lint": "npm run lint --workspace apps/api && npm run lint --workspace apps/web",
     "typecheck": "npm run typecheck --workspace apps/api && npm run typecheck --workspace apps/web && npm run typecheck --workspace packages/db && npm run typecheck --workspace packages/shared",
-    "test": "npm run test --workspace apps/api --if-present && npm run test --workspace apps/web --if-present",
+    "test": "npm run test --workspace apps/api --if-present && npm run test --workspace apps/web --if-present && npm run test --workspace packages/db --if-present",
     "build": "npm run build --workspace packages/shared && npm run build --workspace packages/db && npm run build --workspace apps/api && npm run build --workspace apps/web",
     "prisma:validate": "npm run prisma:validate --workspace packages/db",
     "prisma:generate": "npm run prisma:generate --workspace packages/db",

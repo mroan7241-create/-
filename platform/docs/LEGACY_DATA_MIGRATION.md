@@ -64,11 +64,20 @@ PostgreSQL (المنصة الجديدة)
 4. association_applications + application_answers (أرشيف تاريخي فقط)
 5. beneficiaries (بما فيها legacy_status/legacy_needs_text كحقول أرشيف)
 6. beneficiary_needs
-7. receipt_batches + receipt_items + receipt_damage_photos
+7. receipt_batches + receipt_items (النوع القديم لكل بند يُطابَق مقابل
+   enum DeviceType الثلاثة الجديدة إن أمكن → device_type؛ غير ذلك
+   → legacy_device_type_text فقط، device_type يبقى NULL — راجع
+   DATA_MODEL.md §14 وSTATE_MAPPING.md §11) + receipt_damage_photos
 8. device_units (من سجلات "الأجهزة" القديمة — current_location_type
-   يُشتق من الحالة القديمة، راجع STATE_MAPPING.md §8)
+   يُشتق من الحالة القديمة، راجع STATE_MAPPING.md §8؛ نفس مطابقة
+   device_type/legacy_device_type_text المذكورة أعلاه لبنود الاستلام؛
+   current_location_ref يُشتق من "رقم المندوب"/"رقم المستفيد" القديم
+   حسب current_location_type — يجب أن يحترم استيراد كل صف CHECK
+   constraint ck_device_units_location_ref_by_type من أول كتابة، لا بعدها)
 9. device_allocations (يُشتق من ربط "رقم المستفيد"/"رقم الاحتياج" على
-   الجهاز القديم — active فقط للأجهزة غير "تم التسليم"/"تالف")
+   الجهاز القديم — active فقط للأجهزة غير "تم التسليم"/"تالف". **لا**
+   يُكتب أي beneficiaryNeedId مباشر على device_units — device_allocations
+   هي المصدر الوحيد بعد NODE-0.1، راجع DATA_MODEL.md §11)
 10. device_movements (سجل تاريخي — إن لم يوجد سجل حركة قديم مفصَّل،
     يُنشأ سطر واحد "IMPORTED" لكل جهاز بدل تاريخ مفقود، موثَّق كذلك)
 11. delivery_missions + delivery_attempts (من ورقة "التسليمات" القديمة)

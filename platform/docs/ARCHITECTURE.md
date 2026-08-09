@@ -114,6 +114,47 @@ NODE-4) — القواعد المعتمدة (`RELEASE.md`/`StateRules.gs`) ال�
   `LockService.getScriptLock()` في النظام القديم لكن بحبيبة أدق (لكل
   جمعية، لا قفل عالمي واحد على المشروع كله).
 
+## 4.1) NODE-0.1 — Database Integrity Hardening (تمّت)
+
+قبل بدء NODE-1، خضع النموذج لتقوية بنيوية دون أي منطق أعمال جديد —
+24 كيانًا إجمالًا (association_applications وapplication_answers
+كيانان منفصلان، راجع `DATA_MODEL.md`):
+
+1. **مصدر حقيقة وحيد للتخصيص**: أُزيل الربط المباشر
+   `device_units.beneficiary_need_id`/`beneficiaryNeed` (كان مصدر حقيقة
+   مزدوجًا إلى جانب `device_allocations`). لا `beneficiaryId` مباشر
+   أُضيف بدلًا منه — `device_allocations` (بقيدَي التفرّد الجزئيَّين لكل
+   device/beneficiary_need) هي المصدر الوحيد الآن.
+2. **Tenant integrity بقيود DB حقيقية**: composite foreign keys
+   `(id, associationId)` بدل الاعتماد على `association_id` denormalized
+   وحده — `beneficiary_needs→beneficiaries`،
+   `device_allocations→device_units/beneficiary_needs/beneficiaries`،
+   `device_movements→device_units`، `delivery_missions→beneficiaries`.
+   PostgreSQL يرفض الآن أي إدراج/تحديث يحاول ربط سجل بجمعية لا تطابق
+   association_id الفعلي للكيان المُشار إليه — لا فقط Service
+   validation. اختُبر عمليًا بـ12+ حالة ضد PostgreSQL حقيقي (راجع
+   `packages/db/test/db-integrity.test.ts`).
+3. **Reference values uniqueness صحيحة**: partial unique indexes
+   (`ux_reference_values_root` لـ`parent_id IS NULL`،
+   `ux_reference_values_child` لـ`parent_id IS NOT NULL`) بدل قيد بسيط
+   كان عاجزًا عن منع تكرار الجذور (NULL != NULL في UNIQUE عادي).
+4. **Device type موحَّد**: enum `DeviceType` واحد ثابت عبر
+   `beneficiary_needs`/`receipt_items`/`device_units`. الأخيران اختياريان
+   (nullable) + `legacyDeviceTypeText` للأرشيف التاريخي فقط، مع CHECK
+   يفرض DB-level حضور أحد الحقلين دائمًا. الإلزام الكامل (enum غير فارغ
+   لكل سجل جديد) يبقى Service-level (DTO validation، NODE-4).
+5. **Device location invariant**: CHECK constraint يفرض تناسق
+   `current_location_ref` حسب `current_location_type` (`WAREHOUSE`/
+   `DAMAGED_HOLDING` → NULL؛ `DELEGATE`/`BENEFICIARY` → NOT NULL).
+   Polymorphic FK حقيقي (يشير لـ`accounts` أو `beneficiaries` حسب
+   النوع) غير ممكن في PostgreSQL بعمود واحد — يبقى Service-level صريحًا
+   عند NODE-4/NODE-6.
+6. **`uuidv7()` توافقية**: الـmigration الأولى تُنشئ دالة `public.uuidv7()`
+   (polyfill قياسي عبر `pgcrypto`/`gen_random_uuid()`) بحيث تعمل هذه
+   المنصة على أي PostgreSQL ≥ 13 محليًا/CI دون انتظار توفّر PostgreSQL 18
+   فعليًا؛ على PostgreSQL 18 تُستخدم الدالة المدمجة تلقائيًا (search_path
+   يقدّم pg_catalog دومًا) بلا أي تعارض تسمية.
+
 ## 5) هوية جمعية الزاد وRTL
 
 المرجع الوحيد للهوية البصرية هو `Index.html` على الفرع القديم — ألوان

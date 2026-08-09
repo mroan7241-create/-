@@ -1,3 +1,35 @@
+-- ============================================================
+-- Preamble (NODE-0.1): دالة uuidv7() توافقية
+-- ============================================================
+-- PostgreSQL 18 يوفّر uuidv7() كدالة مدمجة في pg_catalog. لضمان أن هذه
+-- الـmigration تعمل على أي نسخة PostgreSQL >= 13 (بيئات تطوير/CI قد لا
+-- تشغّل 18 بعد)، نُنشئ هنا نسخة توافقية بنفس الاسم في مخطط "public".
+--
+-- لا تعارض تسمية مع النسخة المدمجة في PostgreSQL 18: search_path
+-- الافتراضي يضع pg_catalog قبل public ضمنيًا حتى لو لم يُذكر صراحة، لذا
+-- على PostgreSQL 18 كل استدعاء غير مؤهَّل لـ`uuidv7()` يحل تلقائيًا إلى
+-- pg_catalog.uuidv7() المدمجة (الأحدث والأدق)، وتبقى public.uuidv7()
+-- هنا بلا استخدام فعلي (معرَّفة فقط، غير ضارة). على أي نسخة أقدم يُستخدم
+-- هذا polyfill فعليًا.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE OR REPLACE FUNCTION public.uuidv7() RETURNS uuid
+LANGUAGE sql VOLATILE PARALLEL SAFE AS $$
+  SELECT encode(
+    set_bit(
+      set_bit(
+        overlay(uuid_send(gen_random_uuid()) placing
+          substring(int8send((extract(epoch from clock_timestamp()) * 1000)::bigint) from 3 for 6)
+          from 1 for 6
+        ),
+        52, 1
+      ),
+      53, 1
+    ),
+    'hex'
+  )::uuid;
+$$;
+
 -- CreateEnum
 CREATE TYPE "AccountRole" AS ENUM ('ADMIN', 'ASSOCIATION', 'DELEGATE');
 
@@ -26,7 +58,7 @@ CREATE TYPE "NeedDecisionStatus" AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 CREATE TYPE "NeedFulfillmentStatus" AS ENUM ('APPROVED_ENTITLEMENT', 'AWAITING_DEVICE', 'DEVICE_READY', 'AWAITING_DELEGATE_ASSIGNMENT', 'ASSIGNED_TO_DELEGATE_PENDING', 'OUT_WITH_DELEGATE', 'DEFERRED', 'AWAITING_RETURN_CONFIRMATION', 'RETURNED_TO_ASSOCIATION_WAREHOUSE', 'DELIVERED');
 
 -- CreateEnum
-CREATE TYPE "NeedDeviceType" AS ENUM ('REFRIGERATOR', 'OVEN', 'WASHING_MACHINE');
+CREATE TYPE "DeviceType" AS ENUM ('REFRIGERATOR', 'OVEN', 'WASHING_MACHINE');
 
 -- CreateEnum
 CREATE TYPE "DeviceStatus" AS ENUM ('WAREHOUSE', 'ALLOCATED', 'WITH_DELEGATE', 'DELIVERED', 'DAMAGED');
@@ -216,7 +248,7 @@ CREATE TABLE "beneficiary_needs" (
     "public_code" TEXT NOT NULL,
     "beneficiary_id" UUID NOT NULL,
     "association_id" UUID NOT NULL,
-    "device_type" "NeedDeviceType" NOT NULL,
+    "device_type" "DeviceType" NOT NULL,
     "decision_status" "NeedDecisionStatus" NOT NULL DEFAULT 'PENDING',
     "reject_reason" TEXT,
     "reviewed_by" UUID,
@@ -272,7 +304,8 @@ CREATE TABLE "receipt_items" (
     "id" UUID NOT NULL DEFAULT uuidv7(),
     "public_code" TEXT NOT NULL,
     "receipt_batch_id" UUID NOT NULL,
-    "device_type" TEXT NOT NULL,
+    "device_type" "DeviceType",
+    "legacy_device_type_text" TEXT,
     "spec" TEXT,
     "sent_qty" INTEGER NOT NULL,
     "good_qty" INTEGER NOT NULL DEFAULT 0,
@@ -302,7 +335,8 @@ CREATE TABLE "device_units" (
     "id" UUID NOT NULL DEFAULT uuidv7(),
     "public_code" TEXT NOT NULL,
     "association_id" UUID NOT NULL,
-    "device_type" TEXT NOT NULL,
+    "device_type" "DeviceType",
+    "legacy_device_type_text" TEXT,
     "spec" TEXT,
     "receipt_item_id" UUID,
     "status" "DeviceStatus" NOT NULL DEFAULT 'WAREHOUSE',
@@ -311,7 +345,6 @@ CREATE TABLE "device_units" (
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
     "delivered_at" TIMESTAMP(3),
-    "beneficiary_need_id" UUID,
 
     CONSTRAINT "device_units_pkey" PRIMARY KEY ("id")
 );
@@ -507,7 +540,7 @@ CREATE INDEX "association_applications_status_idx" ON "association_applications"
 CREATE UNIQUE INDEX "application_answers_application_id_question_key_key" ON "application_answers"("application_id", "question_key");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "reference_values_type_value_parent_id_key" ON "reference_values"("type", "value", "parent_id");
+CREATE INDEX "reference_values_type_active_sort_order_idx" ON "reference_values"("type", "active", "sort_order");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "beneficiaries_public_code_key" ON "beneficiaries"("public_code");
@@ -519,6 +552,9 @@ CREATE INDEX "beneficiaries_association_id_review_status_idx" ON "beneficiaries"
 CREATE INDEX "beneficiaries_phone_idx" ON "beneficiaries"("phone");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "beneficiaries_id_association_id_key" ON "beneficiaries"("id", "association_id");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "beneficiary_needs_public_code_key" ON "beneficiary_needs"("public_code");
 
 -- CreateIndex
@@ -526,6 +562,9 @@ CREATE INDEX "beneficiary_needs_beneficiary_id_idx" ON "beneficiary_needs"("bene
 
 -- CreateIndex
 CREATE INDEX "beneficiary_needs_association_id_decision_status_fulfillmen_idx" ON "beneficiary_needs"("association_id", "decision_status", "fulfillment_status");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "beneficiary_needs_id_association_id_key" ON "beneficiary_needs"("id", "association_id");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "beneficiary_needs_beneficiary_id_device_type_key" ON "beneficiary_needs"("beneficiary_id", "device_type");
@@ -559,6 +598,9 @@ CREATE UNIQUE INDEX "device_units_public_code_key" ON "device_units"("public_cod
 
 -- CreateIndex
 CREATE INDEX "device_units_association_id_device_type_status_idx" ON "device_units"("association_id", "device_type", "status");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "device_units_id_association_id_key" ON "device_units"("id", "association_id");
 
 -- CreateIndex
 CREATE INDEX "device_allocations_association_id_status_idx" ON "device_allocations"("association_id", "status");
@@ -627,7 +669,7 @@ ALTER TABLE "beneficiaries" ADD CONSTRAINT "beneficiaries_association_id_fkey" F
 ALTER TABLE "beneficiaries" ADD CONSTRAINT "beneficiaries_reviewed_by_fkey" FOREIGN KEY ("reviewed_by") REFERENCES "accounts"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "beneficiary_needs" ADD CONSTRAINT "beneficiary_needs_beneficiary_id_fkey" FOREIGN KEY ("beneficiary_id") REFERENCES "beneficiaries"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "beneficiary_needs" ADD CONSTRAINT "beneficiary_needs_beneficiary_id_association_id_fkey" FOREIGN KEY ("beneficiary_id", "association_id") REFERENCES "beneficiaries"("id", "association_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "beneficiary_needs" ADD CONSTRAINT "beneficiary_needs_association_id_fkey" FOREIGN KEY ("association_id") REFERENCES "associations"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -669,16 +711,13 @@ ALTER TABLE "device_units" ADD CONSTRAINT "device_units_association_id_fkey" FOR
 ALTER TABLE "device_units" ADD CONSTRAINT "device_units_receipt_item_id_fkey" FOREIGN KEY ("receipt_item_id") REFERENCES "receipt_items"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "device_units" ADD CONSTRAINT "device_units_beneficiary_need_id_fkey" FOREIGN KEY ("beneficiary_need_id") REFERENCES "beneficiary_needs"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "device_allocations" ADD CONSTRAINT "device_allocations_device_id_association_id_fkey" FOREIGN KEY ("device_id", "association_id") REFERENCES "device_units"("id", "association_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "device_allocations" ADD CONSTRAINT "device_allocations_device_id_fkey" FOREIGN KEY ("device_id") REFERENCES "device_units"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "device_allocations" ADD CONSTRAINT "device_allocations_beneficiary_need_id_association_id_fkey" FOREIGN KEY ("beneficiary_need_id", "association_id") REFERENCES "beneficiary_needs"("id", "association_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "device_allocations" ADD CONSTRAINT "device_allocations_beneficiary_need_id_fkey" FOREIGN KEY ("beneficiary_need_id") REFERENCES "beneficiary_needs"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "device_allocations" ADD CONSTRAINT "device_allocations_beneficiary_id_fkey" FOREIGN KEY ("beneficiary_id") REFERENCES "beneficiaries"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "device_allocations" ADD CONSTRAINT "device_allocations_beneficiary_id_association_id_fkey" FOREIGN KEY ("beneficiary_id", "association_id") REFERENCES "beneficiaries"("id", "association_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "device_allocations" ADD CONSTRAINT "device_allocations_association_id_fkey" FOREIGN KEY ("association_id") REFERENCES "associations"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -687,7 +726,7 @@ ALTER TABLE "device_allocations" ADD CONSTRAINT "device_allocations_association_
 ALTER TABLE "device_allocations" ADD CONSTRAINT "device_allocations_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "accounts"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "device_movements" ADD CONSTRAINT "device_movements_device_id_fkey" FOREIGN KEY ("device_id") REFERENCES "device_units"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "device_movements" ADD CONSTRAINT "device_movements_device_id_association_id_fkey" FOREIGN KEY ("device_id", "association_id") REFERENCES "device_units"("id", "association_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "device_movements" ADD CONSTRAINT "device_movements_association_id_fkey" FOREIGN KEY ("association_id") REFERENCES "associations"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -696,7 +735,7 @@ ALTER TABLE "device_movements" ADD CONSTRAINT "device_movements_association_id_f
 ALTER TABLE "device_movements" ADD CONSTRAINT "device_movements_performed_by_fkey" FOREIGN KEY ("performed_by") REFERENCES "accounts"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "delivery_missions" ADD CONSTRAINT "delivery_missions_beneficiary_id_fkey" FOREIGN KEY ("beneficiary_id") REFERENCES "beneficiaries"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "delivery_missions" ADD CONSTRAINT "delivery_missions_beneficiary_id_association_id_fkey" FOREIGN KEY ("beneficiary_id", "association_id") REFERENCES "beneficiaries"("id", "association_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "delivery_missions" ADD CONSTRAINT "delivery_missions_association_id_fkey" FOREIGN KEY ("association_id") REFERENCES "associations"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -736,10 +775,96 @@ ALTER TABLE "idempotency_keys" ADD CONSTRAINT "idempotency_keys_account_id_fkey"
 
 
 -- ============================================================
--- قيود بنيوية إضافية لا يدعمها Prisma schema مباشرة (partial unique
--- indexes بشرط WHERE) — أُضيفت يدويًا بعد توليد الـmigration الأساسية
--- من `prisma migrate diff`. توثيق القرار في schema.prisma (تعليق فوق
--- device_allocations) وplatform/docs/DATA_MODEL.md.
+-- NODE-0.1 (القسم 1) — Source of Truth الوحيد للتخصيص
+-- ============================================================
+-- device_units لم يعد يحمل عمود beneficiary_need_id (أُزيل من schema.prisma
+-- بالكامل قبل توليد هذه الـmigration من الصفر — لا عمود متروك لتفريغه
+-- هنا). DeviceAllocation (بقيدَي التفرّد الجزئيَّين أدناه) هي المصدر
+-- الوحيد لمعرفة تخصيص أي جهاز حاليًا.
+
+-- ============================================================
+-- NODE-0.1 (القسم 2) — Tenant / Association Integrity: composite FKs
+-- ============================================================
+-- الجزء الأكبر من هذا القسم مُولَّد تلقائيًا أعلاه من schema.prisma
+-- (composite foreign keys: beneficiary_needs→beneficiaries،
+-- device_allocations→device_units/beneficiary_needs/beneficiaries،
+-- device_movements→device_units، delivery_missions→beneficiaries) —
+-- راجع تعليقات "NODE-0.1 (القسم 2)" في schema.prisma لشرح كل واحدة.
+-- لا SQL يدوي إضافي مطلوب هنا لهذا القسم.
+
+-- ============================================================
+-- NODE-0.1 (القسم 3) — Reference Values uniqueness (partial indexes)
+-- ============================================================
+-- القيد البسيط UNIQUE(type, value, parent_id) كان غير كافٍ: PostgreSQL
+-- يعامل كل NULL كقيمة مختلفة في UNIQUE عادي، فلا يمنع تكرار الجذور
+-- (parent_id IS NULL). لذلك لم يُدرَج أي @@unique بديل في schema.prisma
+-- لهذا الجدول — الفرض الحقيقي هنا فقط عبر partial unique indexes:
+
+-- يمنع تكرار جذر (parent_id IS NULL) بنفس (type, value) — مثال: نوع
+-- REGION بنفس القيمة مرتين بلا أب.
+CREATE UNIQUE INDEX "ux_reference_values_root"
+  ON "reference_values" ("type", "value")
+  WHERE "parent_id" IS NULL;
+
+-- يمنع تكرار child بنفس (type, value) تحت نفس الأب تحديدًا — نفس child
+-- (بنفس type/value) تحت أبوين مختلفين يبقى مسموحًا (مثال: مدينة بنفس
+-- الاسم تحت منطقتين مختلفتين — متوافق مع النموذج الهرمي الحالي).
+CREATE UNIQUE INDEX "ux_reference_values_child"
+  ON "reference_values" ("type", "value", "parent_id")
+  WHERE "parent_id" IS NOT NULL;
+
+-- ============================================================
+-- NODE-0.1 (القسم 4) — Device Type integrity
+-- ============================================================
+-- device_type أصبح enum اختياري (DeviceType?) على receipt_items
+-- وdevice_units لاستيعاب سجلات تاريخية مستوردة خارج الأنواع الثلاثة
+-- المعتمدة (راجع legacy_device_type_text). القيد أدناه يفرض DB-level أن
+-- كل صف يحمل على الأقل أحد الحقلين غير فارغ دائمًا — لا صف بلا أي دلالة
+-- لنوع الجهاز إطلاقًا. "device_type إلزامي لكل سجل تشغيلي جديد" يبقى
+-- Service-level (DTO validation عند الإنشاء الفعلي في NODE-4)، لأن DB
+-- لا يمكنها تمييز "سجل جديد" عن "سجل مستورَد تاريخيًا" بذاتها.
+ALTER TABLE "receipt_items"
+  ADD CONSTRAINT "ck_receipt_items_device_type_present"
+  CHECK ("device_type" IS NOT NULL OR "legacy_device_type_text" IS NOT NULL);
+
+ALTER TABLE "device_units"
+  ADD CONSTRAINT "ck_device_units_device_type_present"
+  CHECK ("device_type" IS NOT NULL OR "legacy_device_type_text" IS NOT NULL);
+
+-- ============================================================
+-- NODE-0.1 (القسم 5) — Device location integrity
+-- ============================================================
+-- Invariant الحاكم: "لا يوجد جهاز بموقع مجهول". PostgreSQL لا يمكنها فرض
+-- Foreign Key متعدد الأشكال (عمود واحد current_location_ref يشير لجدول
+-- accounts أو beneficiaries حسب current_location_type) — هذا الجزء يبقى
+-- Service-level validation صريحًا (يُطبَّق فعليًا عند تفعيل
+-- InventoryModule/DeliveriesModule في NODE-4/NODE-6؛ راجع
+-- platform/docs/ARCHITECTURE.md وplatform/docs/DATA_MODEL.md).
+--
+-- ما تفرضه DB فعليًا الآن: تناسق حضور/غياب current_location_ref حسب
+-- current_location_type —
+--   WAREHOUSE / DAMAGED_HOLDING: association_id على الصف نفسه يكفي
+--     لمعرفة "الجمعية/الموقع" (لا كيان مستودع مستقل بعد) → ref يجب أن
+--     يكون NULL (لا مرجع غامض لكيان غير موجود).
+--   DELEGATE / BENEFICIARY: المرجع (حساب مندوب أو مستفيد) إلزامي.
+ALTER TABLE "device_units"
+  ADD CONSTRAINT "ck_device_units_location_ref_by_type"
+  CHECK (
+    (
+      "current_location_type" IN ('WAREHOUSE', 'DAMAGED_HOLDING')
+      AND "current_location_ref" IS NULL
+    )
+    OR
+    (
+      "current_location_type" IN ('DELEGATE', 'BENEFICIARY')
+      AND "current_location_ref" IS NOT NULL
+    )
+  );
+
+-- ============================================================
+-- من migration NODE-0 الأصلية (device_allocations وreceipt_items) —
+-- محفوظة كما هي بعد إعادة إنشاء الـmigration من الصفر (القسم 7: لا
+-- بيانات Production بعد، فأُعيد التوليد بدل تراكم migrations صغيرة).
 -- ============================================================
 
 -- جهاز واحد لا يملك أكثر من تخصيص ACTIVE واحد في وقت واحد.
@@ -752,9 +877,8 @@ CREATE UNIQUE INDEX "ux_device_allocations_active_need"
   ON "device_allocations" ("beneficiary_need_id")
   WHERE "status" = 'ACTIVE';
 
--- ============================================================
--- CHECK constraints — بنود محضر الاستلام (receipt_items)
--- ============================================================
+-- بنود محضر الاستلام: الكميات لا يمكن أن تكون سالبة، والكمية المرسلة
+-- يجب أن تكون موجبة دائمًا.
 ALTER TABLE "receipt_items"
   ADD CONSTRAINT "ck_receipt_items_sent_qty_positive" CHECK ("sent_qty" > 0);
 
@@ -769,11 +893,9 @@ ALTER TABLE "receipt_items"
 
 -- التحقق النهائي (good + damaged + missing = sent) يُفرض عبر Database
 -- CHECK constraint هنا أيضًا كخط دفاع أخير على مستوى البيانات، بالإضافة
--- إلى فرضه داخل transaction عند التأكيد في apps/api (راجع
--- platform/docs/ARCHITECTURE.md، قسم "Database Transactions") — القيمة
--- الافتراضية للأعمدة الثلاثة صفر قبل التأكيد، لذا هذا القيد لا يمنع
--- إنشاء بند بانتظار التأكيد (0 + 0 + 0 != sent_qty)، فهو مطبَّق فقط بعد
--- أن تكتب عملية التأكيد الكميات الثلاث فعليًا ضمن نفس الـtransaction.
+-- إلى فرضه داخل transaction عند التأكيد في apps/api. الكميات الثلاث صفر
+-- افتراضيًا قبل التأكيد (حالة "لم يُؤكَّد بعد" مسموحة)، لكن فور كتابة أي
+-- قيمة فعلية تُفرض المطابقة الكاملة.
 ALTER TABLE "receipt_items"
   ADD CONSTRAINT "ck_receipt_items_quantities_reconcile"
   CHECK (

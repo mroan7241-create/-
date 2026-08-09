@@ -1,4 +1,6 @@
 erDiagram
+    %% 24 كيانًا إجمالًا (association_applications وapplication_answers
+    %% كيانان منفصلان) — راجع platform/docs/DATA_MODEL.md وschema.prisma.
     ACCOUNT ||--o{ AUTH_CREDENTIAL : has
     ACCOUNT ||--o{ AUTH_SESSION : has
     ACCOUNT }o--o| ASSOCIATION : "belongs to (nullable)"
@@ -22,7 +24,9 @@ erDiagram
     BENEFICIARY ||--o{ DELIVERY_ATTEMPT : has
     BENEFICIARY }o--o| ACCOUNT : "reviewed by"
 
-    BENEFICIARY_NEED ||--o{ DEVICE_UNIT : "fulfilled by"
+    %% NODE-0.1: لا علاقة مباشرة BENEFICIARY_NEED↔DEVICE_UNIT بعد الآن —
+    %% أُزيل الربط المزدوج؛ DEVICE_ALLOCATION هي المصدر الوحيد للتخصيص
+    %% (الجهاز مرتبط بالاحتياج عبر DEVICE_ALLOCATION فقط، لا FK مباشر).
     BENEFICIARY_NEED ||--o{ DEVICE_ALLOCATION : has
     BENEFICIARY_NEED }o--o| ACCOUNT : "reviewed by"
 
@@ -113,16 +117,18 @@ erDiagram
         uuid id PK
         string public_code UK
         uuid association_id FK
+        enum device_type "nullable — legacy_device_type_text لسجلات مستوردة خارج enum"
+        string legacy_device_type_text "nullable"
         enum status
         enum current_location_type
-        string current_location_ref "nullable"
+        string current_location_ref "nullable — CHECK يفرض NOT NULL لـDELEGATE/BENEFICIARY فقط"
     }
 
     DEVICE_ALLOCATION {
         uuid id PK
-        uuid device_id FK
-        uuid beneficiary_need_id FK
-        uuid beneficiary_id FK
+        uuid device_id FK "composite FK مع association_id"
+        uuid beneficiary_need_id FK "composite FK مع association_id"
+        uuid beneficiary_id FK "composite FK مع association_id"
         enum status "ACTIVE unique per device+need (partial index)"
     }
 
@@ -144,6 +150,8 @@ erDiagram
         uuid id PK
         string public_code UK
         uuid receipt_batch_id FK
+        enum device_type "nullable — legacy_device_type_text لسجلات مستوردة خارج enum"
+        string legacy_device_type_text "nullable"
         int sent_qty "CHECK > 0"
         int good_qty "CHECK >= 0"
         int damaged_qty "CHECK >= 0"

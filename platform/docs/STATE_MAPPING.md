@@ -250,15 +250,23 @@ RECEIVED_WITH_DISCREPANCIES        → (نهائية)
 
 ---
 
-## 11) NeedDeviceType (أنواع الاحتياج المعتمدة)
+## 11) DeviceType (أنواع الجهاز المعتمدة)
 
 **المصدر**: `Config.gs` → `NEW_NEED_DEVICE_TYPES` (محصورة عمدًا في ثلاثة فقط — منفصلة عن `REFERENCE_SEED_DEVICE_TYPES` الأوسع تاريخيًا).
 
-| Legacy (عربي) | Internal enum (`NeedDeviceType`) |
+| Legacy (عربي) | Internal enum (`DeviceType`) |
 |---|---|
 | ثلاجة | `REFRIGERATOR` |
 | فرن | `OVEN` |
 | غسالة | `WASHING_MACHINE` |
+
+**NODE-0.1**: وُحِّد enum واحد باسم `DeviceType` (لا `NeedDeviceType`
+منفصل) عبر `beneficiary_needs`/`receipt_items`/`device_units` معًا —
+إلزامي على `beneficiary_needs` (يطابق قيد النظام القديم عند تسجيل
+احتياج جديد)، واختياري على `receipt_items`/`device_units` مع حقل أرشيف
+منفصل `legacyDeviceTypeText` للقيم التاريخية خارج الأنواع الثلاثة (ورقة
+"الأجهزة" القديمة كانت تسمح بنطاق أوسع). راجع `DATA_MODEL.md` §14
+و`LEGACY_DATA_MIGRATION.md`.
 
 ---
 

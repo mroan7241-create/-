@@ -4,6 +4,9 @@
 Truth). هذا الملف شرح نصي مختصر للقرارات غير الواضحة من القراءة
 المباشرة للـschema، بالإضافة إلى `ERD.mmd` (رسم Mermaid).
 
+**عدد الكيانات: 24** (association_applications وapplication_answers
+كيانان منفصلان — عدد نماذج `model` الفعلي في `schema.prisma`، لا 23).
+
 ## مبادئ عامة
 
 - **PK**: UUID (`uuidv7()`) على كل كيان. **لا** استخدام `publicCode`
@@ -56,10 +59,20 @@ Prisma schema لا يدعم `@@unique` بشرط `WHERE` مباشرة. لذلك:
 يحل محل الحقل المسطَّح `'رقم المستفيد'` على الجهاز في النظام القديم.
 `current_location_type` هو enum (`DeviceMovementLocationType`:
 `WAREHOUSE`/`DELEGATE`/`BENEFICIARY`/`DAMAGED_HOLDING`)، و
-`current_location_ref` مرجع اختياري (معرّف مندوب أو مستفيد) حسب النوع
-— **لا يوجد جهاز بموقع غير معروف** (نفس القاعدة المطلوبة صراحة)، لأن
-كل تحديث لهذا الحقل يجب أن يترافق داخل نفس Transaction مع `INSERT` في
-`device_movements` (راجع ARCHITECTURE.md §3).
+`current_location_ref` مرجع اختياري (معرّف مندوب أو مستفيد) حسب النوع.
+
+**NODE-0.1**: قاعدة "لا يوجد جهاز بموقع مجهول" مفروضة الآن جزئيًا
+عبر CHECK constraint حقيقي (`ck_device_units_location_ref_by_type`):
+`WAREHOUSE`/`DAMAGED_HOLDING` يجب أن يكون `current_location_ref` فيهما
+`NULL` (الجمعية معروفة بالفعل عبر `association_id` على السجل نفسه، لا
+كيان مستودع مستقل بعد)، و`DELEGATE`/`BENEFICIARY` يجب أن يكون المرجع
+غير فارغ (`NOT NULL`). ما لا تفرضه DB (polymorphic FK غير ممكن بعمود
+واحد يشير لجدولين مختلفين حسب النوع): أن `current_location_ref` يشير
+فعليًا لصف موجود في `accounts` (دور DELEGATE) أو `beneficiaries` حسب
+النوع، وأن ذلك السجل ينتمي لنفس `association_id`. هذا يبقى Service-level
+validation صريحًا يُطبَّق عند تفعيل InventoryModule/DeliveriesModule
+فعليًا (NODE-4/NODE-6). كل تحديث لهذا الحقل يجب أن يترافق أيضًا داخل نفس
+Transaction مع `INSERT` في `device_movements` (راجع ARCHITECTURE.md §3).
 
 ### 5) `receipt_items` — CHECK constraints
 
@@ -121,6 +134,101 @@ BeneficiaryNeeds.gs). **لا Notification Engine كامل الآن** — الأ�
 الثلاثة المدرجة (`BENEFICIARY_APPROVED`, `RECEIPT_CONFIRMED`,
 `STOCK_INCREASED`) أمثلة توضيحية فقط لما سيُنشَر لاحقًا، بلا أي مستهلك
 (`consumer`) مُنفَّذ بعد.
+
+### 11) NODE-0.1 — Source of Truth الوحيد للتخصيص (إزالة الربط المزدوج)
+
+`device_units` كان يحمل في NODE-0 حقلًا مباشرًا
+`beneficiaryNeedId`/`beneficiaryNeed` إلى جانب كيان `device_allocations`
+المستقل — مصدر حقيقة مزدوج لنفس المعنى (أي احتياج مخصَّص له هذا الجهاز
+حاليًا). أُزيل هذا الربط بالكامل في NODE-0.1، **ولم يُضَف** `beneficiaryId`
+مباشر بدلًا منه. المصدر الوحيد الآن: حالة الجهاز (`device_units.status`)
++ وجود `device_allocations` نشطة (`status = 'ACTIVE'`) — والتي بحكم
+partial unique index (البند 3 أعلاه) لا يمكن أن تتكرر لنفس الجهاز أو
+لنفس الاحتياج في نفس اللحظة.
+
+### 12) NODE-0.1 — Tenant / Association Integrity (composite foreign keys)
+
+`association_id` denormalized عمدًا على كل كيان تابع لجمعية (لتحسين
+tenant filtering والأداء — لا يتطلب كل استعلام JOIN إلى الكيان الأب
+لمعرفة الجمعية). المخاطرة: drift — سجل يحمل `association_id` مختلفًا
+عن association_id الكيان الفعلي الذي يشير إليه (مثلًا احتياج لجمعية A
+يشير خطأً إلى مستفيد جمعية B).
+
+الحل: composite unique keys `(id, associationId)` على الكيانات الأب
+(`beneficiaries`, `beneficiary_needs`, `device_units`) + composite
+foreign keys من الكيانات التابعة تشير إلى هذين العمودين معًا، لا `id`
+فقط:
+
+```
+beneficiary_needs   (beneficiary_id, association_id) → beneficiaries(id, association_id)
+device_allocations  (device_id, association_id)       → device_units(id, association_id)
+device_allocations  (beneficiary_need_id, association_id) → beneficiary_needs(id, association_id)
+device_allocations  (beneficiary_id, association_id)  → beneficiaries(id, association_id)
+device_movements    (device_id, association_id)       → device_units(id, association_id)
+delivery_missions   (beneficiary_id, association_id)  → beneficiaries(id, association_id)
+```
+
+PostgreSQL يرفض الآن أي `INSERT`/`UPDATE` يحاول تمرير `association_id`
+لا يطابق association_id الفعلي للسجل المُشار إليه — **قبل** وصول أي
+Service validation. مُختبَر بـ12+ حالة تكامل حقيقية ضد PostgreSQL (راجع
+`packages/db/test/db-integrity.test.ts`، الأقسام 1-4).
+
+**ما بقي Service-level فقط**: مطابقة `delegate_account_id` (على
+`delivery_missions`/`delivery_attempts`) لنفس `association_id` — لم
+تُطلَب composite FK لها صراحة في هذه المرحلة، و`accounts.association_id`
+أصلًا nullable (حساب ADMIN بلا جمعية)، فربطها بقيد بنيوي صارم يحتاج
+تصميمًا إضافيًا (هل NULL مسموح دومًا لـADMIN المُعيَّن كمندوب مؤقت؟) —
+يُحسم عند تفعيل DelegatesModule فعليًا (NODE-6).
+
+### 13) NODE-0.1 — Reference Values uniqueness (partial unique indexes)
+
+القيد الأصلي `@@unique([type, value, parentId])` في NODE-0 كان غير
+كافٍ: PostgreSQL يعامل كل `NULL` كقيمة مختلفة عن غيرها ضمن `UNIQUE`
+عادي، فلا يمنع تكرار قيم جذرية (`parent_id IS NULL`) بنفس `(type,
+value)` — مثال: نوع `REGION` بنفس القيمة `"الرياض"` مرتين بلا أب، كلاهما
+كان يمر بلا رفض.
+
+الحل: أُزيل ذلك القيد من `schema.prisma`، واستُبدل بـpartial unique
+indexes حقيقية في الـmigration:
+
+```sql
+CREATE UNIQUE INDEX ux_reference_values_root
+  ON reference_values (type, value) WHERE parent_id IS NULL;
+
+CREATE UNIQUE INDEX ux_reference_values_child
+  ON reference_values (type, value, parent_id) WHERE parent_id IS NOT NULL;
+```
+
+النتيجة: تكرار جذر بنفس `(type, value)` مرفوض، وتكرار child بنفس
+`(type, value)` تحت **نفس** الأب مرفوض، لكن نفس child (نفس `type`/
+`value`) تحت أبوين مختلفين **مسموح** — متوافق مع النموذج الهرمي الحالي
+(مثال: مدينة بنفس الاسم قد تتكرر تحت منطقتين مختلفتين). مُختبَر صراحة
+(الحالتان 5-6 + حالة "مسموح" في `db-integrity.test.ts`).
+
+### 14) NODE-0.1 — Device Type unification (enum واحد + أرشيف تاريخي منفصل)
+
+قبل هذه المراجعة: `beneficiary_needs.device_type` كان enum
+(`NeedDeviceType`)، بينما `receipt_items.device_type` و
+`device_units.device_type` كانا نصًا حرًا (`String`) — لا ضمان أن
+القيمة تطابق أحد الأنواع الثلاثة المعتمدة.
+
+الحل: enum داخلي واحد ثابت (`DeviceType`: `REFRIGERATOR`/`OVEN`/
+`WASHING_MACHINE`) مستخدَم عبر الكيانات الثلاثة معًا:
+
+- `beneficiary_needs.device_type`: **يبقى إلزاميًا** (`NOT NULL`) —
+  النظام القديم كان يفرض هذا القيد أصلًا عند تسجيل احتياج جديد.
+- `receipt_items.device_type` و`device_units.device_type`: **اختياريان**
+  (`DeviceType?`)، مع حقل مصاحب `legacyDeviceTypeText` (نص حر) — لأن
+  السجلات التاريخية (ورقة "الأجهزة" القديمة) كانت تسمح بأنواع أوسع من
+  الثلاثة الجديدة (`REFERENCE_SEED_DEVICE_TYPES` القديمة). CHECK
+  constraint (`ck_receipt_items_device_type_present`،
+  `ck_device_units_device_type_present`) يفرض DB-level أن أحد الحقلين
+  على الأقل غير فارغ دومًا — لا صف بلا أي دلالة لنوع الجهاز.
+- **إلزام `device_type` (enum) لكل سجل تشغيلي جديد** (لا نص حر) يبقى
+  Service-level (DTO validation عند الإنشاء الفعلي في NODE-4) — DB
+  لا يمكنها تمييز "سجل جديد يُنشأ الآن" عن "سجل مستورَد تاريخيًا" بذاتها.
+
+راجع `STATE_MAPPING.md` و`LEGACY_DATA_MIGRATION.md` للتفصيل الكامل.
 
 ## الفهارس (Indexing Plan)
 

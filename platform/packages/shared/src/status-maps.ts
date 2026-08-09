@@ -16,7 +16,7 @@ import {
   LegacyBeneficiaryStatus,
   LocationSource,
   NeedDecisionStatus,
-  NeedDeviceType,
+  DeviceType,
   NeedFulfillmentStatus,
   ReceiptBatchStatus,
 } from './enums';
@@ -78,10 +78,10 @@ export const NEED_FULFILLMENT_STATUS_LABELS_AR: Record<NeedFulfillmentStatus, st
   [NeedFulfillmentStatus.DELIVERED]: 'تم التسليم',
 };
 
-export const NEED_DEVICE_TYPE_LABELS_AR: Record<NeedDeviceType, string> = {
-  [NeedDeviceType.REFRIGERATOR]: 'ثلاجة',
-  [NeedDeviceType.OVEN]: 'فرن',
-  [NeedDeviceType.WASHING_MACHINE]: 'غسالة',
+export const DEVICE_TYPE_LABELS_AR: Record<DeviceType, string> = {
+  [DeviceType.REFRIGERATOR]: 'ثلاجة',
+  [DeviceType.OVEN]: 'فرن',
+  [DeviceType.WASHING_MACHINE]: 'غسالة',
 };
 
 export const DEVICE_STATUS_LABELS_AR: Record<DeviceStatus, string> = {
