@@ -1,7 +1,19 @@
 import { Module } from '@nestjs/common';
-import { BeneficiaryNeedsController } from './beneficiary-needs.controller';
 
-@Module({
-  controllers: [BeneficiaryNeedsController],
-})
+/**
+ * احتياجات المستفيدين ومراجعتها.
+ *
+ * المنطق الفعلي مُنقول بالكامل ويعيش في `BeneficiariesModule` — الاحتياج
+ * في النظام القديم ليس كيانًا مستقلًا بدورة حياة خاصة: `setBeneficiaryNeeds_`
+ * جزء من مسار حفظ المستفيد، و`reviewBeneficiaryNeeds_` تكتب صف المستفيد
+ * وصفوف احتياجاته في **معاملة واحدة** لا تقبل التجزئة.
+ *
+ * NODE-3.1 (البند 6): أُزيلت نقطة `GET /beneficiary-needs/_module-status`
+ * لأنها لم تكن ميزة حقيقية للمستخدم، بل لافتة حالة لوحدة منطقها مُنقول
+ * أصلًا (بخلاف `_module-status` في الوحدات التي **لم** يُنقَل منطقها بعد،
+ * وهي باقية كما هي). الوحدة نفسها تبقى مسجَّلة في `AppModule` بلا أي
+ * نقطة HTTP عامة، حفاظًا على الهيكل القائم بلا تغيير أي مسار آخر.
+ * لا يستورد أي شيء منها ولا يعتمد عليها أي اختبار — تحقَّق قبل الإزالة.
+ */
+@Module({})
 export class BeneficiaryNeedsModule {}

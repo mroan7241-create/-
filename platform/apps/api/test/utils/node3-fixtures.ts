@@ -141,7 +141,8 @@ export function beneficiaryPayload(overrides: BeneficiaryPayloadOverrides = {}) 
     region: 'الرياض',
     city: 'الرياض',
     district: 'حي النرجس',
-    address: 'شارع الملك عبدالعزيز، قرب المسجد الجامع',
+    // NODE-3.1: `address`/`landmark` لم يعودا حقلَي إدخال إطلاقًا — إرسالهما
+    // يُرفض بـ400 عبر `forbidNonWhitelisted` العام، فحُذفا من الحمولة القياسية.
     phone: uniquePhone(),
     familyCount: 5,
     socialSecurity: true,

@@ -486,4 +486,450 @@ describe('NODE-3 — المستفيدون والاحتياجات (CRUD/عزل/ت
       expect(res.body.items.every((i: { needsPending: number }) => i.needsPending >= 1)).toBe(true);
     });
   });
+
+  // ================================================================
+  // NODE-3.1 — البند 1: العنوان/العلامة المميزة حقول قراءة تاريخية فقط
+  // ================================================================
+  describe('NODE-3.1 — address/landmark: قراءة تاريخية فقط', () => {
+    it('إرسال address أو landmark في الإنشاء أو التعديل يُرفض بـ400 (ليسا حقلَي إدخال)', async () => {
+      await http()
+        .post('/api/v1/beneficiaries')
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ address: 'عنوان وصفي' }))
+        .expect(400);
+
+      await http()
+        .post('/api/v1/beneficiaries')
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ landmark: 'قرب المسجد' }))
+        .expect(400);
+
+      const { id } = await createBeneficiary(app, assocACookie);
+      await http()
+        .patch(`/api/v1/beneficiaries/${id}`)
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ address: 'عنوان جديد', opId: newOpId('upd') }))
+        .expect(400);
+      await http()
+        .patch(`/api/v1/beneficiaries/${id}`)
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ landmark: 'علامة جديدة', opId: newOpId('upd') }))
+        .expect(400);
+    });
+
+    it('الإنشاء لا يشترطهما، ويترك address على قيمة القاعدة الافتراضية وlandmark فارغًا', async () => {
+      const { id } = await createBeneficiary(app, assocACookie);
+      const created = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+      expect(created.address).toBe('');
+      expect(created.landmark).toBeNull();
+    });
+
+    it('سجل تاريخي يحمل قيمًا فعلية: تعديل حقل آخر لا يمسّهما إطلاقًا، والتفاصيل تُعيدهما', async () => {
+      const { id } = await createBeneficiary(app, assocACookie);
+
+      // محاكاة سجل مهاجَر من النظام القديم: تُكتب القيم مباشرة عبر Prisma
+      // تجاوزًا للـAPI (الذي لم يعد يقبلهما أصلًا).
+      const historicalAddress = 'شارع الملك عبدالعزيز، قرب المسجد الجامع';
+      const historicalLandmark = 'بجوار الصيدلية الكبرى';
+      await prisma.beneficiary.update({
+        where: { id },
+        data: { address: historicalAddress, landmark: historicalLandmark },
+      });
+
+      await http()
+        .patch(`/api/v1/beneficiaries/${id}`)
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ name: 'اسم محدَّث تمامًا', opId: newOpId('upd') }))
+        .expect(200);
+
+      const after = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+      expect(after.name).toBe('اسم محدَّث تمامًا');
+      // بايت ببايت كما كانا — لا مسح ولا استبدال ولا قصّ.
+      expect(after.address).toBe(historicalAddress);
+      expect(after.landmark).toBe(historicalLandmark);
+
+      const detail = await http().get(`/api/v1/beneficiaries/${id}`).set('Cookie', assocACookie).expect(200);
+      expect(detail.body.address).toBe(historicalAddress);
+      expect(detail.body.landmark).toBe(historicalLandmark);
+    });
+  });
+
+  // ================================================================
+  // NODE-3.1 — البند 2: موقع المستفيد (أعمدة Prisma الموجودة أصلًا)
+  // ================================================================
+  describe('NODE-3.1 — موقع المستفيد', () => {
+    it('الحفظ بلا أي بيانات موقع صالح تمامًا (الموقع اختياري)', async () => {
+      const { id } = await createBeneficiary(app, assocACookie);
+      const row = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+      expect(row.latitude).toBeNull();
+      expect(row.longitude).toBeNull();
+      expect(row.locationSource).toBeNull();
+      expect(row.locationUpdatedAt).toBeNull();
+
+      const detail = await http().get(`/api/v1/beneficiaries/${id}`).set('Cookie', assocACookie).expect(200);
+      expect(detail.body.locationConfirmed).toBe(false);
+    });
+
+    it('يحفظ إحداثيات صالحة مع المصدر وتاريخ التحديث', async () => {
+      const res = await http()
+        .post('/api/v1/beneficiaries')
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ lat: 24.7136, lng: 46.6753, locationSource: 'CURRENT_LOCATION' }))
+        .expect(201);
+
+      const row = await prisma.beneficiary.findUniqueOrThrow({ where: { id: res.body.beneficiaryId } });
+      expect(Number(row.latitude)).toBeCloseTo(24.7136, 6);
+      expect(Number(row.longitude)).toBeCloseTo(46.6753, 6);
+      expect(row.locationSource).toBe('CURRENT_LOCATION');
+      expect(row.locationUpdatedAt).not.toBeNull();
+
+      const detail = await http()
+        .get(`/api/v1/beneficiaries/${res.body.beneficiaryId}`)
+        .set('Cookie', assocACookie)
+        .expect(200);
+      expect(detail.body.locationConfirmed).toBe(true);
+      expect(detail.body.lat).toBeCloseTo(24.7136, 6);
+    });
+
+    it('إحداثية واحدة دون الأخرى تُرفض (both-or-neither)، وخارج المدى يُرفض', async () => {
+      for (const bad of [
+        { lat: 24.7136 },
+        { lng: 46.6753 },
+        { lat: 91, lng: 46 },
+        { lat: -91, lng: 46 },
+        { lat: 24, lng: 181 },
+        { lat: 24, lng: -181 },
+      ]) {
+        await http()
+          .post('/api/v1/beneficiaries')
+          .set('Cookie', assocACookie)
+          .send(beneficiaryPayload(bad))
+          .expect(400);
+      }
+    });
+
+    it('مصدر موقع غير معروف يُصحَّح إلى MANUAL بدل رفض الطلب (تساهل Legacy)', async () => {
+      const res = await http()
+        .post('/api/v1/beneficiaries')
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ lat: 24.5, lng: 46.5, locationSource: 'قيمة غير معروفة' }))
+        .expect(201);
+      const row = await prisma.beneficiary.findUniqueOrThrow({ where: { id: res.body.beneficiaryId } });
+      expect(row.locationSource).toBe('MANUAL');
+    });
+
+    it('تعديل حقل لا علاقة له بالموقع لا يمسّ locationUpdatedAt إطلاقًا', async () => {
+      const create = await http()
+        .post('/api/v1/beneficiaries')
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ lat: 24.5, lng: 46.5, locationSource: 'MAP' }))
+        .expect(201);
+      const id = create.body.beneficiaryId;
+      const before = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // لا lat/lng في الحمولة إطلاقًا ⇒ الموقع لا يُمسّ.
+      await http()
+        .patch(`/api/v1/beneficiaries/${id}`)
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ name: 'اسم مختلف', opId: newOpId('upd') }))
+        .expect(200);
+
+      const after = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+      expect(after.locationUpdatedAt?.toISOString()).toBe(before.locationUpdatedAt?.toISOString());
+      expect(Number(after.latitude)).toBeCloseTo(24.5, 6);
+      expect(after.locationSource).toBe('MAP');
+    });
+
+    it('إرسال نفس الإحداثيات دون تغيير فعلي لا يُحدِّث locationUpdatedAt', async () => {
+      const create = await http()
+        .post('/api/v1/beneficiaries')
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ lat: 24.5, lng: 46.5, locationSource: 'MAP' }))
+        .expect(201);
+      const id = create.body.beneficiaryId;
+      const before = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      await http()
+        .patch(`/api/v1/beneficiaries/${id}`)
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ lat: 24.5, lng: 46.5, locationSource: 'MANUAL', opId: newOpId('upd') }))
+        .expect(200);
+
+      const after = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+      expect(after.locationUpdatedAt?.toISOString()).toBe(before.locationUpdatedAt?.toISOString());
+      // المصدر أيضًا لا يُمسّ ما دامت الإحداثيات لم تتغيّر.
+      expect(after.locationSource).toBe('MAP');
+    });
+
+    it('تغيير الإحداثيات فعليًا يُحدِّث المصدر وتاريخ التحديث', async () => {
+      const create = await http()
+        .post('/api/v1/beneficiaries')
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ lat: 24.5, lng: 46.5, locationSource: 'MAP' }))
+        .expect(201);
+      const id = create.body.beneficiaryId;
+      const before = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      await http()
+        .patch(`/api/v1/beneficiaries/${id}`)
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ lat: 21.4225, lng: 39.8262, locationSource: 'CURRENT_LOCATION', opId: newOpId('upd') }))
+        .expect(200);
+
+      const after = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+      expect(Number(after.latitude)).toBeCloseTo(21.4225, 6);
+      expect(after.locationSource).toBe('CURRENT_LOCATION');
+      expect(after.locationUpdatedAt!.getTime()).toBeGreaterThan(before.locationUpdatedAt!.getTime());
+    });
+
+    it('مسح الموقع صراحةً (lat/lng = null) يفرّغ الأعمدة الأربعة', async () => {
+      const create = await http()
+        .post('/api/v1/beneficiaries')
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ lat: 24.5, lng: 46.5, locationSource: 'MAP' }))
+        .expect(201);
+      const id = create.body.beneficiaryId;
+
+      await http()
+        .patch(`/api/v1/beneficiaries/${id}`)
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ lat: null, lng: null, opId: newOpId('upd') }))
+        .expect(200);
+
+      const after = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+      expect(after.latitude).toBeNull();
+      expect(after.longitude).toBeNull();
+      expect(after.locationSource).toBeNull();
+      expect(after.locationUpdatedAt).toBeNull();
+    });
+
+    it('مُصفّي "بانتظار تحديد الموقع" يصفّي خادميًا على غياب الإحداثيات', async () => {
+      await createBeneficiary(app, assocACookie); // بلا موقع
+      await http()
+        .post('/api/v1/beneficiaries')
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ lat: 24.5, lng: 46.5, locationSource: 'MAP' }))
+        .expect(201);
+
+      const pending = await http()
+        .get('/api/v1/beneficiaries?locationStatus=PENDING')
+        .set('Cookie', assocACookie)
+        .expect(200);
+      expect(pending.body.total).toBe(1);
+      expect(pending.body.items[0].locationConfirmed).toBe(false);
+
+      const confirmed = await http()
+        .get('/api/v1/beneficiaries?locationStatus=CONFIRMED')
+        .set('Cookie', assocACookie)
+        .expect(200);
+      expect(confirmed.body.total).toBe(1);
+      expect(confirmed.body.items[0].locationConfirmed).toBe(true);
+
+      // قيمة غير معروفة للمُصفّي تُرفض بـ400 لا 500، ولا تتعارض مع البحث.
+      await http().get('/api/v1/beneficiaries?locationStatus=NOPE').set('Cookie', assocACookie).expect(400);
+    });
+
+    it('المُصفّي يتعايش مع البحث الحر بلا أن يُلغي أحدهما الآخر', async () => {
+      await createBeneficiary(app, assocACookie, { name: 'مستفيد بلا موقع للبحث' });
+      const res = await http()
+        .get('/api/v1/beneficiaries?locationStatus=PENDING&search=للبحث')
+        .set('Cookie', assocACookie)
+        .expect(200);
+      expect(res.body.total).toBe(1);
+    });
+  });
+
+  // ================================================================
+  // NODE-3.1 — البند 3: تنبيه "مطابق محتمل" غير الحاجب
+  // ================================================================
+  describe('NODE-3.1 — تنبيه المطابق المحتمل (غير حاجب)', () => {
+    it('نفس الاسم (بعد التطبيع) ونفس المدينة بجوال مختلف: ينجح الحفظ مع تنبيه يحمل publicCode', async () => {
+      const { id: firstId } = await createBeneficiary(app, assocACookie, { name: 'محمد عبدالله الشمري' });
+      const first = await prisma.beneficiary.findUniqueOrThrow({ where: { id: firstId } });
+
+      const res = await http()
+        .post('/api/v1/beneficiaries')
+        .set('Cookie', assocACookie)
+        // تطبيع الاسم: مسافات زائدة + حالة أحرف — يجب أن يُطابِق رغم ذلك.
+        .send(beneficiaryPayload({ name: '  محمد   عبدالله    الشمري ' }))
+        .expect(201);
+
+      expect(res.body.possibleDuplicate).toBeDefined();
+      expect(res.body.possibleDuplicate.publicCode).toBe(first.publicCode);
+      expect(res.body.possibleDuplicate.message).toContain(first.publicCode);
+      // لا تسريب لأي معرّف داخلي في التنبيه.
+      expect(JSON.stringify(res.body.possibleDuplicate)).not.toContain(firstId);
+      // ومع ذلك الحفظ **نجح فعلًا**: سجلان قائمان.
+      expect(await prisma.beneficiary.count({ where: { associationId: fx.associationAId } })).toBe(2);
+    });
+
+    it('نفس الاسم لكن مدينة مختلفة: لا تنبيه', async () => {
+      await createBeneficiary(app, assocACookie, { name: 'سالم القحطاني', city: 'الرياض' });
+      const res = await http()
+        .post('/api/v1/beneficiaries')
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ name: 'سالم القحطاني', region: 'مكة المكرمة', city: 'جدة' }))
+        .expect(201);
+      expect(res.body.possibleDuplicate).toBeUndefined();
+    });
+
+    it('مطابقة اسم+مدينة لدى جمعية أخرى: لا تنبيه ولا تسريب لبياناتها', async () => {
+      const { id: otherId } = await createBeneficiary(app, assocBCookie, { name: 'فاطمة العتيبي' });
+      const other = await prisma.beneficiary.findUniqueOrThrow({ where: { id: otherId } });
+
+      const res = await http()
+        .post('/api/v1/beneficiaries')
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ name: 'فاطمة العتيبي' }))
+        .expect(201);
+
+      expect(res.body.possibleDuplicate).toBeUndefined();
+      expect(JSON.stringify(res.body)).not.toContain(other.publicCode);
+      expect(JSON.stringify(res.body)).not.toContain(otherId);
+    });
+
+    it('التعديل يُطلق نفس الفحص، ولا يُنبّه المستفيد على نفسه', async () => {
+      const { id: aId } = await createBeneficiary(app, assocACookie, { name: 'خالد الدوسري' });
+      const a = await prisma.beneficiary.findUniqueOrThrow({ where: { id: aId } });
+      const { id: bId } = await createBeneficiary(app, assocACookie, { name: 'اسم مختلف تمامًا' });
+
+      // تعديل السجل على نفسه بلا تغيير الاسم: لا تنبيه ذاتي.
+      const selfRes = await http()
+        .patch(`/api/v1/beneficiaries/${aId}`)
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ name: 'خالد الدوسري', opId: newOpId('upd') }))
+        .expect(200);
+      expect(selfRes.body.possibleDuplicate).toBeUndefined();
+
+      // تعديل السجل الثاني ليطابق اسم الأول ⇒ تنبيه غير حاجب.
+      const dupRes = await http()
+        .patch(`/api/v1/beneficiaries/${bId}`)
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ name: 'خالد الدوسري', opId: newOpId('upd') }))
+        .expect(200);
+      expect(dupRes.body.ok).toBe(true);
+      expect(dupRes.body.possibleDuplicate.publicCode).toBe(a.publicCode);
+
+      // والحفظ سرى فعليًا رغم التنبيه.
+      const after = await prisma.beneficiary.findUniqueOrThrow({ where: { id: bId } });
+      expect(after.name).toBe('خالد الدوسري');
+    });
+  });
+
+  // ================================================================
+  // NODE-3.1 — البند 4: رفض تكرار الجوال آمن ضد السباق (أقفال استشارية)
+  // ================================================================
+  describe('NODE-3.1 — تزامن رفض تكرار الجوال', () => {
+    it('إنشاءان متزامنان بنفس الجوال في نفس الجمعية: واحد فقط ينجح والآخر 409، وصف واحد في القاعدة', async () => {
+      const phone = uniquePhone();
+      const results = await Promise.all([
+        http().post('/api/v1/beneficiaries').set('Cookie', assocACookie).send(beneficiaryPayload({ phone })),
+        http().post('/api/v1/beneficiaries').set('Cookie', assocACookie).send(beneficiaryPayload({ phone })),
+      ]);
+
+      const statuses = results.map((r) => r.status).sort();
+      expect(statuses).toEqual([201, 409]);
+      const conflict = results.find((r) => r.status === 409)!;
+      expect(conflict.body.error.code).toBe('BENEFICIARY_DUPLICATE_PHONE');
+
+      expect(await prisma.beneficiary.count({ where: { associationId: fx.associationAId, phone } })).toBe(1);
+    });
+
+    it('تصادم متقاطع (جوال أساسي لأحدهما = إضافي للآخر) لا يمرّ مرتين', async () => {
+      const shared = uniquePhone();
+      const results = await Promise.all([
+        http().post('/api/v1/beneficiaries').set('Cookie', assocACookie).send(beneficiaryPayload({ phone: shared })),
+        http()
+          .post('/api/v1/beneficiaries')
+          .set('Cookie', assocACookie)
+          .send(beneficiaryPayload({ phone: uniquePhone(), phone2: shared })),
+      ]);
+
+      const succeeded = results.filter((r) => r.status === 201);
+      expect(succeeded).toHaveLength(1);
+      expect(results.find((r) => r.status !== 201)!.status).toBe(409);
+
+      // لا صفّان يحملان الرقم المشترك بأي من العمودين.
+      const holders = await prisma.beneficiary.count({
+        where: { associationId: fx.associationAId, OR: [{ phone: shared }, { secondaryPhone: shared }] },
+      });
+      expect(holders).toBe(1);
+    });
+
+    it('تعديلان متزامنان لمستفيدَين نحو نفس الجوال الهدف: لا تكرار ولا جمود', async () => {
+      const target = uniquePhone();
+      const { id: aId } = await createBeneficiary(app, assocACookie);
+      const { id: bId } = await createBeneficiary(app, assocACookie);
+
+      const results = await Promise.all([
+        http()
+          .patch(`/api/v1/beneficiaries/${aId}`)
+          .set('Cookie', assocACookie)
+          .send(beneficiaryPayload({ phone: target, opId: newOpId('upd') })),
+        http()
+          .patch(`/api/v1/beneficiaries/${bId}`)
+          .set('Cookie', assocACookie)
+          .send(beneficiaryPayload({ phone: target, opId: newOpId('upd') })),
+      ]);
+
+      // لا 500 (جمود Postgres كان سيظهر هنا تحديدًا) — نجاح واحد و409 واحد.
+      expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+      expect(await prisma.beneficiary.count({ where: { associationId: fx.associationAId, phone: target } })).toBe(1);
+    });
+
+    it('تبادل رقمين بين معاملتين متزامنتين لا يُسبّب جمودًا (ترتيب أقفال حتمي)', async () => {
+      const p1 = uniquePhone();
+      const p2 = uniquePhone();
+      const { id: aId } = await createBeneficiary(app, assocACookie, { phone: p1 });
+      const { id: bId } = await createBeneficiary(app, assocACookie, { phone: p2 });
+
+      // A: p1 → p2، وB: p2 → p1 — كل معاملة تحتاج قفلَي نفس الرقمين بترتيب
+      // معكوس ظاهريًا؛ الترتيب الحتمي داخل acquirePhoneLocks يمنع الجمود.
+      const results = await Promise.all([
+        http()
+          .patch(`/api/v1/beneficiaries/${aId}`)
+          .set('Cookie', assocACookie)
+          .send(beneficiaryPayload({ phone: p2, opId: newOpId('upd') })),
+        http()
+          .patch(`/api/v1/beneficiaries/${bId}`)
+          .set('Cookie', assocACookie)
+          .send(beneficiaryPayload({ phone: p1, opId: newOpId('upd') })),
+      ]);
+
+      // المهم: لا 500 ولا تعليق — كلاهما حُسم بردّ نظيف.
+      for (const r of results) expect([200, 409]).toContain(r.status);
+      const phones = await prisma.beneficiary.findMany({
+        where: { associationId: fx.associationAId },
+        select: { phone: true },
+      });
+      expect(new Set(phones.map((p) => p.phone)).size).toBe(phones.length);
+    }, 30000);
+
+    it('جمعيتان مختلفتان تستخدمان نفس الجوال في نفس اللحظة: كلاهما ينجح (القاعدة لم تتغيّر)', async () => {
+      const phone = uniquePhone();
+      const results = await Promise.all([
+        http().post('/api/v1/beneficiaries').set('Cookie', assocACookie).send(beneficiaryPayload({ phone })),
+        http().post('/api/v1/beneficiaries').set('Cookie', assocBCookie).send(beneficiaryPayload({ phone })),
+      ]);
+
+      expect(results.map((r) => r.status)).toEqual([201, 201]);
+      expect(await prisma.beneficiary.count({ where: { phone, associationId: fx.associationAId } })).toBe(1);
+      expect(await prisma.beneficiary.count({ where: { phone, associationId: fx.associationBId } })).toBe(1);
+    });
+  });
+
+  // ================================================================
+  // NODE-3.1 — البند 6: إزالة نقطة حالة الوحدة غير المستخدَمة
+  // ================================================================
+  describe('NODE-3.1 — تنظيف BeneficiaryNeedsModule', () => {
+    it('لم تعد هناك نقطة HTTP عامة على /beneficiary-needs', async () => {
+      await http().get('/api/v1/beneficiary-needs/_module-status').set('Cookie', assocACookie).expect(404);
+    });
+  });
 });

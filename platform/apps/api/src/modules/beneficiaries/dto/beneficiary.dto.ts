@@ -46,6 +46,23 @@ export class ListBeneficiariesQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsIn(['asc', 'desc'])
   sortDir?: 'asc' | 'desc';
+
+  /**
+   * NODE-3.1 — مُصفّي "تأكيد الموقع" المشتق، مطابقًا لِ
+   * `Validation.gs::beneficiaryLocationConfirmed_` حرفيًا: الحالة **لا
+   * تُخزَّن كعمود**، بل تُستنتج من وجود الإحداثيتين معًا.
+   *  - `PENDING`  = "بانتظار تحديد الموقع" (`!locationConfirmed`) —
+   *    `Beneficiaries.gs::listBeneficiaries_` سطر 37-38.
+   *  - `CONFIRMED` = "موقع مؤكد".
+   *
+   * مُصفّي "جاهز للإحالة" القديم **غير مُنفَّذ عمدًا** هنا: شرطه في Legacy
+   * (سطر 45) يجمع `locationConfirmed` مع `حالة التسليم = 'لم يبدأ'` ومع
+   * وجود جهاز "مخصص" فعليًا — وكلاهما بيانات مخزون/تسليم لم تُهاجَر بعد
+   * (NODE-4/NODE-6). راجع BENEFICIARIES.md.
+   */
+  @IsOptional()
+  @IsIn(['PENDING', 'CONFIRMED'])
+  locationStatus?: 'PENDING' | 'CONFIRMED';
 }
 
 /** حقول المستفيد المشتركة بين الإنشاء والتعديل — مطابقة لِ`buildBeneficiaryFieldValues_`. */
@@ -66,9 +83,13 @@ class BeneficiaryFieldsDto {
   @MaxLength(120)
   district!: string;
 
-  @IsString()
-  @MaxLength(250)
-  address!: string;
+  // NODE-3.1 — `address` و`landmark` **ليسا حقلَي إدخال بعد الآن**
+  // (قرار مستخدم صريح، وهو انحراف مقصود عن Legacy الذي كان يقبلهما حيَّين
+  // في `buildBeneficiaryFieldValues_`). العمودان باقيان في القاعدة
+  // للقراءة التاريخية فقط، ولا يُكتَب إليهما من أي مسار REST. حذفهما من
+  // هنا يعني أن إرسالهما في الجسم يُرفض بـ400 عبر
+  // `ValidationPipe({whitelist:true, forbidNonWhitelisted:true})` العام.
+  // راجع docs/BENEFICIARIES.md.
 
   @IsString()
   phone!: string;
@@ -94,13 +115,38 @@ class BeneficiaryFieldsDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(200)
-  landmark?: string;
-
-  @IsOptional()
-  @IsString()
   @MaxLength(1000)
   notes?: string;
+
+  /**
+   * NODE-3.1 — إحداثيات اختيارية بالكامل، مطابقة لِ
+   * `Validation.gs::optionalCoordinate_`:
+   *  - غيابهما معًا (`undefined`) ⇒ **لا يُمسّ الموقع المخزَّن إطلاقًا**.
+   *  - `null` لكليهما معًا ⇒ مسح الموقع (زر "✕ مسح الموقع" في
+   *    `Index.html::clearLocationFields`).
+   *  - قيمة واحدة دون الأخرى ⇒ 400 صريح (both-or-neither).
+   *  - المدى: خط العرض [-90, 90]، خط الطول [-180, 180].
+   *
+   * `@IsOptional()` في class-validator يتخطّى التحقق لِ`null` و`undefined`
+   * معًا، فيمرّ المسح الصريح بلا خطأ ويُفرَّق بينهما في الخدمة.
+   */
+  @IsOptional()
+  @IsNumber()
+  lat?: number | null;
+
+  @IsOptional()
+  @IsNumber()
+  lng?: number | null;
+
+  /**
+   * وصفي بحت. Legacy (`validateLocationSource_`) **متساهل عمدًا**: قيمة
+   * غير معروفة تُصحَّح إلى "يدوي" بدل رفض الطلب، ولذلك لا `@IsIn` هنا —
+   * التصحيح يتم في الخدمة بنفس السلوك حرفيًا.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  locationSource?: string;
 
   @IsString()
   @MaxLength(120)

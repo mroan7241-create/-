@@ -18,6 +18,8 @@ import { normalizePagination, toPaginatedResult, type PaginatedResult, type Pagi
 import { validateRegionCity } from '../applications/application-reference.util';
 import { validateSocialStatus } from './beneficiary-reference.util';
 import { beneficiaryOrderBy, type BeneficiarySortField } from './beneficiary-sort.util';
+import { buildLocationWrite, locationConfirmed, normalizeNameForMatch } from './beneficiary-location.util';
+import { acquirePhoneLocks } from './beneficiary-phone-lock.util';
 import { ALLOCATION_TRIGGER_PORT, type AllocationTriggerPort } from '../allocation/allocation-trigger.port';
 import type { AuthContext } from '../auth/auth.types';
 
@@ -52,17 +54,27 @@ export interface BeneficiaryWriteInput {
   region: string;
   city: string;
   district: string;
-  address: string;
   phone: string;
   phone2?: string;
   familyCount: number;
   socialSecurity?: boolean;
   socialStatus: string;
   income?: number;
-  landmark?: string;
   notes?: string;
+  lat?: number | null;
+  lng?: number | null;
+  locationSource?: string;
   deviceTypes?: DeviceType[];
   opId: string;
+}
+
+/**
+ * تنبيه "مطابق محتمل" غير حاجب — `findPossibleDuplicateBeneficiary_`.
+ * يحمل `publicCode` البشري فقط، ولا يُسرَّب معه أي معرّف داخلي (UUID).
+ */
+export interface PossibleDuplicateWarning {
+  publicCode: string;
+  message: string;
 }
 
 export interface NeedDecisionInput {
@@ -110,6 +122,7 @@ export class BeneficiariesService {
       search?: string;
       associationId?: string;
       reviewStatus?: BeneficiaryReviewStatus;
+      locationStatus?: 'PENDING' | 'CONFIRMED';
       sortBy?: BeneficiarySortField;
       sortDir?: 'asc' | 'desc';
     },
@@ -125,6 +138,16 @@ export class BeneficiariesService {
     where.associationId = this.resolveTenantScope(ctx, params.associationId);
 
     if (params.reviewStatus) where.reviewStatus = params.reviewStatus;
+
+    // NODE-3.1 — "بانتظار تحديد الموقع" مشتقة لا مخزَّنة، مطابقةً لِ
+    // `beneficiaryLocationConfirmed_`: مؤكَّد ⇔ العمودان موجودان معًا،
+    // ومعلَّق ⇔ أحدهما (أو كلاهما) غائب. يُوضَع الشرط في `AND` لا في `OR`
+    // حتى لا يصطدم بشرط البحث الحر أدناه (الذي يحجز `where.OR` لنفسه).
+    if (params.locationStatus === 'PENDING') {
+      where.AND = [{ OR: [{ latitude: null }, { longitude: null }] }];
+    } else if (params.locationStatus === 'CONFIRMED') {
+      where.AND = [{ latitude: { not: null } }, { longitude: { not: null } }];
+    }
 
     if (params.search) {
       const q = params.search.trim();
@@ -187,23 +210,38 @@ export class BeneficiariesService {
 
     const associationId = this.resolveWriteAssociation(ctx, input.associationId);
     const fields = await this.buildFieldValues(input, null);
+    // سجل جديد ⇒ لا موقع سابق للمقارنة؛ أي إحداثيات مُرسَلة تُعَدّ تغييرًا
+    // (وهو حرفيًا شرط `!existing` في `buildBeneficiaryFieldValues_`).
+    const location = buildLocationWrite(input, null, new Date());
 
-    const payload = { associationId, ...fields, deviceTypes, phone: fields.phone };
+    const payload = { associationId, ...fields, ...location, deviceTypes, phone: fields.phone };
 
     const outcome = await prisma.$transaction(async (tx) => {
-      const claim = await this.idempotency.claim<{ beneficiaryId: string }>(tx, ctx.accountId, 'beneficiary-create', input.opId, payload);
+      const claim = await this.idempotency.claim<{ beneficiaryId: string; possibleDuplicate?: PossibleDuplicateWarning }>(
+        tx,
+        ctx.accountId,
+        'beneficiary-create',
+        input.opId,
+        payload,
+      );
       if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse! };
 
       const association = await tx.association.findUnique({ where: { id: associationId }, select: { id: true } });
       if (!association) throw new ApiError('BENEFICIARY_ASSOCIATION_NOT_FOUND', 'اختر جمعية صحيحة', 400);
 
+      // قفل استشاري لكل (جمعية، جوال) **قبل** فحص التكرار وقبل الكتابة —
+      // يغلق سباق TOCTOU الذي كان يسمح لطلبين متزامنين بالمرور معًا.
+      await acquirePhoneLocks(tx, associationId, [fields.phone, fields.secondaryPhone]);
       await this.assertNoConfirmedDuplicate(tx, associationId, fields.phone, fields.secondaryPhone, null);
+
+      const possibleDuplicate = await this.findPossibleDuplicate(tx, associationId, fields.name, fields.city, null);
 
       const beneficiary = await tx.beneficiary.create({
         data: {
           publicCode: await this.publicCode.nextPublicCode(tx, 'BEN'),
           associationId,
           ...fields,
+          ...location,
           reviewStatus: BeneficiaryReviewStatus.UNDER_REVIEW,
         },
       });
@@ -222,7 +260,9 @@ export class BeneficiariesService {
         });
       }
 
-      const response = { beneficiaryId: beneficiary.id };
+      // التنبيه جزء من الرد المخزَّن حتى تُعيد إعادة المحاولة بنفس opId
+      // نفس التنبيه بالضبط بدل ردٍّ مختلف عن الأصل.
+      const response = { beneficiaryId: beneficiary.id, ...(possibleDuplicate ? { possibleDuplicate } : {}) };
       await this.idempotency.complete(tx, ctx.accountId, 'beneficiary-create', input.opId, response);
       return { replayed: false as const, response };
     });
@@ -233,7 +273,12 @@ export class BeneficiariesService {
       });
     }
 
-    return { ok: true as const, beneficiaryId: outcome.response.beneficiaryId, replayed: outcome.replayed };
+    return {
+      ok: true as const,
+      beneficiaryId: outcome.response.beneficiaryId,
+      replayed: outcome.replayed,
+      ...(outcome.response.possibleDuplicate ? { possibleDuplicate: outcome.response.possibleDuplicate } : {}),
+    };
   }
 
   // ================================================================
@@ -265,16 +310,37 @@ export class BeneficiariesService {
     }
 
     const fields = await this.buildFieldValues(input, existing);
-    const payload = { id, ...fields, deviceTypes: requestedTypes };
+    const payload = { id, ...fields, lat: input.lat ?? null, lng: input.lng ?? null, deviceTypes: requestedTypes };
 
     const outcome = await prisma.$transaction(async (tx) => {
       const scope = `beneficiary-update:${id}`;
-      const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, scope, input.opId, payload);
-      if (!claim.claimed) return { replayed: true as const };
+      const claim = await this.idempotency.claim<{ ok: true; possibleDuplicate?: PossibleDuplicateWarning }>(
+        tx,
+        ctx.accountId,
+        scope,
+        input.opId,
+        payload,
+      );
+      if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse ?? { ok: true as const } };
 
       // إعادة قراءة الحالة **داخل** المعاملة مع قفل الصف — القرار لا يُبنى
       // على قراءة سابقة تجاوزها الزمن (سباق: الإدارة تبتّ بينما التعديل
       // في الطريق). نفس مبدأ «كل قراءة يُبنى عليها قرار تحدث داخل القفل».
+      // NODE-3.1 — الأقفال الاستشارية تُكتسَب على **اتحاد** الأرقام:
+      // القيم المخزَّنة حاليًا (قد يتسابق طلب آخر على ادّعاء الرقم الذي
+      // نتخلّى عنه) + القيم الجديدة المستهدَفة. الترتيب حتمي داخل
+      // `acquirePhoneLocks`، فمعاملتان تتبادلان رقمين لا تتجمّدان.
+      await acquirePhoneLocks(tx, existing.associationId, [
+        existing.phone,
+        existing.secondaryPhone,
+        fields.phone,
+        fields.secondaryPhone,
+      ]);
+
+      // إعادة القراءة **بعد** اكتساب الأقفال: قرار الكتابة لا يُبنى على أي
+      // قراءة سبقت القفل. `FOR UPDATE` هنا يجلب أيضًا الإحداثيات المخزَّنة
+      // فعليًا لحظة القرار، فيُبنى قرار "هل تغيّر الموقع؟" على الحالة
+      // الراهنة لا على لقطة قديمة.
       const locked = await this.lockBeneficiary(tx, id);
       if (!locked) throw beneficiaryNotFound();
       if (touchesNeeds && isFinalReviewStatus(locked.review_status as BeneficiaryReviewStatus)) {
@@ -283,21 +349,36 @@ export class BeneficiariesService {
 
       await this.assertNoConfirmedDuplicate(tx, existing.associationId, fields.phone, fields.secondaryPhone, id);
 
-      await tx.beneficiary.update({ where: { id }, data: fields });
+      const location = buildLocationWrite(
+        input,
+        { latitude: locked.latitude, longitude: locked.longitude },
+        new Date(),
+      );
+
+      const possibleDuplicate = await this.findPossibleDuplicate(tx, existing.associationId, fields.name, fields.city, id);
+
+      // `address`/`landmark` **لا يُذكران هنا إطلاقًا** — لا مفتاحًا ولا
+      // قيمة `undefined`. قيمتهما التاريخية تبقى كما هي حرفيًا (البند 1).
+      await tx.beneficiary.update({ where: { id }, data: { ...fields, ...location } });
 
       if (touchesNeeds && requestedTypes) {
         await this.syncNeeds(tx, id, existing.associationId, requestedTypes);
       }
 
-      await this.idempotency.complete(tx, ctx.accountId, scope, input.opId, { ok: true });
-      return { replayed: false as const };
+      const response = { ok: true as const, ...(possibleDuplicate ? { possibleDuplicate } : {}) };
+      await this.idempotency.complete(tx, ctx.accountId, scope, input.opId, response);
+      return { replayed: false as const, response };
     });
 
     if (!outcome.replayed) {
       await this.audit.log(this.actor(ctx), 'BENEFICIARY_UPDATED', 'beneficiaries', id);
     }
 
-    return { ok: true as const, replayed: outcome.replayed };
+    return {
+      ok: true as const,
+      replayed: outcome.replayed,
+      ...(outcome.response.possibleDuplicate ? { possibleDuplicate: outcome.response.possibleDuplicate } : {}),
+    };
   }
 
   /**
@@ -685,10 +766,63 @@ export class BeneficiariesService {
   }
 
   private async lockBeneficiary(tx: Prisma.TransactionClient, id: string) {
-    const rows = await tx.$queryRaw<{ id: string; review_status: string; association_id: string }[]>`
-      SELECT id, review_status, association_id FROM beneficiaries WHERE id = ${id}::uuid AND archived_at IS NULL FOR UPDATE
+    const rows = await tx.$queryRaw<
+      {
+        id: string;
+        review_status: string;
+        association_id: string;
+        latitude: Prisma.Decimal | null;
+        longitude: Prisma.Decimal | null;
+      }[]
+    >`
+      SELECT id, review_status, association_id, latitude, longitude
+      FROM beneficiaries WHERE id = ${id}::uuid AND archived_at IS NULL FOR UPDATE
     `;
     return rows[0] ?? null;
+  }
+
+  /**
+   * `findPossibleDuplicateBeneficiary_` — نفس الاسم بعد التطبيع + نفس
+   * المدينة، ضمن **نفس الجمعية حصرًا**، مع استثناء السجل نفسه عند التعديل.
+   *
+   * تنبيه **غير حاجب**: الحفظ ينجح كما هو (201/200)، ويُرفَق التنبيه في
+   * الرد فقط — تمامًا كـ`result.possibleDuplicateWarning` القديمة التي
+   * تعرضها الواجهة كـtoast تحذيري لا كنافذة مانعة.
+   *
+   * التطبيع (`trim` + توحيد المسافات + حالة صغيرة) يُنفَّذ داخل SQL بنفس
+   * منطق `normalizeNameForMatch_` حتى تتم المطابقة في القاعدة لا بسحب كل
+   * صفوف الجمعية إلى التطبيق. النطاق مقيَّد بـ`association_id` في شرط
+   * الاستعلام نفسه، فلا يمكن أن يقرأ صف جمعية أخرى إطلاقًا.
+   */
+  private async findPossibleDuplicate(
+    tx: Prisma.TransactionClient,
+    associationId: string,
+    name: string,
+    city: string,
+    excludeId: string | null,
+  ): Promise<PossibleDuplicateWarning | null> {
+    const normalizedName = normalizeNameForMatch(name);
+    if (!normalizedName) return null;
+
+    const rows = await tx.$queryRaw<{ public_code: string }[]>`
+      SELECT public_code FROM beneficiaries
+      WHERE association_id = ${associationId}::uuid
+        AND archived_at IS NULL
+        AND (${excludeId}::uuid IS NULL OR id <> ${excludeId}::uuid)
+        AND lower(regexp_replace(btrim(name), '\s+', ' ', 'g')) = ${normalizedName}
+        AND city = ${city}
+      ORDER BY created_at ASC
+      LIMIT 1
+    `;
+
+    const match = rows[0];
+    if (!match) return null;
+
+    // الرسالة تذكر الرمز العام البشري فقط — لا UUID داخلي إطلاقًا.
+    return {
+      publicCode: match.public_code,
+      message: `تنبيه: يوجد مستفيد آخر بنفس الاسم والمدينة (رقم ${match.public_code}) — تأكد أنه ليس تكرارًا قبل المتابعة`,
+    };
   }
 
   /**
@@ -793,7 +927,11 @@ export class BeneficiariesService {
       region: place.region,
       city: place.city,
       district: requiredText(input.district, 'الحي', BENEFICIARY_LIMITS.district),
-      address: requiredText(input.address, 'العنوان الوصفي (الشارع وأقرب معلم)', BENEFICIARY_LIMITS.address),
+      // NODE-3.1 — `address`/`landmark` غير مذكورين هنا إطلاقًا: لم يعودا
+      // حقلَي إدخال، ولا يُكتَب إليهما من أي مسار REST. عند الإنشاء يبقى
+      // `address` على قيمته الافتراضية في القاعدة ('') و`landmark` على
+      // `null`؛ وعند التعديل تبقى قيمتهما التاريخية سليمة لأن مفتاحهما لا
+      // يظهر في `data` أصلًا. (انحراف مقصود عن Legacy — راجع BENEFICIARIES.md.)
       phone,
       secondaryPhone,
       familyCount: boundedInt(input.familyCount, BENEFICIARY_LIMITS.familyCountMin, BENEFICIARY_LIMITS.familyCountMax, 'عدد الأفراد'),
@@ -802,7 +940,6 @@ export class BeneficiariesService {
       income: new Prisma.Decimal(
         boundedInt(input.income ?? 0, BENEFICIARY_LIMITS.incomeMin, BENEFICIARY_LIMITS.incomeMax, 'مبلغ الدخل'),
       ),
-      landmark: cleanText(input.landmark, BENEFICIARY_LIMITS.landmark) || null,
       notes: cleanText(input.notes, BENEFICIARY_LIMITS.notes) || null,
     };
   }
@@ -911,6 +1048,10 @@ function mapBeneficiary(row: {
   income: Prisma.Decimal | null;
   landmark: string | null;
   notes: string | null;
+  latitude: Prisma.Decimal | null;
+  longitude: Prisma.Decimal | null;
+  locationSource: string | null;
+  locationUpdatedAt: Date | null;
   reviewStatus: string;
   beneficiaryRejectReason: string | null;
   reviewedAt: Date | null;
@@ -931,8 +1072,16 @@ function mapBeneficiary(row: {
     socialSecurity: row.socialSecurity,
     socialStatus: row.maritalStatus,
     income: row.income ? Number(row.income) : 0,
+    // NODE-3.1 — `address`/`landmark` حقلا **قراءة تاريخية** فقط: يبقيان في
+    // شكل الرد كما هما (سجلات مهاجَرة قد تحملهما)، لكنهما ليسا حقلَي إدخال.
     landmark: row.landmark,
     notes: row.notes,
+    lat: row.latitude === null ? null : Number(row.latitude),
+    lng: row.longitude === null ? null : Number(row.longitude),
+    locationSource: row.locationSource,
+    locationUpdatedAt: row.locationUpdatedAt,
+    // حالة مشتقة لا عمود لها — `beneficiaryLocationConfirmed_`.
+    locationConfirmed: locationConfirmed(row),
     reviewStatus: row.reviewStatus,
     beneficiaryRejectReason: row.beneficiaryRejectReason,
     reviewedAt: row.reviewedAt,

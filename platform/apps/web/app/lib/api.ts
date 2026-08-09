@@ -212,8 +212,15 @@ export interface BeneficiarySummary {
   socialSecurity: boolean;
   socialStatus: string;
   income: number;
+  /** `address`/`landmark`: حقول قراءة تاريخية فقط — لا تُرسَل في أي طلب حفظ. */
   landmark: string | null;
   notes: string | null;
+  lat: number | null;
+  lng: number | null;
+  locationSource: string | null;
+  locationUpdatedAt: string | null;
+  /** مشتقة خادميًا: الموقع مؤكَّد ⇔ الإحداثيتان موجودتان معًا. */
+  locationConfirmed: boolean;
   reviewStatus: BeneficiaryReviewStatus;
   beneficiaryRejectReason: string | null;
   reviewedAt: string | null;
@@ -226,6 +233,23 @@ export interface BeneficiarySummary {
 
 export interface BeneficiaryDetail extends Omit<BeneficiarySummary, 'needsTotal' | 'needsPending' | 'needsApproved' | 'needsRejected'> {
   needs: BeneficiaryNeed[];
+}
+
+/**
+ * تنبيه "مطابق محتمل" (نفس الاسم والمدينة داخل نفس الجمعية) — **غير حاجب**:
+ * الحفظ نجح فعلًا، ويُرفَق التنبيه ليعرضه المستخدم ويقرّر. يحمل الرمز العام
+ * البشري فقط، بلا أي معرّف داخلي.
+ */
+export interface PossibleDuplicateWarning {
+  publicCode: string;
+  message: string;
+}
+
+export interface SaveResult {
+  ok: true;
+  beneficiaryId?: string;
+  replayed?: boolean;
+  possibleDuplicate?: PossibleDuplicateWarning;
 }
 
 export interface BulkReviewResponse {
