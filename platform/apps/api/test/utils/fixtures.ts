@@ -1,5 +1,6 @@
 import * as argon2 from 'argon2';
 import { prisma, AccountRole, AccountStatus, AssociationStatus, AuthCredentialType } from '@alzad/db';
+import { delegateCredentialLookupHash, normalizeDelegateCode } from '../../src/common/crypto.util';
 
 export async function hashSecret(secret: string): Promise<string> {
   return argon2.hash(secret, { type: argon2.argon2id });
@@ -264,7 +265,11 @@ async function upsertUserAccount(
 }
 
 async function upsertDelegateAccount(publicCode: string, code: string, associationId: string, status: AccountStatus) {
-  const secretHash = await hashSecret(code);
+  const normalizedCode = normalizeDelegateCode(code);
+  const secretHash = await hashSecret(normalizedCode);
+  // نفس مخطط identifier الفعلي المستخدَم في auth.service.ts/seed.ts —
+  // lookup hash (HMAC) للرمز المطبَّع، وليس placeholder غير سرّي.
+  const identifier = delegateCredentialLookupHash(normalizedCode);
   const account = await prisma.account.upsert({
     where: { publicCode },
     update: { status, associationId },
@@ -279,9 +284,9 @@ async function upsertDelegateAccount(publicCode: string, code: string, associati
   });
 
   await prisma.authCredential.upsert({
-    where: { type_identifier: { type: AuthCredentialType.DELEGATE_ACCESS_CODE, identifier: publicCode } },
+    where: { type_identifier: { type: AuthCredentialType.DELEGATE_ACCESS_CODE, identifier } },
     update: { secretHash, accountId: account.id },
-    create: { accountId: account.id, type: AuthCredentialType.DELEGATE_ACCESS_CODE, identifier: publicCode, secretHash },
+    create: { accountId: account.id, type: AuthCredentialType.DELEGATE_ACCESS_CODE, identifier, secretHash },
   });
 
   return account;

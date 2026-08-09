@@ -5,9 +5,15 @@
  */
 import { PrismaClient, AccountRole, AccountStatus, AssociationStatus, AuthCredentialType, BeneficiaryReviewStatus, NeedDecisionStatus, DeviceType } from '../generated/client';
 import * as argon2 from 'argon2';
+import { computeCredentialLookupHash, normalizeDelegateCode, AUTH_CREDENTIAL_LOOKUP_HMAC_KEY_DEV_DEFAULT } from '@alzad/shared';
 import { seedReferenceData } from './reference-data.seed';
 
 const prisma = new PrismaClient();
+
+// نفس المتغير ونفس الافتراضي المستخدَمين في apps/api/src/config/auth.config.ts
+// (packages/shared/src/auth-secrets.ts هو المصدر الوحيد لكليهما) — لا
+// helper منفصل هنا، فقط استدعاء لنفس الدالة المشتركة (computeCredentialLookupHash).
+const credentialLookupHmacKey = process.env.AUTH_CREDENTIAL_LOOKUP_HMAC_KEY ?? AUTH_CREDENTIAL_LOOKUP_HMAC_KEY_DEV_DEFAULT;
 
 async function hashSecret(secret: string): Promise<string> {
   return argon2.hash(secret, { type: argon2.argon2id });
@@ -85,6 +91,7 @@ async function main() {
     const existingDelegate = await prisma.account.findUnique({ where: { publicCode: seedAssoc.delegateAccountCode } });
     if (!existingDelegate) {
       const delegateAccessCode = generateDelegateCode();
+      const normalizedCode = normalizeDelegateCode(delegateAccessCode);
       await prisma.account.create({
         data: {
           publicCode: seedAssoc.delegateAccountCode,
@@ -95,9 +102,11 @@ async function main() {
           credentials: {
             create: {
               type: AuthCredentialType.DELEGATE_ACCESS_CODE,
-              // identifier غير سرّي (لمجرد فرادة UNIQUE(type, identifier)) — الرمز الفعلي لا يُخزَّن إلا كـsecretHash (Argon2id).
-              identifier: seedAssoc.delegateAccountCode,
-              secretHash: await hashSecret(delegateAccessCode),
+              // identifier = lookup hash (HMAC-SHA256) للرمز المطبَّع — نفس الدالة المشتركة
+              // المستخدَمة في مسار تسجيل الدخول الفعلي (apps/api)، وليس implementation منفصل.
+              // الرمز الفعلي لا يُخزَّن خامًا أبدًا؛ فقط كـsecretHash (Argon2id).
+              identifier: computeCredentialLookupHash(normalizedCode, credentialLookupHmacKey),
+              secretHash: await hashSecret(normalizedCode),
             },
           },
         },

@@ -5,8 +5,12 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/http-exception.filter';
+import { assertProductionSecretsConfigured } from './config/auth.config';
 
 async function bootstrap() {
+  // يرفض الإقلاع بوضوح إن كان NODE_ENV=production وأي مفتاح HMAC أمني حسّاس ما زال بقيمته الافتراضية للتطوير.
+  assertProductionSecretsConfigured();
+
   const corsOrigin = process.env.CORS_ORIGIN ?? 'http://localhost:3000';
   const app = await NestFactory.create(AppModule, {
     cors: { origin: corsOrigin, credentials: true },

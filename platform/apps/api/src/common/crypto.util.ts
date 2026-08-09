@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { computeCredentialLookupHash, normalizeDelegateCode } from '@alzad/shared';
 import { authConfig } from '../config/auth.config';
 
 /**
@@ -17,6 +18,29 @@ export function sha256Hex(value: string): string {
 /** HMAC للمعرِّفات الحساسة (بريد/رمز مندوب) قبل استخدامها كـsubject_hash في auth_rate_limits — لا تُخزَّن القيمة الخام أبدًا. */
 export function hmacHex(value: string): string {
   return createHmac('sha256', authConfig.rateLimitHmacKey).update(value, 'utf8').digest('hex');
+}
+
+/**
+ * lookup hash حتمي لرمز دخول مندوب مطبَّع مسبقًا (trim+uppercase) —
+ * يُستخدم كـ`AuthCredential.identifier` لنوع DELEGATE_ACCESS_CODE بدل
+ * الرمز الخام، فيتيح findUnique O(1) بدل فحص خطي على كل بيانات اعتماد
+ * المناديب النشطة. مفتاح HMAC مستقل تمامًا عن rateLimitHmacKey/
+ * resetTokenHmacKey — راجع AUTHENTICATION.md.
+ */
+export function delegateCredentialLookupHash(normalizedDelegateCode: string): string {
+  return computeCredentialLookupHash(normalizedDelegateCode, authConfig.credentialLookupHmacKey);
+}
+
+export { normalizeDelegateCode };
+
+/**
+ * HMAC-SHA256 لرمز إعادة تعيين كلمة المرور (مطبَّع مسبقًا: trim+uppercase)
+ * — يُستخدم كـ`password_reset_tokens.token_hash` بدل SHA-256 عادي، لأن
+ * الرمز نفسه أقل entropy بكثير من رمز جلسة عشوائي (8 خانات فقط)؛ مفتاح
+ * HMAC مستقل تمامًا عن rateLimitHmacKey/credentialLookupHmacKey.
+ */
+export function resetTokenHash(normalizedCode: string): string {
+  return createHmac('sha256', authConfig.resetTokenHmacKey).update(normalizedCode, 'utf8').digest('hex');
 }
 
 /** أبجدية بلا أحرف/أرقام متشابهة بصريًا (0/O، 1/I/L) — نفس مبدأ createAccessCode_ القديم في Validation.gs. */

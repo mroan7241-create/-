@@ -1,3 +1,9 @@
+import {
+  AUTH_CREDENTIAL_LOOKUP_HMAC_KEY_DEV_DEFAULT,
+  AUTH_RATE_LIMIT_HMAC_KEY_DEV_DEFAULT,
+  AUTH_RESET_TOKEN_HMAC_KEY_DEV_DEFAULT,
+} from '@alzad/shared';
+
 /**
  * إعدادات مركزية للمصادقة — قابلة للضبط عبر متغيرات بيئة، بلا أي secret
  * حقيقي هنا (قيم افتراضية آمنة للتطوير فقط). المصدر السلوكي: Auth.gs/
@@ -37,7 +43,22 @@ export const authConfig = {
    * تطوير افتراضية فقط؛ يجب ضبط AUTH_RATE_LIMIT_HMAC_KEY في أي بيئة
    * حقيقية عبر متغير بيئة خارج GitHub تمامًا.
    */
-  rateLimitHmacKey: process.env.AUTH_RATE_LIMIT_HMAC_KEY ?? 'dev-only-rate-limit-hmac-key-change-me',
+  rateLimitHmacKey: process.env.AUTH_RATE_LIMIT_HMAC_KEY ?? AUTH_RATE_LIMIT_HMAC_KEY_DEV_DEFAULT,
+
+  /**
+   * مفتاح HMAC لحساب lookup hash لبيانات اعتماد المندوب (identifier في
+   * auth_credentials لنوع DELEGATE_ACCESS_CODE) — يتيح بحثًا O(1) بدل
+   * فحص خطي على كل بيانات الاعتماد النشطة، بلا تخزين الرمز الخام أو
+   * إعادة استخدام مفتاح HMAC آخر. راجع packages/shared/src/credential-lookup.ts.
+   */
+  credentialLookupHmacKey: process.env.AUTH_CREDENTIAL_LOOKUP_HMAC_KEY ?? AUTH_CREDENTIAL_LOOKUP_HMAC_KEY_DEV_DEFAULT,
+
+  /**
+   * مفتاح HMAC لتجزئة رمز إعادة تعيين كلمة المرور (password_reset_tokens.token_hash)
+   * — مفتاح مستقل تمامًا عن rateLimitHmacKey وcredentialLookupHmacKey،
+   * لأن الرمز نفسه أقل entropy بكثير من رمز الجلسة (8 خانات فقط).
+   */
+  resetTokenHmacKey: process.env.AUTH_RESET_TOKEN_HMAC_KEY ?? AUTH_RESET_TOKEN_HMAC_KEY_DEV_DEFAULT,
 
   /** Argon2id parameters (النوع يُضبط argon2id صراحة عند الاستدعاء — راجع common/password.util.ts). */
   argon2: {
@@ -46,3 +67,26 @@ export const authConfig = {
     parallelism: Number(process.env.AUTH_ARGON2_PARALLELISM ?? 1),
   },
 } as const;
+
+/**
+ * يرفض بدء تشغيل الخادم بوضوح إذا كان NODE_ENV=production وأي من
+ * مفاتيح HMAC الأمنية الثلاثة ما زال يحمل القيمة الافتراضية المخصَّصة
+ * للتطوير فقط — بدل السماح بتشغيل Production بمفاتيح معروفة عامةً
+ * (موجودة في الكود المصدري نفسه على GitHub) بصمت. يُستدعى مرة واحدة في
+ * apps/api/src/main.ts قبل NestFactory.create.
+ */
+export function assertProductionSecretsConfigured(): void {
+  if (process.env.NODE_ENV !== 'production') return;
+
+  const insecureVars: string[] = [];
+  if (authConfig.rateLimitHmacKey === AUTH_RATE_LIMIT_HMAC_KEY_DEV_DEFAULT) insecureVars.push('AUTH_RATE_LIMIT_HMAC_KEY');
+  if (authConfig.credentialLookupHmacKey === AUTH_CREDENTIAL_LOOKUP_HMAC_KEY_DEV_DEFAULT) insecureVars.push('AUTH_CREDENTIAL_LOOKUP_HMAC_KEY');
+  if (authConfig.resetTokenHmacKey === AUTH_RESET_TOKEN_HMAC_KEY_DEV_DEFAULT) insecureVars.push('AUTH_RESET_TOKEN_HMAC_KEY');
+
+  if (insecureVars.length > 0) {
+    throw new Error(
+      `رفض بدء التشغيل: NODE_ENV=production لكن القيم الافتراضية للتطوير ما زالت مُستخدَمة لمتغيرات البيئة الحساسة التالية: ` +
+        `${insecureVars.join(', ')}. اضبط قيمًا حقيقية عبر متغيرات بيئة خارج GitHub تمامًا قبل التشغيل.`,
+    );
+  }
+}

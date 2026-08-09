@@ -85,6 +85,19 @@ describe('Audit — security-sensitive actions recorded (NODE-1)', () => {
       .send({ currentPassword: 'AuditResetPass999', newPassword: fixtures.assocPassword });
   });
 
+  // NODE-1.1 §4 — التدقيق يُسجَّل بعد commit المعاملة فعليًا، ولا يظهر إطلاقًا عند فشل إعادة التعيين.
+  it('PASSWORD_RESET_COMPLETED لا يُسجَّل أبدًا عند فشل إعادة التعيين (رمز خاطئ)', async () => {
+    await http().post('/api/v1/auth/password-reset/request').send({ email: fixtures.assocEmail });
+
+    const failedAttempt = await http()
+      .post('/api/v1/auth/password-reset/confirm')
+      .send({ email: fixtures.assocEmail, code: 'RST-WRONG9', newPassword: 'ShouldNotApply123' });
+    expect(failedAttempt.status).toBe(400);
+
+    const completedEntries = await prisma.auditLog.findMany({ where: { action: 'PASSWORD_RESET_COMPLETED' } });
+    expect(completedEntries.length).toBe(0);
+  });
+
   it('ASSOCIATION_PASSWORD_RESET يُسجَّل عند استخدام ADMIN لإعادة تعيين كلمة مرور جمعية', async () => {
     const adminLogin = await http().post('/api/v1/auth/login').send({ type: 'user', email: fixtures.adminEmail, password: fixtures.adminPassword });
     const res = await http()

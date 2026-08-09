@@ -17,13 +17,21 @@ function requestMeta(req: Request) {
   return { ipAddress: req.ip, userAgent: req.get('user-agent') ?? undefined };
 }
 
-function setSessionCookie(res: Response, token: string, expiresAt: Date) {
+/**
+ * عمر الكوكي = absoluteExpiresAt (السقف المطلق 12h)، وليس expiresAt
+ * المنزلق (idle 6h) — المتصفح لا يجب أن يحذف الكوكي عند الساعة السادسة
+ * فيما الجلسة نفسها قد تكون ما زالت نشطة (تم تمديد expires_at في DB
+ * عبر أي طلب موثَّق لاحق). الخادم (SessionAuthGuard) هو الحكم الوحيد
+ * لصلاحية الجلسة الفعلية على كل طلب — الكوكي غلاف نقل فقط، لا يفرض
+ * idle timeout بذاته. راجع AUTHENTICATION.md §3.
+ */
+function setSessionCookie(res: Response, token: string, absoluteExpiresAt: Date) {
   res.cookie(authConfig.sessionCookieName, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
     path: '/',
-    expires: expiresAt,
+    expires: absoluteExpiresAt,
   });
 }
 
@@ -47,7 +55,7 @@ export class AuthController {
         ? await this.authService.loginDelegate(dto.code ?? '', meta)
         : await this.authService.loginUser(dto.email ?? '', dto.password ?? '', meta);
 
-    setSessionCookie(res, result.rawToken, result.expiresAt);
+    setSessionCookie(res, result.rawToken, result.absoluteExpiresAt);
     return { ok: true, user: result.account };
   }
 

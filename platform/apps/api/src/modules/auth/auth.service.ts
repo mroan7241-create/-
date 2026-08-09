@@ -3,7 +3,15 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { timingSafeEqual } from 'node:crypto';
 import { prisma, AccountRole, AccountStatus, AssociationStatus, AuthCredentialType } from '@alzad/db';
 import { authConfig } from '../../config/auth.config';
-import { generateAccessCode, generateSessionToken, generateStrongTempPassword, sha256Hex } from '../../common/crypto.util';
+import {
+  delegateCredentialLookupHash,
+  generateAccessCode,
+  generateSessionToken,
+  generateStrongTempPassword,
+  normalizeDelegateCode,
+  resetTokenHash,
+  sha256Hex,
+} from '../../common/crypto.util';
 import { hashSecret, verifySecret } from '../../common/password.util';
 import { assertPasswordPolicy } from '../../common/password-policy';
 import { RateLimitService } from '../../common/rate-limit.service';
@@ -19,6 +27,8 @@ const PASSWORD_RESET_INVALID_MESSAGE = 'رمز الاستعادة غير صحي�
 export interface LoginResult {
   rawToken: string;
   expiresAt: Date;
+  /** سقف مطلق ثابت للجلسة (12h) — الـcontroller يستخدمه لعمر الكوكي، لا expiresAt المنزلق. */
+  absoluteExpiresAt: Date;
   account: { id: string; publicCode: string; name: string; role: AccountRole; associationId: string | null; mustChangePassword: boolean };
 }
 
@@ -71,6 +81,7 @@ export class AuthService {
     return {
       rawToken: session.rawToken,
       expiresAt: session.expiresAt,
+      absoluteExpiresAt: session.absoluteExpiresAt,
       account: {
         id: account.id,
         publicCode: account.publicCode,
@@ -86,34 +97,32 @@ export class AuthService {
   // LOGIN — DELEGATE (رمز دخول، بلا بريد/كلمة مرور)
   // ================================================================
   async loginDelegate(codeRaw: string, meta: RequestMeta): Promise<LoginResult> {
-    const code = String(codeRaw || '').trim().toUpperCase();
+    const code = normalizeDelegateCode(codeRaw);
     if (!DELEGATE_CODE_RE.test(code)) throw authInvalidCredentials();
 
     await this.rateLimit.consume('login:delegate', code, authConfig.rateLimitDelegateLogin);
 
-    // لا فهرسة مباشرة ممكنة (الرمز نفسه هو السرّ، لا يُخزَّن خامًا) — فحص
-    // خطي عبر argon2.verify لكل بيانات اعتماد مندوب نشطة، نفس مبدأ
-    // full-table-scan constant-time-compare في loginDelegate_ القديمة.
-    const candidates = await prisma.authCredential.findMany({
-      where: { type: AuthCredentialType.DELEGATE_ACCESS_CODE, account: { role: AccountRole.DELEGATE, status: AccountStatus.ACTIVE } },
+    // بحث O(1) عبر lookup hash (HMAC-SHA256 بمفتاح مخصَّص) بدل فحص خطي
+    // على كل بيانات اعتماد المناديب — راجع common/crypto.util.ts
+    // وpackages/shared/src/credential-lookup.ts. لا فهرسة على الرمز
+    // الخام نفسه أبدًا (لا يُخزَّن أصلًا).
+    const lookupHash = delegateCredentialLookupHash(code);
+    const credential = await prisma.authCredential.findUnique({
+      where: { type_identifier: { type: AuthCredentialType.DELEGATE_ACCESS_CODE, identifier: lookupHash } },
       include: { account: { include: { association: true } } },
     });
 
-    let matched: (typeof candidates)[number] | null = null;
-    for (const candidate of candidates) {
-      // eslint-disable-next-line no-await-in-loop
-      if (await verifySecret(candidate.secretHash, code)) {
-        matched = candidate;
-        break;
-      }
-    }
+    const account = credential?.account;
+    const roleOk = account && account.role === AccountRole.DELEGATE && account.status === AccountStatus.ACTIVE;
+    // التحقق بـArgon2id يبقى إلزاميًا حتى بعد نجاح lookup — دفاع متعمَّق
+    // (defense-in-depth)، لا اعتماد على lookup hash وحده كإثبات هوية.
+    const passwordOk = credential && (await verifySecret(credential.secretHash, code));
 
-    if (!matched) {
+    if (!credential || !account || !roleOk || !passwordOk) {
       await delay(350);
       throw authInvalidCredentials();
     }
 
-    const account = matched.account;
     if (!account.associationId || !account.association || account.association.status !== AssociationStatus.ACTIVE) {
       throw authAssociationDisabled();
     }
@@ -125,6 +134,7 @@ export class AuthService {
     return {
       rawToken: session.rawToken,
       expiresAt: session.expiresAt,
+      absoluteExpiresAt: session.absoluteExpiresAt,
       account: {
         id: account.id,
         publicCode: account.publicCode,
@@ -136,7 +146,7 @@ export class AuthService {
     };
   }
 
-  private async createSession(accountId: string, meta: RequestMeta): Promise<{ rawToken: string; expiresAt: Date }> {
+  private async createSession(accountId: string, meta: RequestMeta): Promise<{ rawToken: string; expiresAt: Date; absoluteExpiresAt: Date }> {
     const rawToken = generateSessionToken();
     const now = new Date();
     const expiresAt = new Date(now.getTime() + authConfig.sessionIdleSeconds * 1000);
@@ -152,7 +162,7 @@ export class AuthService {
         userAgent: meta.userAgent ?? null,
       },
     });
-    return { rawToken, expiresAt };
+    return { rawToken, expiresAt, absoluteExpiresAt };
   }
 
   // ================================================================
@@ -250,7 +260,7 @@ export class AuthService {
         data: {
           accountId: account.id,
           emailNormalized: email,
-          tokenHash: sha256Hex(code),
+          tokenHash: resetTokenHash(code),
           expiresAt: new Date(Date.now() + authConfig.passwordResetTtlSeconds * 1000),
         },
       });
@@ -285,7 +295,7 @@ export class AuthService {
         return { ok: false };
       }
 
-      const providedHash = sha256Hex(code);
+      const providedHash = resetTokenHash(code);
       const isMatch = timingSafeEqualHex(providedHash, token.token_hash);
       if (!isMatch) {
         const nextAttempts = token.attempt_count + 1;
@@ -317,7 +327,6 @@ export class AuthService {
       await tx.authSession.updateMany({ where: { accountId: account.id, revokedAt: null }, data: { revokedAt: new Date() } });
       await tx.passwordResetToken.update({ where: { id: token.id }, data: { consumedAt: new Date() } });
 
-      await this.audit.log({ id: account.id, role: account.role, associationId: account.associationId }, 'PASSWORD_RESET_COMPLETED', 'accounts', account.id);
       return { ok: true, account };
     });
 
@@ -325,6 +334,17 @@ export class AuthService {
       throw new ApiError('AUTH_VALIDATION_FAILED', PASSWORD_RESET_INVALID_MESSAGE, 400);
     }
     const accountForAlert = outcome.account;
+
+    // التدقيق يُسجَّل بعد التزام (commit) المعاملة فعليًا — لا قبله من
+    // داخل $transaction — حتى لا يُسجَّل PASSWORD_RESET_COMPLETED إن
+    // فشلت المعاملة لأي سبب بعد نجاح المنطق الداخلي (تناسق ترتيب
+    // الأحداث، وليس لأن AuditService يستخدم tx نفسها أصلًا).
+    await this.audit.log(
+      { id: accountForAlert.id, role: accountForAlert.role, associationId: accountForAlert.associationId },
+      'PASSWORD_RESET_COMPLETED',
+      'accounts',
+      accountForAlert.id,
+    );
 
     try {
       await this.emailService.sendSecurityAlert({
