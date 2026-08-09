@@ -1,0 +1,15 @@
+/**
+ * أكواد خطأ مستقرة لعمليات المصادقة — مشتركة بين apps/api (يُصدرها) و
+ * apps/web (يعرض رسالة مناسبة لكل كود دون الاعتماد على نص الرسالة
+ * الإنجليزي). راجع platform/docs/AUTHENTICATION.md.
+ */
+export enum AuthErrorCode {
+  AUTH_INVALID_CREDENTIALS = 'AUTH_INVALID_CREDENTIALS',
+  AUTH_ACCOUNT_DISABLED = 'AUTH_ACCOUNT_DISABLED',
+  AUTH_ASSOCIATION_DISABLED = 'AUTH_ASSOCIATION_DISABLED',
+  AUTH_SESSION_EXPIRED = 'AUTH_SESSION_EXPIRED',
+  AUTH_FORBIDDEN = 'AUTH_FORBIDDEN',
+  AUTH_PASSWORD_CHANGE_REQUIRED = 'AUTH_PASSWORD_CHANGE_REQUIRED',
+  AUTH_RATE_LIMITED = 'AUTH_RATE_LIMITED',
+  AUTH_VALIDATION_FAILED = 'AUTH_VALIDATION_FAILED',
+}

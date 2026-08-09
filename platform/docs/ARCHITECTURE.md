@@ -164,25 +164,35 @@ foundation؛ لا نقل typography الكاملة أو المكوّنات بع�
 `MIGRATION_ROADMAP.md`). كل شاشة `<html lang="ar" dir="rtl">` من جذر
 التخطيط (`app/layout.tsx`) — لا استثناء.
 
-## 6) حدود الـModules (NODE-0)
+## 6) حدود الـModules
 
-كل module في `apps/api/src/modules/*` هيكل فقط (controller placeholder
-واحد + `_module-status` endpoint إعلامي) — الحدود بين Domains مرسومة
-الآن لتُعبَّأ تدريجيًا:
+كل module في `apps/api/src/modules/*` بدأ كهيكل NODE-0 (controller
+placeholder واحد + `_module-status` endpoint إعلامي). منذ NODE-1:
+`AuthModule` و`ReferenceDataModule` و`AuditModule` أصبحت منطقًا حقيقيًا
+كاملًا (لا placeholders)؛ بقية الوحدات أدناه لا تزال FOUNDATION_READY/
+NOT_STARTED كما في NODE-0 — راجع `FEATURE_PARITY.md` للحالة الدقيقة
+لكل دالة:
 
-`AuthModule`, `AccountsModule`, `AssociationsModule`,
+`AuthModule` ✅ NODE-1, `AccountsModule`, `AssociationsModule`,
 `ApplicationsModule`, `BeneficiariesModule`, `BeneficiaryNeedsModule`,
-`ReferenceDataModule`, `ReceiptsModule`, `InventoryModule`,
+`ReferenceDataModule` ✅ NODE-1, `ReceiptsModule`, `InventoryModule`,
 `AllocationModule`, `DelegatesModule`, `DeliveriesModule`,
-`ActivitiesModule`, `FilesModule`, `AuditModule`, `SettingsModule`.
+`ActivitiesModule`, `FilesModule`, `AuditModule` ✅ NODE-1, `SettingsModule`.
+
+`SessionAuthGuard` (`apps/api/src/modules/auth/guards/`) مسجَّل
+كـ`APP_GUARD` عالمي في `AuthModule` — يُطبَّق على **كل** endpoint في كل
+Module أعلاه تلقائيًا (`@Public()` هو الاستثناء الصريح الوحيد)، حتى
+على الـ`_module-status` placeholders التي لم تُنقَل منطقها الفعلي بعد.
+راجع `AUTHENTICATION.md` للتفصيل الكامل.
 
 ## 7) لماذا لا Redis الآن
 
-لا حاجة فعلية ظهرت في NODE-0 (لا جلسات موزَّعة متعددة العمليات بعد، لا
-rate-limiting متقدم، لا queue فعلية). `idempotency_keys` و
-`outbox_events` في PostgreSQL كافيان لهذه المرحلة. يُعاد التقييم عند
-NODE-5/NODE-6 إن ظهرت حاجة حقيقية (مثلًا queue لمعالجة `outbox_events`
-بشكل غير متزامن).
+لا حاجة فعلية ظهرت بعد (لا queue فعلية). `idempotency_keys` و
+`outbox_events` في PostgreSQL كافيان لهذه المرحلة، وكذلك `auth_rate_limits`
+(DB-backed rate limiting منذ NODE-1 — راجع AUTHENTICATION.md §11؛ قرار
+صريح بعدم استخدام Redis حتى لجلسات API متعددة instances). يُعاد
+التقييم عند NODE-5/NODE-6 إن ظهرت حاجة حقيقية (مثلًا queue لمعالجة
+`outbox_events` بشكل غير متزامن).
 
 ## 8) NEEDS_DECISION المسجَّلة في هذه المرحلة
 

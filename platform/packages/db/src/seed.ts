@@ -4,22 +4,29 @@
  * seed` داخل packages/db). آمنة لإعادة التشغيل (upsert بكل مكان).
  */
 import { PrismaClient, AccountRole, AccountStatus, AssociationStatus, AuthCredentialType, BeneficiaryReviewStatus, NeedDecisionStatus, DeviceType } from '../generated/client';
-import { randomBytes, scryptSync } from 'node:crypto';
+import * as argon2 from 'argon2';
+import { seedReferenceData } from './reference-data.seed';
 
 const prisma = new PrismaClient();
 
-function hashSecret(secret: string): string {
-  const salt = randomBytes(16).toString('hex');
-  const derived = scryptSync(secret, salt, 64).toString('hex');
-  return `scrypt:${salt}:${derived}`;
+async function hashSecret(secret: string): Promise<string> {
+  return argon2.hash(secret, { type: argon2.argon2id });
+}
+
+/** نفس صيغة رمز دخول المندوب القديمة (MND-XXXXXX) — يُطبع في السجل مرة واحدة فقط للتطوير المحلي، ولا يُخزَّن نصًا صريحًا. */
+function generateDelegateCode(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let out = '';
+  for (let i = 0; i < 6; i++) out += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return `MND-${out}`;
 }
 
 async function main() {
   const admin = await prisma.account.upsert({
-    where: { publicCode: 'MND-000001' },
+    where: { publicCode: 'ADM-000001' },
     update: {},
     create: {
-      publicCode: 'MND-000001',
+      publicCode: 'ADM-000001',
       name: 'مدير النظام (تجريبي)',
       email: 'admin@example.org',
       role: AccountRole.ADMIN,
@@ -28,15 +35,15 @@ async function main() {
         create: {
           type: AuthCredentialType.EMAIL_PASSWORD,
           identifier: 'admin@example.org',
-          secretHash: hashSecret('DevAdminPass123'),
+          secretHash: await hashSecret('DevAdminPass123'),
         },
       },
     },
   });
 
   const associationsSeed = [
-    { code: 'ASC-000001', name: 'جمعية الاختبار الأولى', accountCode: 'MND-000002', delegateCode: 'MND-000003' },
-    { code: 'ASC-000002', name: 'جمعية الاختبار الثانية', accountCode: 'MND-000004', delegateCode: 'MND-000005' },
+    { code: 'ASC-000001', name: 'جمعية الاختبار الأولى', accountCode: 'USR-000002', delegateAccountCode: 'MND-000003' },
+    { code: 'ASC-000002', name: 'جمعية الاختبار الثانية', accountCode: 'USR-000004', delegateAccountCode: 'MND-000005' },
   ];
 
   for (const seedAssoc of associationsSeed) {
@@ -69,30 +76,35 @@ async function main() {
           create: {
             type: AuthCredentialType.EMAIL_PASSWORD,
             identifier: `${seedAssoc.code.toLowerCase()}-account@example.org`,
-            secretHash: hashSecret('DevAssocPass123'),
+            secretHash: await hashSecret('DevAssocPass123'),
           },
         },
       },
     });
 
-    await prisma.account.upsert({
-      where: { publicCode: seedAssoc.delegateCode },
-      update: {},
-      create: {
-        publicCode: seedAssoc.delegateCode,
-        name: `مندوب ${seedAssoc.name}`,
-        role: AccountRole.DELEGATE,
-        associationId: association.id,
-        status: AccountStatus.ACTIVE,
-        credentials: {
-          create: {
-            type: AuthCredentialType.DELEGATE_ACCESS_CODE,
-            identifier: `${seedAssoc.code}-DLG`,
-            secretHash: hashSecret('123456'),
+    const existingDelegate = await prisma.account.findUnique({ where: { publicCode: seedAssoc.delegateAccountCode } });
+    if (!existingDelegate) {
+      const delegateAccessCode = generateDelegateCode();
+      await prisma.account.create({
+        data: {
+          publicCode: seedAssoc.delegateAccountCode,
+          name: `مندوب ${seedAssoc.name}`,
+          role: AccountRole.DELEGATE,
+          associationId: association.id,
+          status: AccountStatus.ACTIVE,
+          credentials: {
+            create: {
+              type: AuthCredentialType.DELEGATE_ACCESS_CODE,
+              // identifier غير سرّي (لمجرد فرادة UNIQUE(type, identifier)) — الرمز الفعلي لا يُخزَّن إلا كـsecretHash (Argon2id).
+              identifier: seedAssoc.delegateAccountCode,
+              secretHash: await hashSecret(delegateAccessCode),
+            },
           },
         },
-      },
-    });
+      });
+      // eslint-disable-next-line no-console
+      console.log(`رمز دخول مندوب تجريبي (${seedAssoc.name}): ${delegateAccessCode}`);
+    }
 
     const beneficiary = await prisma.beneficiary.upsert({
       where: { publicCode: `BEN-${seedAssoc.code.slice(-6)}` },
@@ -125,6 +137,8 @@ async function main() {
     });
   }
 
+  const referenceResult = await seedReferenceData(prisma);
+  console.log(`بذر البيانات المرجعية: ${referenceResult.inserted} سجلًا جديدًا (idempotent — لا تكرار).`);
   console.log('اكتمل بذر بيانات التطوير — Admin:', admin.publicCode);
 }
 

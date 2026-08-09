@@ -1,8 +1,11 @@
 erDiagram
     %% 24 كيانًا إجمالًا (association_applications وapplication_answers
     %% كيانان منفصلان) — راجع platform/docs/DATA_MODEL.md وschema.prisma.
+    %% NODE-1: auth_rate_limits (scope, subject_hash HMAC, attempt_count,
+    %% expires_at) غير مُدرَج هنا عمدًا — جدول مستقل بلا أي FK لكيان آخر.
     ACCOUNT ||--o{ AUTH_CREDENTIAL : has
     ACCOUNT ||--o{ AUTH_SESSION : has
+    ACCOUNT ||--o{ PASSWORD_RESET_TOKEN : has
     ACCOUNT }o--o| ASSOCIATION : "belongs to (nullable)"
     ASSOCIATION ||--o{ ACCOUNT : employs
     ASSOCIATION ||--o{ BENEFICIARY : owns
@@ -78,6 +81,35 @@ erDiagram
         uuid association_id FK "nullable"
         enum status
         boolean must_change_password
+        datetime last_login_at "nullable — NODE-1"
+    }
+
+    AUTH_CREDENTIAL {
+        uuid id PK
+        uuid account_id FK
+        enum type "EMAIL_PASSWORD | DELEGATE_ACCESS_CODE"
+        string identifier UK "compound (type, identifier)"
+        string secret_hash "Argon2id"
+        string previous_secret_hash "nullable — يمنع إعادة الاستخدام الفوري"
+    }
+
+    AUTH_SESSION {
+        uuid id PK
+        uuid account_id FK
+        string token_hash UK "SHA-256(raw token) — الرمز الخام لا يُخزَّن أبدًا"
+        datetime expires_at "sliding — 6h TTL"
+        datetime absolute_expires_at "ثابت — 12h سقف لا يُمدَّد — NODE-1"
+        datetime revoked_at "nullable"
+    }
+
+    PASSWORD_RESET_TOKEN {
+        uuid id PK
+        uuid account_id FK
+        string email_normalized
+        string token_hash "SHA-256(code)"
+        int attempt_count
+        datetime expires_at "15 دقيقة"
+        datetime consumed_at "nullable — استخدام واحد"
     }
 
     ASSOCIATION {

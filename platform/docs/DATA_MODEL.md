@@ -230,6 +230,35 @@ CREATE UNIQUE INDEX ux_reference_values_child
 
 راجع `STATE_MAPPING.md` و`LEGACY_DATA_MIGRATION.md` للتفصيل الكامل.
 
+## إضافات NODE-1 (مصادقة/جلسات/reference data)
+
+عبر migration جديدة `20260809050238_node1_auth_reference_data` (لم
+تُعدَّل migration `20260809043546_init` — append-only ملزم من هذه
+النقطة فصاعدًا):
+
+- `accounts.last_login_at` (`DateTime?`) — يُحدَّث بعد كل دخول ناجح فقط.
+- `auth_sessions.absolute_expires_at` (`DateTime`, NOT NULL) — سقف
+  مطلق ثابت منذ الإنشاء (12 ساعة)، منفصل عن `expires_at` المنزلق (6
+  ساعات). راجع AUTHENTICATION.md §3 لخوارزمية التمديد الكاملة.
+- `ReferenceValueType` (enum) وُسِّع من 5 إلى 10 قيم عبر `ALTER TYPE
+  ... ADD VALUE` (لا DML على القيم الجديدة ضمن نفس الـmigration —
+  آمن): أُضيف `ASSOCIATION_SECTOR`, `DEVICE_SPEC`, `SUPPLIER`,
+  `DIFFERENCE_REASON`, `RECEIVER_TITLE` لمطابقة `REFERENCE_DATA_TYPES_`
+  القديمة الكاملة (10 أنواع).
+- `password_reset_tokens` (id, account_id, email_normalized,
+  token_hash, attempt_count, expires_at, consumed_at, created_at؛
+  `@@index([account_id])`, `@@index([expires_at])`) — يستبدل اعتماد
+  القديم على `CacheService` بنموذج دائم صالح عبر أكثر من instance.
+- `auth_rate_limits` (id, scope, subject_hash, window_started_at,
+  attempt_count, expires_at, created_at, updated_at؛
+  `@@unique([scope, subject_hash])`, `@@index([expires_at])`) —
+  `subject_hash` = HMAC-SHA256 للمعرِّف الخام، لا يُخزَّن المعرِّف نفسه.
+
+راجع `AUTHENTICATION.md` للسلوك الكامل، و`ReferenceValue.parentId`
+(FK ذاتي حقيقي على `id` — على خلاف عمود "يتبع" النصي المسطَّح في
+القديم) في مخطط الـschema أعلاه للعلاقات الهرمية (REGION→CITY،
+DEVICE_TYPE→DEVICE_SPEC).
+
 ## الفهارس (Indexing Plan)
 
 مطابقة لما طُلب صراحة — لا فهارس عشوائية إضافية:

@@ -24,16 +24,27 @@ grep -oE "api\('[a-zA-Z_][a-zA-Z0-9_]*'" Index.html | sort -u
 شيء `MIGRATED` أو `PARITY_VERIFIED` بعد، كما يقتضي النطاق ("لا تحاول
 نقل كل Business Logic الآن").
 
+**تحديث NODE-1**: دوال `Auth.gs` الست و`ReferenceData.gs::getReferenceData`
+انتقلت إلى `MIGRATED` — تنفيذ حقيقي (سلوك مطابق للقديم، أُعيد قراءة
+`Auth.gs`/`ReferenceData.gs`/`Validation.gs`/`ExecutionTracking.gs`/
+`DevicesAssociations.gs` بالكامل قبل التنفيذ) + 54 اختبار تكامل/أمان
+حقيقي أخضر (`apps/api/test/*.e2e-spec.ts`) يغطي كل مسار. لم تُستخدم
+`PARITY_VERIFIED` لأن المقارنة لم تكن تشغيلًا فعليًا بالتوازي مع نظام
+Apps Script الحي (تعذّر الوصول لبيئة Apps Script من هذه الجلسة) — إنما
+قراءة الكود القديم سطرًا بسطر ومطابقة السلوك يدويًا واختبار كل حالة.
+`getBootstrapData` **يبقى `NOT_STARTED` عمدًا** — قرار مؤجَّل، راجع
+MIGRATION_ROADMAP.md.
+
 ---
 
 | Legacy Module (.gs) | Legacy Public Function | Current UI (Index.html) | New API Module | New Endpoint (planned) | New UI Route (planned) | DB Entities | Parity Status | Notes |
 |---|---|---|---|---|---|---|---|---|
-| Auth.gs | `login` | شاشة الدخول | AuthModule | `POST /auth/login` | `/login` | accounts, auth_credentials, auth_sessions | FOUNDATION_READY | Module skeleton فقط — health check لا auth فعلي بعد |
-| Auth.gs | `logout` | كل الشاشات (زر خروج) | AuthModule | `POST /auth/logout` | — | auth_sessions | NOT_STARTED | يُبطل الجلسة (`revoked_at`) |
-| Auth.gs | `changePassword` | الإعدادات | AuthModule | `PATCH /auth/password` | `/settings` | auth_credentials | NOT_STARTED | يحدّث secret_hash، ينقل القديم إلى previous_secret_hash |
-| Auth.gs | `requestPasswordReset` | شاشة الدخول | AuthModule | `POST /auth/password-reset/request` | `/login` | auth_credentials | NOT_STARTED | |
-| Auth.gs | `resetPasswordWithCode` | شاشة الدخول | AuthModule | `POST /auth/password-reset/confirm` | `/login` | auth_credentials | NOT_STARTED | |
-| Auth.gs | `resetAssociationPassword` | لوحة ADMIN | AuthModule | `POST /auth/associations/:id/reset-password` | `/admin/associations/:id` | auth_credentials | NOT_STARTED | ADMIN only |
+| Auth.gs | `login` | شاشة الدخول | AuthModule | `POST /auth/login` | `/login` | accounts, auth_credentials, auth_sessions | MIGRATED | جلسات opaque (SHA-256 hash)، Argon2id، rate limit DB-backed 8/15m — راجع AUTHENTICATION.md |
+| Auth.gs | `logout` | كل الشاشات (زر خروج) | AuthModule | `POST /auth/logout` | `/dashboard` | auth_sessions | MIGRATED | يُبطل الجلسة (`revoked_at`)، idempotent |
+| Auth.gs | `changePassword` | الإعدادات | AuthModule | `PATCH /auth/password` | `/change-password` | auth_credentials, auth_sessions | MIGRATED | يحدّث secret_hash، ينقل القديم إلى previous_secret_hash، يُبطل كل الجلسات (بما فيها الحالية) |
+| Auth.gs | `requestPasswordReset` | شاشة الدخول | AuthModule | `POST /auth/password-reset/request` | `/login/forgot-password` | password_reset_tokens | MIGRATED | رد عام موحَّد دائمًا؛ 5/15m rate limit لكل بريد |
+| Auth.gs | `resetPasswordWithCode` | شاشة الدخول | AuthModule | `POST /auth/password-reset/confirm` | `/login/forgot-password` | password_reset_tokens, auth_credentials, auth_sessions | MIGRATED | TTL=15د، 6 محاولات كحد أقصى، استخدام واحد، 10/15m rate limit |
+| Auth.gs | `resetAssociationPassword` | لوحة ADMIN | AuthModule | `POST /auth/associations/:id/reset-password` | `/admin/associations/:id` (لاحقًا) | auth_credentials, auth_sessions | MIGRATED | ADMIN only؛ كلمة مرور مؤقتة تُعاد مرة واحدة فقط، mustChangePassword=true |
 | Bootstrap.gs | `getBootstrapData` | تحميل أولي لكل لوحات التحكم | AccountsModule (+ عبر modules متعددة) | `GET /bootstrap` | (root loader) | accounts, associations, reference_values, system_settings | NOT_STARTED | يُستبدل جزئيًا بـREST endpoints مستقلة لكل نطاق (لا نمط bootstrap ضخم واحد في الهيكل الجديد إلزاميًا — قرار تصميم لاحق، راجع MIGRATION_ROADMAP) |
 | DevicesAssociations.gs | `saveAssociation` | إدارة الجمعيات (ADMIN) | AssociationsModule | `POST/PATCH /associations` | `/admin/associations` | associations, accounts | FOUNDATION_READY | |
 | DevicesAssociations.gs | `updateAssociationSettings` | إعدادات الجمعية | AssociationsModule | `PATCH /associations/:id/settings` | `/association/settings` | associations | NOT_STARTED | |
@@ -60,22 +71,28 @@ grep -oE "api\('[a-zA-Z_][a-zA-Z0-9_]*'" Index.html | sort -u
 | ReceiptBatches.gs | `listBeneficiaryDeliveryAttempts` | سجل تسليم مستفيد | DeliveriesModule | `GET /beneficiaries/:id/delivery-attempts` | `/admin/beneficiaries/:id` | delivery_attempts | NOT_STARTED | append-only، لا حذف |
 | ReceiptBatches.gs | `getDeliveryProofImage` | إثبات التسليم | FilesModule | `GET /files/:id/signed-url` | (inline في تفاصيل التسليم) | files | NOT_STARTED | signed URL مؤقت — لا رابط دائم |
 | DevicesAssociations.gs | `listDelegateAuditLog` | سجل مندوب | AuditModule | `GET /audit-logs?actorAccountId=` | `/delegate/log` | audit_logs | NOT_STARTED | append-only |
-| ReferenceData.gs | `getReferenceData` | كل القوائم المنسدلة | ReferenceDataModule | `GET /reference-values` | (شبه-كل الشاشات) | reference_values | FOUNDATION_READY | |
+| ReferenceData.gs | `getReferenceData` | كل القوائم المنسدلة | ReferenceDataModule | `GET /reference-values` | (شبه-كل الشاشات) | reference_values | MIGRATED | عام بلا جلسة كالقديم؛ لا "builtin fallback" صامت — انحراف متعمَّد، راجع AUTHENTICATION.md/ARCHITECTURE.md |
 | ActivitiesAndDashboard.gs (ضمن الملفات الحالية) | `getActivitiesBundle` | إدارة الأنشطة (ADMIN) | ActivitiesModule | `GET /activities` | `/admin/activities` | activities, activity_evidence | FOUNDATION_READY | |
 | ActivitiesAndDashboard.gs | `saveActivity` | إدارة الأنشطة (ADMIN) | ActivitiesModule | `POST/PATCH /activities` | `/admin/activities` | activities | NOT_STARTED | |
 | DevicesAssociations.gs | `getPortalBundle` | لوحة ADMIN الرئيسية (مؤشرات) | (متعدد — تجميع عبر modules) | `GET /dashboard/summary` | `/admin` | (قراءة مجمَّعة من عدة كيانات) | NOT_STARTED | ليست وحدة مستقلة — endpoint تجميعي فقط، لا منطق أعمال خاص به |
 
 ---
 
-## تغطية Parity Status (NODE-0)
+## تغطية Parity Status (بعد NODE-1)
 
 | الحالة | العدد |
 |---|---|
-| `FOUNDATION_READY` | 10 |
-| `NOT_STARTED` | 22 |
-| `MIGRATED` | 0 |
+| `FOUNDATION_READY` | 8 |
+| `NOT_STARTED` | 17 |
+| `MIGRATED` | 7 |
 | `PARITY_VERIFIED` | 0 |
 | **الإجمالي** | **32** |
+
+الأسطر السبعة `MIGRATED`: `login`، `logout`، `changePassword`،
+`requestPasswordReset`، `resetPasswordWithCode`،
+`resetAssociationPassword` (كل Auth.gs)، و`getReferenceData`
+(ReferenceData.gs). `getBootstrapData` لا يزال `NOT_STARTED` عمدًا —
+قرار NODE-1 المعتمد هو عدم نقله الآن (endpoints مستقلة بديلة).
 
 كل الـ32 دالة عامة الموجودة فعليًا في `Index.html` مُدرَجة أعلاه — لا
 endpoint واحد غاب عن هذه المصفوفة. الأعمدة الفارغة أو غير الدقيقة (مثل

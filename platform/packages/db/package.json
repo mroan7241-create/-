@@ -20,7 +20,9 @@
     "test": "jest --runInBand"
   },
   "dependencies": {
-    "@prisma/client": "^5.20.0"
+    "@alzad/shared": "*",
+    "@prisma/client": "^5.20.0",
+    "argon2": "^0.45.1"
   },
   "devDependencies": {
     "@types/jest": "^29.5.13",

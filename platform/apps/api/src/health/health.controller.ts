@@ -1,6 +1,7 @@
 import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { prisma } from '@alzad/db';
+import { Public } from '../common/decorators/public.decorator';
 
 interface HealthResponse {
   status: 'ok' | 'degraded';
@@ -14,6 +15,7 @@ interface HealthResponse {
 @ApiTags('health')
 @Controller('health')
 export class HealthController {
+  @Public()
   @Get()
   @ApiOperation({ summary: 'يتحقق من صحة الـAPI واتصال PostgreSQL' })
   async check(): Promise<HealthResponse> {

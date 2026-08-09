@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'منصة جمعية الزاد — تجريبي (NODE-0)',
-  description: 'أساس Next.js App Router الجديد — RTL، لا يزال قيد الهجرة التدريجية من Google Apps Script.',
+  title: 'منصة جمعية الزاد',
+  description: 'منصة توزيع الأجهزة الجديدة — RTL، لا تزال قيد الهجرة التدريجية من Google Apps Script.',
 };
 
 /**
