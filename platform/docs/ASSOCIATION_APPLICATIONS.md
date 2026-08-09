@@ -345,7 +345,7 @@ LEGACY_DATA_MIGRATION.md لخطة مصالحة العدّاد عند استير�
 |---|---|---|---|
 | POST | `/api/v1/association-applications` | عام | multipart، حقل الملف `licenseFile` |
 | GET | `/api/v1/association-applications/status/:clientRequestId` | عام | بلا PII |
-| GET | `/api/v1/association-applications` | ADMIN | ترقيم/بحث/تصفية بالحالة — `page`/`pageSize`/`status` بتحقق زمن تشغيل (400 لا 500)، **بلا `sortBy`/`sortDir`** (راجع §13) |
+| GET | `/api/v1/association-applications` | ADMIN | ترقيم/بحث/تصفية بالحالة — `page`/`pageSize`/`status` بتحقق زمن تشغيل (400 لا 500) — `page` محصور `[1, MAX_PAGE=100000]` و`pageSize` `[1,100]`؛ سقف `page` (NODE-2.2) حاجز ضد `skip` غير محدود لا ادّعاء عمق ترقيم، راجع ASSOCIATIONS.md، **بلا `sortBy`/`sortDir`** (راجع §13) |
 | GET | `/api/v1/association-applications/:id` | ADMIN | التفاصيل + الإجابات الثماني — `:id` عبر `ParseUUIDPipe` (400 على معرّف مشوَّه) |
 | GET | `/api/v1/association-applications/:id/license-file` | ADMIN | `{url}` signed 300s + سجل تدقيق — `:id` عبر `ParseUUIDPipe` (400 على معرّف مشوَّه) |
 | POST | `/api/v1/association-applications/:id/review` | ADMIN | `{decision, reason?, opId}` — `:id` عبر `ParseUUIDPipe` (400 على معرّف مشوَّه) |

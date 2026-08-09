@@ -6,6 +6,7 @@ import { createTestApp } from './utils/bootstrap';
 import { cleanAuthState, seedTestFixtures } from './utils/fixtures';
 import { NODE2_MARKER, cleanNode2State, loginAs, loginAsDelegate, uniqueSuffix } from './utils/node2-fixtures';
 import { clearLicenseObjects, startTestStorage, stopTestStorage } from './utils/storage-harness';
+import { MAX_PAGE } from '../src/common/pagination.util';
 
 /** NODE-2 — إدارة الجمعيات: قائمة/إنشاء مباشر/تعديل/تعطيل + إعدادات الجمعية الذاتية. */
 describe('NODE-2 — إدارة الجمعيات', () => {
@@ -383,6 +384,33 @@ describe('NODE-2 — إدارة الجمعيات', () => {
     const res = await http().get(`/api/v1/associations?pageSize=${encodeURIComponent(pageSize)}`).set('Cookie', adminCookie);
     expect(res.status).toBe(400);
   });
+
+  // ————————————————————————————————————————
+  // NODE-2.2 (1) سقف أعلى لـpage — حاجز ضد skip غير محدود
+  // ————————————————————————————————————————
+  it.each([1, MAX_PAGE])('page ضمن الحدود (%s) يُقبل بـ200', async (page) => {
+    const res = await http().get(`/api/v1/associations?page=${page}`).set('Cookie', adminCookie);
+    expect(res.status).toBe(200);
+    expect(res.body.page).toBe(page);
+    expect(Array.isArray(res.body.items)).toBe(true);
+  });
+
+  it.each([String(MAX_PAGE + 1), '1e308', '9007199254740991'])(
+    'page فوق السقف (%s) يُرفض بـ400 نظيف بلا 500 وبلا تسريب Prisma/SQL',
+    async (page) => {
+      const res = await http().get(`/api/v1/associations?page=${encodeURIComponent(page)}`).set('Cookie', adminCookie);
+      expect(res.status).toBe(400);
+      expect(res.status).not.toBe(500);
+      // مغلَّف الخطأ الموحَّد نفسه المستخدَم في NODE-2/NODE-2.1.
+      expect(res.body.ok).toBe(false);
+      expect(typeof res.body.error?.code).toBe('string');
+      expect(typeof res.body.error?.message).toBe('string');
+      const serialized = JSON.stringify(res.body);
+      expect(serialized).not.toMatch(/prisma|postgres|postgresql/i);
+      expect(serialized).not.toMatch(/SELECT |OFFSET|LIMIT|\bat \w+ \(/i);
+      expect(serialized).not.toMatch(/Infinity|NaN/);
+    },
+  );
 
   it('status عشوائي على قائمة الجمعيات يُرفض بـ400 ولا يصل إلى Prisma', async () => {
     for (const status of ['NOPE', 'active', "ACTIVE'; DROP TABLE associations; --"]) {

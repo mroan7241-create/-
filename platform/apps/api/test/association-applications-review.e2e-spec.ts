@@ -13,6 +13,7 @@ import {
   type ApplicationPayload,
 } from './utils/node2-fixtures';
 import { clearLicenseObjects, startTestStorage, stopTestStorage } from './utils/storage-harness';
+import { MAX_PAGE } from '../src/common/pagination.util';
 
 /** NODE-2 — مراجعة الطلبات (ADMIN حصرًا): قائمة/تفاصيل/ملف الترخيص/قبول/رفض. */
 describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
@@ -139,6 +140,44 @@ describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
   it.each(['abc', '-5', '0', '101', '99999'])('pageSize غير صالح (%s) على قائمة الطلبات يُرفض بـ400', async (pageSize) => {
     const res = await http().get(`/api/v1/association-applications?pageSize=${encodeURIComponent(pageSize)}`).set('Cookie', adminCookie);
     expect(res.status).toBe(400);
+  });
+
+  // ————————————————————————————————————————
+  // NODE-2.2 (1) سقف أعلى لـpage — حاجز ضد skip غير محدود
+  // ————————————————————————————————————————
+  it.each([1, MAX_PAGE])('page ضمن الحدود (%s) على قائمة الطلبات يُقبل بـ200', async (page) => {
+    const res = await http().get(`/api/v1/association-applications?page=${page}`).set('Cookie', adminCookie);
+    expect(res.status).toBe(200);
+    expect(res.body.page).toBe(page);
+    expect(Array.isArray(res.body.items)).toBe(true);
+  });
+
+  it.each([String(MAX_PAGE + 1), '1e308', '9007199254740991'])(
+    'page فوق السقف (%s) على قائمة الطلبات يُرفض بـ400 نظيف بلا 500 وبلا تسريب Prisma/SQL',
+    async (page) => {
+      const res = await http()
+        .get(`/api/v1/association-applications?page=${encodeURIComponent(page)}`)
+        .set('Cookie', adminCookie);
+      expect(res.status).toBe(400);
+      expect(res.status).not.toBe(500);
+      expect(res.body.ok).toBe(false);
+      expect(typeof res.body.error?.code).toBe('string');
+      expect(typeof res.body.error?.message).toBe('string');
+      const serialized = JSON.stringify(res.body);
+      expect(serialized).not.toMatch(/prisma|postgres|postgresql/i);
+      expect(serialized).not.toMatch(/SELECT |OFFSET|LIMIT|\bat \w+ \(/i);
+      expect(serialized).not.toMatch(/Infinity|NaN/);
+    },
+  );
+
+  it('pageSize ضمن الحدود [1,100] ما يزال يعمل كما هو (تراجُع NODE-2.1)', async () => {
+    for (const pageSize of [1, 100]) {
+      const res = await http()
+        .get(`/api/v1/association-applications?page=1&pageSize=${pageSize}`)
+        .set('Cookie', adminCookie);
+      expect(res.status).toBe(200);
+      expect(res.body.pageSize).toBe(pageSize);
+    }
   });
 
   it('status عشوائي على قائمة الطلبات يُرفض بـ400 ولا يصل إلى Prisma', async () => {
