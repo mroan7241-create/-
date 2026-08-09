@@ -68,25 +68,81 @@ export const authConfig = {
   },
 } as const;
 
+/** الحد الأدنى لطول أي مفتاح HMAC أمني في Production — 32 بايت UTF-8 (256 بت من العشوائية على الأقل). */
+const MIN_PRODUCTION_SECRET_BYTES = 32;
+
+interface ProductionSecretSpec {
+  envVar: string;
+  devDefault: string;
+}
+
+const PRODUCTION_SECRET_SPECS: ProductionSecretSpec[] = [
+  { envVar: 'AUTH_RATE_LIMIT_HMAC_KEY', devDefault: AUTH_RATE_LIMIT_HMAC_KEY_DEV_DEFAULT },
+  { envVar: 'AUTH_CREDENTIAL_LOOKUP_HMAC_KEY', devDefault: AUTH_CREDENTIAL_LOOKUP_HMAC_KEY_DEV_DEFAULT },
+  { envVar: 'AUTH_RESET_TOKEN_HMAC_KEY', devDefault: AUTH_RESET_TOKEN_HMAC_KEY_DEV_DEFAULT },
+];
+
 /**
- * يرفض بدء تشغيل الخادم بوضوح إذا كان NODE_ENV=production وأي من
- * مفاتيح HMAC الأمنية الثلاثة ما زال يحمل القيمة الافتراضية المخصَّصة
- * للتطوير فقط — بدل السماح بتشغيل Production بمفاتيح معروفة عامةً
- * (موجودة في الكود المصدري نفسه على GitHub) بصمت. يُستدعى مرة واحدة في
- * apps/api/src/main.ts قبل NestFactory.create.
+ * يرفض بدء تشغيل الخادم بوضوح إذا كان NODE_ENV=production ولم تُضبَط
+ * مفاتيح HMAC الأمنية الثلاثة (AUTH_RATE_LIMIT_HMAC_KEY،
+ * AUTH_CREDENTIAL_LOOKUP_HMAC_KEY، AUTH_RESET_TOKEN_HMAC_KEY) بقيم
+ * حقيقية صالحة — بدل السماح بتشغيل Production بمفاتيح ضعيفة أو
+ * معروفة عامةً (موجودة في الكود المصدري نفسه على GitHub) بصمت. تُقرأ
+ * متغيرات البيئة الخام مباشرة هنا (لا `authConfig.*HmacKey` الذي يستبدل
+ * القيمة الفارغة/غير المضبوطة بالافتراضي التطويري ضمنيًا عبر `??`، وهو
+ * ما كان يُخفي حالات فارغة/whitespace-only عن الفحص السابق). يُستدعى
+ * مرة واحدة في apps/api/src/main.ts قبل NestFactory.create.
+ *
+ * الشروط الأربعة لكل متغير:
+ * 1) موجود وغير فارغ بعد trim (لا مفقود، لا فارغ، لا whitespace فقط).
+ * 2) ليس القيمة الافتراضية المخصَّصة للتطوير.
+ * 3) طوله (UTF-8 بايت، بعد trim) ≥ 32 بايت.
+ * 4) مختلف عن قيمتَي المتغيرين الآخرين (لا مفتاح واحد يُعاد استخدامه لأكثر من غرض).
+ *
+ * رسالة الخطأ تذكر **أسماء** المتغيرات غير الصالحة فقط — لا تطبع أي
+ * قيمة سرّية أبدًا، حتى في حالة الفشل.
  */
 export function assertProductionSecretsConfigured(): void {
   if (process.env.NODE_ENV !== 'production') return;
 
-  const insecureVars: string[] = [];
-  if (authConfig.rateLimitHmacKey === AUTH_RATE_LIMIT_HMAC_KEY_DEV_DEFAULT) insecureVars.push('AUTH_RATE_LIMIT_HMAC_KEY');
-  if (authConfig.credentialLookupHmacKey === AUTH_CREDENTIAL_LOOKUP_HMAC_KEY_DEV_DEFAULT) insecureVars.push('AUTH_CREDENTIAL_LOOKUP_HMAC_KEY');
-  if (authConfig.resetTokenHmacKey === AUTH_RESET_TOKEN_HMAC_KEY_DEV_DEFAULT) insecureVars.push('AUTH_RESET_TOKEN_HMAC_KEY');
+  const invalidVars = new Set<string>();
+  const validTrimmedByVar = new Map<string, string>();
 
-  if (insecureVars.length > 0) {
+  for (const spec of PRODUCTION_SECRET_SPECS) {
+    const trimmed = (process.env[spec.envVar] ?? '').trim();
+    if (!trimmed) {
+      invalidVars.add(spec.envVar); // مفقود، فارغ، أو whitespace فقط
+      continue;
+    }
+    if (trimmed === spec.devDefault) {
+      invalidVars.add(spec.envVar);
+      continue;
+    }
+    if (Buffer.byteLength(trimmed, 'utf8') < MIN_PRODUCTION_SECRET_BYTES) {
+      invalidVars.add(spec.envVar);
+      continue;
+    }
+    validTrimmedByVar.set(spec.envVar, trimmed);
+  }
+
+  // فحص التكرار: فقط بين المتغيرات التي اجتازت الشروط 1-3 أعلاه بالفعل.
+  const validEntries = [...validTrimmedByVar.entries()];
+  for (let i = 0; i < validEntries.length; i++) {
+    for (let j = i + 1; j < validEntries.length; j++) {
+      if (validEntries[i][1] === validEntries[j][1]) {
+        invalidVars.add(validEntries[i][0]);
+        invalidVars.add(validEntries[j][0]);
+      }
+    }
+  }
+
+  if (invalidVars.size > 0) {
+    const orderedNames = PRODUCTION_SECRET_SPECS.map((s) => s.envVar).filter((name) => invalidVars.has(name));
     throw new Error(
-      `رفض بدء التشغيل: NODE_ENV=production لكن القيم الافتراضية للتطوير ما زالت مُستخدَمة لمتغيرات البيئة الحساسة التالية: ` +
-        `${insecureVars.join(', ')}. اضبط قيمًا حقيقية عبر متغيرات بيئة خارج GitHub تمامًا قبل التشغيل.`,
+      `رفض بدء التشغيل: NODE_ENV=production لكن متغيرات البيئة الحساسة التالية غير صالحة ` +
+        `(مفقودة/فارغة/whitespace فقط/قيمة افتراضية للتطوير/أقصر من ٣٢ بايت/مكررة بين أكثر من غرض): ` +
+        `${orderedNames.join(', ')}. اضبط قيمًا عشوائية حقيقية مختلفة تمامًا لكل متغير (32 بايت على الأقل) ` +
+        `عبر متغيرات بيئة خارج GitHub تمامًا قبل التشغيل.`,
     );
   }
 }
