@@ -1,0 +1,228 @@
+erDiagram
+    ACCOUNT ||--o{ AUTH_CREDENTIAL : has
+    ACCOUNT ||--o{ AUTH_SESSION : has
+    ACCOUNT }o--o| ASSOCIATION : "belongs to (nullable)"
+    ASSOCIATION ||--o{ ACCOUNT : employs
+    ASSOCIATION ||--o{ BENEFICIARY : owns
+    ASSOCIATION ||--o{ BENEFICIARY_NEED : owns
+    ASSOCIATION ||--o{ RECEIPT_BATCH : owns
+    ASSOCIATION ||--o{ DEVICE_UNIT : owns
+    ASSOCIATION ||--o{ DEVICE_ALLOCATION : owns
+    ASSOCIATION ||--o{ DEVICE_MOVEMENT : owns
+    ASSOCIATION ||--o{ DELIVERY_MISSION : owns
+    ASSOCIATION ||--o| ASSOCIATION_APPLICATION : "resulted from"
+
+    ASSOCIATION_APPLICATION ||--o{ APPLICATION_ANSWER : has
+    ASSOCIATION_APPLICATION }o--o| FILE : "license file"
+    ASSOCIATION_APPLICATION }o--o| ACCOUNT : "reviewed by"
+
+    BENEFICIARY ||--o{ BENEFICIARY_NEED : has
+    BENEFICIARY ||--o{ DEVICE_ALLOCATION : has
+    BENEFICIARY ||--o{ DELIVERY_MISSION : has
+    BENEFICIARY ||--o{ DELIVERY_ATTEMPT : has
+    BENEFICIARY }o--o| ACCOUNT : "reviewed by"
+
+    BENEFICIARY_NEED ||--o{ DEVICE_UNIT : "fulfilled by"
+    BENEFICIARY_NEED ||--o{ DEVICE_ALLOCATION : has
+    BENEFICIARY_NEED }o--o| ACCOUNT : "reviewed by"
+
+    RECEIPT_BATCH ||--o{ RECEIPT_ITEM : contains
+    RECEIPT_BATCH }o--|| ACCOUNT : "created by"
+    RECEIPT_BATCH }o--o| ACCOUNT : "confirmed by"
+    RECEIPT_BATCH }o--o| FILE : "quantity photo"
+    RECEIPT_BATCH }o--o| FILE : "signature photo"
+
+    RECEIPT_ITEM ||--o{ RECEIPT_DAMAGE_PHOTO : has
+    RECEIPT_ITEM ||--o{ DEVICE_UNIT : produces
+
+    RECEIPT_DAMAGE_PHOTO }o--|| FILE : references
+
+    DEVICE_UNIT ||--o{ DEVICE_ALLOCATION : "allocated via"
+    DEVICE_UNIT ||--o{ DEVICE_MOVEMENT : "moved via"
+
+    DEVICE_ALLOCATION }o--|| DEVICE_UNIT : allocates
+    DEVICE_ALLOCATION }o--|| BENEFICIARY_NEED : fulfills
+    DEVICE_ALLOCATION }o--|| BENEFICIARY : for
+    DEVICE_ALLOCATION }o--o| ACCOUNT : "created by"
+
+    DEVICE_MOVEMENT }o--|| DEVICE_UNIT : moves
+    DEVICE_MOVEMENT }o--o| ACCOUNT : "performed by"
+
+    DELIVERY_MISSION ||--o{ DELIVERY_ATTEMPT : has
+    DELIVERY_MISSION }o--o| ACCOUNT : "delegate"
+
+    DELIVERY_ATTEMPT }o--|| ACCOUNT : "delegate"
+    DELIVERY_ATTEMPT }o--o| FILE : "proof photo"
+    DELIVERY_ATTEMPT }o--o| FILE : "recipient signature"
+
+    ACTIVITY ||--o{ ACTIVITY_EVIDENCE : has
+    ACTIVITY_EVIDENCE }o--o| FILE : references
+
+    AUDIT_LOG }o--o| ACCOUNT : "actor"
+    AUDIT_LOG }o--o| ASSOCIATION : "scoped to"
+
+    IDEMPOTENCY_KEY }o--|| ACCOUNT : "owned by"
+
+    FILE }o--o| ACCOUNT : "uploaded by"
+
+    ACCOUNT {
+        uuid id PK
+        string public_code UK
+        string name
+        string email
+        enum role
+        uuid association_id FK "nullable"
+        enum status
+        boolean must_change_password
+    }
+
+    ASSOCIATION {
+        uuid id PK
+        string public_code UK
+        string name
+        enum status
+    }
+
+    ASSOCIATION_APPLICATION {
+        uuid id PK
+        string public_code UK
+        string client_request_id UK "nullable"
+        enum status
+        uuid resulting_association_id FK "nullable"
+    }
+
+    BENEFICIARY {
+        uuid id PK
+        string public_code UK
+        uuid association_id FK
+        enum review_status
+        enum legacy_status "read-only migration field"
+    }
+
+    BENEFICIARY_NEED {
+        uuid id PK
+        string public_code UK
+        uuid beneficiary_id FK
+        uuid association_id FK
+        enum device_type
+        enum decision_status
+        enum fulfillment_status "nullable"
+    }
+
+    DEVICE_UNIT {
+        uuid id PK
+        string public_code UK
+        uuid association_id FK
+        enum status
+        enum current_location_type
+        string current_location_ref "nullable"
+    }
+
+    DEVICE_ALLOCATION {
+        uuid id PK
+        uuid device_id FK
+        uuid beneficiary_need_id FK
+        uuid beneficiary_id FK
+        enum status "ACTIVE unique per device+need (partial index)"
+    }
+
+    DEVICE_MOVEMENT {
+        uuid id PK
+        uuid device_id FK
+        enum to_location_type
+        string reason
+    }
+
+    RECEIPT_BATCH {
+        uuid id PK
+        string public_code UK
+        uuid association_id FK
+        enum status
+    }
+
+    RECEIPT_ITEM {
+        uuid id PK
+        string public_code UK
+        uuid receipt_batch_id FK
+        int sent_qty "CHECK > 0"
+        int good_qty "CHECK >= 0"
+        int damaged_qty "CHECK >= 0"
+        int missing_qty "CHECK >= 0"
+    }
+
+    RECEIPT_DAMAGE_PHOTO {
+        uuid id PK
+        uuid receipt_item_id FK
+        uuid file_id FK
+    }
+
+    DELIVERY_MISSION {
+        uuid id PK
+        string public_code UK
+        uuid beneficiary_id FK
+        uuid delegate_account_id FK "nullable"
+        enum status
+    }
+
+    DELIVERY_ATTEMPT {
+        uuid id PK
+        string public_code UK
+        uuid mission_id FK
+        enum status
+        enum failure_reason "nullable"
+    }
+
+    FILE {
+        uuid id PK
+        string bucket
+        string object_key
+        enum category
+    }
+
+    ACTIVITY {
+        uuid id PK
+        string phase_name
+        string main_activity_name
+        string status
+    }
+
+    ACTIVITY_EVIDENCE {
+        uuid id PK
+        uuid activity_id FK
+        string approval_status
+    }
+
+    AUDIT_LOG {
+        uuid id PK
+        uuid actor_account_id FK "nullable"
+        string action
+        string entity_type
+        json metadata
+    }
+
+    IDEMPOTENCY_KEY {
+        uuid id PK
+        uuid account_id FK
+        string scope
+        string key
+        enum status
+    }
+
+    REFERENCE_VALUE {
+        uuid id PK
+        enum type
+        string value
+        uuid parent_id FK "nullable"
+    }
+
+    OUTBOX_EVENT {
+        uuid id PK
+        enum type
+        enum status
+        json payload
+    }
+
+    SYSTEM_SETTING {
+        string key PK
+        json value
+    }

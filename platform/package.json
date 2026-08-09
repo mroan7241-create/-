@@ -1,0 +1,27 @@
+{
+  "name": "alzad-platform",
+  "private": true,
+  "description": "منصة جمعية الزاد المستقلة (Node.js/NestJS/Next.js/PostgreSQL) — NODE-0: تأسيس فقط، لا نقل منطق أعمال كامل بعد. المرجع الوحيد للميزات هو الفرع القديم claude/code-index-review-kz5k4u.",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "lint": "npm run lint --workspace apps/api && npm run lint --workspace apps/web",
+    "typecheck": "npm run typecheck --workspace apps/api && npm run typecheck --workspace apps/web && npm run typecheck --workspace packages/db && npm run typecheck --workspace packages/shared",
+    "test": "npm run test --workspace apps/api --if-present && npm run test --workspace apps/web --if-present",
+    "build": "npm run build --workspace packages/shared && npm run build --workspace packages/db && npm run build --workspace apps/api && npm run build --workspace apps/web",
+    "prisma:validate": "npm run prisma:validate --workspace packages/db",
+    "prisma:generate": "npm run prisma:generate --workspace packages/db",
+    "db:migrate:dev": "npm run migrate:dev --workspace packages/db",
+    "db:seed": "npm run seed --workspace packages/db",
+    "dev:api": "npm run start:dev --workspace apps/api",
+    "dev:web": "npm run dev --workspace apps/web"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}

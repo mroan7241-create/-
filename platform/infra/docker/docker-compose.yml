@@ -1,0 +1,71 @@
+name: alzad-platform-dev
+
+services:
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-alzad_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-dev-only}
+      POSTGRES_DB: ${POSTGRES_DB:-alzad_platform}
+    ports:
+      - '5432:5432'
+    volumes:
+      - alzad_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-alzad_dev} -d ${POSTGRES_DB:-alzad_platform}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # تخزين كائنات متوافق مع S3 للتطوير المحلي فقط — يستبدل Google Drive
+  # metadata. كل الملفات (تراخيص/صور استلام/صور تلف/توقيعات/إثباتات
+  # تسليم) PRIVATE دومًا؛ apps/api يطبّق authorization قبل أي signed URL.
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${OBJECT_STORAGE_ACCESS_KEY:-alzad-dev}
+      MINIO_ROOT_PASSWORD: ${OBJECT_STORAGE_SECRET_KEY:-change-me-dev-only}
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - alzad_minio_data:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/api.Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-alzad_dev}:${POSTGRES_PASSWORD:-change-me-dev-only}@postgres:5432/${POSTGRES_DB:-alzad_platform}?schema=public
+    ports:
+      - '3001:3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ../..
+      dockerfile: infra/docker/web.Dockerfile
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:3001/api/v1
+    ports:
+      - '3000:3000'
+    depends_on:
+      - api
+
+volumes:
+  alzad_postgres_data:
+  alzad_minio_data:

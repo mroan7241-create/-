@@ -1,0 +1,77 @@
+name: platform-ci
+
+on:
+  push:
+    branches: [platform/node-migration]
+    paths: ['platform/**', '.github/workflows/platform-ci.yml']
+  pull_request:
+    paths: ['platform/**', '.github/workflows/platform-ci.yml']
+
+# لا Deploy في هذا الـworkflow إطلاقًا (NODE-0) — build/lint/test فقط.
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platform
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: alzad_ci
+          POSTGRES_PASSWORD: alzad_ci_password
+          POSTGRES_DB: alzad_platform_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alzad_ci -d alzad_platform_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://alzad_ci:alzad_ci_password@localhost:5432/alzad_platform_ci?schema=public
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: platform/package-lock.json
+
+      - name: install
+        run: npm install --workspaces --include-workspace-root
+
+      - name: build shared package
+        run: npm run build --workspace packages/shared
+
+      - name: prisma validate
+        run: npm run prisma:validate --workspace packages/db
+
+      - name: prisma generate
+        run: npm run prisma:generate --workspace packages/db
+
+      - name: prisma migrate deploy (against CI PostgreSQL — schema only, no data)
+        run: npm run migrate:deploy --workspace packages/db
+
+      - name: build db package
+        run: npm run build --workspace packages/db
+
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: lint
+        run: npm run lint
+
+      - name: unit + integration tests
+        run: npm run test
+
+      - name: build api
+        run: npm run build --workspace apps/api
+
+      - name: build web
+        run: npm run build --workspace apps/web

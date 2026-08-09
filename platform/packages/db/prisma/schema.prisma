@@ -1,0 +1,821 @@
+// ============================================================
+// منصة جمعية الزاد — Prisma schema (NODE-0)
+// ============================================================
+// هذا الملف هو Source of Truth الوحيد لبنية قاعدة البيانات. أي تعديل
+// على البنية يمر عبر migration جديدة هنا — ممنوع أي تعديل يدوي مباشر
+// على قاعدة البيانات (انظر platform/docs/ARCHITECTURE.md، قسم "قواعد
+// حاكمة").
+//
+// قرار معماري: Domain Model علائقي حقيقي، وليس نسخة حرفية من أوراق
+// Google Sheets القديمة. كل كيان يحمل Internal PK من نوع UUID
+// (uuidv7() — PostgreSQL 18 يدعمها أصلًا؛ ترتيب زمني قابل للفرز خلافًا
+// لـuuid v4 العشوائي)، وحقل publicCode منفصل تمامًا يحمل الرقم البشري
+// القديم (BEN-000001 ...) للعرض وربط بيانات الهجرة القديمة فقط — لا
+// يُستخدم أبدًا كـForeign Key.
+//
+// النطاق: NODE-0 يصمم كل الكيانات المطلوبة لموازاة الميزات الحالية،
+// لكن لا يُطبَّق عليها أي منطق أعمال بعد (راجع platform/docs/
+// FEATURE_PARITY.md لحالة كل نطاق).
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// Enums (تطابق حرفيًا packages/shared/src/enums.ts)
+// ============================================================
+
+enum AccountRole {
+  ADMIN
+  ASSOCIATION
+  DELEGATE
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum AuthCredentialType {
+  EMAIL_PASSWORD
+  DELEGATE_ACCESS_CODE
+}
+
+enum AssociationStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ApplicationStatus {
+  UNDER_REVIEW
+  ACCEPTED
+  REJECTED
+}
+
+enum BeneficiaryReviewStatus {
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum LegacyBeneficiaryStatus {
+  NEW
+  UNDER_REVIEW
+  APPROVED
+  AWAITING_DEVICES
+  DELIVERY_IN_PROGRESS
+  DELIVERED
+  CANCELLED
+}
+
+enum NeedDecisionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum NeedFulfillmentStatus {
+  APPROVED_ENTITLEMENT
+  AWAITING_DEVICE
+  DEVICE_READY
+  AWAITING_DELEGATE_ASSIGNMENT
+  ASSIGNED_TO_DELEGATE_PENDING
+  OUT_WITH_DELEGATE
+  DEFERRED
+  AWAITING_RETURN_CONFIRMATION
+  RETURNED_TO_ASSOCIATION_WAREHOUSE
+  DELIVERED
+}
+
+enum NeedDeviceType {
+  REFRIGERATOR
+  OVEN
+  WASHING_MACHINE
+}
+
+enum DeviceStatus {
+  WAREHOUSE
+  ALLOCATED
+  WITH_DELEGATE
+  DELIVERED
+  DAMAGED
+}
+
+enum DeliveryStatus {
+  NOT_STARTED
+  PREPARING
+  OUT_WITH_DELEGATE
+  DELIVERED
+  DELIVERY_FAILED
+}
+
+enum DeliveryFailureReason {
+  COULD_NOT_REACH
+  NO_ANSWER
+  POSTPONEMENT_REQUESTED
+  INCORRECT_ADDRESS
+  NOT_FOUND
+  RECEIPT_REFUSED
+}
+
+enum ReceiptBatchStatus {
+  DRAFT
+  AWAITING_ASSOCIATION_CONFIRMATION
+  RECEIVED_COMPLETE
+  RECEIVED_WITH_DISCREPANCIES
+}
+
+enum LocationSource {
+  MAP
+  CURRENT_LOCATION
+  IMPORT
+  MANUAL
+}
+
+enum ReferenceValueType {
+  REGION
+  CITY
+  ASSOCIATION_CATEGORY
+  SOCIAL_STATUS
+  DEVICE_TYPE
+}
+
+enum FileCategory {
+  ASSOCIATION_LICENSE
+  RECEIPT_QUANTITY_PHOTO
+  RECEIPT_SIGNATURE_PHOTO
+  RECEIPT_DAMAGE_PHOTO
+  DELIVERY_PROOF_PHOTO
+  DELIVERY_RECIPIENT_SIGNATURE
+  ACTIVITY_EVIDENCE
+}
+
+enum DeviceAllocationStatus {
+  ACTIVE
+  RELEASED
+}
+
+enum IdempotencyKeyStatus {
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
+
+enum OutboxEventType {
+  BENEFICIARY_APPROVED
+  RECEIPT_CONFIRMED
+  STOCK_INCREASED
+}
+
+enum OutboxEventStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+enum DeviceMovementLocationType {
+  WAREHOUSE
+  DELEGATE
+  BENEFICIARY
+  DAMAGED_HOLDING
+}
+
+// ============================================================
+// 1) accounts
+// ============================================================
+model Account {
+  id                String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  publicCode        String        @unique @map("public_code")
+  name              String
+  email             String?
+  role              AccountRole
+  associationId     String?       @map("association_id") @db.Uuid
+  status            AccountStatus @default(ACTIVE)
+  mustChangePassword Boolean      @default(false) @map("must_change_password")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+  archivedAt        DateTime?     @map("archived_at")
+
+  association       Association?  @relation(fields: [associationId], references: [id])
+  credentials       AuthCredential[]
+  sessions          AuthSession[]
+  reviewedApplications AssociationApplication[] @relation("ApplicationReviewedBy")
+  reviewedBeneficiaries Beneficiary[] @relation("BeneficiaryReviewedBy")
+  reviewedNeeds     BeneficiaryNeed[] @relation("NeedReviewedBy")
+  uploadedFiles     FileObject[]
+  createdReceiptBatches ReceiptBatch[] @relation("ReceiptBatchCreatedBy")
+  confirmedReceiptBatches ReceiptBatch[] @relation("ReceiptBatchConfirmedBy")
+  deviceAllocationsCreated DeviceAllocation[] @relation("AllocationCreatedBy")
+  deviceMovementsPerformed DeviceMovement[] @relation("MovementPerformedBy")
+  deliveryMissionsAsDelegate DeliveryMission[] @relation("MissionDelegate")
+  deliveryAttemptsAsDelegate DeliveryAttempt[] @relation("AttemptDelegate")
+  auditLogs         AuditLog[]
+  idempotencyKeys   IdempotencyKey[]
+
+  @@index([email, status])
+  @@map("accounts")
+}
+
+// ============================================================
+// 2) auth_credentials
+// ============================================================
+model AuthCredential {
+  id                 String             @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  accountId          String             @map("account_id") @db.Uuid
+  type               AuthCredentialType
+  identifier         String
+  secretHash         String             @map("secret_hash")
+  previousSecretHash String?            @map("previous_secret_hash")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  account            Account            @relation(fields: [accountId], references: [id])
+
+  @@unique([type, identifier])
+  @@index([accountId])
+  @@map("auth_credentials")
+}
+
+// ============================================================
+// 3) auth_sessions
+// ============================================================
+model AuthSession {
+  id         String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  accountId  String    @map("account_id") @db.Uuid
+  tokenHash  String    @unique @map("token_hash")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  lastSeenAt DateTime  @default(now()) @map("last_seen_at")
+  ipAddress  String?   @map("ip_address")
+  userAgent  String?   @map("user_agent")
+
+  account    Account   @relation(fields: [accountId], references: [id])
+
+  @@index([accountId])
+  @@map("auth_sessions")
+}
+
+// ============================================================
+// 4) associations
+// ============================================================
+model Association {
+  id           String            @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  publicCode   String            @unique @map("public_code")
+  name         String
+  category     String
+  region       String
+  city         String
+  phones       String[]
+  email        String?
+  status       AssociationStatus @default(ACTIVE)
+  createdAt    DateTime          @default(now()) @map("created_at")
+  updatedAt    DateTime          @updatedAt @map("updated_at")
+  archivedAt   DateTime?         @map("archived_at")
+
+  accounts             Account[]
+  beneficiaries        Beneficiary[]
+  beneficiaryNeeds     BeneficiaryNeed[]
+  receiptBatches       ReceiptBatch[]
+  deviceUnits          DeviceUnit[]
+  deviceAllocations    DeviceAllocation[]
+  deviceMovements      DeviceMovement[]
+  deliveryMissions     DeliveryMission[]
+  resultingApplication AssociationApplication[] @relation("ApplicationResultingAssociation")
+  auditLogs            AuditLog[]
+
+  @@index([status])
+  @@map("associations")
+}
+
+// ============================================================
+// 5) association_applications + application_answers
+// ============================================================
+model AssociationApplication {
+  id                     String            @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  publicCode             String            @unique @map("public_code")
+  clientRequestId        String?           @unique @map("client_request_id")
+  name                   String
+  category               String
+  region                 String
+  city                   String
+  phone                  String
+  email                  String?
+  contactName            String            @map("contact_name")
+  notes                  String?
+  licenseNumber          String?           @map("license_number")
+  licenseExpiryDate      DateTime?         @map("license_expiry_date") @db.Date
+  licenseFileId          String?           @map("license_file_id") @db.Uuid
+  pledgeAccepted         Boolean           @default(false) @map("pledge_accepted")
+  pledgeAcceptedAt       DateTime?         @map("pledge_accepted_at")
+  status                 ApplicationStatus @default(UNDER_REVIEW)
+  rejectReason           String?           @map("reject_reason")
+  resultingAssociationId String?           @map("resulting_association_id") @db.Uuid
+  submittedAt            DateTime          @default(now()) @map("submitted_at")
+  reviewedAt             DateTime?         @map("reviewed_at")
+  reviewedById           String?           @map("reviewed_by") @db.Uuid
+
+  licenseFile             FileObject?  @relation(fields: [licenseFileId], references: [id])
+  resultingAssociation    Association? @relation("ApplicationResultingAssociation", fields: [resultingAssociationId], references: [id])
+  reviewedBy               Account?    @relation("ApplicationReviewedBy", fields: [reviewedById], references: [id])
+  answers                  ApplicationAnswer[]
+
+  @@index([status])
+  @@map("association_applications")
+}
+
+/// أسئلة القبول الثمانية (Config.gs APPLICATION_QUESTIONS) — صف لكل سؤال بدل أعمدة ثابتة، حتى تُضاف/تُعدَّل الأسئلة مستقبلًا دون migration بنيوية.
+model ApplicationAnswer {
+  id            String                  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  applicationId String                  @map("application_id") @db.Uuid
+  questionKey   String                  @map("question_key")
+  answer        Boolean
+
+  application   AssociationApplication  @relation(fields: [applicationId], references: [id])
+
+  @@unique([applicationId, questionKey])
+  @@map("application_answers")
+}
+
+// ============================================================
+// 6) reference_values
+// ============================================================
+model ReferenceValue {
+  id       String              @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  type     ReferenceValueType
+  value    String
+  parentId String?             @map("parent_id") @db.Uuid
+  sortOrder Int                @default(0) @map("sort_order")
+  active   Boolean             @default(true)
+
+  parent   ReferenceValue?     @relation("ReferenceValueHierarchy", fields: [parentId], references: [id])
+  children ReferenceValue[]    @relation("ReferenceValueHierarchy")
+
+  @@unique([type, value, parentId])
+  @@map("reference_values")
+}
+
+// ============================================================
+// 7) beneficiaries
+// ============================================================
+model Beneficiary {
+  id                     String                  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  publicCode             String                  @unique @map("public_code")
+  associationId          String                  @map("association_id") @db.Uuid
+  name                   String
+  region                 String
+  city                   String
+  district               String?
+  phone                  String
+  secondaryPhone         String?                 @map("secondary_phone")
+  familyCount            Int                     @map("family_count")
+  socialSecurity         Boolean                 @default(false) @map("social_security")
+  maritalStatus          String                  @map("marital_status")
+  income                 Decimal?                @db.Decimal(12, 2)
+  latitude               Decimal?                @db.Decimal(9, 6)
+  longitude              Decimal?                @db.Decimal(9, 6)
+  locationSource         LocationSource?         @map("location_source")
+  locationUpdatedAt      DateTime?               @map("location_updated_at")
+
+  reviewStatus           BeneficiaryReviewStatus @default(UNDER_REVIEW) @map("review_status")
+  beneficiaryRejectReason String?                @map("beneficiary_reject_reason")
+  reviewedById            String?                @map("reviewed_by") @db.Uuid
+  reviewedAt              DateTime?              @map("reviewed_at")
+
+  /// الحقل القديم "حالة المستفيد" (Config.gs BENEFICIARY_STATUSES) — يُحفظ للقراءة التاريخية فقط أثناء الهجرة، ليس Source of Truth جديدًا (انظر platform/docs/STATE_MAPPING.md).
+  legacyStatus            LegacyBeneficiaryStatus? @map("legacy_status")
+  /// نص "الاحتياج" الحر القديم قبل beneficiary_needs — يُحفظ للأرشفة فقط.
+  legacyNeedsText          String?                @map("legacy_needs_text")
+
+  createdAt               DateTime               @default(now()) @map("created_at")
+  updatedAt                DateTime              @updatedAt @map("updated_at")
+  archivedAt                DateTime?            @map("archived_at")
+
+  association              Association           @relation(fields: [associationId], references: [id])
+  reviewedBy                Account?             @relation("BeneficiaryReviewedBy", fields: [reviewedById], references: [id])
+  needs                      BeneficiaryNeed[]
+  deviceAllocations          DeviceAllocation[]
+  deliveryMissions            DeliveryMission[]
+  deliveryAttempts             DeliveryAttempt[]
+
+  @@index([associationId, reviewStatus])
+  @@index([phone])
+  @@map("beneficiaries")
+}
+
+// ============================================================
+// 8) beneficiary_needs
+// ============================================================
+model BeneficiaryNeed {
+  id                String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  publicCode        String                 @unique @map("public_code")
+  beneficiaryId     String                 @map("beneficiary_id") @db.Uuid
+  associationId     String                 @map("association_id") @db.Uuid
+  deviceType        NeedDeviceType         @map("device_type")
+
+  decisionStatus    NeedDecisionStatus     @default(PENDING) @map("decision_status")
+  rejectReason      String?                @map("reject_reason")
+  reviewedById      String?                @map("reviewed_by") @db.Uuid
+  reviewedAt        DateTime?              @map("reviewed_at")
+
+  fulfillmentStatus NeedFulfillmentStatus? @map("fulfillment_status")
+
+  createdAt         DateTime               @default(now()) @map("created_at")
+  updatedAt         DateTime               @updatedAt @map("updated_at")
+
+  beneficiary       Beneficiary            @relation(fields: [beneficiaryId], references: [id])
+  association       Association            @relation(fields: [associationId], references: [id])
+  reviewedBy        Account?               @relation("NeedReviewedBy", fields: [reviewedById], references: [id])
+  deviceUnits       DeviceUnit[]
+  allocations       DeviceAllocation[]
+
+  /// القيد الحالي: مستفيد واحد لا يملك أكثر من احتياج واحد من نفس device_type.
+  @@unique([beneficiaryId, deviceType])
+  @@index([beneficiaryId])
+  @@index([associationId, decisionStatus, fulfillmentStatus])
+  @@map("beneficiary_needs")
+}
+
+// ============================================================
+// 9) files
+// ============================================================
+model FileObject {
+  id              String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  storageProvider String       @map("storage_provider")
+  bucket          String
+  objectKey       String       @map("object_key")
+  originalName    String       @map("original_name")
+  mimeType        String       @map("mime_type")
+  sizeBytes       BigInt       @map("size_bytes")
+  sha256          String?
+  category        FileCategory
+  uploadedById    String?      @map("uploaded_by") @db.Uuid
+  createdAt       DateTime     @default(now()) @map("created_at")
+
+  uploadedBy      Account?     @relation(fields: [uploadedById], references: [id])
+
+  associationApplications AssociationApplication[]
+  receiptBatchQuantityPhoto ReceiptBatch[] @relation("ReceiptBatchQuantityPhoto")
+  receiptBatchSignaturePhoto ReceiptBatch[] @relation("ReceiptBatchSignaturePhoto")
+  receiptDamagePhotos ReceiptDamagePhoto[]
+  deliveryAttemptProof DeliveryAttempt[] @relation("AttemptProofFile")
+  deliveryAttemptSignature DeliveryAttempt[] @relation("AttemptSignatureFile")
+  activityEvidence  ActivityEvidence[]
+
+  @@unique([bucket, objectKey])
+  @@index([category])
+  @@map("files")
+}
+
+// ============================================================
+// 10) receipt_batches
+// ============================================================
+model ReceiptBatch {
+  id                  String             @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  publicCode          String             @unique @map("public_code")
+  associationId       String             @map("association_id") @db.Uuid
+  supplierName        String             @map("supplier_name")
+  sentAt              DateTime?          @map("sent_at")
+  createdById         String             @map("created_by") @db.Uuid
+  status              ReceiptBatchStatus @default(DRAFT)
+  notes                String?
+
+  receiverName          String?          @map("receiver_name")
+  receiverTitle          String?         @map("receiver_title")
+
+  quantityPhotoFileId     String?        @map("quantity_photo_file_id") @db.Uuid
+  signatureFileId          String?       @map("signature_file_id") @db.Uuid
+
+  confirmedAt                DateTime?   @map("confirmed_at")
+  /// من يؤكد الاستلام يجب ألا يكون نفس من أنشأ المحضر (نفس قاعدة النظام القديم — تُفرض في خدمة apps/api لاحقًا، لا في القيد البنيوي وحده).
+  confirmedById               String?    @map("confirmed_by") @db.Uuid
+
+  createdAt                    DateTime  @default(now()) @map("created_at")
+  updatedAt                     DateTime @updatedAt @map("updated_at")
+
+  association          Association       @relation(fields: [associationId], references: [id])
+  createdBy             Account          @relation("ReceiptBatchCreatedBy", fields: [createdById], references: [id])
+  confirmedBy            Account?        @relation("ReceiptBatchConfirmedBy", fields: [confirmedById], references: [id])
+  quantityPhotoFile        FileObject?   @relation("ReceiptBatchQuantityPhoto", fields: [quantityPhotoFileId], references: [id])
+  signatureFile              FileObject? @relation("ReceiptBatchSignaturePhoto", fields: [signatureFileId], references: [id])
+  items                       ReceiptItem[]
+
+  @@index([associationId, status])
+  @@map("receipt_batches")
+}
+
+// ============================================================
+// 11) receipt_items
+// ============================================================
+model ReceiptItem {
+  id               String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  publicCode       String       @unique @map("public_code")
+  receiptBatchId   String       @map("receipt_batch_id") @db.Uuid
+
+  deviceType       String       @map("device_type")
+  spec             String?
+
+  sentQty          Int          @map("sent_qty")
+  goodQty          Int          @default(0) @map("good_qty")
+  damagedQty       Int          @default(0) @map("damaged_qty")
+  missingQty       Int          @default(0) @map("missing_qty")
+
+  differenceReason String?      @map("difference_reason")
+  differenceNotes  String?      @map("difference_notes")
+
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
+
+  receiptBatch     ReceiptBatch @relation(fields: [receiptBatchId], references: [id])
+  damagePhotos     ReceiptDamagePhoto[]
+  deviceUnits      DeviceUnit[]
+
+  @@index([receiptBatchId])
+  @@map("receipt_items")
+}
+
+// ============================================================
+// 12) receipt_damage_photos
+// ============================================================
+model ReceiptDamagePhoto {
+  id            String      @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  publicCode    String      @unique @map("public_code")
+  receiptItemId String      @map("receipt_item_id") @db.Uuid
+  fileId        String      @map("file_id") @db.Uuid
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  receiptItem   ReceiptItem @relation(fields: [receiptItemId], references: [id])
+  file          FileObject  @relation(fields: [fileId], references: [id])
+
+  @@index([receiptItemId])
+  @@map("receipt_damage_photos")
+}
+
+// ============================================================
+// 13) device_units
+// ============================================================
+model DeviceUnit {
+  id                 String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  publicCode         String        @unique @map("public_code")
+
+  associationId      String        @map("association_id") @db.Uuid
+  deviceType         String        @map("device_type")
+  spec               String?
+  receiptItemId      String?       @map("receipt_item_id") @db.Uuid
+
+  status             DeviceStatus  @default(WAREHOUSE)
+
+  currentLocationType DeviceMovementLocationType @map("current_location_type")
+  currentLocationRef  String?      @map("current_location_ref") @db.Uuid
+
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+  deliveredAt         DateTime?    @map("delivered_at")
+
+  association         Association  @relation(fields: [associationId], references: [id])
+  receiptItem          ReceiptItem? @relation(fields: [receiptItemId], references: [id])
+  allocations           DeviceAllocation[]
+  movements              DeviceMovement[]
+  beneficiaryNeed          BeneficiaryNeed? @relation(fields: [beneficiaryNeedId], references: [id])
+  beneficiaryNeedId          String?  @map("beneficiary_need_id") @db.Uuid
+
+  @@index([associationId, deviceType, status])
+  @@map("device_units")
+}
+
+// ============================================================
+// 14) device_allocations
+// ============================================================
+model DeviceAllocation {
+  id               String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  deviceId         String                 @map("device_id") @db.Uuid
+  beneficiaryNeedId String                @map("beneficiary_need_id") @db.Uuid
+  beneficiaryId     String                @map("beneficiary_id") @db.Uuid
+  associationId      String               @map("association_id") @db.Uuid
+
+  status             DeviceAllocationStatus @default(ACTIVE)
+  allocatedAt         DateTime             @default(now()) @map("allocated_at")
+  releasedAt            DateTime?          @map("released_at")
+  releaseReason           String?          @map("release_reason")
+
+  createdById               String?        @map("created_by") @db.Uuid
+  source                     String?        /// اسم العملية المصدر (allocator/manual/rebalance) — للتتبع فقط
+
+  device               DeviceUnit          @relation(fields: [deviceId], references: [id])
+  beneficiaryNeed        BeneficiaryNeed   @relation(fields: [beneficiaryNeedId], references: [id])
+  beneficiary              Beneficiary     @relation(fields: [beneficiaryId], references: [id])
+  association                Association   @relation(fields: [associationId], references: [id])
+  createdBy                    Account?    @relation("AllocationCreatedBy", fields: [createdById], references: [id])
+
+  /// "الجهاز يملك تخصيصًا نشطًا واحدًا فقط" و"الاحتياج لا يملك أكثر من جهاز Active" — partial unique indexes حقيقية تُضاف عبر SQL خام في الـmigration (راجع migration.sql: ux_device_allocations_active_device / ux_device_allocations_active_need)، لأن Prisma schema لا يدعم WHERE على @@unique مباشرة.
+  @@index([associationId, status])
+  @@map("device_allocations")
+}
+
+// ============================================================
+// 15) device_movements (append-only)
+// ============================================================
+model DeviceMovement {
+  id               String                     @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  deviceId         String                     @map("device_id") @db.Uuid
+  associationId    String                     @map("association_id") @db.Uuid
+
+  fromLocationType DeviceMovementLocationType? @map("from_location_type")
+  fromLocationRef  String?                    @map("from_location_ref") @db.Uuid
+  toLocationType   DeviceMovementLocationType @map("to_location_type")
+  toLocationRef    String?                    @map("to_location_ref") @db.Uuid
+
+  reason           String
+  referenceType    String?                    @map("reference_type")
+  referenceId      String?                    @map("reference_id") @db.Uuid
+
+  performedById    String?                    @map("performed_by") @db.Uuid
+  createdAt        DateTime                   @default(now()) @map("created_at")
+
+  device           DeviceUnit                 @relation(fields: [deviceId], references: [id])
+  association      Association                @relation(fields: [associationId], references: [id])
+  performedBy      Account?                   @relation("MovementPerformedBy", fields: [performedById], references: [id])
+
+  @@index([deviceId, createdAt])
+  @@map("device_movements")
+}
+
+// ============================================================
+// 16) delivery_missions
+// ============================================================
+model DeliveryMission {
+  id                String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  publicCode        String          @unique @map("public_code")
+
+  beneficiaryId     String          @map("beneficiary_id") @db.Uuid
+  associationId     String          @map("association_id") @db.Uuid
+  delegateAccountId String?         @map("delegate_account_id") @db.Uuid
+
+  status            DeliveryStatus  @default(NOT_STARTED)
+  assignedAt        DateTime?       @map("assigned_at")
+  scheduledFor      DateTime?       @map("scheduled_for")
+
+  createdAt         DateTime        @default(now()) @map("created_at")
+  updatedAt         DateTime        @updatedAt @map("updated_at")
+
+  beneficiary       Beneficiary     @relation(fields: [beneficiaryId], references: [id])
+  association       Association     @relation(fields: [associationId], references: [id])
+  delegate          Account?        @relation("MissionDelegate", fields: [delegateAccountId], references: [id])
+  attempts          DeliveryAttempt[]
+
+  @@index([delegateAccountId, status])
+  @@index([associationId, status])
+  @@map("delivery_missions")
+}
+
+// ============================================================
+// 17) delivery_attempts (append-only، تمثل ورقة "التسليمات")
+// ============================================================
+model DeliveryAttempt {
+  id                        String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  publicCode                String                 @unique @map("public_code")
+  missionId                 String                 @map("mission_id") @db.Uuid
+  beneficiaryId              String                @map("beneficiary_id") @db.Uuid
+  delegateAccountId           String               @map("delegate_account_id") @db.Uuid
+
+  status                       DeliveryStatus       @map("status")
+  failureReason                  DeliveryFailureReason? @map("failure_reason")
+  notes                            String?
+
+  proofFileId                       String?         @map("proof_file_id") @db.Uuid
+  recipientSignatureFileId             String?      @map("recipient_signature_file_id") @db.Uuid
+
+  attemptedAt                            DateTime   @map("attempted_at")
+  createdAt                                DateTime @default(now()) @map("created_at")
+
+  mission       DeliveryMission @relation(fields: [missionId], references: [id])
+  beneficiary   Beneficiary     @relation(fields: [beneficiaryId], references: [id])
+  delegate      Account         @relation("AttemptDelegate", fields: [delegateAccountId], references: [id])
+  proofFile     FileObject?     @relation("AttemptProofFile", fields: [proofFileId], references: [id])
+  signatureFile FileObject?     @relation("AttemptSignatureFile", fields: [recipientSignatureFileId], references: [id])
+
+  @@index([missionId])
+  @@map("delivery_attempts")
+}
+
+// ============================================================
+// 18) activities
+// ============================================================
+model Activity {
+  id               String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  phaseOrder       Int      @map("phase_order")
+  phaseName        String   @map("phase_name")
+  mainActivityOrder Int     @map("main_activity_order")
+  mainActivityName  String  @map("main_activity_name")
+  subActivityName    String? @map("sub_activity_name")
+  responsible          String?
+  startDate               DateTime? @map("start_date") @db.Date
+  endDate                   DateTime? @map("end_date") @db.Date
+  completionPercent           Decimal @default(0) @map("completion_percent") @db.Decimal(5, 2)
+  status                        String
+  notes                            String?
+
+  createdAt                          DateTime @default(now()) @map("created_at")
+  updatedAt                            DateTime @updatedAt @map("updated_at")
+
+  evidence                              ActivityEvidence[]
+
+  @@map("activities")
+}
+
+// ============================================================
+// 19) activity_evidence
+// ============================================================
+model ActivityEvidence {
+  id               String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  activityId       String   @map("activity_id") @db.Uuid
+  fileId           String?  @map("file_id") @db.Uuid
+  approvalStatus   String   @map("approval_status")
+  notes            String?
+  uploadedAt       DateTime @default(now()) @map("uploaded_at")
+
+  activity         Activity    @relation(fields: [activityId], references: [id])
+  file             FileObject? @relation(fields: [fileId], references: [id])
+
+  @@index([activityId])
+  @@map("activity_evidence")
+}
+
+// ============================================================
+// 20) audit_logs (append-only)
+// ============================================================
+model AuditLog {
+  id              String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  actorAccountId  String?      @map("actor_account_id") @db.Uuid
+  actorRole       AccountRole? @map("actor_role")
+  associationId   String?      @map("association_id") @db.Uuid
+
+  action          String
+  entityType      String       @map("entity_type")
+  entityId        String?      @map("entity_id")
+
+  metadata        Json?
+
+  createdAt       DateTime     @default(now()) @map("created_at")
+
+  actorAccount    Account?     @relation(fields: [actorAccountId], references: [id])
+  association     Association? @relation(fields: [associationId], references: [id])
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorAccountId, createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================================
+// 21) idempotency_keys
+// ============================================================
+model IdempotencyKey {
+  id            String               @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  accountId     String               @map("account_id") @db.Uuid
+  scope         String
+  key           String
+  requestHash   String               @map("request_hash")
+  status        IdempotencyKeyStatus @default(IN_PROGRESS)
+  responseJson  Json?                @map("response_json")
+  createdAt     DateTime             @default(now()) @map("created_at")
+  expiresAt     DateTime?            @map("expires_at")
+
+  account       Account              @relation(fields: [accountId], references: [id])
+
+  @@unique([accountId, scope, key])
+  @@map("idempotency_keys")
+}
+
+// ============================================================
+// 22) system_settings
+// ============================================================
+model SystemSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("system_settings")
+}
+
+// ============================================================
+// 23) outbox_events (Transactional Outbox)
+// ============================================================
+model OutboxEvent {
+  id           String            @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  type         OutboxEventType
+  status       OutboxEventStatus @default(PENDING)
+  payload      Json
+  createdAt    DateTime          @default(now()) @map("created_at")
+  processedAt  DateTime?         @map("processed_at")
+  attempts     Int               @default(0)
+  lastError    String?           @map("last_error")
+
+  @@index([status, createdAt])
+  @@map("outbox_events")
+}

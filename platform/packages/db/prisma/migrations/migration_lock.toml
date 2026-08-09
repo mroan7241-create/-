@@ -1,0 +1,2 @@
+# يديره Prisma تلقائيًا — لا تعدّله يدويًا.
+provider = "postgresql"

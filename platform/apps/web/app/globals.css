@@ -1,0 +1,74 @@
+/* Design tokens — منقولة حرفيًا من Index.html (الفرع القديم) كمرجع
+   هوية أولي. راجع platform/docs/ARCHITECTURE.md ("هوية جمعية الزاد")
+   قبل توسيعها في NODE لاحقة؛ لا تُنقل بقية التصميم (typography الكاملة،
+   المكوّنات) في NODE-0 عمدًا. */
+:root {
+  --zad-950: #4a0a22;
+  --zad-900: #5e0e2c;
+  --zad-800: #75123a;
+  --zad-700: #8e1b45;
+  --zad-600: #a32b4c;
+  --zad-500: #b3423f;
+  --zad-400: #c05a4c;
+  --zad-300: #d98c81;
+  --zad-200: #edc4bd;
+  --zad-100: #f8e6e2;
+
+  --gold-700: #b07c12;
+  --gold-600: #c9901a;
+  --gold-500: #e2a62e;
+  --gold-400: #eebe5e;
+  --gold-200: #f7e3b6;
+  --gold-100: #fdf4e2;
+
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 20px;
+
+  --canvas: #fbf7f5;
+  --paper: #ffffff;
+  --ink: #2a1420;
+  --line: #ecdfe0;
+
+  --font-display: 'Tajawal', 'IBM Plex Sans Arabic', Tahoma, Arial, sans-serif;
+  --font-body: 'Tajawal', 'IBM Plex Sans Arabic', Tahoma, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+}
+
+body {
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.7;
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display);
+  line-height: 1.3;
+  margin: 0;
+  color: var(--zad-800);
+}
+
+a {
+  color: var(--zad-700);
+}
+
+code {
+  direction: ltr;
+  display: inline-block;
+  unicode-bidi: isolate;
+}

@@ -1,0 +1,25 @@
+# Node
+node_modules/
+dist/
+build/
+.next/
+out/
+coverage/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Prisma generated client (regenerated from schema.prisma at install time)
+packages/db/generated/
+
+# Logs
+*.log
+npm-debug.log*
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# OS
+.DS_Store

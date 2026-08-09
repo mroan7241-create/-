@@ -1,0 +1,29 @@
+{
+  "name": "@alzad/db",
+  "version": "0.0.1",
+  "private": true,
+  "description": "طبقة قاعدة البيانات (Prisma + PostgreSQL) للمنصة الجديدة — schema.prisma هو Source of Truth الوحيد للبنية؛ لا تعديل يدوي على قاعدة البيانات.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "prisma": {
+    "seed": "ts-node --transpile-only src/seed.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "echo 'no lint configured yet for packages/db'",
+    "prisma:generate": "prisma generate",
+    "prisma:validate": "prisma validate",
+    "migrate:dev": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
+    "seed": "prisma db seed"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.20.0"
+  },
+  "devDependencies": {
+    "prisma": "^5.20.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
+  }
+}
