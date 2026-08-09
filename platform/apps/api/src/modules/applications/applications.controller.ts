@@ -1,7 +1,7 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { ApplicationStatus, AccountRole } from '@alzad/db';
+import { AccountRole } from '@alzad/db';
 import { Public } from '../../common/decorators/public.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -10,6 +10,7 @@ import { ApiError } from '../../common/api-error';
 import { LICENSE_FILE_MAX_BYTES } from '../files/file-validation.util';
 import { ApplicationsService } from './applications.service';
 import { ReviewApplicationDto, SubmitApplicationDto } from './dto/submit-application.dto';
+import { ListApplicationsQueryDto } from './dto/list-applications-query.dto';
 
 @ApiTags('applications')
 @Controller()
@@ -66,38 +67,28 @@ export class ApplicationsController {
   @Get('association-applications')
   @Roles(AccountRole.ADMIN)
   @ApiOperation({ summary: 'قائمة طلبات الانضمام — ADMIN فقط، مع pagination/search/filter' })
-  async list(
-    @Query('page') page?: string,
-    @Query('pageSize') pageSize?: string,
-    @Query('search') search?: string,
-    @Query('status') status?: ApplicationStatus,
-  ) {
-    return this.applications.listApplications({
-      page: page ? Number(page) : undefined,
-      pageSize: pageSize ? Number(pageSize) : undefined,
-      search,
-      status,
-    });
+  async list(@Query() query: ListApplicationsQueryDto) {
+    return this.applications.listApplications(query);
   }
 
   @Get('association-applications/:id')
   @Roles(AccountRole.ADMIN)
   @ApiOperation({ summary: 'تفاصيل طلب انضمام — ADMIN فقط' })
-  async detail(@Param('id') id: string) {
+  async detail(@Param('id', ParseUUIDPipe) id: string) {
     return this.applications.getApplicationDetail(id);
   }
 
   @Get('association-applications/:id/license-file')
   @Roles(AccountRole.ADMIN)
   @ApiOperation({ summary: 'رابط موقَّع قصير العمر لعرض ملف الترخيص — ADMIN فقط، Audit عند كل عرض' })
-  async licenseFile(@CurrentUser() ctx: AuthContext, @Param('id') id: string) {
+  async licenseFile(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string) {
     return this.applications.getLicenseSignedUrl(ctx, id);
   }
 
   @Post('association-applications/:id/review')
   @Roles(AccountRole.ADMIN)
   @ApiOperation({ summary: 'قبول/رفض طلب انضمام — ADMIN فقط، نهائي، idempotent عبر opId' })
-  async review(@CurrentUser() ctx: AuthContext, @Param('id') id: string, @Body() dto: ReviewApplicationDto) {
+  async review(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ReviewApplicationDto) {
     return this.applications.reviewApplication(ctx, id, dto.decision, dto.reason, dto.opId);
   }
 }

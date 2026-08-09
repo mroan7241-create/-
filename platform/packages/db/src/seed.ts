@@ -148,7 +148,55 @@ async function main() {
 
   const referenceResult = await seedReferenceData(prisma);
   console.log(`بذر البيانات المرجعية: ${referenceResult.inserted} سجلًا جديدًا (idempotent — لا تكرار).`);
+
+  await reconcilePublicCodeCounters();
   console.log('اكتمل بذر بيانات التطوير — Admin:', admin.publicCode);
+}
+
+/**
+ * الجداول التي تحمل publicCode بصيغة `PREFIX-000000` ويولّدها
+ * PublicCodeService من نفس عدّاد public_code_counters.
+ */
+const PUBLIC_CODE_SOURCES: { prefix: string; table: string }[] = [
+  { prefix: 'ADM', table: 'accounts' },
+  { prefix: 'USR', table: 'accounts' },
+  { prefix: 'MND', table: 'accounts' },
+  { prefix: 'ASC', table: 'associations' },
+  { prefix: 'BEN', table: 'beneficiaries' },
+  { prefix: 'NED', table: 'beneficiary_needs' },
+  { prefix: 'APP', table: 'association_applications' },
+];
+
+/**
+ * يُقدّم عدّاد public_code_counters ليتجاوز أكبر رقم بذَره هذا الملف يدويًا.
+ *
+ * الخلل المُصحَّح (كان قائمًا قبل NODE-2.1 ومستقلًا عنها): البذر يكتب
+ * رموزًا ثابتة مثل `ASC-000001`/`ASC-000002` مباشرةً **دون** أن يحجزها في
+ * public_code_counters، بينما `PublicCodeService.nextPublicCode` يبدأ من 1
+ * دائمًا. فأول جمعية تُنشأ عبر الـAPI على قاعدة بيانات جديدة تحصل على
+ * `ASC-000001` المحجوز أصلًا فتفشل بـ`Unique constraint failed on
+ * public_code` (خطأ 500 خام). كان الخلل يختفي في التشغيل الثاني لأن
+ * العدّاد يكون قد تجاوز الرموز المبذورة، فبدا كأنه تقطّع عشوائي.
+ *
+ * التصحيح هنا لا في PublicCodeService عمدًا: المولّد الذرّي سليم، والخطأ
+ * أن البذر يفتعل رموزًا بلا حجز. `greatest(...)` تجعل العملية idempotent
+ * ولا تُنقص عدّادًا تقدَّم فعلًا. الشرط النصّي يقتصر على `PREFIX-` متبوعًا
+ * بستّ خانات رقمية حصرًا حتى لا تدخل رموز المناديب العشوائية
+ * (`MND-SEXKR5`) في الحساب.
+ */
+async function reconcilePublicCodeCounters(): Promise<void> {
+  for (const { prefix, table } of PUBLIC_CODE_SOURCES) {
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO public_code_counters (prefix, next_value, updated_at)
+       SELECT $1, coalesce(max((substring(public_code from '[0-9]{6}$'))::int), 0), now()
+         FROM ${table}
+        WHERE public_code ~ ('^' || $1 || '-[0-9]{6}$')
+       ON CONFLICT (prefix) DO UPDATE
+         SET next_value = greatest(public_code_counters.next_value, excluded.next_value),
+             updated_at = now()`,
+      prefix,
+    );
+  }
 }
 
 main()

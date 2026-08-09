@@ -43,6 +43,30 @@ export function resetTokenHash(normalizedCode: string): string {
   return createHmac('sha256', authConfig.resetTokenHmacKey).update(normalizedCode, 'utf8').digest('hex');
 }
 
+/**
+ * NODE-2.1 — بصمة حتمية (HMAC-SHA256) لكلمة المرور المؤقتة التي يزوّدها
+ * ADMIN عند الإنشاء المباشر لجمعية. الغرض **وحيد**: إدخال كلمة المرور
+ * ضمن حمولة مقارنة idempotency (`association-create`) دون أن تعبر أي
+ * بايت صريح منها إلى أي شيء يُخزَّن أو يُسجَّل — لا request_hash ولا
+ * response_json ولا audit_logs ولا سجلات التطبيق.
+ *
+ * لماذا HMAC لا SHA-256 عادي: كلمات المرور المؤقتة قابلة للتخمين
+ * بالقاموس؛ تجزئة بلا مفتاح في عمود مخزَّن تُتيح هجوم قاموس دون اتصال.
+ * المفتاح هنا هو `rateLimitHmacKey` نفسه المستخدَم أصلًا لتحويل
+ * المعرِّفات الحساسة إلى `subject_hash` — نفس الغرض بالضبط (بصمة غير
+ * قابلة للعكس لقيمة حساسة تُقارَن بالتساوي فقط) — مع **فصل نطاق** صريح
+ * عبر بادئة رسالة ثابتة، فلا تتقاطع أي بصمة هنا مع أي بصمة هناك. لا
+ * يُضاف أي secret/متغير بيئة جديد.
+ *
+ * أثر تدوير المفتاح: opId قديم يُعاد بعد التدوير سيُقارَن ببصمة مختلفة
+ * فيُرفَض بـ409 (fail-closed) — سلوك محافظ ومقصود، لا يُنشئ تكرارًا.
+ */
+export function associationCreatePasswordFingerprint(temporaryPassword: string): string {
+  return createHmac('sha256', authConfig.rateLimitHmacKey)
+    .update(`association-create-password:v1:${temporaryPassword}`, 'utf8')
+    .digest('hex');
+}
+
 /** أبجدية بلا أحرف/أرقام متشابهة بصريًا (0/O، 1/I/L) — نفس مبدأ createAccessCode_ القديم في Validation.gs. */
 const ACCESS_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 

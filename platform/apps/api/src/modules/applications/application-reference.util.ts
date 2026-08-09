@@ -32,6 +32,19 @@ export async function validateRegionCity(regionRaw: string, cityRaw: string): Pr
   return { region, city };
 }
 
+/**
+ * تطبيع اسم التصنيف التاريخي إلى اسمه الرسمي ("بر" → "جمعية بر") بلا أي
+ * تحقق — يطابق سطر `REFERENCE_LEGACY_CATEGORY_SYNONYMS[value] || value`
+ * في validateAssociationCategory_ القديمة. مُصدَّر لأن مسار
+ * grandfathering في تعديل الجمعية (NODE-2.1) يحتاج القيمة الرسمية نفسها
+ * التي كانت Legacy تُعيدها حتى في فرع القيمة التاريخية المقبولة.
+ */
+export function canonicalizeAssociationCategory(categoryRaw?: string): string {
+  const raw = String(categoryRaw ?? '').trim();
+  if (!raw) return '';
+  return CATEGORY_SYNONYMS[raw] ?? raw;
+}
+
 /** category اختياري — إن أُرسل يجب أن يكون قيمة نشطة (بعد تطبيق مرادفات Legacy) في ASSOCIATION_CATEGORY. */
 export async function validateAssociationCategory(categoryRaw?: string): Promise<string | undefined> {
   const raw = String(categoryRaw ?? '').trim();

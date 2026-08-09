@@ -243,6 +243,259 @@ describe('NODE-2 — إدارة الجمعيات', () => {
   });
 
   // ————————————————————————————————————————
+  // NODE-2.1 (1) البيانات المرجعية عند الإنشاء المباشر
+  // ————————————————————————————————————————
+  it('الإنشاء المباشر يرفض منطقة غير معروفة وزوج منطقة/مدينة غير متطابق وتصنيفًا غير معتمد', async () => {
+    const badRegion = await createAssociation(newAssociationBody({ region: 'منطقة وهمية', city: 'الرياض' }));
+    expect(badRegion.status).toBe(400);
+    expect(badRegion.body.error.code).toBe('APPLICATION_INVALID_REFERENCE');
+
+    const badPair = await createAssociation(newAssociationBody({ region: 'الرياض', city: 'جدة' }));
+    expect(badPair.status).toBe(400);
+    expect(badPair.body.error.code).toBe('APPLICATION_INVALID_REFERENCE');
+
+    const badCategory = await createAssociation(newAssociationBody({ category: 'تصنيف غير موجود' }));
+    expect(badCategory.status).toBe(400);
+    expect(badCategory.body.error.code).toBe('APPLICATION_INVALID_REFERENCE');
+
+    // لا شيء أُنشئ من أيٍّ من المحاولات الثلاث.
+    expect(await prisma.association.count({ where: { name: { contains: NODE2_MARKER } } })).toBe(0);
+  });
+
+  it('المرادف التاريخي «بر» يُطبَّع إلى «جمعية بر» عند الإنشاء المباشر', async () => {
+    const body = newAssociationBody({ category: 'بر' });
+    const res = await createAssociation(body);
+    expect(res.status).toBe(201);
+
+    const association = await prisma.association.findUniqueOrThrow({ where: { id: res.body.associationId } });
+    expect(association.category).toBe('جمعية بر');
+  });
+
+  // ————————————————————————————————————————
+  // NODE-2.1 (1) grandfathering عند التعديل
+  // ————————————————————————————————————————
+  /** ينشئ جمعية صالحة ثم يزرع فيها قيمًا مرجعية تاريخية غير معتمدة مباشرةً في القاعدة. */
+  async function createWithLegacyReferenceValues() {
+    const body = newAssociationBody();
+    const created = await createAssociation(body);
+    expect(created.status).toBe(201);
+    const id = created.body.associationId as string;
+
+    await prisma.association.update({
+      where: { id },
+      data: { category: 'تصنيف تاريخي ملغى', region: 'منطقة تاريخية', city: 'مدينة تاريخية' },
+    });
+    return { id, body };
+  }
+
+  it('تعديل حقل غير ذي صلة ينجح رغم وجود تصنيف/منطقة/مدينة تاريخية غير معتمدة (grandfathering)', async () => {
+    const { id } = await createWithLegacyReferenceValues();
+
+    const res = await http()
+      .patch(`/api/v1/associations/${id}`)
+      .set('Cookie', adminCookie)
+      .send({ name: `${NODE2_MARKER} اسم جديد فقط`, phone: '0561111111' });
+    expect(res.status).toBe(200);
+
+    const after = await prisma.association.findUniqueOrThrow({ where: { id } });
+    expect(after.name).toBe(`${NODE2_MARKER} اسم جديد فقط`);
+    expect(after.phones).toEqual(['0561111111']);
+    // الحقول التاريخية لم تُمَسّ ولم تُجبَر على إعادة التحقق.
+    expect(after.category).toBe('تصنيف تاريخي ملغى');
+    expect(after.region).toBe('منطقة تاريخية');
+    expect(after.city).toBe('مدينة تاريخية');
+  });
+
+  it('إعادة إرسال نفس القيمة التاريخية بعينها مقبولة، واستبدالها بقيمة غير صالحة أخرى مرفوضة', async () => {
+    const { id } = await createWithLegacyReferenceValues();
+
+    // نفس القيم المخزَّنة حرفيًا — مقبولة (isGrandfatheredValue_ في Legacy).
+    const same = await http()
+      .patch(`/api/v1/associations/${id}`)
+      .set('Cookie', adminCookie)
+      .send({ category: 'تصنيف تاريخي ملغى', region: 'منطقة تاريخية', city: 'مدينة تاريخية' });
+    expect(same.status).toBe(200);
+
+    // قيمة غير صالحة **أخرى** — مرفوضة في الحقول الثلاثة، لا تبديل لغير صالح بغير صالح.
+    const otherCategory = await http()
+      .patch(`/api/v1/associations/${id}`)
+      .set('Cookie', adminCookie)
+      .send({ category: 'تصنيف ملغى آخر' });
+    expect(otherCategory.status).toBe(400);
+    expect(otherCategory.body.error.code).toBe('APPLICATION_INVALID_REFERENCE');
+
+    const otherRegion = await http().patch(`/api/v1/associations/${id}`).set('Cookie', adminCookie).send({ region: 'منطقة ملغاة أخرى' });
+    expect(otherRegion.status).toBe(400);
+
+    const otherCity = await http().patch(`/api/v1/associations/${id}`).set('Cookie', adminCookie).send({ city: 'مدينة ملغاة أخرى' });
+    expect(otherCity.status).toBe(400);
+
+    const after = await prisma.association.findUniqueOrThrow({ where: { id } });
+    expect(after.category).toBe('تصنيف تاريخي ملغى');
+    expect(after.region).toBe('منطقة تاريخية');
+    expect(after.city).toBe('مدينة تاريخية');
+  });
+
+  it('تغيير المدينة وحدها يُتحقَّق منه مقابل الزوج النهائي المدمَج مع المنطقة المخزَّنة', async () => {
+    const body = newAssociationBody({ region: 'الرياض', city: 'الرياض' });
+    const created = await createAssociation(body);
+    const id = created.body.associationId;
+
+    // 'جدة' مدينة صالحة بذاتها لكنها لا تتبع 'الرياض' المخزَّنة → يجب أن تُرفض.
+    const wrongPair = await http().patch(`/api/v1/associations/${id}`).set('Cookie', adminCookie).send({ city: 'جدة' });
+    expect(wrongPair.status).toBe(400);
+    expect(wrongPair.body.error.code).toBe('APPLICATION_INVALID_REFERENCE');
+
+    // مدينة تتبع المنطقة المخزَّنة فعلًا → تُقبل.
+    const rightPair = await http().patch(`/api/v1/associations/${id}`).set('Cookie', adminCookie).send({ city: 'الخرج' });
+    expect(rightPair.status).toBe(200);
+    expect((await prisma.association.findUniqueOrThrow({ where: { id } })).city).toBe('الخرج');
+  });
+
+  // ————————————————————————————————————————
+  // NODE-2.1 (2) البحث بالجوال
+  // ————————————————————————————————————————
+  it('البحث في قائمة الجمعيات يطابق رقم الجوال بأي صيغة مقبولة', async () => {
+    const phone = '0567654321';
+    const body = newAssociationBody({ phone, name: `${NODE2_MARKER} جمعية البحث بالجوال` });
+    expect((await createAssociation(body)).status).toBe(201);
+
+    for (const term of ['0567654321', '567654321', '966567654321', '+966567654321']) {
+      const res = await http().get(`/api/v1/associations?search=${encodeURIComponent(term)}&pageSize=100`).set('Cookie', adminCookie);
+      expect(res.status).toBe(200);
+      expect(res.body.items.some((row: { name: string }) => row.name === body.name)).toBe(true);
+    }
+
+    // رقم كامل صالح لكنه لغير هذه الجمعية لا يطابقها.
+    const miss = await http().get('/api/v1/associations?search=0509999999&pageSize=100').set('Cookie', adminCookie);
+    expect(miss.body.items.some((row: { name: string }) => row.name === body.name)).toBe(false);
+  });
+
+  // ————————————————————————————————————————
+  // NODE-2.1 (3) تحقق زمن تشغيل لمعاملات الاستعلام
+  // ————————————————————————————————————————
+  it.each(['abc', '-1', '0', '1.5'])('page غير صالح (%s) يُرفض بـ400 لا 500 ولا قيمة افتراضية صامتة', async (page) => {
+    const res = await http().get(`/api/v1/associations?page=${encodeURIComponent(page)}`).set('Cookie', adminCookie);
+    expect(res.status).toBe(400);
+  });
+
+  it.each(['abc', '-5', '0', '101', '1000'])('pageSize غير صالح (%s) يُرفض بـ400', async (pageSize) => {
+    const res = await http().get(`/api/v1/associations?pageSize=${encodeURIComponent(pageSize)}`).set('Cookie', adminCookie);
+    expect(res.status).toBe(400);
+  });
+
+  it('status عشوائي على قائمة الجمعيات يُرفض بـ400 ولا يصل إلى Prisma', async () => {
+    for (const status of ['NOPE', 'active', "ACTIVE'; DROP TABLE associations; --"]) {
+      const res = await http().get(`/api/v1/associations?status=${encodeURIComponent(status)}`).set('Cookie', adminCookie);
+      expect(res.status).toBe(400);
+    }
+    // القيم الصحيحة ما تزال تعمل.
+    expect((await http().get('/api/v1/associations?status=ACTIVE').set('Cookie', adminCookie)).status).toBe(200);
+    expect((await http().get('/api/v1/associations?pageSize=100&page=1').set('Cookie', adminCookie)).status).toBe(200);
+  });
+
+  // ————————————————————————————————————————
+  // NODE-2.1 (4) UUID مشوَّه
+  // ————————————————————————————————————————
+  it.each(['not-a-uuid', '123', "' OR 1=1 --", '00000000-0000-0000-0000-00000000zzzz'])(
+    'معرّف جمعية مشوَّه (%s) يُرفض بـ400 نظيف لا 500 على التفاصيل والتعديل',
+    async (badId) => {
+      const detail = await http().get(`/api/v1/associations/${encodeURIComponent(badId)}`).set('Cookie', adminCookie);
+      expect(detail.status).toBe(400);
+      expect(detail.body.ok).toBe(false);
+      expect(JSON.stringify(detail.body)).not.toMatch(/prisma|postgres|invalid input syntax/i);
+
+      const update = await http()
+        .patch(`/api/v1/associations/${encodeURIComponent(badId)}`)
+        .set('Cookie', adminCookie)
+        .send({ name: 'x' });
+      expect(update.status).toBe(400);
+      expect(JSON.stringify(update.body)).not.toMatch(/prisma|postgres|invalid input syntax/i);
+    },
+  );
+
+  // ————————————————————————————————————————
+  // NODE-2.1 (6) بصمة كلمة المرور في حمولة الـidempotency
+  // ————————————————————————————————————————
+  it('نفس opId ونفس بقية الحقول لكن بكلمة مرور مؤقتة مختلفة يُرفض بـ409 ولا يُنشئ شيئًا', async () => {
+    const body = newAssociationBody();
+    const first = await createAssociation(body);
+    expect(first.status).toBe(201);
+
+    const replaySamePassword = await createAssociation(body);
+    expect(replaySamePassword.status).toBe(201);
+    expect(replaySamePassword.body.associationId).toBe(first.body.associationId);
+
+    const differentPassword = { ...body, temporaryPassword: 'CompletelyOther99' };
+    const conflict = await createAssociation(differentPassword);
+    expect(conflict.status).toBe(409);
+    expect(conflict.body.error.code).toBe('APPLICATION_IDEMPOTENCY_CONFLICT');
+
+    expect(await prisma.association.count({ where: { name: body.name } })).toBe(1);
+    expect(await prisma.account.count({ where: { email: body.email } })).toBe(1);
+    expect(await prisma.idempotencyKey.count()).toBe(1);
+  });
+
+  it('كلمة المرور المؤقتة للإنشاء المباشر لا تُخزَّن صريحةً في أي عمود', async () => {
+    const body = newAssociationBody();
+    expect((await createAssociation(body)).status).toBe(201);
+
+    const rows = await prisma.idempotencyKey.findMany();
+    expect(rows).toHaveLength(1);
+    expect(JSON.stringify(rows[0])).not.toContain(body.temporaryPassword);
+    // البصمة المخزَّنة hex فقط — لا أثر لأي بايت من كلمة المرور.
+    expect(rows[0].requestHash).toMatch(/^[0-9a-f]{64}$/);
+
+    const audits = await prisma.auditLog.findMany();
+    expect(JSON.stringify(audits)).not.toContain(body.temporaryPassword);
+
+    // مسح نصّي فعلي على كل الجداول ذات الصلة — نفس نمط اختبار القبول القائم.
+    const hits = await prisma.$queryRawUnsafe<{ hit: number }[]>(
+      `SELECT (
+         (SELECT count(*) FROM idempotency_keys WHERE coalesce(response_json::text,'') LIKE $1 OR request_hash LIKE $1 OR key LIKE $1) +
+         (SELECT count(*) FROM audit_logs WHERE coalesce(metadata::text,'') LIKE $1) +
+         (SELECT count(*) FROM auth_credentials WHERE secret_hash LIKE $1 OR identifier LIKE $1) +
+         (SELECT count(*) FROM accounts WHERE name LIKE $1 OR email LIKE $1) +
+         (SELECT count(*) FROM associations WHERE name LIKE $1 OR coalesce(email,'') LIKE $1)
+       )::int AS hit`,
+      `%${body.temporaryPassword}%`,
+    );
+    expect(hits[0].hit).toBe(0);
+  });
+
+  // ————————————————————————————————————————
+  // NODE-2.1 (8) الترتيب — parity مع applySort_ في listAssociations_
+  // ————————————————————————————————————————
+  it('sortBy المسموح يغيّر الترتيب فعلًا، وأي عمود آخر يُرفض بـ400', async () => {
+    const first = newAssociationBody({ name: `${NODE2_MARKER} أ جمعية الترتيب`, region: 'الرياض', city: 'الخرج' });
+    const second = newAssociationBody({ name: `${NODE2_MARKER} ي جمعية الترتيب`, region: 'الرياض', city: 'الرياض' });
+    expect((await createAssociation(first)).status).toBe(201);
+    expect((await createAssociation(second)).status).toBe(201);
+
+    const namesOf = (body: { items: { name: string }[] }) =>
+      body.items.filter((row) => row.name.includes('جمعية الترتيب')).map((row) => row.name);
+
+    const asc = await http().get('/api/v1/associations?sortBy=name&sortDir=asc&pageSize=100').set('Cookie', adminCookie);
+    expect(asc.status).toBe(200);
+    const desc = await http().get('/api/v1/associations?sortBy=name&sortDir=desc&pageSize=100').set('Cookie', adminCookie);
+    expect(desc.status).toBe(200);
+    expect(namesOf(desc.body)).toEqual([...namesOf(asc.body)].reverse());
+
+    const byCity = await http().get('/api/v1/associations?sortBy=city&pageSize=100').set('Cookie', adminCookie);
+    expect(byCity.status).toBe(200);
+
+    // قائمة بيضاء صارمة — أي عمود آخر أو محاولة حقن تُرفض قبل أي استعلام.
+    for (const sortBy of ['id', 'createdAt', 'progress', 'email', 'name; DROP TABLE associations', '(SELECT 1)']) {
+      const res = await http().get(`/api/v1/associations?sortBy=${encodeURIComponent(sortBy)}`).set('Cookie', adminCookie);
+      expect(res.status).toBe(400);
+    }
+    for (const sortDir of ['ascending', 'DESC;', 'up']) {
+      const res = await http().get(`/api/v1/associations?sortBy=name&sortDir=${encodeURIComponent(sortDir)}`).set('Cookie', adminCookie);
+      expect(res.status).toBe(400);
+    }
+  });
+
+  // ————————————————————————————————————————
   // 66) 67) 68) التعطيل وإبطال الجلسات
   // ————————————————————————————————————————
   it('تعطيل الجمعية يُبطل جلسات حساب الجمعية وحسابات المندوبين معًا، وإعادة التفعيل لا تُحييها', async () => {

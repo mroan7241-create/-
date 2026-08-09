@@ -199,6 +199,42 @@ describe('NODE-2 — تقديم طلب الانضمام (عام)', () => {
     expect(res.body.error.code).toBe('APPLICATION_LICENSE_EXPIRY_CONTRADICTION');
   });
 
+  // ————————————————————————————————————————
+  // NODE-2.1 (5) تاريخ انتهاء الترخيص — رفض التدحرج الصامت
+  // ————————————————————————————————————————
+  it.each([
+    ['يوم غير موجود في فبراير', '2026-02-31'],
+    ['يوم غير موجود في أبريل', '2026-04-31'],
+    ['شهر 13', '2026-13-01'],
+    ['شهر 00', '2026-00-10'],
+    ['يوم 00', '2026-05-00'],
+    ['29 فبراير في سنة غير كبيسة', '2026-02-29'],
+    ['يوم 32', '2026-01-32'],
+  ])('تاريخ انتهاء ترخيص مستحيل يُرفض بدل أن يتدحرج بصمت — %s (%s)', async (_label, licenseExpiryDate) => {
+    const res = await submitApplication(app, validApplicationPayload({ licenseExpiryDate }));
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('APPLICATION_VALIDATION_FAILED');
+    expect(await prisma.associationApplication.count()).toBe(0);
+  });
+
+  it.each(['31-12-2030', '2030/12/31', '2030-12-31T00:00:00Z', '2030-1-5', '', 'غدًا'])(
+    'صيغة تاريخ غير YYYY-MM-DD تُرفض: %s',
+    async (licenseExpiryDate) => {
+      const res = await submitApplication(app, validApplicationPayload({ licenseExpiryDate }));
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('APPLICATION_VALIDATION_FAILED');
+    },
+  );
+
+  it.each(['2028-02-29', '2030-12-31', '2027-01-01'])('تاريخ صالح فعلًا يبقى مقبولًا ويُخزَّن كما أُدخِل: %s', async (licenseExpiryDate) => {
+    await cleanNode2State();
+    const res = await submitApplication(app, validApplicationPayload({ licenseExpiryDate }));
+    expect(res.status).toBe(200);
+
+    const application = await prisma.associationApplication.findFirstOrThrow({ where: { publicCode: res.body.id } });
+    expect(application.licenseExpiryDate!.toISOString().slice(0, 10)).toBe(licenseExpiryDate);
+  });
+
   it('«الترخيص ساري = لا» مع تاريخ منتهٍ مقبول (لا تناقض)', async () => {
     const answers = { ...validApplicationPayload().answers, 'الترخيص ساري': false };
     const res = await submitApplication(app, validApplicationPayload({ answers, licenseExpiryDate: '2020-01-01' }));

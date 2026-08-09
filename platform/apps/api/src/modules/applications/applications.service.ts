@@ -472,11 +472,45 @@ function validateAnswers(answersRaw: Record<string, boolean> | undefined): Recor
   return result;
 }
 
+/** صيغة YYYY-MM-DD حصرًا — لا صيغ Date التساهلية ولا طوابع زمنية كاملة. */
+const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * NODE-2.1 — تحقق صارم من تاريخ انتهاء الترخيص.
+ *
+ * الخلل المُصحَّح: `new Date('2026-02-31T00:00:00.000Z')` لا يرمي في
+ * JavaScript، بل **يتدحرج** بصمت إلى 2026-03-03، و`2026-13-01` تصبح
+ * 2027-01-01. النتيجة أن تاريخًا مستحيلًا كان يُقبَل ويُخزَّن كتاريخ
+ * مختلف تمامًا عمّا كتبه المتقدِّم — ثم تُقارَن قاعدة التناقض
+ * (todayInRiyadh) بتاريخ لم يُدخِله أحد أصلًا.
+ *
+ * التصحيح: تُستخرج الأجزاء الثلاثة كأعداد صحيحة من صيغة YYYY-MM-DD
+ * المضبوطة، ثم يُعاد بناء التاريخ بـDate.UTC ويُقارَن ما استقر عليه فعلًا
+ * (getUTCFullYear/getUTCMonth+1/getUTCDate) بما طُلب — أي انزياح يعني
+ * تدحرجًا فيُرفَض. قاعدة "الترخيص ساري + تاريخ منتهٍ" في المستدعي تبقى
+ * كما هي حرفيًا؛ هذا البند يشدّ فحص الصيغة السابق لها فقط.
+ */
 function parseRequiredDate(value: string): Date {
-  const date = new Date(`${value}T00:00:00.000Z`);
-  if (!value || Number.isNaN(date.getTime())) {
+  const raw = String(value ?? '').trim();
+  const match = DATE_ONLY_PATTERN.exec(raw);
+  if (!match) {
     throw new ApiError('APPLICATION_VALIDATION_FAILED', 'تاريخ انتهاء الترخيص غير صالح', 400);
   }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  const rolledOver =
+    Number.isNaN(date.getTime()) ||
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() + 1 !== month ||
+    date.getUTCDate() !== day;
+  if (rolledOver) {
+    throw new ApiError('APPLICATION_VALIDATION_FAILED', 'تاريخ انتهاء الترخيص غير صالح', 400);
+  }
+
   return date;
 }
 

@@ -64,13 +64,34 @@
 | `contactName` | مطلوب، ≤ 100 | 400 |
 | `notes` | اختياري، ≤ 500 | — |
 | `licenseNumber` | مطلوب، ≤ 60 | 400 |
-| `licenseExpiryDate` | تاريخ صالح | `APPLICATION_VALIDATION_FAILED` |
+| `licenseExpiryDate` | `YYYY-MM-DD` حصرًا، وتاريخ تقويمي **موجود فعلًا** (لا تدحرج) — راجع §التاريخ الصارم أدناه | `APPLICATION_VALIDATION_FAILED` |
 | `answers` | JSON بالمفاتيح الثمانية من `LEGACY_APPLICATION_QUESTIONS`، كل قيمة boolean صريحة | `APPLICATION_ANSWER_REQUIRED` |
 | `licenseFile` | JPEG/PNG/WEBP بـmagic bytes فعلية، ≤ 8 MiB | `APPLICATION_LICENSE_INVALID` / `APPLICATION_LICENSE_TOO_LARGE` |
 
 > **`scoreLabel` («7/8») مؤشّر عرض فقط.** يُحسب من عدد إجابات «نعم» ولا
 > يدخل في أي قرار قبول/رفض ولا يُخزَّن كحقل مشتق. القرار يدوي بالكامل،
 > كما في القديم تمامًا.
+
+---
+
+### التاريخ الصارم لانتهاء الترخيص (NODE-2.1)
+
+`new Date('2026-02-31T00:00:00.000Z')` **لا يرمي** في JavaScript، بل
+يتدحرج بصمت إلى `2026-03-03`، و`2026-13-01` تصبح `2027-01-01`. فكان
+تاريخ مستحيل يُقبَل ويُخزَّن كتاريخ مختلف تمامًا عمّا كتبه المتقدِّم، ثم
+تُقارَن به قاعدة التناقض أدناه.
+
+التصحيح: تُضبط الصيغة بـ`^\d{4}-\d{2}-\d{2}$`، ثم تُستخرج الأجزاء
+الثلاثة كأعداد صحيحة ويُعاد بناء التاريخ بـ`Date.UTC`، ثم يُقارَن ما
+استقر عليه فعلًا (`getUTCFullYear`/`getUTCMonth()+1`/`getUTCDate`) بما
+طُلب — أي انزياح يعني تدحرجًا فيُرفَض بـ`APPLICATION_VALIDATION_FAILED`.
+أمثلة مرفوضة: `2026-02-31`، `2026-04-31`، `2026-13-01`، `2026-02-29`
+(سنة غير كبيسة)، `2026-05-00`. الصيغ غير `YYYY-MM-DD` (`2030/12/31`،
+`31-12-2030`، طابع زمني كامل) مرفوضة كذلك.
+
+قاعدة «الترخيص ساري = نعم مع تاريخ في الماضي» بتوقيت `Asia/Riyadh`
+(`todayInRiyadh()` → `APPLICATION_LICENSE_EXPIRY_CONTRADICTION`) لم تتغيّر
+إطلاقًا؛ هذا البند يشدّ فحص الصيغة السابق لها فقط.
 
 ---
 
@@ -324,10 +345,10 @@ LEGACY_DATA_MIGRATION.md لخطة مصالحة العدّاد عند استير�
 |---|---|---|---|
 | POST | `/api/v1/association-applications` | عام | multipart، حقل الملف `licenseFile` |
 | GET | `/api/v1/association-applications/status/:clientRequestId` | عام | بلا PII |
-| GET | `/api/v1/association-applications` | ADMIN | ترقيم/بحث/تصفية بالحالة |
-| GET | `/api/v1/association-applications/:id` | ADMIN | التفاصيل + الإجابات الثماني |
-| GET | `/api/v1/association-applications/:id/license-file` | ADMIN | `{url}` signed 300s + سجل تدقيق |
-| POST | `/api/v1/association-applications/:id/review` | ADMIN | `{decision, reason?, opId}` |
+| GET | `/api/v1/association-applications` | ADMIN | ترقيم/بحث/تصفية بالحالة — `page`/`pageSize`/`status` بتحقق زمن تشغيل (400 لا 500)، **بلا `sortBy`/`sortDir`** (راجع §13) |
+| GET | `/api/v1/association-applications/:id` | ADMIN | التفاصيل + الإجابات الثماني — `:id` عبر `ParseUUIDPipe` (400 على معرّف مشوَّه) |
+| GET | `/api/v1/association-applications/:id/license-file` | ADMIN | `{url}` signed 300s + سجل تدقيق — `:id` عبر `ParseUUIDPipe` (400 على معرّف مشوَّه) |
+| POST | `/api/v1/association-applications/:id/review` | ADMIN | `{decision, reason?, opId}` — `:id` عبر `ParseUUIDPipe` (400 على معرّف مشوَّه) |
 
 ## 12) الشاشات
 
@@ -336,3 +357,28 @@ LEGACY_DATA_MIGRATION.md لخطة مصالحة العدّاد عند استير�
 - `/apply/status` — متابعة الحالة بلا PII.
 - `/admin/applications` — قائمة + تفاصيل + معاينة الترخيص عبر الرابط
   الموقَّع + قبول/رفض (الرفض يشترط سببًا؛ القبول يعرض كلمة المرور مرة واحدة).
+
+---
+
+## 13) الترتيب في قائمة الطلبات — لا ميزة ترتيب في القديم (NODE-2.1)
+
+فُحص المصدر القديم مباشرةً، والنتيجة أن **`sortBy`/`sortDir` ليست ميزة
+قائمة لطلبات الانضمام**، فلم تُخترع هنا:
+
+- `Applications.gs::listApplications_` يقتصر على
+  `applySearch_` + فلترة الحالة + `paginate_`، و**لا يستدعي `applySort_`
+  إطلاقًا** — بخلاف `DevicesAssociations.gs::listAssociations_` و
+  `listDevices_` اللذين يستدعيانه فعلًا (فرق مقصود في المصدر لا سهو).
+- `Index.html::renderApplications` يستدعي
+  `toolbar({placeholder, filters, count})` **بلا `sortFields`**، و
+  `sortSelect` يُعيد نصًا فارغًا عند غياب `sortFields` — فلا يُرسم أي عنصر
+  ترتيب في صفحة «طلبات الانضمام» أصلًا (بينما `renderAssociations` يمرّر
+  `sortFields` فعلًا).
+- الترتيب ثابت دائمًا في `getAssociationApplications_`:
+  `.sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1))` — أي
+  `submittedAt` تنازليًا.
+
+لذلك يبقى `GET /association-applications` على ترتيب ثابت
+`submittedAt DESC`، ويُرفض أي `sortBy`/`sortDir` بـ400 (حقل غير معرَّف في
+الـDTO تحت `forbidNonWhitelisted`). ترتيب قائمة **الجمعيات** ميزة حقيقية
+وقد نُفِّذت — راجع ASSOCIATIONS.md §الترتيب.

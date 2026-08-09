@@ -128,6 +128,63 @@ describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
     }
   });
 
+  // ————————————————————————————————————————
+  // NODE-2.1 (3) تحقق زمن تشغيل لمعاملات الاستعلام
+  // ————————————————————————————————————————
+  it.each(['abc', '-1', '0', '2.5'])('page غير صالح (%s) على قائمة الطلبات يُرفض بـ400 لا 500', async (page) => {
+    const res = await http().get(`/api/v1/association-applications?page=${encodeURIComponent(page)}`).set('Cookie', adminCookie);
+    expect(res.status).toBe(400);
+  });
+
+  it.each(['abc', '-5', '0', '101', '99999'])('pageSize غير صالح (%s) على قائمة الطلبات يُرفض بـ400', async (pageSize) => {
+    const res = await http().get(`/api/v1/association-applications?pageSize=${encodeURIComponent(pageSize)}`).set('Cookie', adminCookie);
+    expect(res.status).toBe(400);
+  });
+
+  it('status عشوائي على قائمة الطلبات يُرفض بـ400 ولا يصل إلى Prisma', async () => {
+    for (const status of ['NOPE', 'accepted', "UNDER_REVIEW'; DROP TABLE association_applications; --"]) {
+      const res = await http()
+        .get(`/api/v1/association-applications?status=${encodeURIComponent(status)}`)
+        .set('Cookie', adminCookie);
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(res.body)).not.toMatch(/prisma|postgres/i);
+    }
+    for (const status of ['UNDER_REVIEW', 'ACCEPTED', 'REJECTED']) {
+      expect((await http().get(`/api/v1/association-applications?status=${status}`).set('Cookie', adminCookie)).status).toBe(200);
+    }
+  });
+
+  // ————————————————————————————————————————
+  // NODE-2.1 (4) UUID مشوَّه على مسارات الطلبات الثلاثة
+  // ————————————————————————————————————————
+  it.each(['not-a-uuid', '42', "' OR 1=1 --", '00000000-0000-0000-0000-0000000000zz'])(
+    'معرّف طلب مشوَّه (%s) يُرفض بـ400 على التفاصيل وملف الترخيص والمراجعة',
+    async (badId) => {
+      const encoded = encodeURIComponent(badId);
+
+      const detail = await http().get(`/api/v1/association-applications/${encoded}`).set('Cookie', adminCookie);
+      expect(detail.status).toBe(400);
+
+      const licenseFile = await http().get(`/api/v1/association-applications/${encoded}/license-file`).set('Cookie', adminCookie);
+      expect(licenseFile.status).toBe(400);
+
+      const review = await http()
+        .post(`/api/v1/association-applications/${encoded}/review`)
+        .set('Cookie', adminCookie)
+        .send({ decision: 'accept', opId: randomUUID() });
+      expect(review.status).toBe(400);
+
+      for (const res of [detail, licenseFile, review]) {
+        expect(res.body.ok).toBe(false);
+        expect(JSON.stringify(res.body)).not.toMatch(/prisma|postgres|invalid input syntax|uuid_in/i);
+      }
+
+      // لا شيء نُفِّذ: لا جمعية أُنشئت ولا سجل تدقيق كُتب.
+      expect(await prisma.auditLog.count({ where: { action: 'APPLICATION_LICENSE_VIEWED' } })).toBe(0);
+      expect(await prisma.idempotencyKey.count()).toBe(0);
+    },
+  );
+
   it('تفاصيل الطلب تُعيد كل الإجابات مع مؤشّر العرض yes/total، والطلب المجهول يُعيد 404', async () => {
     const { id } = await createApplication();
     const detail = await http().get(`/api/v1/association-applications/${id}`).set('Cookie', adminCookie);
