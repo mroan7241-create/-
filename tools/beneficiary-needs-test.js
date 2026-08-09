@@ -883,5 +883,234 @@ section('19) استدعاء listBeneficiaries لا يكتب أي شيء — ال
   assert('لا سجل عمليات جديد نتيجة القراءة وحدها', S.readTable_('سجل العمليات').rows.length === auditCountBefore);
 }
 
+/** Patch 3.2A.1: يراقب استدعاءات runAutoAllocation_ (associationId فقط) دون تعديل AutoAllocation.gs نفسها — استبدال الدالة في الـsandbox مؤقتًا مع الحفاظ على سلوكها الحقيقي (call-through). */
+function trackAllocationCalls_(S) {
+  const calls = [];
+  const original = S.runAutoAllocation_;
+  S.runAutoAllocation_ = function (associationId) {
+    calls.push(String(associationId));
+    return original.apply(this, arguments);
+  };
+  return { calls: calls, restore: function () { S.runAutoAllocation_ = original; } };
+}
+
+/* ================================================================
+   20) Patch 3.2A.1 — المراجعة الفردية: لا تغيير — التخصيص يُشغَّل مرة واحدة كما هو
+   ================================================================ */
+section('20) Patch 3.2A.1 — reviewBeneficiaryNeeds (فردي) ما زال يشغّل AutoAllocation مرة واحدة فور الاعتماد');
+{
+  const ctx = seedScenario(buildSandbox());
+  const { S, admin, assocSession, beneficiaryId } = ctx;
+  S.setBeneficiaryNeeds(assocSession.token, beneficiaryId, ['ثلاجة']);
+  const needId = needRows(S, beneficiaryId)[0].id;
+  const tracker = trackAllocationCalls_(S);
+  try {
+    const result = S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, {
+      beneficiaryDecision: 'معتمد', needDecisions: [{ needId: needId, decision: 'معتمد' }]
+    });
+    assert('قرار المراجعة الفردي نجح', result.ok && result.beneficiaryDecision === 'معتمد');
+    assert('AutoAllocation شُغِّل مرة واحدة بالضبط لهذه الجمعية', tracker.calls.length === 1 && tracker.calls[0] === ctx.assoc.id);
+  } finally { tracker.restore(); }
+}
+
+/* ================================================================
+   21) Patch 3.2A.1 — Bulk، جمعية واحدة: تشغيل واحد فقط لعدة مستفيدين
+   ================================================================ */
+section('21) Patch 3.2A.1 — bulkReviewBeneficiaries: 5 مستفيدين من نفس الجمعية → AutoAllocation مرة واحدة فقط');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+  const assoc = S.saveAssociation(admin.token, {
+    name: 'جمعية دفعة واحدة', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
+    phone: '0500000030', email: 'bulk-one-assoc@example.org', password: 'BulkPass123'
+  });
+  const assocSession = S.createSession_({ id: 'USR-ASSOC-BULK1', name: 'جمعية دفعة واحدة', role: 'ASSOCIATION', associationId: assoc.id });
+
+  const items = [];
+  for (let i = 0; i < 5; i++) {
+    const beneficiary = S.saveBeneficiary(assocSession.token, {
+      deviceTypes: ['ثلاجة'], name: 'مستفيد جمعية واحدة ' + i, region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: freshPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+    });
+    const needId = needRows(S, beneficiary.id)[0].id;
+    items.push({ beneficiaryId: beneficiary.id, beneficiaryDecision: 'معتمد', needDecisions: [{ needId: needId, decision: 'معتمد' }] });
+  }
+
+  const tracker = trackAllocationCalls_(S);
+  try {
+    const result = S.bulkReviewBeneficiaries(admin.token, { items: items });
+    assert('كل الخمسة نجحوا', result.success.length === 5 && result.failed.length === 0);
+    assert('AutoAllocation شُغِّل مرة واحدة بالضبط (لا 5 مرات) لجمعية واحدة تأثرت',
+      tracker.calls.length === 1 && tracker.calls[0] === assoc.id);
+  } finally { tracker.restore(); }
+}
+
+/* ================================================================
+   22) Patch 3.2A.1 — Bulk، جمعيتان: تشغيل مرتين فقط، مرة لكل جمعية
+   ================================================================ */
+section('22) Patch 3.2A.1 — bulkReviewBeneficiaries: مستفيدون من جمعيتين → AutoAllocation مرتين فقط (مرة لكل جمعية)');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+  const assocA = S.saveAssociation(admin.token, {
+    name: 'جمعية أ للدفعة', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
+    phone: '0500000031', email: 'bulk-assoc-a@example.org', password: 'BulkPassA123'
+  });
+  const assocB = S.saveAssociation(admin.token, {
+    name: 'جمعية ب للدفعة', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
+    phone: '0500000032', email: 'bulk-assoc-b@example.org', password: 'BulkPassB123'
+  });
+  const sessionA = S.createSession_({ id: 'USR-ASSOC-BULK-A', name: 'جمعية أ للدفعة', role: 'ASSOCIATION', associationId: assocA.id });
+  const sessionB = S.createSession_({ id: 'USR-ASSOC-BULK-B', name: 'جمعية ب للدفعة', role: 'ASSOCIATION', associationId: assocB.id });
+
+  const items = [];
+  for (let i = 0; i < 3; i++) {
+    const beneficiary = S.saveBeneficiary(sessionA.token, {
+      deviceTypes: ['ثلاجة'], name: 'مستفيد أ ' + i, region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: freshPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+    });
+    const needId = needRows(S, beneficiary.id)[0].id;
+    items.push({ beneficiaryId: beneficiary.id, beneficiaryDecision: 'معتمد', needDecisions: [{ needId: needId, decision: 'معتمد' }] });
+  }
+  for (let i = 0; i < 2; i++) {
+    const beneficiary = S.saveBeneficiary(sessionB.token, {
+      deviceTypes: ['فرن'], name: 'مستفيد ب ' + i, region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+      phone: freshPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+    });
+    const needId = needRows(S, beneficiary.id)[0].id;
+    items.push({ beneficiaryId: beneficiary.id, beneficiaryDecision: 'معتمد', needDecisions: [{ needId: needId, decision: 'معتمد' }] });
+  }
+
+  const tracker = trackAllocationCalls_(S);
+  try {
+    const result = S.bulkReviewBeneficiaries(admin.token, { items: items });
+    assert('كل الخمسة نجحوا (3 من أ، 2 من ب)', result.success.length === 5 && result.failed.length === 0);
+    assert('AutoAllocation شُغِّل مرتين بالضبط، مرة لكل جمعية فريدة', tracker.calls.length === 2);
+    assert('الجمعيتان معًا وبلا تكرار لأي منهما', new Set(tracker.calls).size === 2
+      && tracker.calls.indexOf(assocA.id) !== -1 && tracker.calls.indexOf(assocB.id) !== -1);
+  } finally { tracker.restore(); }
+}
+
+/* ================================================================
+   23) Patch 3.2A.1 — مستفيد فشل داخل الدفعة لا يوقف البقية ولا يضيف جمعيته للتخصيص
+   ================================================================ */
+section('23) Patch 3.2A.1 — فشل مستفيد داخل bulk: البقية تنجح، وجمعية الفاشل لا تدخل قائمة التخصيص إلا إن نجح غيره من نفس الجمعية');
+{
+  const S = buildSandbox();
+  seedSheets(S);
+  const admin = adminSession(S);
+  const assoc = S.saveAssociation(admin.token, {
+    name: 'جمعية فشل جزئي', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
+    phone: '0500000033', email: 'bulk-partial-fail@example.org', password: 'BulkPassC123'
+  });
+  const assocSession = S.createSession_({ id: 'USR-ASSOC-BULK-FAIL', name: 'جمعية فشل جزئي', role: 'ASSOCIATION', associationId: assoc.id });
+
+  const goodBeneficiary = S.saveBeneficiary(assocSession.token, {
+    deviceTypes: ['ثلاجة'], name: 'مستفيد ناجح', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+    phone: freshPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+  });
+  const goodNeedId = needRows(S, goodBeneficiary.id)[0].id;
+
+  // مستفيد وحيد الاحتياج في جمعية أخرى منفصلة، سيُرفض احتياجه فيفشل شرط "احتياج معتمد واحد على الأقل" رغم قرار "معتمد".
+  const otherAssoc = S.saveAssociation(admin.token, {
+    name: 'جمعية الفاشل وحده', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض',
+    phone: '0500000034', email: 'bulk-fail-only@example.org', password: 'BulkPassD123'
+  });
+  const otherAssocSession = S.createSession_({ id: 'USR-ASSOC-BULK-FAIL2', name: 'جمعية الفاشل وحده', role: 'ASSOCIATION', associationId: otherAssoc.id });
+  const failBeneficiary = S.saveBeneficiary(otherAssocSession.token, {
+    deviceTypes: ['غسالة'], name: 'مستفيد فاشل وحيد بجمعيته', region: 'الرياض', city: 'الرياض', address: 'حي', district: 'حي',
+    phone: freshPhone_(), familyCount: 2, socialStatus: 'أرملة', needs: []
+  });
+  const failNeedId = needRows(S, failBeneficiary.id)[0].id;
+
+  const tracker = trackAllocationCalls_(S);
+  try {
+    const result = S.bulkReviewBeneficiaries(admin.token, {
+      items: [
+        { beneficiaryId: goodBeneficiary.id, beneficiaryDecision: 'معتمد', needDecisions: [{ needId: goodNeedId, decision: 'معتمد' }] },
+        { beneficiaryId: failBeneficiary.id, beneficiaryDecision: 'معتمد', needDecisions: [{ needId: failNeedId, decision: 'مرفوض', rejectReason: 'غير مؤهل' }] }
+      ]
+    });
+    assert('المستفيد الجيد نجح والفاشل فشل', result.success.length === 1 && result.success[0].beneficiaryId === goodBeneficiary.id
+      && result.failed.length === 1 && result.failed[0].beneficiaryId === failBeneficiary.id);
+    assert('AutoAllocation شُغِّل مرة واحدة فقط، لجمعية المستفيد الناجح دون جمعية الفاشل',
+      tracker.calls.length === 1 && tracker.calls[0] === assoc.id && tracker.calls.indexOf(otherAssoc.id) === -1);
+  } finally { tracker.restore(); }
+}
+
+/* ================================================================
+   24) Patch 3.2A.1 — مستفيد مرفوض كليًا وعنصر skipped لا يسببان أي تشغيل تخصيص
+   ================================================================ */
+section('24) Patch 3.2A.1 — رفض مستفيد كليًا وعنصر skipped لا يشغّلان AutoAllocation إطلاقًا');
+{
+  const ctx = seedScenario(buildSandbox());
+  const { S, admin, assocSession, beneficiaryId } = ctx;
+  const needId = needRows(S, beneficiaryId)[0].id;
+
+  const tracker = trackAllocationCalls_(S);
+  try {
+    const result = S.bulkReviewBeneficiaries(admin.token, {
+      items: [
+        { beneficiaryId: beneficiaryId, beneficiaryDecision: 'مرفوض', beneficiaryRejectReason: 'غير مستوفٍ للشروط', needDecisions: [{ needId: needId, decision: 'مرفوض' }] },
+        { beneficiaryId: '', beneficiaryDecision: 'معتمد', needDecisions: [] }
+      ]
+    });
+    assert('المستفيد رُفض بنجاح، والعنصر الثاني تُجوهِل', result.success.length === 1 && result.success[0].beneficiaryId === beneficiaryId
+      && result.skipped.length === 1 && result.failed.length === 0);
+    assert('لا استدعاء لـAutoAllocation إطلاقًا (لا اعتماد ناجح بأي احتياج معتمد)', tracker.calls.length === 0);
+  } finally { tracker.restore(); }
+}
+
+/* ================================================================
+   25) Patch 3.2A.1 — فشل AutoAllocation المؤجَّل بعد نجاح الاعتمادات لا يفسدها
+   ================================================================ */
+section('25) Patch 3.2A.1 — فشل محرك التخصيص المؤجَّل بعد نجاح الاعتمادات: تبقى success، لا تتحول إلى failed');
+{
+  const ctx = seedScenario(buildSandbox());
+  const { S, admin, assocSession, beneficiaryId } = ctx;
+  S.setBeneficiaryNeeds(assocSession.token, beneficiaryId, ['ثلاجة']);
+  const needId = needRows(S, beneficiaryId)[0].id;
+
+  const original = S.runAutoAllocation_;
+  S.runAutoAllocation_ = function () { throw new Error('عطل محاكى في محرك التخصيص'); };
+  S.__logs.length = 0;
+  try {
+    const result = S.bulkReviewBeneficiaries(admin.token, {
+      items: [{ beneficiaryId: beneficiaryId, beneficiaryDecision: 'معتمد', needDecisions: [{ needId: needId, decision: 'معتمد' }] }]
+    });
+    assert('العنصر يبقى ضمن success رغم فشل التخصيص بعده', result.success.length === 1 && result.success[0].beneficiaryId === beneficiaryId);
+    assert('لا شيء انتقل إلى failed بسبب فشل التخصيص', result.failed.length === 0);
+    assert('القرار نفسه كُتب فعليًا رغم فشل التخصيص', String(beneficiaryRow(S, beneficiaryId)['حالة مراجعة المستفيد']) === 'معتمد');
+    assert('allocationWarnings يحمل تحذيرًا بخصوص هذه الجمعية (حقل إضافي غير كاسر)',
+      Array.isArray(result.allocationWarnings) && result.allocationWarnings.length === 1 && result.allocationWarnings[0].associationId === ctx.assoc.id);
+    assert('تحذير مسجَّل في السجل (Logger) بدل إسقاط النتيجة الناجحة', S.__logs.some(l => l.indexOf('فشل محرك التخصيص التلقائي المؤجَّل') >= 0));
+  } finally { S.runAutoAllocation_ = original; }
+}
+
+/* ================================================================
+   26) Patch 3.2A.1 — قواعد reviewBeneficiaryNeeds الحالية لم تتغير
+   ================================================================ */
+section('26) Patch 3.2A.1 — قواعد المراجعة الفردية (سبب الرفض الإلزامي، احتياج معتمد واحد على الأقل) كما هي حرفيًا');
+{
+  const ctx = seedScenario(buildSandbox());
+  const { S, admin, assocSession, beneficiaryId } = ctx;
+  const needId = needRows(S, beneficiaryId)[0].id;
+
+  throws('رفض مستفيد بلا سبب ما زال يفشل', () => S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, {
+    beneficiaryDecision: 'مرفوض', needDecisions: [{ needId: needId, decision: 'مرفوض' }]
+  }), 'إلزامي');
+
+  throws('اعتماد مستفيد برفض كل احتياجاته ما زال يفشل', () => S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, {
+    beneficiaryDecision: 'معتمد', needDecisions: [{ needId: needId, decision: 'مرفوض', rejectReason: 'اختياري' }]
+  }), 'دون اعتماد احتياج واحد');
+
+  const ok = S.reviewBeneficiaryNeeds(admin.token, beneficiaryId, {
+    beneficiaryDecision: 'معتمد', needDecisions: [{ needId: needId, decision: 'معتمد' }]
+  });
+  assert('اعتماد مستفيد باحتياج معتمد ما زال ينجح كما هو', ok.ok && ok.beneficiaryDecision === 'معتمد' && ok.approvedCount === 1);
+}
+
 console.log(failures === 0 ? '\n=== ALL PASS ===' : '\n=== ' + failures + ' FAILURE(S) ===');
 process.exit(failures === 0 ? 0 : 1);

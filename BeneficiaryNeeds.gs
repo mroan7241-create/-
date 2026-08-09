@@ -567,11 +567,20 @@ function reviewBeneficiaryNeeds(token, beneficiaryId, payload) {
 }
 
 /**
- * ⚠️ تفترض أن المستدعي يُمسك ScriptLock فعلًا (عبر runLockedIdempotent_
- * في reviewBeneficiaryNeeds أعلاه) — لا تُمسك أي قفل بنفسها ولا تُستدعى
- * مباشرة من أي مسار آخر.
+ * ⚠️ تفترض أن المستدعي يُمسك ScriptLock فعلًا (عبر runLockedIdempotent_ —
+ * إما من reviewBeneficiaryNeeds أعلاه للمراجعة الفردية، أو من
+ * bulkReviewBeneficiaries لكل عنصر بقفله المستقل الخاص به) — لا تُمسك أي
+ * قفل بنفسها.
+ *
+ * Patch 3.2A.1: triggerAllocation (داخلي بحت — لا علاقة له بأي حقل يصل
+ * من العميل ضمن payload) يتحكم فقط في استدعاء runAutoAllocation_ داخل
+ * هذه الدالة نفسها بعد نجاح القرار. افتراضيًا true (سلوك المراجعة
+ * الفردية كما هو حرفيًا دون تغيير). bulkReviewBeneficiaries وحدها تمرّر
+ * false صراحة من كودها الداخلي لتؤجّل التخصيص وتشغّله مرة واحدة لكل
+ * جمعية بعد انتهاء الدفعة كاملة — العميل لا يملك أي وسيلة للتأثير على
+ * هذه القيمة عبر أي حقل في الطلب.
  */
-function reviewBeneficiaryNeeds_(user, beneficiaryId, payload) {
+function reviewBeneficiaryNeeds_(user, beneficiaryId, payload, triggerAllocation) {
   beneficiaryId = cleanId_(beneficiaryId);
   const beneficiaryDecision = String(payload.beneficiaryDecision || '');
   if (['معتمد', 'مرفوض'].indexOf(beneficiaryDecision) === -1) {
@@ -737,12 +746,17 @@ function reviewBeneficiaryNeeds_(user, beneficiaryId, payload) {
       + ' beneficiaryId=' + beneficiaryId + ' — ' + auditError.message);
   }
 
-  // Phase 3.1 (القسم 4): اعتماد احتياجات جديدة قد يفتح فرصة تخصيص تلقائي
-  // فورية (مخزون كان ينتظر احتياجًا معتمدًا). معزول تمامًا عن نجاح قرار
-  // المراجعة نفسه — فشله لا يجوز أن يُسقط قرارًا نجح فعليًا (نفس مبدأ عزل audit).
-  if (beneficiaryDecision === 'معتمد' && approvedCount > 0) {
+  // Phase 3.1 (القسم 4)، عُدِّل في Patch 3.2A.1: اعتماد احتياجات جديدة قد
+  // يفتح فرصة تخصيص تلقائي فورية (مخزون كان ينتظر احتياجًا معتمدًا).
+  // معزول تمامًا عن نجاح قرار المراجعة نفسه — فشله لا يجوز أن يُسقط قرارًا
+  // نجح فعليًا (نفس مبدأ عزل audit). عندما triggerAllocation === false
+  // (مسار bulkReviewBeneficiaries الداخلي فقط) يُؤجَّل هذا الاستدعاء إلى
+  // المستدعي، الذي يجمع associationId من الاستجابة أدناه ويشغّله مرة
+  // واحدة لكل جمعية بعد انتهاء الدفعة كاملة.
+  const associationId = String(beneficiary['رقم الجمعية']);
+  if (triggerAllocation !== false && beneficiaryDecision === 'معتمد' && approvedCount > 0) {
     try {
-      runAutoAllocation_(String(beneficiary['رقم الجمعية']), user);
+      runAutoAllocation_(associationId, user);
     } catch (allocationError) {
       Logger.log('تحذير: نجح قرار المراجعة فعليًا لكن فشل محرك التخصيص التلقائي بعده — traceId=' + requestMeta_().traceId
         + ' beneficiaryId=' + beneficiaryId + ' — ' + allocationError.message);
@@ -752,6 +766,9 @@ function reviewBeneficiaryNeeds_(user, beneficiaryId, payload) {
   // Phase 2.3.3 (القسم 4): قرار المراجعة نجح فعليًا في هذه اللحظة — فشل
   // قراءة قائمة الاحتياجات المُحدَّثة بعد ذلك لا يجوز أن يُظهر للإدارة أن
   // قرار الاعتماد/الرفض نفسه فشل، ولا يمنع تخزين نتيجة opId.
+  // associationId يُضاف دومًا (حقل إضافي غير كاسر) — يستخدمه
+  // bulkReviewBeneficiaries داخليًا لتجميع الجمعيات المتأثرة؛ لا يغيّر أي
+  // حقل موجود سابقًا في استجابة المراجعة الفردية.
   try {
     return {
       ok: true,
@@ -759,6 +776,7 @@ function reviewBeneficiaryNeeds_(user, beneficiaryId, payload) {
       beneficiaryDecision: beneficiaryDecision,
       approvedCount: approvedCount,
       rejectedCount: rejectedCount,
+      associationId: associationId,
       needs: beneficiaryNeeds_(beneficiaryId)
     };
   } catch (enrichError) {
@@ -769,28 +787,40 @@ function reviewBeneficiaryNeeds_(user, beneficiaryId, payload) {
       beneficiaryDecision: beneficiaryDecision,
       approvedCount: approvedCount,
       rejectedCount: rejectedCount,
+      associationId: associationId,
       refreshRequired: true
     };
   }
 }
 
 /**
- * Phase 3.2A (القسم 3) — wrapper بالجملة فوق reviewBeneficiaryNeeds
+ * Phase 3.2A (القسم 3) — wrapper بالجملة فوق reviewBeneficiaryNeeds_
  * الموجودة حرفيًا، بلا أي تكرار لقواعد المراجعة نفسها: كل عنصر يُمرَّر
- * كما هو إلى reviewBeneficiaryNeeds (نقطة الدخول العامة الكاملة —
- * requireSession_ + runLockedIdempotent_ + reviewBeneficiaryNeeds_ بكل
- * تحقّقاتها وتراجعها الحالي دون تغيير سطر واحد فيها)، فيُمسك قفل مستقل
- * قصير لكل مستفيد على حدة (مفتاح القفل بالفعل مرتبط برقم المستفيد —
- * runLockedIdempotent_ في reviewBeneficiaryNeeds — فلا تعارض بين عناصر
- * دفعة واحدة، ولا قفل متداخل). فشل عنصر واحد (سبب رفض ناقص، احتياج
+ * إلى نفس الدالة الداخلية reviewBeneficiaryNeeds_ بكل تحقّقاتها وتراجعها
+ * الحالي دون تغيير سطر واحد في منطقها، تحت نفس آلية القفل/idempotency
+ * الحالية (runLockedIdempotent_ — مفتاح القفل مرتبط برقم المستفيد، فلا
+ * تعارض بين عناصر دفعة واحدة ولا قفل متداخل؛ نفس ما تفعله reviewBeneficiaryNeeds
+ * العامة تمامًا لكل استدعاء فردي). فشل عنصر واحد (سبب رفض ناقص، احتياج
  * محسوم مسبقًا، تعارض حالة، إلخ) يُلتقَط ويُصنَّف فورًا دون إيقاف بقية
  * الدفعة — قاعدة "كل شيء أو لا شيء" تبقى محصورة **داخل** كل عنصر مفرد
  * (كما في reviewBeneficiaryNeeds_ نفسها)، لا عبر عناصر الدفعة كاملة.
  *
+ * Patch 3.2A.1: الفرق الوحيد عن استدعاء reviewBeneficiaryNeeds العامة
+ * مباشرة هو تمرير triggerAllocation=false داخليًا (وسيط دالة داخلي، لا
+ * حقل قادم من العميل) — فلا يُشغَّل محرك التخصيص التلقائي داخل كل عنصر.
+ * بدلًا من ذلك تُجمَع associationId لكل عنصر نجح فعليًا وكان قراره
+ * "معتمد" باحتياج معتمد واحد على الأقل، ثم يُشغَّل runAutoAllocation_
+ * مرة واحدة فقط لكل جمعية فريدة بعد انتهاء كل عناصر الدفعة — بلا أي
+ * تعديل على AutoAllocation.gs نفسها ولا على سلوك المراجعة الفردية
+ * (reviewBeneficiaryNeeds تستمر بتمرير القيمة الافتراضية true).
+ *
  * payload = {
  *   items: [{beneficiaryId, beneficiaryDecision, beneficiaryRejectReason, needDecisions, opId}],
  * }
- * يعيد {ok, success: [{beneficiaryId, approvedCount, rejectedCount}], failed: [{beneficiaryId, error}], skipped: [{beneficiaryId, reason}]}.
+ * يعيد {ok, success: [{beneficiaryId, approvedCount, rejectedCount}], failed: [{beneficiaryId, error}], skipped: [{beneficiaryId, reason}], allocationWarnings?}.
+ * allocationWarnings حقل إضافي اختياري (غير كاسر) — يظهر فقط إن فشل
+ * التخصيص المؤجَّل لجمعية بعد نجاح اعتماداتها فعليًا؛ لا يُسقِط أي عنصر
+ * من success (نفس فلسفة عزل audit/allocation في المراجعة الفردية).
  */
 function bulkReviewBeneficiaries(token, payload) {
   return perfTime_('bulkReviewBeneficiaries', () => {
@@ -802,6 +832,7 @@ function bulkReviewBeneficiaries(token, payload) {
     const success = [];
     const failed = [];
     const skipped = [];
+    const associationIdsToAllocate = {};
     items.forEach(entry => {
       const beneficiaryId = cleanId_(entry && entry.beneficiaryId);
       if (!beneficiaryId) {
@@ -809,26 +840,50 @@ function bulkReviewBeneficiaries(token, payload) {
         return;
       }
       try {
-        const result = reviewBeneficiaryNeeds(token, beneficiaryId, {
+        const itemPayload = {
           beneficiaryDecision: entry.beneficiaryDecision,
           beneficiaryRejectReason: entry.beneficiaryRejectReason,
           needDecisions: entry.needDecisions,
           opId: entry.opId
-        });
+        };
+        const result = runLockedIdempotent_('reviewBeneficiaryNeeds:' + beneficiaryId, user.id, itemPayload.opId,
+          () => reviewBeneficiaryNeeds_(user, beneficiaryId, itemPayload, false));
         success.push({beneficiaryId: beneficiaryId, approvedCount: result.approvedCount, rejectedCount: result.rejectedCount});
+        if (result.beneficiaryDecision === 'معتمد' && result.approvedCount > 0 && result.associationId) {
+          associationIdsToAllocate[result.associationId] = true;
+        }
       } catch (error) {
         failed.push({beneficiaryId: beneficiaryId, error: error.message});
       }
     });
 
+    // Patch 3.2A.1: تشغيل واحد فقط لكل جمعية فريدة تأثرت باعتماد ناجح —
+    // بعد انتهاء الدفعة كاملة، لا بعد كل مستفيد. فشل التخصيص لجمعية لا
+    // يحوّل عناصرها الناجحة إلى failed (نفس عزل الأثر الجانبي في المراجعة
+    // الفردية) — يُسجَّل تحذيرًا فقط ويُضاف إلى allocationWarnings.
+    const allocationWarnings = [];
+    Object.keys(associationIdsToAllocate).forEach(associationId => {
+      try {
+        runAutoAllocation_(associationId, user);
+      } catch (allocationError) {
+        const traceId = requestMeta_().traceId;
+        Logger.log('تحذير: نجحت اعتمادات الدفعة فعليًا لكن فشل محرك التخصيص التلقائي المؤجَّل لجمعية — traceId=' + traceId
+          + ' associationId=' + associationId + ' — ' + allocationError.message);
+        allocationWarnings.push({associationId: associationId, error: allocationError.message});
+      }
+    });
+
     try {
       audit_(user, 'مراجعة مستفيدين بالجملة', 'المستفيدون', '',
-        'محاولات: ' + items.length + ' — نجح: ' + success.length + '، فشل: ' + failed.length + '، تُجوهِل: ' + skipped.length);
+        'محاولات: ' + items.length + ' — نجح: ' + success.length + '، فشل: ' + failed.length + '، تُجوهِل: ' + skipped.length
+        + '، تخصيص تلقائي مؤجَّل لِ ' + Object.keys(associationIdsToAllocate).length + ' جمعية');
     } catch (auditError) {
       Logger.log('تحذير: فشل تسجيل العملية بعد اكتمال المراجعة بالجملة فعليًا — traceId=' + requestMeta_().traceId + ' — ' + auditError.message);
     }
 
-    return {ok: true, success: success, failed: failed, skipped: skipped};
+    const response = {ok: true, success: success, failed: failed, skipped: skipped};
+    if (allocationWarnings.length) response.allocationWarnings = allocationWarnings;
+    return response;
   });
 }
 
