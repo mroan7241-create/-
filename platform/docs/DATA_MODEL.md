@@ -259,6 +259,67 @@ CREATE UNIQUE INDEX ux_reference_values_child
 القديم) في مخطط الـschema أعلاه للعلاقات الهرمية (REGION→CITY،
 DEVICE_TYPE→DEVICE_SPEC).
 
+## إضافات NODE-2 (طلبات الانضمام + إدارة الجمعيات)
+
+### 15) `public_code_counters` — عدّاد الرموز العامة
+
+جدول صغير `(prefix TEXT PK, next_value INT, updated_at)`. يستبدل
+`nextId_` القديمة المبنية على `MAX(...)+1` (التي كانت آمنة فقط لأن
+`LockService` سلسل كل كتابة). التخصيص الذرّي:
+
+```sql
+INSERT INTO public_code_counters (prefix, next_value, updated_at)
+VALUES ($1, 1, now())
+ON CONFLICT (prefix) DO UPDATE
+  SET next_value = public_code_counters.next_value + 1, updated_at = now()
+RETURNING next_value
+```
+
+يُستدعى دائمًا داخل معاملة السجل المُرقَّم، فيتراجع الرقم مع أي rollback.
+البادئات المستخدَمة فعليًا في NODE-2: `APP` (طلبات)، `ASC` (جمعيات)،
+`USR` (حسابات). البقية (`BEN`/`NED`/`DEV`/`MND`/`RCB`) تُضاف عند نقل
+نطاقاتها. **مصالحة العدّاد بعد استيراد أرقام Legacy إلزامية** — راجع
+LEGACY_DATA_MIGRATION.md.
+
+### 16) `association_applications` — أعمدة وقيود NODE-2
+
+- `sector` أُضيف (كان مفقودًا منذ NODE-0 رغم وجوده في القديم:
+  `'مجال عمل الجمعية'`).
+- `category` صار **nullable**: القديم لا يفرضه في
+  `submitAssociationApplication_`، وكونه `NOT NULL` كان خطأ نمذجة.
+- `UNIQUE (license_file_id)` — ملف ترخيص واحد لا يُشارَك بين طلبين.
+- `UNIQUE (resulting_association_id)` — طلبان لا يمكن أن يشيرا لنفس
+  الجمعية الناتجة (يمنع ازدواج مسار القبول بنيويًا، لا بالكود فقط).
+- فهارس بحث ADMIN على `email` / `phone` / `license_number`.
+
+### 17) فهارس فريدة **جزئية** لقواعد الأعمال (بديل `LockService`)
+
+```sql
+CREATE UNIQUE INDEX ux_pending_application_email
+  ON association_applications (email)
+  WHERE status = 'UNDER_REVIEW' AND email IS NOT NULL;
+CREATE UNIQUE INDEX ux_pending_application_phone
+  ON association_applications (phone)  WHERE status = 'UNDER_REVIEW';
+CREATE UNIQUE INDEX ux_pending_application_license
+  ON association_applications (license_number)
+  WHERE status = 'UNDER_REVIEW' AND license_number IS NOT NULL;
+
+CREATE UNIQUE INDEX ux_accounts_one_association_role
+  ON accounts (association_id)
+  WHERE role = 'ASSOCIATION' AND archived_at IS NULL;
+```
+
+شرط `WHERE status = 'UNDER_REVIEW'` جوهري ومقصود: السجلات التاريخية
+المبتوتة لا تمنع طلبًا جديدًا مشروعًا — نفس سلوك القديم بالضبط.
+`ux_accounts_one_association_role` يجعل «حساب دخول واحد لكل جمعية»
+ضمانة بنيوية، فتصبح `findFirst({associationId, role})` محدَّدة النتيجة.
+
+> **ملاحظة تنفيذية**: هذه فهارس raw SQL خارج `schema.prisma` (Prisma لا
+> يدعم `@@unique` مشروطًا). لذلك `P2002` الناتج عنها يحمل **اسم الفهرس**
+> في `meta.target`، بينما القيود المعرَّفة في المخطط تحمل **أسماء
+> الأعمدة**. أي كود يفسّر `P2002` يجب أن يطابق الصيغتين معًا — راجع
+> ASSOCIATION_APPLICATIONS.md §3.
+
 ## الفهارس (Indexing Plan)
 
 مطابقة لما طُلب صراحة — لا فهارس عشوائية إضافية:

@@ -35,6 +35,28 @@ Apps Script الحي (تعذّر الوصول لبيئة Apps Script من هذه
 `getBootstrapData` **يبقى `NOT_STARTED` عمدًا** — قرار مؤجَّل، راجع
 MIGRATION_ROADMAP.md.
 
+**تحديث NODE-2**: دوال `Applications.gs` الأربع المستدعاة من الواجهة
+(`submitAssociationApplication`, `getApplicationStatus`,
+`getApplicationLicenseFile`, `reviewAssociationApplication`) ودالتا
+القوائم الداخليتان (`listApplications`, `listAssociations`) ودالتا
+`DevicesAssociations.gs` (`saveAssociation`, `updateAssociationSettings`)
+انتقلت إلى `MIGRATED` — تنفيذ حقيقي بعد قراءة `Applications.gs`
+و`DevicesAssociations.gs` و`Validation.gs` و`Normalize.gs` و`Pagination.gs`
+سطرًا بسطر، مع 97 اختبار تكامل/أمان/تزامن جديد أخضر
+(`apps/api/test/association-applications-*.e2e-spec.ts`,
+`associations-management.e2e-spec.ts`, `storage-integration.e2e-spec.ts`)
+إضافة إلى 69 اختبار NODE-1 بقيت خضراء بلا تعديل.
+
+**لم تُستخدم `PARITY_VERIFIED` عمدًا**: التطابق المُثبَت هنا هو تطابق
+**على مستوى الكود** (قراءة المصدر القديم ومطابقة السلوك حالةً بحالة
+واختبارها)، وليس تشغيلًا فعليًا بالتوازي مع نظام Apps Script الحي على
+نفس المدخلات — تلك المقارنة التشغيلية لم تُجرَ، ولا يجوز ادّعاؤها.
+`resetAssociationPassword` تبقى `MIGRATED` من NODE-1 (لم يُعَد تنفيذها
+في NODE-2؛ شاشة إدارة الجمعيات الجديدة تستدعي نفس الـendpoint القائم).
+
+الحالة `MIGRATED` في هذا الملف تعني إذن: **مُنفَّذ ومُختبَر آليًا، غير
+مُقارَن تشغيليًا بالنظام الحي**.
+
 ---
 
 | Legacy Module (.gs) | Legacy Public Function | Current UI (Index.html) | New API Module | New Endpoint (planned) | New UI Route (planned) | DB Entities | Parity Status | Notes |
@@ -46,18 +68,20 @@ MIGRATION_ROADMAP.md.
 | Auth.gs | `resetPasswordWithCode` | شاشة الدخول | AuthModule | `POST /auth/password-reset/confirm` | `/login/forgot-password` | password_reset_tokens, auth_credentials, auth_sessions | MIGRATED | TTL=15د، 6 محاولات كحد أقصى، استخدام واحد، 10/15m rate limit |
 | Auth.gs | `resetAssociationPassword` | لوحة ADMIN | AuthModule | `POST /auth/associations/:id/reset-password` | `/admin/associations/:id` (لاحقًا) | auth_credentials, auth_sessions | MIGRATED | ADMIN only؛ كلمة مرور مؤقتة تُعاد مرة واحدة فقط، mustChangePassword=true |
 | Bootstrap.gs | `getBootstrapData` | تحميل أولي لكل لوحات التحكم | AccountsModule (+ عبر modules متعددة) | `GET /bootstrap` | (root loader) | accounts, associations, reference_values, system_settings | NOT_STARTED | يُستبدل جزئيًا بـREST endpoints مستقلة لكل نطاق (لا نمط bootstrap ضخم واحد في الهيكل الجديد إلزاميًا — قرار تصميم لاحق، راجع MIGRATION_ROADMAP) |
-| DevicesAssociations.gs | `saveAssociation` | إدارة الجمعيات (ADMIN) | AssociationsModule | `POST/PATCH /associations` | `/admin/associations` | associations, accounts | FOUNDATION_READY | |
-| DevicesAssociations.gs | `updateAssociationSettings` | إعدادات الجمعية | AssociationsModule | `PATCH /associations/:id/settings` | `/association/settings` | associations | NOT_STARTED | |
+| DevicesAssociations.gs | `saveAssociation` | إدارة الجمعيات (ADMIN) | AssociationsModule | `POST /associations` (إنشاء)، `PATCH /associations/:id` (تعديل) | `/admin/associations` | associations, accounts, auth_credentials, public_code_counters, idempotency_keys | MIGRATED | مقسَّمة إلى مسارين صريحين بدل `payload.id` الضمني؛ الإنشاء يبني Association+Account+AuthCredential في معاملة واحدة (idempotent عبر `opId`)؛ ACTIVE→INACTIVE يُبطل جلسات كل حسابات الجمعية. تعديل ADMIN لبريد التواصل **لا** يُزامن بريد الدخول — راجع ASSOCIATIONS.md |
+| DevicesAssociations.gs | `updateAssociationSettings` | إعدادات الجمعية | AssociationsModule | `PATCH /associations/me/settings` | `/association/settings` | associations, accounts | MIGRATED | جوال/بريد فقط؛ `associationId` من AuthContext حصرًا (لا يوجد حقل كهذا في الـDTO أصلًا، وValidationPipe يرفض أي حقل غير معرَّف)؛ يُزامن `accounts.email` كالقديم — راجع ASSOCIATIONS.md |
 | DevicesAssociations.gs | `saveDevice` | إدارة الأجهزة | InventoryModule + AllocationModule | `POST/PATCH /device-units` | `/admin/inventory` | device_units, device_allocations, device_movements, beneficiary_needs | NOT_STARTED | أعقد دالة في النظام القديم (ربط جهاز/اكتمال جماعي/فكّ ربط) — راجع STATE_MAPPING.md §7-8 |
 | DevicesAssociations.gs | `assignDelegate` | تعيين مندوب لمستفيد | DelegatesModule + DeliveriesModule | `POST /delivery-missions/:id/assign` | `/association/deliveries` | delivery_missions, beneficiary_needs | NOT_STARTED | "التعيين" فقط، لا استلام فعلي — راجع STATE_MAPPING.md §9 |
 | DevicesAssociations.gs | `saveDelegate` | إدارة المناديب | DelegatesModule | `POST/PATCH /delegates` | `/association/delegates` | accounts (role=DELEGATE), auth_credentials | NOT_STARTED | |
 | DevicesAssociations.gs | `setDelegateStatus` | إدارة المناديب | DelegatesModule | `PATCH /delegates/:id/status` | `/association/delegates` | accounts | NOT_STARTED | |
 | DevicesAssociations.gs | `regenerateDelegateCode` | إدارة المناديب | DelegatesModule | `POST /delegates/:id/regenerate-code` | `/association/delegates` | auth_credentials | NOT_STARTED | يُبطل رمز الدخول القديم — **يجب** استخدام `normalizeDelegateCode`/`computeCredentialLookupHash` من `@alzad/shared` (نفس helper الذي يستخدمه login الحالي وseed)، لا implementation منفصل. راجع AUTHENTICATION.md §2.1 |
 | DevicesAssociations.gs | `getDeviceDetail` | تفاصيل الجهاز | InventoryModule | `GET /device-units/:id` | `/admin/inventory/:id` | device_units, device_movements, device_allocations | NOT_STARTED | |
-| Applications.gs | `submitAssociationApplication` | بوابة تقديم الجمعيات (عام) | ApplicationsModule | `POST /association-applications` | `/apply` | association_applications, application_answers, files | FOUNDATION_READY | client_request_id → idempotency |
-| Applications.gs | `getApplicationStatus` | متابعة حالة الطلب (عام) | ApplicationsModule | `GET /association-applications/:id/status` | `/apply/status` | association_applications | NOT_STARTED | |
-| Applications.gs | `getApplicationLicenseFile` | مراجعة الطلب (ADMIN) | ApplicationsModule + FilesModule | `GET /association-applications/:id/license-file` | `/admin/applications/:id` | files | NOT_STARTED | signed URL مؤقت فقط |
-| Applications.gs | `reviewAssociationApplication` | مراجعة الطلب (ADMIN) | ApplicationsModule | `POST /association-applications/:id/review` | `/admin/applications/:id` | association_applications, associations, accounts | NOT_STARTED | قبول ينشئ association + account تلقائيًا |
+| Applications.gs | `submitAssociationApplication` | بوابة تقديم الجمعيات (عام) | ApplicationsModule | `POST /association-applications` | `/apply` | association_applications, application_answers, files, public_code_counters | MIGRATED | نفس ترتيب Legacy حرفيًا (honeypot → clientRequestId → تحقق رخيص → فحص تكرار → rate limit → ملف → معاملة)؛ الفهارس الجزئية `ux_pending_application_*` تحلّ محلّ LockService؛ الملف يُرفع قبل المعاملة مع حذف تعويضي عند الفشل — راجع ASSOCIATION_APPLICATIONS.md |
+| Applications.gs | `getApplicationStatus` | متابعة حالة الطلب (عام) | ApplicationsModule | `GET /association-applications/status/:clientRequestId` | `/apply/status` | association_applications | MIGRATED | عام بلا جلسة؛ لا أي PII في الرد (رمز/حالة/تاريخ/سبب رفض فقط)؛ 20 محاولة/ساعة لكل معرّف طلب |
+| Applications.gs | `getApplicationLicenseFile` | مراجعة الطلب (ADMIN) | ApplicationsModule + FilesModule | `GET /association-applications/:id/license-file` | `/admin/applications` | files, audit_logs | MIGRATED | ADMIN فقط؛ signed URL عمره 300 ثانية؛ مفتاح المسار هو معرّف الطلب لا معرّف ملف حر؛ كل عرض يُسجَّل `APPLICATION_LICENSE_VIEWED` |
+| Applications.gs | `reviewAssociationApplication` | مراجعة الطلب (ADMIN) | ApplicationsModule | `POST /association-applications/:id/review` | `/admin/applications` | association_applications, associations, accounts, auth_credentials, idempotency_keys, public_code_counters, audit_logs | MIGRATED | UNDER_REVIEW→ACCEPTED\|REJECTED فقط، نهائي؛ `SELECT ... FOR UPDATE` + idempotency عبر `opId`؛ كلمة المرور المؤقتة تُعرض مرة واحدة ولا تُخزَّن ولا تُعاد عند التكرار (انحراف أمني متعمَّد — راجع SECURITY_MODEL.md) |
+| Applications.gs | `listApplications` | قائمة طلبات الانضمام (ADMIN) | ApplicationsModule | `GET /association-applications` | `/admin/applications` | association_applications, application_answers, files | MIGRATED | ليست ضمن الـ32 المستخرَجة من `Index.html` (تُستدعى داخليًا في القديم ضمن حزم اللوحة)؛ ترقيم/بحث/تصفية بالحالة؛ `scoreLabel` («7/8») مؤشّر عرض فقط لا يدخل في أي قرار |
+| DevicesAssociations.gs | `listAssociations` | قائمة الجمعيات (ADMIN) | AssociationsModule | `GET /associations` | `/admin/associations` | associations, accounts, beneficiaries, device_units | MIGRATED | ليست ضمن الـ32 المستخرَجة من `Index.html` (تُستدعى داخليًا في القديم)؛ عدّادات مجمَّعة عبر `groupBy` واحد لكل نوع (لا N+1) |
 | Beneficiaries.gs | `saveBeneficiary` | نموذج المستفيد | BeneficiariesModule | `POST/PATCH /beneficiaries` | `/association/beneficiaries` | beneficiaries, beneficiary_needs | FOUNDATION_READY | |
 | Beneficiaries.gs / ExcelTemplate.gs | `downloadBeneficiaryImportTemplateXlsx` | استيراد جماعي | BeneficiariesModule | `GET /beneficiaries/import-template.xlsx` | `/association/beneficiaries/import` | — | NOT_STARTED | ملف ثابت التوليد، لا بيانات مستخدم |
 | Beneficiaries.gs | `inspectBeneficiaryExcel` | استيراد جماعي (معاينة) | BeneficiariesModule | `POST /beneficiaries/import/inspect` | `/association/beneficiaries/import` | — (قراءة فقط، لا كتابة) | NOT_STARTED | dry-run |

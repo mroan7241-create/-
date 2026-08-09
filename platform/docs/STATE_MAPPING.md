@@ -23,9 +23,34 @@ Script) إلى enum داخلي مستقر بالإنجليزية في المنص
 
 الانتقالات: `UNDER_REVIEW → ACCEPTED \| REJECTED` فقط (لا رجوع، حسب `Applications.gs`).
 
+**منفَّذ فعليًا في NODE-2.** لا توجد ولن تُضاف أي حالة أخرى: لا
+`DRAFT`/`SUBMITTED`/`INCOMPLETE`/`ELIGIBLE`/`INELIGIBLE`/`SCORED`/
+`MAIN_LIST`/`RESERVE_LIST`/`AWAITING_AGREEMENT`/`ACTIVATED` — لأن أيًّا
+منها غير موجود في النظام القديم، ولا محرّك تقييم ولا بوابة أهلية.
+
+- **النهائية مفروضة على مستوى الكود وقاعدة البيانات معًا**: كل مراجعة
+  تبدأ بـ`SELECT … FOR UPDATE` على صف الطلب داخل المعاملة، فأي محاولة
+  ثانية (بما فيها قبول ورفض متزامنان) ترى الحالة المبتوتة وتُرفض بـ
+  `APPLICATION_ALREADY_REVIEWED` (409).
+- **`ACCEPTED` هو الانتقال الوحيد المتعدي**: ينشئ في نفس المعاملة
+  `associations` + `accounts` (دور `ASSOCIATION`) + `auth_credentials`
+  ويربط `resulting_association_id`. `REJECTED` لا ينشئ شيئًا ويشترط
+  سببًا نصيًا (≤ 300 حرفًا).
+- **مؤشّر «7/8» ليس حالة ولا مدخلًا لقرار** — عدد إجابات «نعم» يُحسب
+  للعرض فقط ولا يُخزَّن كحقل مشتق ولا يؤثر في أي انتقال.
+
+راجع ASSOCIATION_APPLICATIONS.md §5 للتسلسل الكامل.
+
 ---
 
 ## 2) Association (حالة الجمعية)
+
+**منفَّذ فعليًا في NODE-2**: `ACTIVE ⇄ INACTIVE` عبر
+`PATCH /associations/:id` (ADMIN فقط). الانتقال `ACTIVE → INACTIVE`
+يُبطل فورًا كل جلسات حسابات الجمعية (`ASSOCIATION` + `DELEGATE`)؛
+والانتقال العكسي **لا** يُحيي جلسة مُبطلة. الجمعية لا تستطيع تغيير حالتها
+بنفسها (مسار الإعدادات الذاتية لا يقبل الحقل أصلًا).
+
 
 **المصدر**: `DevicesAssociations.gs` (الحقل `'الحالة'` في ورقة "الجمعيات": `'نشطة' / 'غير نشطة'`).
 

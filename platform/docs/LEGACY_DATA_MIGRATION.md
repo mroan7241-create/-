@@ -121,6 +121,93 @@ Production حقيقي، بنص صريح أو بتجزئته القديمة (خو
 هذا قرار تصميمي مبدئي فقط لتوجيه NODE-8 — **لم يُنفَّذ أي كود له في
 NODE-1**، ولا استيراد بيانات Production حقيقية حدث أو سيحدث قبل NODE-8.
 
+## إلزامي في NODE-8: مصالحة `public_code_counters` بعد الاستيراد
+
+هذا بند **حاجز** (blocking) لا تحسين اختياري: تجاهله يُنتج تصادم أرقام
+عامة بين السجلات المستورَدة والسجلات الجديدة، وهو خطأ صامت لا يظهر إلا
+بعد وقوعه في بيانات حقيقية.
+
+### الآلية
+
+منذ NODE-2 كل رقم عام جديد يُخصَّص حصريًا عبر
+`PublicCodeService.nextPublicCode(tx, prefix)`، الذي ينفّذ
+upsert-and-increment ذرّيًا واحدًا على جدول
+`public_code_counters (prefix TEXT PRIMARY KEY, next_value INT, updated_at)`:
+
+```sql
+INSERT INTO public_code_counters (prefix, next_value, updated_at)
+VALUES ($1, 1, now())
+ON CONFLICT (prefix) DO UPDATE
+  SET next_value = public_code_counters.next_value + 1, updated_at = now()
+RETURNING next_value
+```
+
+الرقم الناتج يُنسَّق `PREFIX-NNNNNN` (`APP-000123`). العدّاد **لا يعرف
+شيئًا** عن أي `public_code` مستورَد من Legacy: الاستيراد يكتب أعمدة
+`public_code` مباشرةً بأرقام النظام القديم، ولا يمرّ بالعدّاد إطلاقًا.
+فإن بقي `next_value = 1` بعد استيراد `BEN-000001 … BEN-004312`، سيُصدر
+أول تخصيص جديد `BEN-000001` — تصادم فوري مع قيد `UNIQUE` (في أحسن
+الأحوال فشل مرئي، وفي أسوئها إخفاق دفعة استيراد كاملة).
+
+### الإجراء المطلوب — بعد كل الإدراجات وقبل فتح النظام للكتابة
+
+لكل بادئة مستورَدة، ضع العدّاد على **أكبر رقم مستورَد فعليًا**، بحيث
+يكون التخصيص التالي هو `max + 1`:
+
+```sql
+-- مثال للبادئة BEN؛ يُكرَّر لكل بادئة مستورَدة
+INSERT INTO public_code_counters (prefix, next_value, updated_at)
+SELECT 'BEN',
+       COALESCE(MAX(NULLIF(regexp_replace(public_code, '^BEN-', ''), '')::int), 0),
+       now()
+FROM beneficiaries
+WHERE public_code ~ '^BEN-[0-9]+$'
+ON CONFLICT (prefix) DO UPDATE
+  SET next_value = GREATEST(public_code_counters.next_value, EXCLUDED.next_value),
+      updated_at = now();
+```
+
+- `GREATEST` مقصود: المصالحة **لا تُنقص** العدّاد أبدًا (تشغيلها مرتين،
+  أو بعد إصدار أرقام جديدة، آمن وidempotent).
+- `next_value` يُخزَّن كآخر رقم **مُصدَر**، لأن `nextPublicCode` يزيد قبل
+  الإرجاع — لذلك نضعه على `MAX` لا `MAX + 1`.
+- تُنفَّذ داخل نفس معاملة/دفعة الاستيراد، وقبل أي حركة كتابة تطبيقية.
+- الأرقام غير المطابقة للنمط (`^PREFIX-[0-9]+$`) تُستبعَد من الحساب
+  وتُسجَّل في تقرير الاستيراد بدل إسقاطها بصمت.
+
+### البادئات المعنية
+
+| البادئة | الكيان | مستخدَمة منذ |
+|---|---|---|
+| `APP` | `association_applications` | NODE-2 |
+| `ASC` | `associations` | NODE-2 |
+| `USR` | `accounts` (ADMIN/ASSOCIATION) | NODE-2 |
+| `MND` | `accounts` (DELEGATE) | NODE-6 (متوقَّع) |
+| `BEN` | `beneficiaries` | NODE-3 (متوقَّع) |
+| `NED` | `beneficiary_needs` | NODE-3 (متوقَّع) |
+| `DEV` | `device_units` | NODE-4 (متوقَّع) |
+| `RCB` | `receipt_batches` | NODE-4 (متوقَّع) |
+
+`APP`/`ASC`/`USR` مستخدَمة **الآن فعليًا**، فهي أول ما يجب أن تشمله
+المصالحة. البقية تُضاف إلى نفس الخطوة فور نقل نطاقاتها.
+
+### التحقق الإلزامي بعد المصالحة
+
+```sql
+-- يجب أن يعيد صفر صفوف لكل بادئة
+SELECT c.prefix, c.next_value, m.max_imported
+FROM public_code_counters c
+JOIN (SELECT 'BEN' AS prefix,
+             MAX(regexp_replace(public_code,'^BEN-','')::int) AS max_imported
+      FROM beneficiaries WHERE public_code ~ '^BEN-[0-9]+$') m USING (prefix)
+WHERE c.next_value < m.max_imported;
+```
+
+بالإضافة إلى اختبار دخان: تخصيص رقم جديد لكل بادئة مستورَدة والتأكد أنه
+لا يصطدم بأي `public_code` قائم.
+
+---
+
 ## ما لا يُنقَل تلقائيًا
 
 - كلمات مرور/رموز دخول مندوبين خامًا أو حتى بتجزئتهم القديمة (خوارزمية

@@ -24,13 +24,40 @@ rate limiting DB-backed، فرض الأدوار الثلاثة عبر `SessionAu
 لكلمات مرور Production، لا مزوّد بريد إنتاجي حقيقي، لا Deploy — كل ذلك
 خارج نطاق هذه المرحلة صراحة.
 
-## NODE-2 — Association applications + association management
+## NODE-2 — Association applications + association management — **مكتمل**
 
 `Applications.gs` كامل (`submitAssociationApplication`,
 `getApplicationStatus`, `reviewAssociationApplication`,
-`getApplicationLicenseFile`) + `saveAssociation`/
-`updateAssociationSettings` من `DevicesAssociations.gs`. أول استخدام
-حقيقي لـ`FilesModule` (رفع ترخيص + signed URL).
+`getApplicationLicenseFile`, `listApplications`) +
+`saveAssociation`/`updateAssociationSettings`/`listAssociations` من
+`DevicesAssociations.gs`. أول استخدام حقيقي لـ`FilesModule` (رفع ترخيص +
+signed URL) ولـ`public_code_counters` و`idempotency_keys`.
+
+**ما نُفِّذ فعليًا**:
+
+- 6 endpoints للطلبات + 5 للجمعيات (راجع ASSOCIATION_APPLICATIONS.md §11
+  وASSOCIATIONS.md §6).
+- 5 شاشات: `/apply`, `/apply/status`, `/admin/applications`,
+  `/admin/associations`, `/association/settings` — بهوية الزاد وRTL،
+  ومُجرَّبة يدويًا في متصفح حقيقي على المسار الذهبي كاملًا
+  (تقديم → متابعة → مراجعة → قبول/رفض).
+- migration واحدة (`20260809072054_node2_association_applications`):
+  `sector`، `category` nullable، `public_code_counters`، قيود فرادة،
+  وأربعة فهارس فريدة **جزئية** تحلّ محلّ `LockService`.
+- `StorageService` (S3-متوافق: s3rver محليًا، MinIO في CI) مع حذف
+  تعويضي best-effort — لا كائن يتيم.
+- 97 اختبار NODE-2 جديد (وحدة/تكامل/تزامن/أمان/تخزين) + 69 اختبار NODE-1
+  بقيت خضراء بلا أي تعديل عليها = **166 اختبارًا خضراء**.
+- `.github/workflows/platform-ci.yml`: PostgreSQL 18 + MinIO حقيقيان،
+  من قاعدة بيانات فارغة إلى بناء الواجهة، بلا أي خطوة نشر.
+
+**ما استُبعد عمدًا (خارج parity)**: أي حالة طلب غير الثلاث المعتمدة،
+محرّك تقييم، بوابة أهلية، اتفاقيات، مشتريات/RFQ، قوائم رئيسية/احتياطية،
+لوحة تحكم فعلية، أو أي شاشة مستفيدين — كلها غير موجودة في النظام القديم.
+
+**الحالة**: `MIGRATED` لا `PARITY_VERIFIED` — التطابق مُثبَت على مستوى
+الكود والاختبار الآلي، ولم تُجرَ مقارنة تشغيلية حيّة مع نظام Apps Script
+(راجع FEATURE_PARITY.md).
 
 ## NODE-3 — Beneficiaries + beneficiary needs + bulk review
 
@@ -89,7 +116,7 @@ FEATURE_PARITY.md — كل سطر يجب أن يصل `PARITY_VERIFIED` قبل ا
 
 ---
 
-## NEEDS_DECISION — قرارات معلَّقة تحتاج توجيهًا بشريًا صريحًا قبل NODE-2
+## NEEDS_DECISION — قرارات معلَّقة تحتاج توجيهًا بشريًا صريحًا
 
 هذه ليست عيوبًا في NODE-0 — هي قرارات لم يطلبها نطاق NODE-0 صراحة
 ولا يصح افتراض إجابة لها من تلقاء نفسي:
@@ -111,3 +138,16 @@ FEATURE_PARITY.md — كل سطر يجب أن يصل `PARITY_VERIFIED` قبل ا
    NODE-0 صراحة).
 5. **الجدول الزمني/المسؤول عن قرار Cutover** (NODE-10) — قرار بشري بحت،
    خارج نطاق أي مرحلة تقنية.
+
+6. **مزوّد تخزين الكائنات في Production** (NODE-2): العقد
+   (`StorageService`) محايد وS3-متوافق، وMinIO مستخدَم محليًا/في CI فقط.
+   اختيار المزوّد الفعلي وسياسة الاحتفاظ/النسخ الاحتياطي لملفات التراخيص
+   قرار تشغيلي لم يُطلب في NODE-2 ولم يُتَّخذ (ولم تُستخدم أي مفاتيح أو
+   بيانات حقيقية في أي مرحلة).
+7. **مدة الاحتفاظ بملفات تراخيص الطلبات المرفوضة**: القديم لا يحذفها.
+   NODE-2 حافظ على ذلك حرفيًا (لا حذف تلقائي). هل يُضاف تنظيف دوري بعد
+   مدة محدَّدة؟ قرار سياسة بيانات، لا قرار تقني.
+8. **دين أمان التبعيات (`npm audit`)**: العدد ارتفع من 24 إلى 28 بعد
+   إضافة `@aws-sdk/client-s3` و`multer` و`s3rver`. لم يُشغَّل
+   `npm audit fix --force` لا محليًا ولا في CI (يكسر إصدارات رئيسية بلا
+   قرار بشري). المعالجة تحتاج قرارًا صريحًا بترقية/استبدال تبعيات.

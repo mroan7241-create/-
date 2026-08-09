@@ -242,6 +242,9 @@ model Account {
   auditLogs         AuditLog[]
   idempotencyKeys   IdempotencyKey[]
 
+  /// NODE-2: partial unique index حقيقي (raw SQL في migration.sql) يمنع
+  /// أكثر من حساب ASSOCIATION تشغيلي واحد غير مؤرشَف لنفس association_id —
+  /// `ux_accounts_one_association_role ON (association_id) WHERE role='ASSOCIATION' AND archived_at IS NULL`.
   @@index([email, status])
   @@map("accounts")
 }
@@ -329,7 +332,13 @@ model AssociationApplication {
   publicCode             String            @unique @map("public_code")
   clientRequestId        String?           @unique @map("client_request_id")
   name                   String
-  category               String
+  /// NODE-2: "التصنيف" (ASSOCIATION_CATEGORY) — اختياري في Legacy فعليًا
+  /// (submitAssociationApplication_ لا يفرضه)؛ كان NOT NULL خطأً منذ NODE-0.
+  category               String?
+  /// NODE-2: "مجال عمل الجمعية" (ASSOCIATION_SECTOR) — nullable على مستوى DB
+  /// لاستيعاب صفوف مستوردة تاريخيًا (NODE-8) قد تسبق وجود هذا الحقل في
+  /// النموذج القديم؛ الـService الجديدة تفرضه إلزاميًا لكل submission جديد.
+  sector                 String?
   region                 String
   city                   String
   phone                  String
@@ -338,12 +347,16 @@ model AssociationApplication {
   notes                  String?
   licenseNumber          String?           @map("license_number")
   licenseExpiryDate      DateTime?         @map("license_expiry_date") @db.Date
-  licenseFileId          String?           @map("license_file_id") @db.Uuid
+  /// NODE-2: FK فريد (@unique) — ملف الترخيص التشغيلي لا يُشارَك بين أكثر من طلب.
+  licenseFileId          String?           @unique @map("license_file_id") @db.Uuid
   pledgeAccepted         Boolean           @default(false) @map("pledge_accepted")
   pledgeAcceptedAt       DateTime?         @map("pledge_accepted_at")
   status                 ApplicationStatus @default(UNDER_REVIEW)
   rejectReason           String?           @map("reject_reason")
-  resultingAssociationId String?           @map("resulting_association_id") @db.Uuid
+  /// NODE-2: FK فريد — لا يمكن أن ينتج نفس Association من طلبين مختلفين
+  /// (Postgres تعامل NULL كقيم متمايزة في UNIQUE عادي، فلا يمنع تعدد
+  /// الطلبات غير المقبولة بعد، وهو السلوك الصحيح المطلوب).
+  resultingAssociationId String?           @unique @map("resulting_association_id") @db.Uuid
   submittedAt            DateTime          @default(now()) @map("submitted_at")
   reviewedAt             DateTime?         @map("reviewed_at")
   reviewedById           String?           @map("reviewed_by") @db.Uuid
@@ -353,7 +366,14 @@ model AssociationApplication {
   reviewedBy               Account?    @relation("ApplicationReviewedBy", fields: [reviewedById], references: [id])
   answers                  ApplicationAnswer[]
 
+  /// NODE-2: partial unique indexes حقيقية (raw SQL في migration.sql —
+  /// Prisma @@unique العادي لا يدعم شرط WHERE) تمنع أكثر من طلب
+  /// UNDER_REVIEW واحد لنفس البريد/الهاتف/رقم الترخيص المطبَّع؛ سجلات
+  /// ACCEPTED/REJECTED التاريخية لا تُحتسَب. راجع ASSOCIATION_APPLICATIONS.md.
   @@index([status])
+  @@index([email])
+  @@index([phone])
+  @@index([licenseNumber])
   @@map("association_applications")
 }
 
@@ -956,4 +976,25 @@ model AuthRateLimit {
   @@unique([scope, subjectHash])
   @@index([expiresAt])
   @@map("auth_rate_limits")
+}
+
+// ============================================================
+// 27) public_code_counters (NODE-2)
+// ============================================================
+/// مولّد publicCode متزامن ذرّي — يستبدل منطق nextId_/SELECT MAX(...)+1
+/// القديم المبني على Google Sheets (غير آمن أصلًا تحت التزامن الحقيقي).
+/// صف واحد لكل بادئة (APP/ASC/USR/BEN/NED/DEV/MND/RCB/...)؛ `nextPublicCode(tx, prefix)`
+/// في apps/api ينفّذ `INSERT ... ON CONFLICT (prefix) DO UPDATE SET
+/// next_value = next_value + 1 RETURNING next_value` — عبارة SQL واحدة
+/// ذرّية بذاتها، آمنة تحت التزامن العالي بلا الحاجة لقفل صريح إضافي،
+/// ويجب استدعاؤها دائمًا داخل نفس transaction التي تُنشئ السجل المُرقَّم
+/// حتى يتراجع الرقم مع تراجع العملية بالكامل عند الفشل. راجع
+/// LEGACY_DATA_MIGRATION.md لخطة NODE-8 لمصالحة/تقديم العداد بعد استيراد
+/// أرقام Legacy القديمة لمنع أي تصادم.
+model PublicCodeCounter {
+  prefix    String   @id
+  nextValue Int      @default(1) @map("next_value")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("public_code_counters")
 }

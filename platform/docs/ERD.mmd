@@ -3,6 +3,8 @@ erDiagram
     %% كيانان منفصلان) — راجع platform/docs/DATA_MODEL.md وschema.prisma.
     %% NODE-1: auth_rate_limits (scope, subject_hash HMAC, attempt_count,
     %% expires_at) غير مُدرَج هنا عمدًا — جدول مستقل بلا أي FK لكيان آخر.
+    %% NODE-2: أُضيف public_code_counters (مستقل كذلك) وفُصّلت حقول
+    %% association_applications الفعلية مع الفهارس الجزئية التي تحرسها.
     ACCOUNT ||--o{ AUTH_CREDENTIAL : has
     ACCOUNT ||--o{ AUTH_SESSION : has
     ACCOUNT ||--o{ PASSWORD_RESET_TOKEN : has
@@ -121,10 +123,24 @@ erDiagram
 
     ASSOCIATION_APPLICATION {
         uuid id PK
-        string public_code UK
-        string client_request_id UK "nullable"
-        enum status
-        uuid resulting_association_id FK "nullable"
+        string public_code UK "APP-NNNNNN"
+        string client_request_id UK "nullable — idempotency عام"
+        string name
+        string category "nullable (NODE-2)"
+        string sector "NODE-2"
+        string region
+        string city
+        string phone "ux_pending_application_phone (partial, UNDER_REVIEW)"
+        string email "ux_pending_application_email (partial, UNDER_REVIEW)"
+        string contact_name
+        string license_number "ux_pending_application_license (partial, UNDER_REVIEW)"
+        date license_expiry_date
+        uuid license_file_id FK "UK — nullable"
+        boolean pledge_accepted
+        enum status "UNDER_REVIEW | ACCEPTED | REJECTED فقط"
+        string reject_reason "nullable — عند REJECTED فقط"
+        uuid resulting_association_id FK "UK — nullable"
+        uuid reviewed_by_id FK "nullable"
     }
 
     BENEFICIARY {
@@ -265,4 +281,13 @@ erDiagram
     SYSTEM_SETTING {
         string key PK
         json value
+    }
+
+    %% NODE-2: عدّاد الرموز العامة الذرّي — جدول مستقل بلا أي FK لكيان
+    %% آخر (كـauth_rate_limits)، لذلك يظهر بلا علاقات في المخطط.
+    %% البادئات المستخدَمة فعليًا الآن: APP / ASC / USR.
+    PUBLIC_CODE_COUNTER {
+        string prefix PK "APP | ASC | USR | (لاحقًا BEN/NED/DEV/MND/RCB)"
+        int next_value
+        datetime updated_at
     }

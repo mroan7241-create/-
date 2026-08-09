@@ -7,7 +7,7 @@ on:
   pull_request:
     paths: ['platform/**', '.github/workflows/platform-ci.yml']
 
-# لا Deploy في هذا الـworkflow إطلاقًا (NODE-0) — build/lint/test فقط.
+# لا Deploy في هذا الـworkflow إطلاقًا — build/lint/test فقط.
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -30,9 +30,34 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      # NODE-2: تخزين كائنات حقيقي في CI. البيئة المحلية (بلا Docker)
+      # تستخدم s3rver داخل الاختبارات نفسها؛ هنا يعمل MinIO فعليًا،
+      # و OBJECT_STORAGE_EXTERNAL=true يمنع الاختبارات من تشغيل s3rver.
+      # الاختبارات نفسها بلا أي تغيير كود — الفارق كله في متغيرات البيئة.
+      minio:
+        image: minio/minio:edge-cicd
+        env:
+          MINIO_ROOT_USER: alzad_ci_storage
+          MINIO_ROOT_PASSWORD: alzad_ci_storage_password
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "curl -fsS http://localhost:9000/minio/health/live"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
     env:
       DATABASE_URL: postgresql://alzad_ci:alzad_ci_password@localhost:5432/alzad_platform_ci?schema=public
       NODE_ENV: test
+
+      OBJECT_STORAGE_EXTERNAL: 'true'
+      OBJECT_STORAGE_ENDPOINT: http://localhost:9000
+      OBJECT_STORAGE_REGION: us-east-1
+      OBJECT_STORAGE_ACCESS_KEY: alzad_ci_storage
+      OBJECT_STORAGE_SECRET_KEY: alzad_ci_storage_password
+      OBJECT_STORAGE_BUCKET: alzad-platform-test
+      OBJECT_STORAGE_FORCE_PATH_STYLE: 'true'
 
     steps:
       - uses: actions/checkout@v4
@@ -45,6 +70,16 @@ jobs:
 
       - name: install
         run: npm install --workspaces --include-workspace-root
+
+      # NODE-2: bucket خاص تمامًا — لا سياسة وصول عام بحال. المسار الوحيد
+      # للقراءة هو signed URL قصير العمر يُصدره endpoint محروس بـADMIN.
+      - name: create private MinIO bucket
+        run: |
+          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o "$RUNNER_TEMP/mc"
+          chmod +x "$RUNNER_TEMP/mc"
+          "$RUNNER_TEMP/mc" alias set ci "$OBJECT_STORAGE_ENDPOINT" "$OBJECT_STORAGE_ACCESS_KEY" "$OBJECT_STORAGE_SECRET_KEY"
+          "$RUNNER_TEMP/mc" mb --ignore-existing "ci/$OBJECT_STORAGE_BUCKET"
+          "$RUNNER_TEMP/mc" anonymous set none "ci/$OBJECT_STORAGE_BUCKET"
 
       - name: build shared package
         run: npm run build --workspace packages/shared
@@ -73,6 +108,28 @@ jobs:
       - name: unit + integration tests
         run: npm run test
 
+      # NODE-2: تأكيدات على مستوى قاعدة البيانات نفسها — ذرّية عدّاد
+      # public_code تحت تزامن حقيقي، والفهارس الفريدة الجزئية التي تحلّ
+      # محلّ LockService القديم. تُشغَّل صراحةً قبل بقية e2e لأنها أسرع
+      # إشارة إلى كسر بنيوي في المخطط أو الهجرات.
+      - name: DB-level tests (atomic public codes + partial unique indexes + concurrency)
+        run: npx jest --config test/jest-e2e.json --runInBand test/association-applications-db.e2e-spec.ts
+        working-directory: platform/apps/api
+
+      # NODE-2: تكامل تخزين حقيقي ضد MinIO أعلاه (لا mock): رفع، رابط
+      # موقَّع يُجلَب فعليًا بالبايتات، حذف تعويضي، ولا كائن يتيم بعد فشل
+      # معاملة قاعدة البيانات.
+      - name: storage integration tests (real MinIO)
+        run: npx jest --config test/jest-e2e.json --runInBand test/storage-integration.e2e-spec.ts
+        working-directory: platform/apps/api
+
+      # اختبارات API e2e/تكامل حقيقية (NODE-1: مصادقة/جلسات/بيانات مرجعية،
+      # NODE-2: طلبات الانضمام/إدارة الجمعيات/التخزين) ضد PostgreSQL CI
+      # نفسها بعد migrate+seed أعلاه — --runInBand لأنها تشارك قاعدة بيانات
+      # حقيقية واحدة عبر HTTP حقيقي (supertest + Nest app كامل)، لا mocks.
+      - name: API e2e / integration tests (NODE-1 + NODE-2)
+        run: npm run test:e2e --workspace apps/api
+
       - name: build api
         run: npm run build --workspace apps/api
 
@@ -80,10 +137,3 @@ jobs:
         run: npm run build --workspace apps/web
         env:
           NEXT_PUBLIC_API_BASE_URL: http://localhost:3001/api/v1
-
-      # اختبارات API e2e/تكامل حقيقية (NODE-1: 54 اختبار مصادقة/جلسات/
-      # بيانات مرجعية/أمان) ضد PostgreSQL CI نفسها بعد migrate+seed أعلاه —
-      # --runInBand لأنها تشارك قاعدة بيانات حقيقية واحدة عبر HTTP حقيقي
-      # (supertest + Nest app كامل)، لا mocks.
-      - name: API e2e / integration tests (NODE-1 auth + reference-data)
-        run: npm run test:e2e --workspace apps/api
