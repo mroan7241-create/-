@@ -47,6 +47,23 @@ MIGRATION_ROADMAP.md.
 `associations-management.e2e-spec.ts`, `storage-integration.e2e-spec.ts`)
 إضافة إلى 69 اختبار NODE-1 بقيت خضراء بلا تعديل.
 
+**تحديث NODE-3**: `Beneficiaries.gs::listBeneficiaries` و`saveBeneficiary`،
+و`BeneficiaryNeeds.gs::saveBeneficiaryWithNeeds`/`setBeneficiaryNeeds`/
+`removePendingBeneficiaryNeed`/`reviewBeneficiaryNeeds`/
+`bulkReviewBeneficiaries` انتقلت إلى `MIGRATED` — تنفيذ حقيقي بعد قراءة
+`Beneficiaries.gs` و`BeneficiaryNeeds.gs` و`StateRules.gs` و`Config.gs`
+و`Validation.gs` و`Pagination.gs` وقسم المستفيدين في `Index.html` سطرًا
+سطرًا، مع 56 اختبار تكامل/تزامن/عزل جديد أخضر
+(`apps/api/test/beneficiaries-crud.e2e-spec.ts`،
+`beneficiaries-review.e2e-spec.ts`) — منها الأقسام 18–26 من
+`tools/beneficiary-needs-test.js` مُترجَمة إلى اختبارات HTTP حقيقية
+(الدفعة، وتجميع AutoAllocation لكل جمعية). و230 اختبار من NODE-1/NODE-2
+بقيت خضراء بلا إضعاف أي تأكيد.
+
+**AutoAllocation لم يُنقَل في NODE-3** (نطاق NODE-5): نُقل توقيت النداء
+وتجميعه فقط عبر بذرة `AllocationTriggerPort` بتنفيذ NO-OP — راجع
+BENEFICIARIES.md §5.
+
 **لم تُستخدم `PARITY_VERIFIED` عمدًا**: التطابق المُثبَت هنا هو تطابق
 **على مستوى الكود** (قراءة المصدر القديم ومطابقة السلوك حالةً بحالة
 واختبارها)، وليس تشغيلًا فعليًا بالتوازي مع نظام Apps Script الحي على
@@ -82,12 +99,15 @@ MIGRATION_ROADMAP.md.
 | Applications.gs | `reviewAssociationApplication` | مراجعة الطلب (ADMIN) | ApplicationsModule | `POST /association-applications/:id/review` | `/admin/applications` | association_applications, associations, accounts, auth_credentials, idempotency_keys, public_code_counters, audit_logs | MIGRATED | UNDER_REVIEW→ACCEPTED\|REJECTED فقط، نهائي؛ `:id` عبر `ParseUUIDPipe` (NODE-2.1)؛ `SELECT ... FOR UPDATE` + idempotency عبر `opId`؛ كلمة المرور المؤقتة تُعرض مرة واحدة ولا تُخزَّن ولا تُعاد عند التكرار (انحراف أمني متعمَّد — راجع SECURITY_MODEL.md) |
 | Applications.gs | `listApplications` | قائمة طلبات الانضمام (ADMIN) | ApplicationsModule | `GET /association-applications` | `/admin/applications` | association_applications, application_answers, files | MIGRATED | ليست ضمن الـ32 المستخرَجة من `Index.html` (تُستدعى داخليًا في القديم ضمن حزم اللوحة)؛ ترقيم/بحث/تصفية بالحالة؛ `scoreLabel` («7/8») مؤشّر عرض فقط لا يدخل في أي قرار. NODE-2.1: `page`/`pageSize`/`status` بتحقق زمن تشغيل (400 لا 500)، و`:id` عبر `ParseUUIDPipe`. **لا `sortBy`/`sortDir`**: `listApplications_` القديمة لا تستدعي `applySort_` و`renderApplications` لا تمرّر `sortFields` — الترتيب ثابت `submittedAt DESC` (راجع ASSOCIATION_APPLICATIONS.md §13) |
 | DevicesAssociations.gs | `listAssociations` | قائمة الجمعيات (ADMIN) | AssociationsModule | `GET /associations` | `/admin/associations` | associations, accounts, beneficiaries, device_units | MIGRATED | ليست ضمن الـ32 المستخرَجة من `Index.html` (تُستدعى داخليًا في القديم)؛ عدّادات مجمَّعة عبر `groupBy` واحد لكل نوع (لا N+1). NODE-2.1: بحث برقم الجوال (مطبَّع، مطابقة رقم كامل على `phones text[]`)، و`page`/`pageSize`/`status` بتحقق زمن تشغيل (400 لا 500)، و`sortBy`/`sortDir` بقائمة بيضاء `name`/`city` مطابقةً لـ`applySort_` في `listAssociations_` القديمة (`progress` مؤجَّل لاعتماده على نطاق الأجهزة غير المهاجَر) — راجع ASSOCIATIONS.md |
-| Beneficiaries.gs | `saveBeneficiary` | نموذج المستفيد | BeneficiariesModule | `POST/PATCH /beneficiaries` | `/association/beneficiaries` | beneficiaries, beneficiary_needs | FOUNDATION_READY | |
+| Beneficiaries.gs | `listBeneficiaries` | قائمة المستفيدين | BeneficiariesModule | `GET /beneficiaries` | `/admin/beneficiaries`، `/association/beneficiaries` | beneficiaries, beneficiary_needs | MIGRATED | ADMIN+ASSOCIATION؛ العزل من AuthContext حصرًا (جمعية لا تستطيع طلب صفحة جمعية أخرى مهما أرسلت)؛ ترقيم/بحث خادمي، وترتيب بقائمة بيضاء `name`/`city`/`createdAt` مطابقةً لـ`applySort_` + `sortFields` في `renderBeneficiaries`؛ عدّادات الاحتياجات عبر `groupBy` واحد لكل الصفحة (لا N+1) |
+| Beneficiaries.gs / BeneficiaryNeeds.gs | `saveBeneficiary` + `saveBeneficiaryWithNeeds` | نموذج المستفيد | BeneficiariesModule | `POST /beneficiaries` (إنشاء)، `PATCH /beneficiaries/:id` (تعديل) | `/association/beneficiaries` | beneficiaries, beneficiary_needs, public_code_counters, idempotency_keys | MIGRATED | مساران صريحان بدل `payload.id` الضمني (نفس نهج NODE-2 في `saveAssociation`)؛ الإنشاء ذرّي (مستفيد + احتياجاته معًا) ويشترط احتياجًا صالحًا واحدًا على الأقل؛ لا نقل بين الجمعيات من نموذج التعديل العام؛ فحص تكرار الجوال داخل الجمعية وحدها — راجع BENEFICIARIES.md |
+| BeneficiaryNeeds.gs | `setBeneficiaryNeeds` | نموذج المستفيد (الاحتياجات) | BeneficiariesModule | `PATCH /beneficiaries/:id` (حقل `deviceTypes`) | `/association/beneficiaries` | beneficiary_needs | MIGRATED | مدمَجة في مسار التعديل الموحَّد كما في القديم (`updateBeneficiaryWithNeeds_`): غياب `deviceTypes` لا يمسّ الاحتياجات، وإرسالها يُعامَل كقائمة نهائية (إضافة الناقص وحذف المعلَّق الغائب فقط، ولا حذف لمحسوم أبدًا) |
+| BeneficiaryNeeds.gs | `removePendingBeneficiaryNeed` | نموذج المستفيد | BeneficiariesModule | `DELETE /beneficiaries/needs/:needId` | `/association/beneficiaries` | beneficiary_needs, idempotency_keys | MIGRATED | معلَّق فقط وقبل القرار النهائي، ولا يُترك المستفيد بلا احتياج؛ idempotent عبر `opId` بنفس نطاق العملية القديم |
 | Beneficiaries.gs / ExcelTemplate.gs | `downloadBeneficiaryImportTemplateXlsx` | استيراد جماعي | BeneficiariesModule | `GET /beneficiaries/import-template.xlsx` | `/association/beneficiaries/import` | — | NOT_STARTED | ملف ثابت التوليد، لا بيانات مستخدم |
 | Beneficiaries.gs | `inspectBeneficiaryExcel` | استيراد جماعي (معاينة) | BeneficiariesModule | `POST /beneficiaries/import/inspect` | `/association/beneficiaries/import` | — (قراءة فقط، لا كتابة) | NOT_STARTED | dry-run |
 | Beneficiaries.gs | `importBeneficiaries` | استيراد جماعي (تنفيذ) | BeneficiariesModule | `POST /beneficiaries/import` | `/association/beneficiaries/import` | beneficiaries, beneficiary_needs | NOT_STARTED | idempotent عبر import run ID — راجع LEGACY_DATA_MIGRATION.md للمبدأ المشابه |
-| BeneficiaryNeeds.gs | `reviewBeneficiaryNeeds` | مراجعة مستفيد فردي (ADMIN) — Phase 3.2A | BeneficiaryNeedsModule | `POST /beneficiaries/:id/review` | `/admin/beneficiaries/:id` | beneficiaries, beneficiary_needs, audit_logs, device_allocations (عبر AllocationModule) | FOUNDATION_READY | القواعد الكاملة في STATE_MAPPING.md §4 — أهم endpoint للهجرة الدقيقة |
-| BeneficiaryNeeds.gs | `bulkReviewBeneficiaries` | اعتماد بالجملة (ADMIN) — Phase 3.2A.1 | BeneficiaryNeedsModule | `POST /beneficiaries/bulk-review` | `/admin/beneficiaries` (bulk bar) | beneficiaries, beneficiary_needs, audit_logs | FOUNDATION_READY | تجميع AutoAllocation لكل جمعية (Patch 3.2A.1) — يجب الحفاظ عليه حرفيًا عند النقل |
+| BeneficiaryNeeds.gs | `reviewBeneficiaryNeeds` | مراجعة مستفيد فردي (ADMIN) — Phase 3.2A | BeneficiariesModule | `POST /beneficiaries/:id/review` | `/admin/beneficiaries` | beneficiaries, beneficiary_needs, audit_logs, idempotency_keys | MIGRATED | **ADMIN فقط**؛ `SELECT … FOR UPDATE` + idempotency عبر `opId`؛ قرار نهائي غير قابل لإعادة الفتح (`BENEFICIARY_ALREADY_REVIEWED`)؛ سبب رفض المستفيد إلزامي (≤500) وسبب الاحتياج الفردي اختياري؛ الاعتماد يوجب البتّ في كل معلَّق و≥1 معتمد؛ الرفض يغلق كل المعلَّق بالسبب الموحَّد؛ الاعتماد يضبط `APPROVED_ENTITLEMENT` بلا أي فحص مخزون — راجع BENEFICIARIES.md |
+| BeneficiaryNeeds.gs | `bulkReviewBeneficiaries` | اعتماد بالجملة (ADMIN) — Phase 3.2A.1 | BeneficiariesModule | `POST /beneficiaries/bulk-review` | `/admin/beneficiaries` (bulk bar) | beneficiaries, beneficiary_needs, audit_logs, idempotency_keys | MIGRATED | **ADMIN فقط**؛ كل عنصر معاملة ذرّية مستقلة (فشل عنصر لا يُرجِع الناجح)، والرد `success[]`/`failed[]`؛ تجميع بذرة التخصيص **مرة واحدة لكل جمعية فريدة** بعد انتهاء الدفعة (Patch 3.2A.1) محفوظ حرفيًا ومُختبَر بتنفيذ تجسّس؛ البذرة NO-OP في NODE-3 (المحرّك الفعلي في NODE-5) |
 | ReceiptBatches.gs | (إنشاء/إرسال محضر — يُستدعى ضمن مسارات أخرى) | محاضر استلام الأجهزة (ADMIN) | ReceiptsModule | `POST /receipt-batches`, `POST /receipt-batches/:id/send` | `/admin/receipts` | receipt_batches, receipt_items | NOT_STARTED | |
 | ReceiptBatches.gs | `confirmDelivery` (تأكيد الجمعية على المحضر — راجع الاسم الفعلي عند النقل) | تأكيد استلام المحضر (ASSOCIATION) | ReceiptsModule + InventoryModule | `POST /receipt-batches/:id/confirm` | `/association/receipts/:id` | receipt_batches, receipt_items, receipt_damage_photos, device_units | NOT_STARTED | ينشئ device_units من good_qty داخل نفس transaction — راجع ARCHITECTURE.md |
 | ReceiptBatches.gs | `retryDelivery` | إعادة محاولة تسليم | DeliveriesModule | `POST /delivery-missions/:id/retry` | `/delegate/deliveries` | delivery_missions, delivery_attempts | NOT_STARTED | |
@@ -102,15 +122,20 @@ MIGRATION_ROADMAP.md.
 
 ---
 
-## تغطية Parity Status (بعد NODE-1)
+## تغطية Parity Status (بعد NODE-3)
+
+الجدول أعلاه صار يضم أسطرًا لدوال داخلية ليست ضمن الـ32 المستخرَجة من
+`Index.html` (`listApplications`، `listAssociations`، `listBeneficiaries`،
+`setBeneficiaryNeeds`) — أُضيفت لأنها سطح API حقيقي في المنصة الجديدة.
+الأرقام أدناه تعدّ **أسطر الجدول** كما هي الآن.
 
 | الحالة | العدد |
 |---|---|
-| `FOUNDATION_READY` | 8 |
-| `NOT_STARTED` | 17 |
-| `MIGRATED` | 7 |
+| `FOUNDATION_READY` | 1 |
+| `NOT_STARTED` | 19 |
+| `MIGRATED` | 21 |
 | `PARITY_VERIFIED` | 0 |
-| **الإجمالي** | **32** |
+| **الإجمالي** | **41** |
 
 الأسطر السبعة `MIGRATED`: `login`، `logout`، `changePassword`،
 `requestPasswordReset`، `resetPasswordWithCode`،

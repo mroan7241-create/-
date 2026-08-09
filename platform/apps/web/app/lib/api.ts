@@ -55,6 +55,8 @@ export interface ReferenceData {
   citiesByRegion: Record<string, string[]>;
   associationCategories: string[];
   associationSectors: string[];
+  /** NODE-3: قائمة الحالات الاجتماعية المعتمدة — يعيدها الخادم أصلًا منذ NODE-1. */
+  socialStatuses: string[];
   applicationQuestions: { key: string; label: string }[];
   pledgeText: string;
   ready: boolean;
@@ -152,4 +154,88 @@ export function getMe(): Promise<CurrentUser> {
 
 export function logout(): Promise<{ ok: true }> {
   return apiFetch('/auth/logout', { method: 'POST' });
+}
+
+// ================================================================
+// NODE-3 — المستفيدون والاحتياجات
+// ================================================================
+
+export type BeneficiaryReviewStatus = 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED';
+export type NeedDecisionStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+export type DeviceType = 'REFRIGERATOR' | 'OVEN' | 'WASHING_MACHINE';
+
+/** تعريب حالات مراجعة المستفيد — مطابق لِ`StateRules.gs::BENEFICIARY_REVIEW_STATUSES`. */
+export const BENEFICIARY_REVIEW_STATUS_LABELS: Record<BeneficiaryReviewStatus, string> = {
+  UNDER_REVIEW: 'تحت المراجعة',
+  APPROVED: 'معتمد',
+  REJECTED: 'مرفوض',
+};
+
+export const NEED_DECISION_STATUS_LABELS: Record<NeedDecisionStatus, string> = {
+  PENDING: 'بانتظار المراجعة',
+  APPROVED: 'معتمد',
+  REJECTED: 'مرفوض',
+};
+
+/** الأنواع الثلاثة المعتمدة حصرًا لاحتياج جديد (`Config.gs::NEW_NEED_DEVICE_TYPES`). */
+export const DEVICE_TYPE_LABELS: Record<DeviceType, string> = {
+  REFRIGERATOR: 'ثلاجة',
+  OVEN: 'فرن',
+  WASHING_MACHINE: 'غسالة',
+};
+
+export const DEVICE_TYPES: DeviceType[] = ['REFRIGERATOR', 'OVEN', 'WASHING_MACHINE'];
+
+export interface BeneficiaryNeed {
+  id: string;
+  publicCode: string;
+  deviceType: DeviceType;
+  decisionStatus: NeedDecisionStatus;
+  rejectReason: string | null;
+  fulfillmentStatus: string | null;
+  reviewedAt: string | null;
+  createdAt: string;
+}
+
+export interface BeneficiarySummary {
+  id: string;
+  publicCode: string;
+  associationId: string;
+  name: string;
+  region: string;
+  city: string;
+  district: string | null;
+  address: string;
+  phone: string;
+  phone2: string | null;
+  familyCount: number;
+  socialSecurity: boolean;
+  socialStatus: string;
+  income: number;
+  landmark: string | null;
+  notes: string | null;
+  reviewStatus: BeneficiaryReviewStatus;
+  beneficiaryRejectReason: string | null;
+  reviewedAt: string | null;
+  createdAt: string;
+  needsTotal: number;
+  needsPending: number;
+  needsApproved: number;
+  needsRejected: number;
+}
+
+export interface BeneficiaryDetail extends Omit<BeneficiarySummary, 'needsTotal' | 'needsPending' | 'needsApproved' | 'needsRejected'> {
+  needs: BeneficiaryNeed[];
+}
+
+export interface BulkReviewResponse {
+  ok: true;
+  success: { beneficiaryId: string; approvedCount: number; rejectedCount: number }[];
+  failed: { beneficiaryId: string; code: string; error: string }[];
+  allocationWarnings?: { associationId: string; error: string }[];
+}
+
+/** معرّف عملية فريد لكل كتابة — أساس الـidempotency على الخادم. */
+export function newOpId(): string {
+  return `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }

@@ -428,12 +428,22 @@ model Beneficiary {
   region                 String
   city                   String
   district               String?
+  /// NODE-3: العنوان الوصفي (الشارع وأقرب معلم) — عمود "العنوان" في ورقة
+  /// "المستفيدون" القديمة، إلزامي في buildBeneficiaryFieldValues_ (حد 250).
+  /// DEFAULT '' على مستوى القاعدة لأن الـmigration إضافية بحتة (append-only)
+  /// ولا يجوز أن تفشل على جدول يحمل صفوفًا؛ الإلزام مفروض في طبقة الخدمة
+  /// عبر requiredText مطابقةً لِLegacy.
+  address                String                  @default("")
   phone                  String
   secondaryPhone         String?                 @map("secondary_phone")
   familyCount            Int                     @map("family_count")
   socialSecurity         Boolean                 @default(false) @map("social_security")
   maritalStatus          String                  @map("marital_status")
   income                 Decimal?                @db.Decimal(12, 2)
+  /// NODE-3: "علامة مميزة" (حد 200) و"الملاحظات" (حد 1000) — اختياريان في
+  /// Legacy (cleanText_ بلا requiredText_)، فيبقيان nullable هنا.
+  landmark               String?
+  notes                  String?
   latitude               Decimal?                @db.Decimal(9, 6)
   longitude              Decimal?                @db.Decimal(9, 6)
   locationSource         LocationSource?         @map("location_source")
@@ -504,6 +514,15 @@ model BeneficiaryNeed {
   /// association_id → beneficiary_needs.id + association_id).
   @@unique([id, associationId])
   /// القيد الحالي: مستفيد واحد لا يملك أكثر من احتياج واحد من نفس device_type.
+  ///
+  /// NODE-3 — تحقُّق مصدري: هذا القيد **الكامل** (لا فهرس جزئي مشروط بحالة
+  /// القرار) هو المطابق حرفيًا لِLegacy. في `BeneficiaryNeeds.gs` كل فحوص
+  /// التكرار تبني `existingByType` من **كل** صفوف احتياج المستفيد بلا أي
+  /// تصفية على "حالة القرار" (`setBeneficiaryNeeds_` سطر 122-125،
+  /// `updateBeneficiaryWithNeeds_` سطر 431-433) — أي أن احتياجًا **مرفوضًا**
+  /// من نفس النوع يمنع إعادة تسجيل نفس النوع تمامًا كالمعلَّق والمعتمد.
+  /// لذلك لا فهرس جزئي هنا: فهرس جزئي على PENDING/APPROVED فقط كان سيسمح
+  /// بإعادة تقديم نوع سبق رفضه، وهو سلوك **لا** يوجد في النظام القديم.
   @@unique([beneficiaryId, deviceType])
   @@index([beneficiaryId])
   @@index([associationId, decisionStatus, fulfillmentStatus])

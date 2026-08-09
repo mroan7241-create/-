@@ -61,6 +61,27 @@ signed URL) ولـ`public_code_counters` و`idempotency_keys`.
 
 ## NODE-3 — Beneficiaries + beneficiary needs + bulk review
 
+**مُنفَّذة.** كل ما يلي منقول ومُختبَر: `listBeneficiaries`،
+`saveBeneficiary`/`saveBeneficiaryWithNeeds` (مسار إنشاء/تعديل ذرّي
+موحَّد)، `setBeneficiaryNeeds` (مزامنة الاحتياجات ضمن مسار التعديل)،
+`removePendingBeneficiaryNeed`، `reviewBeneficiaryNeeds`،
+`bulkReviewBeneficiaries` — مع تجميع بذرة التخصيص لكل جمعية فريدة
+(Patch 3.2A.1) محفوظًا حرفيًا. التفاصيل الكاملة في BENEFICIARIES.md.
+
+**AutoAllocation لم يُنقَل** (نطاق NODE-5): نُقل **توقيت** النداء وتجميعه
+فقط عبر بذرة `AllocationTriggerPort` بتنفيذ NO-OP، فيستطيع NODE-5 استبدال
+التنفيذ وحده بلا لمس كود المراجعة.
+
+الحالة `MIGRATED` لا `PARITY_VERIFIED`: التطابق مُثبَت على مستوى الكود
+والاختبار الآلي (56 اختبار NODE-3 جديد، منها الأقسام 18–26 من
+`tools/beneficiary-needs-test.js` مُترجَمة إلى اختبارات HTTP حقيقية)،
+ولم تُجرَ مقارنة تشغيلية حيّة مع Apps Script.
+
+خارج النطاق عمدًا في NODE-3: الاستيراد الجماعي من Excel/CSV،
+و`assignDelegate`/`updateBeneficiaryLocation`.
+
+السياق الأصلي لهذه المرحلة:
+
 الأهم لهذا المستند لأنه أحدث Phase مكتملة في النظام القديم
 (Phase 3.2A + Patch 3.2A.1): `saveBeneficiary`، `reviewBeneficiaryNeeds`
 بكل قواعده (راجع STATE_MAPPING.md §4)، و`bulkReviewBeneficiaries` بنفس

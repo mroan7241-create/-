@@ -1,6 +1,7 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { HealthModule } from './health/health.module';
 import { CorrelationIdMiddleware } from './common/correlation-id.middleware';
+import { CommonModule } from './common/common.module';
 
 import { AuthModule } from './modules/auth/auth.module';
 import { AccountsModule } from './modules/accounts/accounts.module';
@@ -21,6 +22,7 @@ import { SettingsModule } from './modules/settings/settings.module';
 
 @Module({
   imports: [
+    CommonModule,
     HealthModule,
     AuthModule,
     AccountsModule,
