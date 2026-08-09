@@ -1,0 +1,205 @@
+/**
+ * ═══════════════════════════════════════════════════════════════
+ *  أدوات مؤقتة لاسترجاع الدخول — احذف هذا الملف بعد الانتهاء
+ * ═══════════════════════════════════════════════════════════════
+ *  لا تشغّل setupSheets. هذه الأدوات لا تنشئ ولا تحذف أي ورقة،
+ *  ولا تلمس أي مستفيد أو جهاز أو تسليم.
+ * ═══════════════════════════════════════════════════════════════
+ */
+
+/**
+ * (0) تشخيص: يكشف سبب أي خطأ غامض قبل تشغيل بقية الأدوات.
+ *     مغلّفة بالكامل حتى لا تُظهر رسالة "خطأ غير معروف" أبدًا.
+ */
+function diagnose() {
+  var lines = [];
+  function say(text) { lines.push(text); }
+
+  say('═══ تشخيص المشروع ═══');
+
+  // 1) هل السكربت مرتبط بملف جداول؟
+  var ss = null;
+  try {
+    ss = SpreadsheetApp.getActiveSpreadsheet();
+  } catch (error) {
+    say('✗ تعذر الوصول إلى SpreadsheetApp: ' + error.message);
+  }
+
+  if (!ss) {
+    say('✗ السكربت غير مرتبط بأي ملف Google Sheets.');
+    say('  الحل: افتح ملف الجداول ← الإضافات ← Apps Script،');
+    say('  أو استخدم النسخة المرتبطة بالملف بدل هذه.');
+    Logger.log(lines.join('\n'));
+    return lines.join('\n');
+  }
+
+  say('✓ الملف المرتبط : ' + ss.getName());
+  say('  المعرّف       : ' + ss.getId());
+  say('  المالك/الحساب : ' + (function () {
+    try { return Session.getEffectiveUser().getEmail() || '(غير متاح)'; }
+    catch (e) { return '(غير متاح)'; }
+  }()));
+
+  // 2) هل الأوراق المطلوبة موجودة؟
+  var required = ['إعدادات المشروع', 'المستخدمون', 'الجمعيات', 'المستفيدون',
+    'الأجهزة', 'المناديب', 'التسليمات', 'إدارة الأنشطة',
+    'شواهد الأنشطة الرئيسية', 'سجل العمليات'];
+
+  var present = ss.getSheets().map(function (s) { return s.getName(); });
+  say('');
+  say('الأوراق الموجودة فعليًا (' + present.length + '):');
+  present.forEach(function (name) { say('  • ' + name); });
+
+  var missing = required.filter(function (name) { return present.indexOf(name) < 0; });
+  say('');
+  if (missing.length) {
+    say('✗ أوراق مفقودة (' + missing.length + '): ' + missing.join('، '));
+  } else {
+    say('✓ جميع الأوراق العشرة موجودة.');
+  }
+
+  // 3) كم حسابًا في ورقة المستخدمين؟
+  var users = ss.getSheetByName('المستخدمون');
+  if (!users) {
+    say('✗ ورقة "المستخدمون" غير موجودة — لا يمكن استرجاع حساب الإدارة.');
+  } else {
+    var lastRow = users.getLastRow();
+    say('✓ ورقة "المستخدمون" فيها ' + Math.max(0, lastRow - 1) + ' حسابًا.');
+    if (lastRow < 2) {
+      say('  ⚠ لا توجد حسابات. النظام لم تُنشأ له بيانات دخول بعد.');
+    }
+  }
+
+  // 4) هل القفل الأمني مفتوح؟
+  var unlocked = false;
+  try {
+    unlocked = PropertiesService.getScriptProperties()
+      .getProperty('ALLOW_ADMIN_RESET') === 'YES';
+  } catch (error) {
+    say('✗ تعذر قراءة خصائص المشروع: ' + error.message);
+  }
+  say('');
+  say(unlocked
+    ? '✓ القفل ALLOW_ADMIN_RESET مفتوح — يمكن تشغيل resetAdminPassword.'
+    : '⚠ القفل ALLOW_ADMIN_RESET غير مضبوط بعد.');
+
+  say('═══ انتهى التشخيص ═══');
+
+  var report = lines.join('\n');
+  Logger.log(report);
+  return report;
+}
+
+
+/**
+ * (1) يعرض الحسابات الموجودة دون إظهار أي كلمة مرور.
+ *     شغّلها أولًا لتعرف بريد الإدارة الصحيح.
+ */
+function showAccounts() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('المستخدمون');
+  if (!sheet) {
+    Logger.log('لم يتم العثور على ورقة "المستخدمون".');
+    return;
+  }
+  var values = sheet.getDataRange().getDisplayValues();
+  if (values.length < 2) {
+    Logger.log('لا توجد حسابات مسجّلة في الورقة.');
+    return;
+  }
+  var headers = values[0];
+  var col = {};
+  headers.forEach(function (name, index) { col[String(name).trim()] = index; });
+
+  Logger.log('عدد الحسابات: ' + (values.length - 1));
+  Logger.log('──────────────────────────────────────────');
+  for (var i = 1; i < values.length; i++) {
+    var row = values[i];
+    if (!String(row[col['رقم المستخدم']] || '').trim()) continue;
+    Logger.log(
+      'الرقم   : ' + row[col['رقم المستخدم']] + '\n' +
+      'الاسم   : ' + row[col['الاسم']] + '\n' +
+      'البريد  : ' + row[col['البريد الإلكتروني']] + '\n' +
+      'الدور   : ' + row[col['الدور']] + '\n' +
+      'الحالة  : ' + row[col['الحالة']] + '\n' +
+      'الجمعية : ' + (row[col['رقم الجمعية']] || '—') + '\n' +
+      '──────────────────────────────────────────'
+    );
+  }
+  Logger.log('ملاحظة: كلمات المرور مشفّرة ولا يمكن عرضها.');
+}
+
+
+/**
+ * (2) يضبط كلمة مرور جديدة لحساب الإدارة.
+ *
+ *     قفل أمان: لا تعمل إلا إذا أضفت في إعدادات المشروع خاصية اسمها
+ *     ALLOW_ADMIN_RESET قيمتها YES — وتُحذف تلقائيًا بعد أول نجاح،
+ *     حتى لو نسيت حذف هذا الملف لا يستطيع أحد استخدامها من المتصفح.
+ */
+function resetAdminPassword() {
+
+  // ← اكتب بريد حساب الإدارة كما ظهر في showAccounts
+  var ADMIN_EMAIL = 'admin@alzad.org';
+
+  // ← اكتب كلمة المرور الجديدة التي تريدها
+  //    الشروط: 10 خانات على الأقل، وتضم حروفًا إنجليزية وأرقامًا
+  var NEW_PASSWORD = 'ZadAdmin2026';
+
+  // ─────────── لا تعدّل ما تحت هذا السطر ───────────
+
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty('ALLOW_ADMIN_RESET') !== 'YES') {
+    throw new Error(
+      'العملية مقفلة. افتح: إعدادات المشروع ← خصائص النص البرمجي ← إضافة خاصية\n' +
+      'الاسم: ALLOW_ADMIN_RESET   القيمة: YES\n' +
+      'ثم أعد تشغيل الدالة.'
+    );
+  }
+
+  if (NEW_PASSWORD.length < 10 ||
+      !/[A-Za-z]/.test(NEW_PASSWORD) ||
+      !/\d/.test(NEW_PASSWORD)) {
+    throw new Error('كلمة المرور يجب أن تكون 10 خانات على الأقل وتضم حروفًا إنجليزية وأرقامًا');
+  }
+
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('المستخدمون');
+  if (!sheet) throw new Error('لم يتم العثور على ورقة "المستخدمون"');
+
+  var values = sheet.getDataRange().getValues();
+  var headers = values[0].map(function (h) { return String(h).trim(); });
+  var col = {};
+  headers.forEach(function (name, index) { col[name] = index; });
+
+  var target = String(ADMIN_EMAIL).trim().toLowerCase();
+  var rowIndex = -1;
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][col['البريد الإلكتروني']]).trim().toLowerCase() === target) {
+      rowIndex = i;
+      break;
+    }
+  }
+  if (rowIndex < 0) {
+    throw new Error('لم يُعثر على حساب بهذا البريد. شغّل showAccounts أولًا وانسخ البريد الصحيح.');
+  }
+
+  var salt = Utilities.getUuid();
+  var hashed = hashSecret_(NEW_PASSWORD, salt);
+
+  sheet.getRange(rowIndex + 1, col['كلمة المرور المشفرة'] + 1).setValue(hashed);
+  sheet.getRange(rowIndex + 1, col['الملح'] + 1).setValue(salt);
+  sheet.getRange(rowIndex + 1, col['الحالة'] + 1).setValue('نشط');
+
+  // إبطال أي جلسات قديمة لهذا الحساب
+  var userId = String(values[rowIndex][col['رقم المستخدم']]);
+  try { revokeSessions_(userId); } catch (ignore) {}
+
+  // إغلاق القفل فورًا — الأداة تعمل مرة واحدة فقط
+  props.deleteProperty('ALLOW_ADMIN_RESET');
+
+  Logger.log('تم بنجاح ✅');
+  Logger.log('البريد        : ' + values[rowIndex][col['البريد الإلكتروني']]);
+  Logger.log('الدور         : ' + values[rowIndex][col['الدور']]);
+  Logger.log('كلمة المرور   : هي التي كتبتها في NEW_PASSWORD أعلاه');
+  Logger.log('');
+  Logger.log('⚠️ احذف هذا الملف الآن من المشروع قبل أي نشر جديد.');
+}
