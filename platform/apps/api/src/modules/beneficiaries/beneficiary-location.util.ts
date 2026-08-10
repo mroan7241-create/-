@@ -156,6 +156,69 @@ export function buildLocationWrite(
 }
 
 /**
+ * ================================================================
+ * NODE-3.2 — «نيّة الموقع» المعيارية لأغراض بصمة idempotency وحدها
+ * ================================================================
+ *
+ * `buildLocationWrite` أعلاه يُنتج **أمر كتابة فعلي** يحمل
+ * `locationUpdatedAt = now` — قيمة تُولَّد لحظة التنفيذ وتختلف في كل
+ * استدعاء. إدخال ذلك الكائن في حمولة `IdempotencyService.claim` كان
+ * يجعل طلبين متطابقين منطقيًا (نفس `opId`، نفس المُدخَل الحقيقي)
+ * يُنتِجان بصمتين مختلفتين، فيُرَدّ على إعادة المحاولة المشروعة بـ409
+ * `APPLICATION_IDEMPOTENCY_CONFLICT` بدل إعادة تشغيل صحيحة.
+ *
+ * الحل: قيمة معيارية **ثابتة زمنيًا** تصف نيّة الطلب لا نتيجته، بثلاث
+ * أشكال حصرية لا رابع لها:
+ *  - `PRESERVE` — وسم بلا بيانات: الحقل غائب عن الطلب ⇒ لا يُمسّ الموقع.
+ *  - `CLEAR` — وسم بلا بيانات: `lat`/`lng` = `null` صراحةً ⇒ مسح كامل.
+ *  - `SET { lat, lng, locationSource }` — إحداثيات فعلية.
+ *
+ * قواعد ملزِمة:
+ *  1. **لا تاريخ ولا أي قيمة تُولَّد وقت التنفيذ** داخل هذه البنية إطلاقًا.
+ *  2. **لا تعتمد على الحالة المخزَّنة في القاعدة**: البصمة تصف الطلب، لا
+ *     أثره. لو دخلت الحالة المخزَّنة في الحساب لانقلبت البصمة بعد أول
+ *     تنفيذ ناجح (لأنه هو نفسه يغيّر تلك الحالة)، فتفشل كل إعادة محاولة
+ *     لاحقة — وهو عين العطب الذي نُصلحه. لذلك لا وسيط `existing` هنا.
+ *  3. **تُستعمل للبصمة فقط**: قرار الكتابة الحقيقي يبقى بيد
+ *     `buildLocationWrite` بلا أي تغيير في سلوكه.
+ *
+ * تطابق التقريب مضمون **بالبناء** لا بالمصادفة: الدالتان تستدعيان
+ * `optionalCoordinate` نفسها، فتخضع الإحداثيات لنفس القصّ إلى ست خانات
+ * عشرية (`Decimal(9,6)` — دقّة التخزين الفعلية). ولا مخطَّط تقريب ثانٍ في
+ * المشروع يمكن أن يخالفه. وكذلك المصدر يمرّ بـ`validateLocationSource`
+ * نفسها، فقيمتان خامّتان مجهولتان تؤولان كلتاهما إلى `MANUAL` ⇒ بصمة
+ * واحدة (نيّة واحدة فعلًا)، بينما `MAP` مقابل `CURRENT_LOCATION` ⇒ 409.
+ */
+export type LocationIntent =
+  | { intent: 'PRESERVE' }
+  | { intent: 'CLEAR' }
+  | { intent: 'SET'; lat: string; lng: string; locationSource: LocationSource };
+
+export function canonicalizeLocationIntent(input: {
+  lat?: number | null;
+  lng?: number | null;
+  locationSource?: string;
+}): LocationIntent {
+  // نفس شرط `buildLocationWrite` حرفيًا — الغياب التام وحده هو "لا تمسّ".
+  // لا `?? null` هنا بحال: طيّ `undefined` و`null` في قيمة واحدة هو ما كان
+  // يجعل «احفظ الموقع كما هو» و«امسح الموقع» يتقاسمان بصمة واحدة.
+  if (input.lat === undefined && input.lng === undefined) return { intent: 'PRESERVE' };
+
+  const coordinates = optionalCoordinate(input.lat, input.lng);
+  if (!coordinates) return { intent: 'CLEAR' };
+
+  return {
+    intent: 'SET',
+    // صيغة نصية بست خانات — تمثيل `Decimal(9,6)` نفسه بلا أي رحلة ذهاب
+    // وإياب عبر float، فالبصمة مستقرة تمامًا عبر العمليات.
+    lat: coordinates.latitude.toFixed(6),
+    lng: coordinates.longitude.toFixed(6),
+    // `hasCoordinates = true` هنا يقينًا، فالمُرجَع لا يكون `null` أبدًا.
+    locationSource: validateLocationSource(input.locationSource, true) ?? LocationSource.MANUAL,
+  };
+}
+
+/**
  * `normalizeNameForMatch_` حرفيًا (Beneficiaries.gs السطر 116-118):
  * قصّ + توحيد المسافات + حالة أحرف صغيرة. إشارة "مطابق محتمل" فقط، لا
  * دليل قاطع أبدًا وحده.

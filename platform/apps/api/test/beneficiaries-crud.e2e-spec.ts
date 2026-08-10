@@ -925,6 +925,261 @@ describe('NODE-3 — المستفيدون والاحتياجات (CRUD/عزل/ت
   });
 
   // ================================================================
+  // NODE-3.2 — بصمة idempotency لنيّة الموقع (PRESERVE/CLEAR/SET)
+  //
+  // العطب المُصلَح: (أ) `locationUpdatedAt` المولَّد لحظة التنفيذ كان
+  // يدخل حمولة التجزئة، فتختلف بصمة طلبين متطابقين تمامًا وتُرَدّ إعادة
+  // المحاولة المشروعة بـ409؛ (ب) `?? null` في مسار التعديل كان يطوي
+  // «الحقل غائب» (احفظ الموقع) و«الحقل = null» (امسح الموقع) في بصمة
+  // واحدة، فيمرّ أحدهما مكان الآخر بلا اعتراض.
+  // ================================================================
+  describe('NODE-3.2 — بصمة idempotency لنيّة الموقع', () => {
+    describe('الإنشاء', () => {
+      it('نفس opId بنفس الإحداثيات: إعادة تشغيل ناجحة لا 409، وصف واحد فقط في القاعدة', async () => {
+        const payload = beneficiaryPayload({ lat: 24.7136, lng: 46.6753, locationSource: 'MAP' });
+
+        const first = await http().post('/api/v1/beneficiaries').set('Cookie', assocACookie).send(payload).expect(201);
+        const second = await http().post('/api/v1/beneficiaries').set('Cookie', assocACookie).send(payload).expect(201);
+
+        expect(second.body.beneficiaryId).toBe(first.body.beneficiaryId);
+        expect(second.body.replayed).toBe(true);
+        expect(first.body.replayed).toBe(false);
+        expect(await prisma.beneficiary.count({ where: { associationId: fx.associationAId } })).toBe(1);
+      });
+
+      it('التاريخ المولَّد لا يشارك في البصمة: إعادة المحاولة بعد مرور زمن حقيقي تنجح ولا تُحدِّث الموقع', async () => {
+        const payload = beneficiaryPayload({ lat: 24.5, lng: 46.5, locationSource: 'CURRENT_LOCATION' });
+
+        const first = await http().post('/api/v1/beneficiaries').set('Cookie', assocACookie).send(payload).expect(201);
+        const id = first.body.beneficiaryId;
+        const before = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+
+        // لو دخل `locationUpdatedAt` البصمة لكانت أي إعادة محاولة بعد أول
+        // مللي ثانية قد أعطت 409 — فالتأخير هنا هو جوهر الإثبات لا زينة.
+        await new Promise((resolve) => setTimeout(resolve, 25));
+
+        const second = await http().post('/api/v1/beneficiaries').set('Cookie', assocACookie).send(payload).expect(201);
+        expect(second.body.replayed).toBe(true);
+        expect(second.body.beneficiaryId).toBe(id);
+
+        // ولا كتابة ثانية وقعت: الموقع بتاريخه الأصلي حرفيًا.
+        const after = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+        expect(after.locationUpdatedAt?.toISOString()).toBe(before.locationUpdatedAt?.toISOString());
+        expect(await prisma.beneficiary.count({ where: { associationId: fx.associationAId } })).toBe(1);
+      });
+
+      it('نفس opId ونفس الإحداثيات بمصدر مختلف دلاليًا: 409', async () => {
+        const payload = beneficiaryPayload({ lat: 24.7136, lng: 46.6753, locationSource: 'MAP' });
+
+        await http().post('/api/v1/beneficiaries').set('Cookie', assocACookie).send(payload).expect(201);
+
+        const conflict = await http()
+          .post('/api/v1/beneficiaries')
+          .set('Cookie', assocACookie)
+          .send({ ...payload, locationSource: 'CURRENT_LOCATION' })
+          .expect(409);
+        expect(conflict.body.error.code).toBe('APPLICATION_IDEMPOTENCY_CONFLICT');
+
+        // ولم يُنشأ صف ثانٍ ولم يتبدّل مصدر الصف الأول.
+        expect(await prisma.beneficiary.count({ where: { associationId: fx.associationAId } })).toBe(1);
+        const row = await prisma.beneficiary.findFirstOrThrow({ where: { associationId: fx.associationAId } });
+        expect(row.locationSource).toBe('MAP');
+      });
+
+      it('مصدران خامّان مجهولان يؤولان كلاهما إلى MANUAL: نيّة واحدة ⇒ إعادة تشغيل لا 409', async () => {
+        const payload = beneficiaryPayload({ lat: 24.5, lng: 46.5, locationSource: 'مصدر مجهول أول' });
+
+        const first = await http().post('/api/v1/beneficiaries').set('Cookie', assocACookie).send(payload).expect(201);
+        const second = await http()
+          .post('/api/v1/beneficiaries')
+          .set('Cookie', assocACookie)
+          .send({ ...payload, locationSource: 'مصدر مجهول آخر مختلف نصًّا' })
+          .expect(201);
+
+        expect(second.body.replayed).toBe(true);
+        expect(second.body.beneficiaryId).toBe(first.body.beneficiaryId);
+      });
+
+      it('إنشاء بلا موقع إطلاقًا: إعادة المحاولة بنفس opId تظل إعادة تشغيل ناجحة', async () => {
+        const payload = beneficiaryPayload();
+
+        const first = await http().post('/api/v1/beneficiaries').set('Cookie', assocACookie).send(payload).expect(201);
+        const second = await http().post('/api/v1/beneficiaries').set('Cookie', assocACookie).send(payload).expect(201);
+
+        expect(second.body.replayed).toBe(true);
+        expect(second.body.beneficiaryId).toBe(first.body.beneficiaryId);
+      });
+    });
+
+    describe('التعديل', () => {
+      /** مستفيد بموقع مؤكَّد — نقطة انطلاق كل حالات PRESERVE/CLEAR أدناه. */
+      const createWithLocation = async () => {
+        const res = await http()
+          .post('/api/v1/beneficiaries')
+          .set('Cookie', assocACookie)
+          .send(beneficiaryPayload({ lat: 24.5, lng: 46.5, locationSource: 'MAP' }))
+          .expect(201);
+        return res.body.beneficiaryId as string;
+      };
+
+      it('نفس opId بنفس حمولة SET: إعادة تشغيل ناجحة لا 409', async () => {
+        const id = await createWithLocation();
+        const payload = beneficiaryPayload({
+          lat: 21.4225,
+          lng: 39.8262,
+          locationSource: 'CURRENT_LOCATION',
+          region: 'مكة المكرمة',
+          city: 'جدة',
+          opId: newOpId('upd'),
+        });
+
+        const first = await http().patch(`/api/v1/beneficiaries/${id}`).set('Cookie', assocACookie).send(payload).expect(200);
+        expect(first.body.replayed).toBe(false);
+        const after = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+
+        const second = await http().patch(`/api/v1/beneficiaries/${id}`).set('Cookie', assocACookie).send(payload).expect(200);
+        expect(second.body.replayed).toBe(true);
+
+        // إعادة التشغيل لم تكتب شيئًا من جديد.
+        const afterReplay = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+        expect(afterReplay.locationUpdatedAt?.toISOString()).toBe(after.locationUpdatedAt?.toISOString());
+        expect(afterReplay.locationSource).toBe('CURRENT_LOCATION');
+      });
+
+      it('PRESERVE ثم CLEAR بنفس opId: 409 — ولا يُمسح الموقع فعليًا', async () => {
+        const id = await createWithLocation();
+        const opId = newOpId('upd');
+        const base = beneficiaryPayload({ opId });
+
+        // (1) الحقل غائب تمامًا ⇒ احفظ الموقع كما هو.
+        const preserve = { ...base };
+        delete (preserve as Record<string, unknown>).lat;
+        delete (preserve as Record<string, unknown>).lng;
+        await http().patch(`/api/v1/beneficiaries/${id}`).set('Cookie', assocACookie).send(preserve).expect(200);
+
+        const afterPreserve = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+        expect(Number(afterPreserve.latitude)).toBeCloseTo(24.5, 6);
+
+        // (2) نفس opId لكن lat/lng = null صراحةً ⇒ نيّة مسح، مختلفة تمامًا.
+        const conflict = await http()
+          .patch(`/api/v1/beneficiaries/${id}`)
+          .set('Cookie', assocACookie)
+          .send({ ...base, lat: null, lng: null })
+          .expect(409);
+        expect(conflict.body.error.code).toBe('APPLICATION_IDEMPOTENCY_CONFLICT');
+
+        // الرفض وقع **قبل** أي كتابة: الموقع سليم بكل أعمدته الأربعة.
+        const afterConflict = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+        expect(Number(afterConflict.latitude)).toBeCloseTo(24.5, 6);
+        expect(Number(afterConflict.longitude)).toBeCloseTo(46.5, 6);
+        expect(afterConflict.locationSource).toBe('MAP');
+        expect(afterConflict.locationUpdatedAt?.toISOString()).toBe(afterPreserve.locationUpdatedAt?.toISOString());
+      });
+
+      it('CLEAR ثم PRESERVE بنفس opId: 409 أيضًا (التمييز متماثل في الاتجاهين)', async () => {
+        const id = await createWithLocation();
+        const opId = newOpId('upd');
+        const base = beneficiaryPayload({ opId });
+
+        await http()
+          .patch(`/api/v1/beneficiaries/${id}`)
+          .set('Cookie', assocACookie)
+          .send({ ...base, lat: null, lng: null })
+          .expect(200);
+        expect((await prisma.beneficiary.findUniqueOrThrow({ where: { id } })).latitude).toBeNull();
+
+        const preserve = { ...base };
+        delete (preserve as Record<string, unknown>).lat;
+        delete (preserve as Record<string, unknown>).lng;
+        const conflict = await http()
+          .patch(`/api/v1/beneficiaries/${id}`)
+          .set('Cookie', assocACookie)
+          .send(preserve)
+          .expect(409);
+        expect(conflict.body.error.code).toBe('APPLICATION_IDEMPOTENCY_CONFLICT');
+      });
+
+      it('نفس opId ونفس الإحداثيات بمصدر مختلف دلاليًا: 409 بلا كتابة', async () => {
+        const id = await createWithLocation();
+        const payload = beneficiaryPayload({
+          lat: 21.4225,
+          lng: 39.8262,
+          locationSource: 'MAP',
+          region: 'مكة المكرمة',
+          city: 'جدة',
+          opId: newOpId('upd'),
+        });
+
+        await http().patch(`/api/v1/beneficiaries/${id}`).set('Cookie', assocACookie).send(payload).expect(200);
+        const after = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+        expect(after.locationSource).toBe('MAP');
+
+        const conflict = await http()
+          .patch(`/api/v1/beneficiaries/${id}`)
+          .set('Cookie', assocACookie)
+          .send({ ...payload, locationSource: 'IMPORT' })
+          .expect(409);
+        expect(conflict.body.error.code).toBe('APPLICATION_IDEMPOTENCY_CONFLICT');
+
+        const afterConflict = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+        expect(afterConflict.locationSource).toBe('MAP');
+      });
+
+      it('نفس الإحداثيات بمصدرين مجهولين (كلاهما MANUAL): نيّة واحدة ⇒ إعادة تشغيل', async () => {
+        const id = await createWithLocation();
+        const payload = beneficiaryPayload({
+          lat: 21.4225,
+          lng: 39.8262,
+          locationSource: 'مجهول أول',
+          region: 'مكة المكرمة',
+          city: 'جدة',
+          opId: newOpId('upd'),
+        });
+
+        await http().patch(`/api/v1/beneficiaries/${id}`).set('Cookie', assocACookie).send(payload).expect(200);
+        const second = await http()
+          .patch(`/api/v1/beneficiaries/${id}`)
+          .set('Cookie', assocACookie)
+          .send({ ...payload, locationSource: 'مجهول ثانٍ' })
+          .expect(200);
+        expect(second.body.replayed).toBe(true);
+      });
+
+      it('لا انحدار: مستفيد بلا موقع إطلاقًا يُعدَّل مرارًا بـopId مختلف بلا أي تعارض', async () => {
+        const { id } = await createBeneficiary(app, assocACookie);
+
+        for (const name of ['اسم أول', 'اسم ثانٍ', 'اسم ثالث']) {
+          const payload = beneficiaryPayload({ name, opId: newOpId('upd') });
+          delete (payload as Record<string, unknown>).lat;
+          delete (payload as Record<string, unknown>).lng;
+          await http().patch(`/api/v1/beneficiaries/${id}`).set('Cookie', assocACookie).send(payload).expect(200);
+        }
+
+        const after = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+        expect(after.name).toBe('اسم ثالث');
+        expect(after.latitude).toBeNull();
+        expect(after.locationUpdatedAt).toBeNull();
+      });
+
+      it('لا انحدار: مسح عادي (بـopId خاص به) لا يزال يمسح الموقع فعليًا', async () => {
+        const id = await createWithLocation();
+
+        await http()
+          .patch(`/api/v1/beneficiaries/${id}`)
+          .set('Cookie', assocACookie)
+          .send(beneficiaryPayload({ lat: null, lng: null, opId: newOpId('upd') }))
+          .expect(200);
+
+        const after = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+        expect(after.latitude).toBeNull();
+        expect(after.longitude).toBeNull();
+        expect(after.locationSource).toBeNull();
+        expect(after.locationUpdatedAt).toBeNull();
+      });
+    });
+  });
+
+  // ================================================================
   // NODE-3.1 — البند 6: إزالة نقطة حالة الوحدة غير المستخدَمة
   // ================================================================
   describe('NODE-3.1 — تنظيف BeneficiaryNeedsModule', () => {

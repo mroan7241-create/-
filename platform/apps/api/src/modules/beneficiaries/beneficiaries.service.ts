@@ -18,7 +18,12 @@ import { normalizePagination, toPaginatedResult, type PaginatedResult, type Pagi
 import { validateRegionCity } from '../applications/application-reference.util';
 import { validateSocialStatus } from './beneficiary-reference.util';
 import { beneficiaryOrderBy, type BeneficiarySortField } from './beneficiary-sort.util';
-import { buildLocationWrite, locationConfirmed, normalizeNameForMatch } from './beneficiary-location.util';
+import {
+  buildLocationWrite,
+  canonicalizeLocationIntent,
+  locationConfirmed,
+  normalizeNameForMatch,
+} from './beneficiary-location.util';
 import { acquirePhoneLocks } from './beneficiary-phone-lock.util';
 import { ALLOCATION_TRIGGER_PORT, type AllocationTriggerPort } from '../allocation/allocation-trigger.port';
 import type { AuthContext } from '../auth/auth.types';
@@ -214,7 +219,19 @@ export class BeneficiariesService {
     // (وهو حرفيًا شرط `!existing` في `buildBeneficiaryFieldValues_`).
     const location = buildLocationWrite(input, null, new Date());
 
-    const payload = { associationId, ...fields, ...location, deviceTypes, phone: fields.phone };
+    // NODE-3.2 — البصمة تأخذ **نيّة** الموقع المعيارية لا أمر الكتابة:
+    // `location` أعلاه يحمل `locationUpdatedAt = new Date()`، وإدخاله في
+    // الحمولة كان يغيّر التجزئة في كل استدعاء فيُرَدّ على كل إعادة محاولة
+    // مشروعة بـ409. `buildLocationWrite` نفسه لم يتغيّر ولا يزال هو مصدر
+    // الكتابة الفعلية في `create` أدناه — الفارق أنه لم يعد مُدخَلًا للبصمة.
+    // على سجل جديد لا موقع سابق له إطلاقًا، فغياب `lat`/`lng` يُعيَّر
+    // `PRESERVE` (لا `CLEAR`) بنفس دالة المسار الآخر حرفيًا: لا حالة خاصة
+    // للإنشاء أصلًا، ونيّة «لم أرسل موقعًا» تبقى متميّزة عن «امسح الموقع
+    // صراحةً» — تمييز محافظ يميل دائمًا إلى 409 صريح بدل إعادة تشغيل
+    // صامتة لطلب نيّته مختلفة.
+    const locationIntent = canonicalizeLocationIntent(input);
+
+    const payload = { associationId, ...fields, locationIntent, deviceTypes, phone: fields.phone };
 
     const outcome = await prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ beneficiaryId: string; possibleDuplicate?: PossibleDuplicateWarning }>(
@@ -310,7 +327,13 @@ export class BeneficiariesService {
     }
 
     const fields = await this.buildFieldValues(input, existing);
-    const payload = { id, ...fields, lat: input.lat ?? null, lng: input.lng ?? null, deviceTypes: requestedTypes };
+    // NODE-3.2 — كان هنا `lat: input.lat ?? null, lng: input.lng ?? null`،
+    // وهو طيّ يجعل «الحقل غائب» (= احفظ الموقع كما هو) و«الحقل = null
+    // صراحةً» (= امسح الموقع) يتقاسمان بصمة واحدة، فيمرّ طلب مسح متنكّرًا
+    // في هيئة إعادة محاولة لطلب حفظ — أو العكس. النيّة المعيارية تفصلهما
+    // إلى `PRESERVE` و`CLEAR`، وتُدخِل `locationSource` المطبَّع في حالة
+    // `SET` لأنه جزء أصيل من نيّة الطلب لا زينة.
+    const payload = { id, ...fields, locationIntent: canonicalizeLocationIntent(input), deviceTypes: requestedTypes };
 
     const outcome = await prisma.$transaction(async (tx) => {
       const scope = `beneficiary-update:${id}`;
