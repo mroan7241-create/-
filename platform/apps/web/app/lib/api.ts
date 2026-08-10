@@ -291,7 +291,7 @@ export interface ReceiptItemSummary {
   damagePhotoCount: number;
 }
 
-export interface ReceiptBatchSummary {
+interface ReceiptBatchCore {
   id: string;
   publicCode: string;
   associationId: string;
@@ -306,10 +306,19 @@ export interface ReceiptBatchSummary {
   hasSignature: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+/** NODE-4.1 — صف قائمة خفيف: بلا بنود/صور تلف، `itemCount` فقط (`GET /receipts`). */
+export interface ReceiptBatchListItem extends ReceiptBatchCore {
+  itemCount: number;
+}
+
+/** تفاصيل كاملة — بنود+كميات+صور تلف، تُجلَب فقط عند فتح محضر واحد (`GET /receipts/:id`). */
+export interface ReceiptBatchDetail extends ReceiptBatchCore {
   items: ReceiptItemSummary[];
 }
 
-export function listReceiptBatches(params: { page?: number; pageSize?: number; associationId?: string; status?: ReceiptBatchStatus } = {}): Promise<Paginated<ReceiptBatchSummary>> {
+export function listReceiptBatches(params: { page?: number; pageSize?: number; associationId?: string; status?: ReceiptBatchStatus } = {}): Promise<Paginated<ReceiptBatchListItem>> {
   const q = new URLSearchParams();
   if (params.page) q.set('page', String(params.page));
   if (params.pageSize) q.set('pageSize', String(params.pageSize));
@@ -318,7 +327,7 @@ export function listReceiptBatches(params: { page?: number; pageSize?: number; a
   return apiFetch(`/receipts?${q.toString()}`);
 }
 
-export function getReceiptBatch(id: string): Promise<ReceiptBatchSummary> {
+export function getReceiptBatch(id: string): Promise<ReceiptBatchDetail> {
   return apiFetch(`/receipts/${id}`);
 }
 

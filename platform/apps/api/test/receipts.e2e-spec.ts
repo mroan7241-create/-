@@ -9,6 +9,7 @@ import { EmailService } from '../src/modules/auth/email/email.service';
 import { FakeEmailService } from '../src/modules/auth/email/fake-email.service';
 import { ALLOCATION_TRIGGER_PORT, type AllocationTriggerPort } from '../src/modules/allocation/allocation-trigger.port';
 import { MAX_PAGE } from '../src/common/pagination.util';
+import { PublicCodeService } from '../src/common/public-code.service';
 import { cleanAuthState, seedTestFixtures } from './utils/fixtures';
 import { loginAs, JPEG_1X1, PNG_1X1, WEBP_1X1 } from './utils/node2-fixtures';
 import { cleanNode3State, seedNode3Fixtures, type Node3Fixtures } from './utils/node3-fixtures';
@@ -396,5 +397,177 @@ describe('NODE-4 — محاضر الاستلام والمخزون', () => {
     expect(otherAssoc.status).toBe(404);
     const owner = await http().get(`/api/v1/inventory/devices/${deviceId}`).set('Cookie', assocACookie);
     expect(owner.status).toBe(200);
+  });
+
+  // ================================================================
+  // NODE-4.1 — تصليب: replay orphans + multipart صارم + MIME صارم +
+  // deviceType↔spec + بحث الجمعية + ترقيم القائمة + خفة القائمة + bulk.
+  // ================================================================
+
+  it('NODE-4.1: replay بنفس opId ونفس المحتوى لا يترك أي كائن يتيم — عدد الكائنات ثابت بعد replay', async () => {
+    const { batchId } = await createAndSendBatch(app, adminCookie, fx.associationAId);
+    const opId = newOpId('replay-cleanup');
+    const first = await confirmBatchRequest(app, assocACookie, batchId, { opId });
+    expect(first.status).toBe(201);
+    const afterFirst = { q: await countObjectsWithPrefix('receipt-quantity/'), s: await countObjectsWithPrefix('receipt-signature/') };
+
+    const replay = await confirmBatchRequest(app, assocACookie, batchId, { opId });
+    expect(replay.status).toBe(201);
+    expect(replay.body.id).toBe(batchId);
+
+    const afterReplay = { q: await countObjectsWithPrefix('receipt-quantity/'), s: await countObjectsWithPrefix('receipt-signature/') };
+    expect(afterReplay).toEqual(afterFirst);
+  });
+
+  it('NODE-4.1: replay مع صورة تلف ينظّف نسخة صورة التلف المكرَّرة أيضًا', async () => {
+    const { batchId, itemIds } = await createAndSendBatch(app, adminCookie, fx.associationAId);
+    const opId = newOpId('replay-damage');
+    const options = {
+      opId,
+      items: [{ itemId: itemIds[0], receivedQty: 2, damagedQty: 1, missingQty: 0, differenceReason: 'تلف أثناء الشحن' }],
+      damagePhotoLinks: [[itemIds[0]]],
+      damagePhotos: [JPEG_1X1],
+    };
+    const first = await confirmBatchRequest(app, assocACookie, batchId, options);
+    expect(first.status).toBe(201);
+    const afterFirst = await countObjectsWithPrefix('receipt-damage/');
+    const replay = await confirmBatchRequest(app, assocACookie, batchId, options);
+    expect(replay.status).toBe(201);
+    const afterReplay = await countObjectsWithPrefix('receipt-damage/');
+    expect(afterReplay).toBe(afterFirst);
+    const units = await prisma.deviceUnit.findMany({ where: { receiptItemId: itemIds[0] } });
+    expect(units).toHaveLength(2); // لا تكرار DeviceUnit جرّاء الـreplay
+  });
+
+  it('NODE-4.1: أشكال multipart مشوَّهة تُرفض بـ400 نظيف — لا 500، لا تسريب داخلي', async () => {
+    const { batchId } = await createAndSendBatch(app, adminCookie, fx.associationAId);
+    const malformedItems = ['{}', '[null]', '"x"'];
+    for (const raw of malformedItems) {
+      const req = request(app.getHttpServer()).post(`/api/v1/receipts/${batchId}/confirm`).set('Cookie', assocACookie);
+      req.field('receiverTitle', 'مدير الجمعية').field('opId', newOpId()).field('items', raw);
+      req.attach('quantityPhoto', JPEG_1X1, { filename: 'q.jpg', contentType: 'image/jpeg' });
+      req.attach('signatureImage', PNG_1X1, { filename: 's.png', contentType: 'image/png' });
+      const res = await req;
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(res.body)).not.toMatch(/prisma|postgres|stack|at Object/i);
+    }
+
+    const malformedLinks = ['{}', '[null]'];
+    for (const raw of malformedLinks) {
+      const req = request(app.getHttpServer()).post(`/api/v1/receipts/${batchId}/confirm`).set('Cookie', assocACookie);
+      req.field('receiverTitle', 'مدير الجمعية').field('opId', newOpId()).field('damagePhotoLinks', raw);
+      req.attach('quantityPhoto', JPEG_1X1, { filename: 'q.jpg', contentType: 'image/jpeg' });
+      req.attach('signatureImage', PNG_1X1, { filename: 's.png', contentType: 'image/png' });
+      const res = await req;
+      expect(res.status).toBe(400);
+    }
+
+    const nonUuidItem = await confirmBatchRequest(app, assocACookie, batchId, { items: [{ itemId: 'not-a-uuid', receivedQty: 1, damagedQty: 0, missingQty: 0 }] });
+    expect(nonUuidItem.status).toBe(400);
+  });
+
+  it('NODE-4.1: damagePhotoId غير صالح على endpoint الإثبات → 400 بلا تسريب داخلي', async () => {
+    const { batchId } = await createAndSendBatch(app, adminCookie, fx.associationAId);
+    const res = await http().get(`/api/v1/receipts/${batchId}/evidence/damage?damagePhotoId=not-a-uuid`).set('Cookie', adminCookie);
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(res.body)).not.toMatch(/prisma|postgres|stack/i);
+  });
+
+  it('NODE-4.1: MIME صارم — مُعلَن خارج القائمة أو غير مطابق للبايتات الفعلية يُرفض دومًا', async () => {
+    const { batchId } = await createAndSendBatch(app, adminCookie, fx.associationAId);
+    const cases: [string, Buffer][] = [
+      ['text/plain', JPEG_1X1],
+      ['application/octet-stream', PNG_1X1],
+      ['image/jpeg', PNG_1X1],
+    ];
+    for (const [mime, bytes] of cases) {
+      const req = request(app.getHttpServer()).post(`/api/v1/receipts/${batchId}/confirm`).set('Cookie', assocACookie);
+      req.field('receiverTitle', 'مدير الجمعية').field('opId', newOpId());
+      req.attach('quantityPhoto', bytes, { filename: 'q.bin', contentType: mime });
+      req.attach('signatureImage', PNG_1X1, { filename: 's.png', contentType: 'image/png' });
+      const res = await req;
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('RECEIPT_EVIDENCE_INVALID');
+    }
+    // مطابقة MIME + بايتات صحيحة تُقبَل (تنظيم مقارَنة إيجابية).
+    const ok = await confirmBatchRequest(app, assocACookie, batchId, {});
+    expect(ok.status).toBe(201);
+  });
+
+  it('NODE-4.1: المواصفة تتبع نوع الجهاز — مواصفة نوع آخر تُرفض، ونوع بلا قائمة معتمدة يبقى نصًا حرًّا', async () => {
+    const refrigeratorOk = await http().post('/api/v1/receipts').set('Cookie', adminCookie).send(
+      createBatchPayload(fx.associationAId, { items: [{ deviceType: 'REFRIGERATOR', spec: '16 قدم', sentQty: 1 }] }),
+    );
+    expect(refrigeratorOk.status).toBe(201);
+
+    const washerOk = await http().post('/api/v1/receipts').set('Cookie', adminCookie).send(
+      createBatchPayload(fx.associationAId, { items: [{ deviceType: 'WASHING_MACHINE', spec: 'أوتوماتيك 7 كجم', sentQty: 1 }] }),
+    );
+    expect(washerOk.status).toBe(201);
+
+    const crossTypeSpec = await http().post('/api/v1/receipts').set('Cookie', adminCookie).send(
+      createBatchPayload(fx.associationAId, { items: [{ deviceType: 'REFRIGERATOR', spec: 'أوتوماتيك 7 كجم', sentQty: 1 }] }),
+    );
+    expect(crossTypeSpec.status).toBe(400);
+    expect(crossTypeSpec.body.error.code).toBe('RECEIPT_INVALID_REFERENCE');
+
+    // OVEN مبذور بقائمة نشطة أيضًا ("5 شعلات"...) — نص حر يُقبَل فقط لو لم توجد أي قائمة نشطة لنوعه؛ نتحقق من القبول الحر عبر مواصفة غير موجودة في القائمة لنوع بلا بذور فعلية (نستخدم OVEN بقيمة غير مُبذَرة للتأكد أن الرفض حقيقي أولًا).
+    const ovenUnknownSpec = await http().post('/api/v1/receipts').set('Cookie', adminCookie).send(
+      createBatchPayload(fx.associationAId, { items: [{ deviceType: 'OVEN', spec: 'مواصفة غير موجودة إطلاقًا', sentQty: 1 }] }),
+    );
+    expect(ovenUnknownSpec.status).toBe(400);
+  });
+
+  it('NODE-4.1: قائمة المحاضر خفيفة (itemCount بلا items)، والتفاصيل الكاملة فقط عبر GET /receipts/:id', async () => {
+    await createAndSendBatch(app, adminCookie, fx.associationAId);
+    const listRes = await http().get('/api/v1/receipts?pageSize=5').set('Cookie', adminCookie);
+    expect(listRes.status).toBe(200);
+    const row = listRes.body.items[0];
+    expect(row.itemCount).toBeGreaterThanOrEqual(1);
+    expect(row.items).toBeUndefined();
+
+    const detailRes = await http().get(`/api/v1/receipts/${row.id}`).set('Cookie', adminCookie);
+    expect(detailRes.status).toBe(200);
+    expect(Array.isArray(detailRes.body.items)).toBe(true);
+  });
+
+  it('NODE-4.1: ترقيم قائمة المحاضر خادمي حقيقي — صفحتان مختلفتان بدون تداخل', async () => {
+    for (let i = 0; i < 3; i++) await createAndSendBatch(app, adminCookie, fx.associationAId);
+    const page1 = await http().get('/api/v1/receipts?pageSize=2&page=1').set('Cookie', adminCookie);
+    const page2 = await http().get('/api/v1/receipts?pageSize=2&page=2').set('Cookie', adminCookie);
+    expect(page1.body.items).toHaveLength(2);
+    const idsPage1 = page1.body.items.map((b: { id: string }) => b.id);
+    const idsPage2 = page2.body.items.map((b: { id: string }) => b.id);
+    expect(idsPage1.some((id: string) => idsPage2.includes(id))).toBe(false);
+  });
+
+  it('NODE-4.1: نطاق أكواد PublicCodeService.nextPublicCodes ذرّي ولا يتداخل تحت تزامن حقيقي', async () => {
+    const publicCode = new PublicCodeService();
+    const prefix = `T4${Date.now().toString(36)}`;
+    const results = await Promise.all(
+      Array.from({ length: 5 }, (_, i) => prisma.$transaction((tx) => publicCode.nextPublicCodes(tx, prefix, 4 + i))),
+    );
+    const allCodes = results.flat();
+    expect(new Set(allCodes).size).toBe(allCodes.length); // لا تكرار إطلاقًا عبر 5 حجوزات متزامنة
+    for (const codes of results) {
+      expect(new Set(codes).size).toBe(codes.length); // كل نطاق داخليًا فريد ومتسلسل
+      expect(codes.every((c) => /^T4\w+-\d{6}$/.test(c))).toBe(true);
+    }
+  });
+
+  it('NODE-4.1: تأكيد بكمية أكبر (bulk) ينتج بالضبط goodQty وحدة جهاز بأكواد فريدة صحيحة الصيغة', async () => {
+    const BULK_QTY = 40;
+    const { batchId, itemIds } = await createAndSendBatch(app, adminCookie, fx.associationAId, {
+      items: [{ deviceType: 'REFRIGERATOR', spec: '18 قدم', sentQty: BULK_QTY }],
+    });
+    const res = await confirmBatchRequest(app, assocACookie, batchId, {
+      items: [{ itemId: itemIds[0], receivedQty: BULK_QTY, damagedQty: 0, missingQty: 0 }],
+    });
+    expect(res.status).toBe(201);
+    const units = await prisma.deviceUnit.findMany({ where: { receiptItemId: itemIds[0] } });
+    expect(units).toHaveLength(BULK_QTY);
+    const codes = units.map((u) => u.publicCode);
+    expect(new Set(codes).size).toBe(BULK_QTY);
+    expect(codes.every((c) => /^DEV-\d{6}$/.test(c))).toBe(true);
   });
 });

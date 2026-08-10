@@ -92,3 +92,10 @@ export class SendReceiptBatchDto {
   @IsString()
   opId!: string;
 }
+
+/** `GET /receipts/:id/evidence/:evidenceType` — معامل الاستعلام damagePhotoId، إن وُجد، UUID فقط. */
+export class ReceiptEvidenceQueryDto {
+  @IsOptional()
+  @IsUUID()
+  damagePhotoId?: string;
+}

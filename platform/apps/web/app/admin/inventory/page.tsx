@@ -2,15 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { AssociationSelect } from '../../lib/association-select';
 import {
   ApiClientError,
-  apiFetch,
   DEVICE_STATUS_LABELS,
   DEVICE_TYPE_LABELS,
   DEVICE_TYPES,
   getDeviceUnit,
   listDeviceUnits,
-  type AssociationSummary,
   type DeviceStatus,
   type DeviceType,
   type DeviceUnitSummary,
@@ -22,19 +21,13 @@ import { cardStyle, errorStyle, inputStyle, mutedStyle, pageStyle, statusBadgeSt
 export default function AdminInventoryPage() {
   const { user, loading } = useRoleGuard(['ADMIN']);
   const [data, setData] = useState<Paginated<DeviceUnitSummary> | null>(null);
-  const [associations, setAssociations] = useState<AssociationSummary[]>([]);
   const [associationId, setAssociationId] = useState('');
   const [deviceType, setDeviceType] = useState<DeviceType | ''>('');
   const [status, setStatus] = useState<DeviceStatus | ''>('');
   const [page, setPage] = useState(1);
   const [error, setError] = useState('');
   const [detail, setDetail] = useState<Awaited<ReturnType<typeof getDeviceUnit>> | null>(null);
-
-  useEffect(() => {
-    apiFetch<Paginated<AssociationSummary>>('/associations?pageSize=200')
-      .then((res) => setAssociations(res.items))
-      .catch(() => {});
-  }, []);
+  const [detailError, setDetailError] = useState('');
 
   useEffect(() => {
     if (!user) return;
@@ -50,13 +43,17 @@ export default function AdminInventoryPage() {
       <h1>مخزون الأجهزة</h1>
       {error && <p style={errorStyle}>{error}</p>}
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-        <select style={{ ...inputStyle, width: 220 }} value={associationId} onChange={(e) => { setAssociationId(e.target.value); setPage(1); }}>
-          <option value="">كل الجمعيات</option>
-          {associations.map((a) => (
-            <option key={a.id} value={a.id}>{a.name}</option>
-          ))}
-        </select>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        <div style={{ minWidth: 220 }}>
+          <AssociationSelect
+            value={associationId}
+            onChange={(id) => {
+              setAssociationId(id);
+              setPage(1);
+            }}
+            placeholder="كل الجمعيات — ابحث لتصفية..."
+          />
+        </div>
         <select style={{ ...inputStyle, width: 180 }} value={deviceType} onChange={(e) => { setDeviceType(e.target.value as DeviceType | ''); setPage(1); }}>
           <option value="">كل الأنواع</option>
           {DEVICE_TYPES.map((t) => (
@@ -82,7 +79,16 @@ export default function AdminInventoryPage() {
         </thead>
         <tbody>
           {(data?.items ?? []).map((d) => (
-            <tr key={d.id} style={{ cursor: 'pointer' }} onClick={() => getDeviceUnit(d.id).then(setDetail).catch(() => {})}>
+            <tr
+              key={d.id}
+              style={{ cursor: 'pointer' }}
+              onClick={() => {
+                setDetailError('');
+                getDeviceUnit(d.id)
+                  .then(setDetail)
+                  .catch((e) => setDetailError(e instanceof ApiClientError ? e.message : 'تعذّر تحميل تفاصيل الجهاز'));
+              }}
+            >
               <td style={tdStyle}>{d.publicCode}</td>
               <td style={tdStyle}>{d.deviceType ? DEVICE_TYPE_LABELS[d.deviceType as DeviceType] ?? d.deviceType : '—'}</td>
               <td style={tdStyle}>{d.spec ?? '—'}</td>
@@ -103,6 +109,7 @@ export default function AdminInventoryPage() {
         </div>
       )}
 
+      {detailError && <p style={errorStyle}>{detailError}</p>}
       {detail && (
         <div style={{ ...cardStyle, marginTop: 20 }}>
           <strong>{detail.publicCode}</strong>

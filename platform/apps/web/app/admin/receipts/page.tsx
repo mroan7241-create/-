@@ -2,21 +2,23 @@
 
 import { useEffect, useState } from 'react';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { AssociationSelect } from '../../lib/association-select';
 import {
   ApiClientError,
-  apiFetch,
   createReceiptBatch,
   DEVICE_TYPE_LABELS,
   DEVICE_TYPES,
+  getReceiptBatch,
+  getReceiptEvidenceUrl,
   listReceiptBatches,
   RECEIPT_BATCH_STATUS_LABELS,
   sendReceiptBatch,
-  type AssociationSummary,
   type CreateReceiptItemInput,
   type DeviceType,
   type Paginated,
+  type ReceiptBatchDetail,
+  type ReceiptBatchListItem,
   type ReceiptBatchStatus,
-  type ReceiptBatchSummary,
 } from '../../lib/api';
 import { cardStyle, errorStyle, inputStyle, labelStyle, mutedStyle, pageStyle, primaryButtonStyle, secondaryButtonStyle, statusBadgeStyle, successStyle, tableStyle, tdStyle, thStyle } from '../../lib/ui';
 
@@ -27,13 +29,15 @@ const STATUS_TONE: Record<ReceiptBatchStatus, 'neutral' | 'good' | 'bad'> = {
   RECEIVED_WITH_DISCREPANCIES: 'bad',
 };
 
+const PAGE_SIZE = 25;
+
 interface DraftItem extends CreateReceiptItemInput {}
 
-/** ADMIN — إدارة محاضر استلام دفعات الأجهزة: إنشاء + إرسال + قائمة. تأكيد الاستلام مسؤولية الجمعية (association/receipts). */
+/** ADMIN — إدارة محاضر استلام دفعات الأجهزة: إنشاء + إرسال + قائمة مُرقَّمة خادميًا + تفاصيل عند الطلب. تأكيد الاستلام مسؤولية الجمعية (association/receipts). */
 export default function AdminReceiptsPage() {
   const { user, loading } = useRoleGuard(['ADMIN']);
-  const [data, setData] = useState<Paginated<ReceiptBatchSummary> | null>(null);
-  const [associations, setAssociations] = useState<AssociationSummary[]>([]);
+  const [data, setData] = useState<Paginated<ReceiptBatchListItem> | null>(null);
+  const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<ReceiptBatchStatus | ''>('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -46,22 +50,24 @@ export default function AdminReceiptsPage() {
   const [items, setItems] = useState<DraftItem[]>([{ deviceType: 'REFRIGERATOR', spec: '', sentQty: 1 }]);
   const [saving, setSaving] = useState(false);
 
+  const [openBatchId, setOpenBatchId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<ReceiptBatchDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState('');
+
   async function refresh() {
     try {
-      setData(await listReceiptBatches({ pageSize: 25, status: statusFilter || undefined }));
+      setError('');
+      setData(await listReceiptBatches({ page, pageSize: PAGE_SIZE, status: statusFilter || undefined }));
     } catch (e) {
       setError(e instanceof ApiClientError ? e.message : 'تعذّر تحميل المحاضر');
     }
   }
 
   useEffect(() => {
-    if (!user) return;
-    refresh();
-    apiFetch<Paginated<AssociationSummary>>('/associations?pageSize=200')
-      .then((res) => setAssociations(res.items))
-      .catch(() => {});
+    if (user) refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, statusFilter]);
+  }, [user, page, statusFilter]);
 
   if (loading || !user) return <p style={pageStyle}>...جارٍ التحميل</p>;
 
@@ -76,10 +82,12 @@ export default function AdminReceiptsPage() {
       const res = await createReceiptBatch({ associationId, supplierName, sentDate, notes: notes || undefined, items });
       setNotice(`أُنشئ المحضر ${res.id} بنجاح — أرسله للجمعية عند الجاهزية`);
       setShowCreate(false);
+      setAssociationId('');
       setSupplierName('');
       setSentDate('');
       setNotes('');
       setItems([{ deviceType: 'REFRIGERATOR', spec: '', sentQty: 1 }]);
+      setPage(1);
       await refresh();
     } catch (e) {
       setError(e instanceof ApiClientError ? e.message : 'تعذّر إنشاء المحضر');
@@ -99,6 +107,25 @@ export default function AdminReceiptsPage() {
     }
   }
 
+  async function openDetail(id: string) {
+    if (openBatchId === id) {
+      setOpenBatchId(null);
+      setDetail(null);
+      return;
+    }
+    setOpenBatchId(id);
+    setDetail(null);
+    setDetailError('');
+    setDetailLoading(true);
+    try {
+      setDetail(await getReceiptBatch(id));
+    } catch (e) {
+      setDetailError(e instanceof ApiClientError ? e.message : 'تعذّر تحميل تفاصيل المحضر');
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
   return (
     <main style={pageStyle}>
       <h1>محاضر استلام دفعات الأجهزة</h1>
@@ -106,7 +133,14 @@ export default function AdminReceiptsPage() {
       {notice && <p style={successStyle}>{notice}</p>}
 
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
-        <select style={{ ...inputStyle, width: 220 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as ReceiptBatchStatus | '')}>
+        <select
+          style={{ ...inputStyle, width: 220 }}
+          value={statusFilter}
+          onChange={(e) => {
+            setStatusFilter(e.target.value as ReceiptBatchStatus | '');
+            setPage(1);
+          }}
+        >
           <option value="">كل الحالات</option>
           {Object.entries(RECEIPT_BATCH_STATUS_LABELS).map(([k, v]) => (
             <option key={k} value={k}>{v}</option>
@@ -121,12 +155,7 @@ export default function AdminReceiptsPage() {
         <section style={{ ...cardStyle, marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
           <label style={labelStyle}>
             الجمعية المستلمة
-            <select style={inputStyle} value={associationId} onChange={(e) => setAssociationId(e.target.value)}>
-              <option value="">اختر جمعية</option>
-              {associations.map((a) => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
-            </select>
+            <AssociationSelect value={associationId} onChange={(id) => setAssociationId(id)} placeholder="ابحث عن جمعية..." />
           </label>
           <label style={labelStyle}>
             اسم المورد
@@ -183,26 +212,125 @@ export default function AdminReceiptsPage() {
         </thead>
         <tbody>
           {(data?.items ?? []).map((b) => (
-            <tr key={b.id}>
-              <td style={tdStyle}>{b.publicCode}</td>
-              <td style={tdStyle}>{b.supplierName}</td>
+            <>
+              <tr key={b.id} style={{ cursor: 'pointer' }} onClick={() => openDetail(b.id)}>
+                <td style={tdStyle}>{b.publicCode}</td>
+                <td style={tdStyle}>{b.supplierName}</td>
+                <td style={tdStyle}>
+                  <span style={statusBadgeStyle(STATUS_TONE[b.status])}>{RECEIPT_BATCH_STATUS_LABELS[b.status]}</span>
+                </td>
+                <td style={tdStyle}>{b.sentDate ? new Date(b.sentDate).toLocaleDateString('ar-SA') : '—'}</td>
+                <td style={tdStyle}>{b.itemCount}</td>
+                <td style={tdStyle}>
+                  {b.status === 'DRAFT' && (
+                    <button
+                      style={secondaryButtonStyle}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        doSend(b.id);
+                      }}
+                    >
+                      إرسال للجمعية
+                    </button>
+                  )}
+                </td>
+              </tr>
+              {openBatchId === b.id && (
+                <tr>
+                  <td style={tdStyle} colSpan={6}>
+                    <ReceiptDetailPanel detail={detail} loading={detailLoading} error={detailError} batchId={b.id} />
+                  </td>
+                </tr>
+              )}
+            </>
+          ))}
+        </tbody>
+      </table>
+      {!data?.items.length && <p style={mutedStyle}>لا توجد محاضر بعد.</p>}
+
+      {data && data.totalPages > 1 && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center' }}>
+          <button style={secondaryButtonStyle} disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>السابق</button>
+          <span style={mutedStyle}>{page} / {data.totalPages}</span>
+          <button style={secondaryButtonStyle} disabled={page >= data.totalPages} onClick={() => setPage((p) => p + 1)}>التالي</button>
+        </div>
+      )}
+    </main>
+  );
+}
+
+function ReceiptDetailPanel({ detail, loading, error, batchId }: { detail: ReceiptBatchDetail | null; loading: boolean; error: string; batchId: string }) {
+  const [evidenceError, setEvidenceError] = useState('');
+
+  async function viewEvidence(type: 'quantity' | 'signature' | 'damage', damagePhotoId?: string) {
+    setEvidenceError('');
+    try {
+      const res = await getReceiptEvidenceUrl(batchId, type, damagePhotoId);
+      window.open(res.url, '_blank', 'noopener,noreferrer');
+    } catch (e) {
+      setEvidenceError(e instanceof ApiClientError ? e.message : 'تعذّر تحميل رابط الإثبات');
+    }
+  }
+
+  if (loading) return <p style={mutedStyle}>...جارٍ تحميل التفاصيل</p>;
+  if (error) return <p style={errorStyle}>{error}</p>;
+  if (!detail) return null;
+
+  return (
+    <div style={{ ...cardStyle, marginTop: 4 }}>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
+        <span>المستلم: {detail.receiverName ?? '—'}</span>
+        <span>الصفة: {detail.receiverTitle ?? '—'}</span>
+        <span>تاريخ التأكيد: {detail.confirmedAt ? new Date(detail.confirmedAt).toLocaleString('ar-SA') : '—'}</span>
+        {detail.notes && <span>ملاحظات: {detail.notes}</span>}
+      </div>
+      {evidenceError && <p style={errorStyle}>{evidenceError}</p>}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+        {detail.hasQuantityPhoto && (
+          <button style={secondaryButtonStyle} onClick={() => viewEvidence('quantity')}>
+            عرض صورة الكمية
+          </button>
+        )}
+        {detail.hasSignature && (
+          <button style={secondaryButtonStyle} onClick={() => viewEvidence('signature')}>
+            عرض توقيع المستلم
+          </button>
+        )}
+      </div>
+      <table style={tableStyle}>
+        <thead>
+          <tr>
+            <th style={thStyle}>النوع</th>
+            <th style={thStyle}>المواصفة</th>
+            <th style={thStyle}>مُرسَل</th>
+            <th style={thStyle}>سليم</th>
+            <th style={thStyle}>تالف</th>
+            <th style={thStyle}>ناقص</th>
+            <th style={thStyle}>سبب الفرق</th>
+            <th style={thStyle}>صور التلف</th>
+          </tr>
+        </thead>
+        <tbody>
+          {detail.items.map((it) => (
+            <tr key={it.id}>
+              <td style={tdStyle}>{it.deviceType}</td>
+              <td style={tdStyle}>{it.spec}</td>
+              <td style={tdStyle}>{it.sentQty}</td>
+              <td style={tdStyle}>{it.receivedQty}</td>
+              <td style={tdStyle}>{it.damagedQty}</td>
+              <td style={tdStyle}>{it.missingQty}</td>
+              <td style={tdStyle}>{it.differenceReason || '—'}</td>
               <td style={tdStyle}>
-                <span style={statusBadgeStyle(STATUS_TONE[b.status])}>{RECEIPT_BATCH_STATUS_LABELS[b.status]}</span>
-              </td>
-              <td style={tdStyle}>{b.sentDate ? new Date(b.sentDate).toLocaleDateString('ar-SA') : '—'}</td>
-              <td style={tdStyle}>{b.items.length}</td>
-              <td style={tdStyle}>
-                {b.status === 'DRAFT' && (
-                  <button style={secondaryButtonStyle} onClick={() => doSend(b.id)}>
-                    إرسال للجمعية
+                {it.damagePhotos.map((p, i) => (
+                  <button key={p.id} style={secondaryButtonStyle} onClick={() => viewEvidence('damage', p.id)}>
+                    صورة {i + 1}
                   </button>
-                )}
+                ))}
               </td>
             </tr>
           ))}
         </tbody>
       </table>
-      {!data?.items.length && <p style={mutedStyle}>لا توجد محاضر بعد.</p>}
-    </main>
+    </div>
   );
 }

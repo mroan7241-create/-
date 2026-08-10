@@ -7,7 +7,8 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthContext } from '../auth/auth.types';
 import { RECEIPT_EVIDENCE_MAX_BYTES } from '../files/file-validation.util';
 import { ReceiptsService } from './receipts.service';
-import { ConfirmReceiptBatchDto, CreateReceiptBatchDto, ListReceiptBatchesQueryDto, SendReceiptBatchDto } from './dto/receipt.dto';
+import { ConfirmReceiptBatchDto, CreateReceiptBatchDto, ListReceiptBatchesQueryDto, ReceiptEvidenceQueryDto, SendReceiptBatchDto } from './dto/receipt.dto';
+import { parseConfirmItems, parseDamagePhotoLinks } from './confirm-multipart.util';
 
 interface ConfirmFiles {
   quantityPhoto?: Express.Multer.File[];
@@ -75,18 +76,8 @@ export class ReceiptsController {
   )
   @ApiOperation({ summary: 'تأكيد استلام محضر — ASSOCIATION فقط ولجمعيتها حصرًا، multipart/form-data' })
   async confirm(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ConfirmReceiptBatchDto, @UploadedFiles() files: ConfirmFiles) {
-    let items;
-    try {
-      items = dto.items ? JSON.parse(dto.items) : [];
-    } catch {
-      throw new BadRequestException('صيغة بيانات بنود التأكيد غير صالحة');
-    }
-    let damagePhotoItemLinks: string[][];
-    try {
-      damagePhotoItemLinks = dto.damagePhotoLinks ? JSON.parse(dto.damagePhotoLinks) : [];
-    } catch {
-      throw new BadRequestException('صيغة روابط صور التلف غير صالحة');
-    }
+    const items = parseConfirmItems(dto.items);
+    const damagePhotoItemLinks = parseDamagePhotoLinks(dto.damagePhotoLinks);
 
     const quantityPhoto = files?.quantityPhoto?.[0];
     const signatureImage = files?.signatureImage?.[0];
@@ -109,11 +100,11 @@ export class ReceiptsController {
     @CurrentUser() ctx: AuthContext,
     @Param('id', ParseUUIDPipe) id: string,
     @Param('evidenceType') evidenceType: string,
-    @Query('damagePhotoId') damagePhotoId?: string,
+    @Query() query: ReceiptEvidenceQueryDto,
   ) {
     if (evidenceType !== 'quantity' && evidenceType !== 'signature' && evidenceType !== 'damage') {
       throw new BadRequestException('نوع إثبات غير معروف');
     }
-    return this.receipts.getEvidenceSignedUrl(ctx, id, evidenceType, damagePhotoId);
+    return this.receipts.getEvidenceSignedUrl(ctx, id, evidenceType, query.damagePhotoId);
   }
 }

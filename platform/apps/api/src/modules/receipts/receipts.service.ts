@@ -94,10 +94,14 @@ export class ReceiptsService {
     }
     if (params.status) where.status = params.status;
 
+    // NODE-4.1: حمولة القائمة خفيفة عمدًا — لا تُضمَّن بنود/صور تلف كل
+    // محضر في كل صف؛ فقط `itemCount` عبر `_count` (استعلام واحد، لا N+1).
+    // التفاصيل الكاملة (البنود+الكميات+صور التلف) عبر `getBatchDetail` عند
+    // الطلب فقط — راجع NODE-4_CONTRACT.md.
     const [rows, total] = await Promise.all([
       prisma.receiptBatch.findMany({
         where,
-        include: { items: { include: { damagePhotos: true } } },
+        include: { _count: { select: { items: true } } },
         orderBy: { createdAt: 'desc' },
         skip,
         take,
@@ -105,14 +109,14 @@ export class ReceiptsService {
       prisma.receiptBatch.count({ where }),
     ]);
 
-    return toPaginatedResult(rows.map(mapBatchSummary), total, page, pageSize);
+    return toPaginatedResult(rows.map(mapBatchListRow), total, page, pageSize);
   }
 
   async getBatchDetail(ctx: AuthContext, id: string) {
     const batch = await prisma.receiptBatch.findUnique({ where: { id }, include: { items: { include: { damagePhotos: true } } } });
     if (!batch) throw new ApiError('RECEIPT_BATCH_NOT_FOUND', 'محضر الاستلام غير موجود', 404);
     assertTenantAccess(ctx, batch.associationId);
-    return mapBatchSummary(batch);
+    return mapBatchDetail(batch);
   }
 
   // ================================================================
@@ -129,7 +133,7 @@ export class ReceiptsService {
       if (!DEVICE_TYPE_VALUES.includes(raw.deviceType)) {
         throw new ApiError('RECEIPT_INVALID_DEVICE_TYPE', `نوع الجهاز "${raw.deviceType}" غير مسموح به في محضر الاستلام`, 400);
       }
-      const spec = await validateDeviceSpec(raw.spec);
+      const spec = await validateDeviceSpec(raw.spec, raw.deviceType);
       const sentQty = requirePositiveSafeInt(raw.sentQty, 'الكمية المرسلة');
       items.push({ deviceType: raw.deviceType, spec, sentQty });
     }
@@ -155,12 +159,17 @@ export class ReceiptsService {
         },
       });
 
-      for (const item of items) {
-        const itemCode = await this.publicCode.nextPublicCode(tx, 'RCI');
-        await tx.receiptItem.create({
-          data: { publicCode: itemCode, receiptBatchId: batch.id, deviceType: item.deviceType, spec: item.spec, sentQty: item.sentQty },
-        });
-      }
+      // NODE-4.1: حجز نطاق أكواد واحد + createMany بدل استعلامين منفصلين لكل صنف.
+      const itemCodes = await this.publicCode.nextPublicCodes(tx, 'RCI', items.length);
+      await tx.receiptItem.createMany({
+        data: items.map((item, i) => ({
+          publicCode: itemCodes[i],
+          receiptBatchId: batch.id,
+          deviceType: item.deviceType,
+          spec: item.spec,
+          sentQty: item.sentQty,
+        })),
+      });
 
       await this.idempotency.complete(tx, ctx.accountId, 'receipt-batch-create', input.opId, { batchId: batch.id });
       return { replayed: false as const, batchId: batch.id };
@@ -389,12 +398,19 @@ export class ReceiptsService {
           });
         }
 
-        for (let i = 0; i < damagePhotoLinks.length; i++) {
-          const fileRow = damageFileRows[i];
-          for (const itemId of damagePhotoLinks[i]) {
-            const linkCode = await this.publicCode.nextPublicCode(tx, 'RCD');
-            await tx.receiptDamagePhoto.create({ data: { publicCode: linkCode, receiptItemId: itemId, fileId: fileRow.id } });
+        // NODE-4.1: نطاق أكواد واحد + createMany بدل استعلام منفصل لكل رابط صورة↔بند.
+        const totalLinkRows = damagePhotoLinks.reduce((sum, itemIds) => sum + itemIds.length, 0);
+        if (totalLinkRows > 0) {
+          const linkCodes = await this.publicCode.nextPublicCodes(tx, 'RCD', totalLinkRows);
+          const linkRows: { publicCode: string; receiptItemId: string; fileId: string }[] = [];
+          let linkCursor = 0;
+          for (let i = 0; i < damagePhotoLinks.length; i++) {
+            const fileRow = damageFileRows[i];
+            for (const itemId of damagePhotoLinks[i]) {
+              linkRows.push({ publicCode: linkCodes[linkCursor++], receiptItemId: itemId, fileId: fileRow.id });
+            }
           }
+          await tx.receiptDamagePhoto.createMany({ data: linkRows });
         }
 
         await tx.receiptBatch.update({
@@ -411,14 +427,20 @@ export class ReceiptsService {
         });
 
         // الأجهزة آخر كتابة — للكمية السليمة فقط، وحدة واحدة لكل جهاز.
-        let deviceUnitsCreated = 0;
-        for (const plan of itemPlans) {
-          if (plan.receivedQty <= 0) continue;
-          for (let i = 0; i < plan.receivedQty; i++) {
-            const deviceCode = await this.publicCode.nextPublicCode(tx, 'DEV');
-            await tx.deviceUnit.create({
-              data: {
-                publicCode: deviceCode,
+        // NODE-4.1: كانت هذه الحلقة تنفّذ استعلامَي DB (nextPublicCode +
+        // create) **لكل وحدة جهاز فرديًا** — غير مقبول لهدف الأداء/الخفة
+        // عند دفعات كبيرة. الآن: حجز نطاق أكواد DEV ذرّي واحد لإجمالي
+        // الكمية السليمة عبر كل الأصناف، ثم كتابة جماعية واحدة (`createMany`)
+        // بدل حلقة استعلامات منفردة.
+        const deviceUnitsCreated = itemPlans.reduce((sum, plan) => sum + Math.max(0, plan.receivedQty), 0);
+        if (deviceUnitsCreated > 0) {
+          const deviceCodes = await this.publicCode.nextPublicCodes(tx, 'DEV', deviceUnitsCreated);
+          const deviceRows: Prisma.DeviceUnitCreateManyInput[] = [];
+          let deviceCursor = 0;
+          for (const plan of itemPlans) {
+            for (let i = 0; i < plan.receivedQty; i++) {
+              deviceRows.push({
+                publicCode: deviceCodes[deviceCursor++],
                 associationId: lockedBatch.association_id,
                 deviceType: plan.deviceType,
                 spec: plan.spec,
@@ -426,16 +448,26 @@ export class ReceiptsService {
                 status: DeviceStatus.WAREHOUSE,
                 currentLocationType: DeviceMovementLocationType.WAREHOUSE,
                 currentLocationRef: null,
-              },
-            });
-            deviceUnitsCreated++;
+              });
+            }
           }
+          await tx.deviceUnit.createMany({ data: deviceRows });
         }
 
         const response = { batchId: id, status: finalStatus, deviceUnitsCreated };
         await this.idempotency.complete(tx, ctx.accountId, 'receipt-batch-confirm', input.opId, response);
         return { replayed: false as const, response };
       });
+
+      if (outcome.replayed) {
+        // NODE-4.1: هذه المحاولة رفعت كائناتها الخاصة (quantityKey/signatureKey/damageKeys)
+        // فعليًا قبل ادّعاء idempotency، لكن التزامن الناجح الحقيقي يخص
+        // المحاولة **الأولى** فقط (كائناتها المُلتزَمة تحت مفاتيح مختلفة
+        // تمامًا محفوظة في fileObject الأصلي بلا مساس). كائنات هذه
+        // المحاولة (المكرَّرة) غير مُستخدَمة إطلاقًا فتُحذَف best-effort
+        // فورًا حتى لا تبقى يتيمة.
+        await Promise.all(uploadedKeys.map((key) => this.storage.deleteObjectBestEffort(key)));
+      }
 
       if (!outcome.replayed) {
         await this.audit.log({ id: ctx.accountId, role: ctx.role, associationId: ctx.associationId }, 'RECEIPT_BATCH_CONFIRMED', 'receipt_batches', id, {
@@ -565,7 +597,45 @@ function assertTenantAccess(ctx: AuthContext, batchAssociationId: string): void 
   }
 }
 
-function mapBatchSummary(row: {
+/** صف قائمة خفيف — بلا بنود/صور تلف، فقط `itemCount` مجمَّع دفعة واحدة عبر `_count`. */
+function mapBatchListRow(row: {
+  id: string;
+  publicCode: string;
+  associationId: string;
+  supplierName: string;
+  sentAt: Date | null;
+  status: string;
+  notes: string | null;
+  receiverName: string | null;
+  receiverTitle: string | null;
+  confirmedAt: Date | null;
+  quantityPhotoFileId: string | null;
+  signatureFileId: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  _count: { items: number };
+}) {
+  return {
+    id: row.id,
+    publicCode: row.publicCode,
+    associationId: row.associationId,
+    supplierName: row.supplierName,
+    sentDate: row.sentAt,
+    status: row.status,
+    notes: row.notes,
+    receiverName: row.receiverName,
+    receiverTitle: row.receiverTitle,
+    confirmedAt: row.confirmedAt,
+    hasQuantityPhoto: !!row.quantityPhotoFileId,
+    hasSignature: !!row.signatureFileId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    itemCount: row._count.items,
+  };
+}
+
+/** تفاصيل كاملة — بنود + كميات + صور تلف — عند طلب محضر واحد فقط. */
+function mapBatchDetail(row: {
   id: string;
   publicCode: string;
   associationId: string;

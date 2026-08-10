@@ -68,8 +68,12 @@ function validateImageFile(buffer: Buffer, declaredMimeType: string | undefined,
   if (!detected) {
     return { valid: false, reason: 'INVALID_TYPE' };
   }
-  // المُعلَن غير موثوق به وحده، لكن تناقضه الصريح مع المكتشَف فعليًا (تزوير MIME) يُرفَض أيضًا.
-  if (declaredMimeType && LICENSE_FILE_ALLOWED_MIME_TYPES.includes(declaredMimeType as DetectedImageType) && declaredMimeType !== detected) {
+  // المُعلَن غير موثوق به وحده، لكن إن وُجد فيجب أن يكون هو نفسه أحد
+  // الأنواع الثلاثة المسموحة **و** أن يطابق ما اكتُشف فعليًا من البايتات —
+  // NODE-4.1: كان الفحص السابق يتجاهل صمتًا أي MIME مُعلَن خارج القائمة
+  // (مثل text/plain أو application/octet-stream) بدل رفضه، فيقبل ملفًا
+  // بصيغة صورة حقيقية لكن Content-Type غير متسق تمامًا معها.
+  if (declaredMimeType && (!LICENSE_FILE_ALLOWED_MIME_TYPES.includes(declaredMimeType as DetectedImageType) || declaredMimeType !== detected)) {
     return { valid: false, reason: 'INVALID_TYPE' };
   }
   return { valid: true, detectedMimeType: detected };
