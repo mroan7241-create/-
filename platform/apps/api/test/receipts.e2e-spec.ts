@@ -13,7 +13,8 @@ import { PublicCodeService } from '../src/common/public-code.service';
 import { cleanAuthState, seedTestFixtures } from './utils/fixtures';
 import { loginAs, JPEG_1X1, PNG_1X1, WEBP_1X1 } from './utils/node2-fixtures';
 import { cleanNode3State, seedNode3Fixtures, type Node3Fixtures } from './utils/node3-fixtures';
-import { cleanNode4State, confirmBatchRequest, createAndSendBatch, createBatchPayload, newOpId } from './utils/node4-fixtures';
+import { RECEIPT_ASSOCIATION_REPORT_REQUIRED_KEY } from '../src/modules/receipts/receipts.service';
+import { cleanNode4State, confirmBatchRequest, createAndSendBatch, createBatchPayload, createBatchRequest, newOpId, PDF_DOC } from './utils/node4-fixtures';
 import { DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { clearLicenseObjects, startTestStorage, stopTestStorage, storageClient, testBucket } from './utils/storage-harness';
 
@@ -24,7 +25,7 @@ async function countObjectsWithPrefix(prefix: string): Promise<number> {
 
 /** ينظّف كل كائنات إثباتات محاضر الاستلام بين الاختبارات — نفس مبدأ clearLicenseObjects لكن لبادئات receipt-*. */
 async function clearReceiptEvidenceObjects(): Promise<void> {
-  for (const prefix of ['receipt-quantity/', 'receipt-signature/', 'receipt-damage/']) {
+  for (const prefix of ['receipt-quantity/', 'receipt-signature/', 'receipt-damage/', 'receipt-admin-proof/', 'receipt-association-report/']) {
     const res = await storageClient().send(new ListObjectsV2Command({ Bucket: testBucket(), Prefix: prefix }));
     for (const obj of res.Contents ?? []) {
       if (obj.Key) await storageClient().send(new DeleteObjectCommand({ Bucket: testBucket(), Key: obj.Key }));
@@ -569,5 +570,282 @@ describe('NODE-4 — محاضر الاستلام والمخزون', () => {
     const codes = units.map((u) => u.publicCode);
     expect(new Set(codes).size).toBe(BULK_QTY);
     expect(codes.every((c) => /^DEV-\d{6}$/.test(c))).toBe(true);
+  });
+
+  // ================================================================
+  // NODE-4.2 — إغلاق محضر الاستلام: رقم مستند + إثبات شراء إداري +
+  // محضر/ختم الجمعية (اختياري بشرط SystemSetting) + دعم حقيقي لأكثر من
+  // صورة تلف مرتبطة ببنود متعددة.
+  // ================================================================
+
+  it('NODE-4.2: إنشاء بلا رقم مستند ولا إثبات يعمل (JSON عادي، توافق خلفي كامل)', async () => {
+    const payload = createBatchPayload(fx.associationAId);
+    const res = await http().post('/api/v1/receipts').set('Cookie', adminCookie).send(payload);
+    expect(res.status).toBe(201);
+    const detail = await http().get(`/api/v1/receipts/${res.body.id}`).set('Cookie', adminCookie);
+    expect(detail.body.documentNumber).toBeNull();
+    expect(detail.body.hasAdminProof).toBe(false);
+  });
+
+  it('NODE-4.2: إنشاء برقم مستند + إثبات شراء صورة يعمل (multipart)', async () => {
+    const res = await createBatchRequest(app, adminCookie, fx.associationAId, {
+      documentNumber: 'DOC-2026-001',
+      adminProofFile: JPEG_1X1,
+      adminProofFilename: 'proof.jpg',
+      adminProofContentType: 'image/jpeg',
+    });
+    expect(res.status).toBe(201);
+    const detail = await http().get(`/api/v1/receipts/${res.body.id}`).set('Cookie', adminCookie);
+    expect(detail.body.documentNumber).toBe('DOC-2026-001');
+    expect(detail.body.hasAdminProof).toBe(true);
+  });
+
+  it('NODE-4.2: إنشاء بإثبات شراء PDF يعمل', async () => {
+    const res = await createBatchRequest(app, adminCookie, fx.associationAId, { adminProofFile: PDF_DOC });
+    expect(res.status).toBe(201);
+    const detail = await http().get(`/api/v1/receipts/${res.body.id}`).set('Cookie', adminCookie);
+    expect(detail.body.hasAdminProof).toBe(true);
+  });
+
+  it('NODE-4.2: إثبات شراء إداري غير صالح (MIME/magic bytes/حجم) يُرفض', async () => {
+    const mismatched = await createBatchRequest(app, adminCookie, fx.associationAId, {
+      adminProofFile: PNG_1X1,
+      adminProofContentType: 'application/pdf',
+    });
+    expect(mismatched.status).toBe(400);
+    expect(mismatched.body.error.code).toBe('RECEIPT_DOCUMENT_INVALID');
+
+    const oversized = Buffer.concat([Buffer.from('%PDF-'), Buffer.alloc(8 * 1024 * 1024 + 10, 0x41)]);
+    const tooLarge = await createBatchRequest(app, adminCookie, fx.associationAId, { adminProofFile: oversized });
+    expect(tooLarge.status).toBe(400);
+    expect(tooLarge.body.error.code).toBe('RECEIPT_DOCUMENT_TOO_LARGE');
+
+    const notADocument = await createBatchRequest(app, adminCookie, fx.associationAId, {
+      adminProofFile: Buffer.from('plain text, not a document at all'),
+    });
+    expect(notADocument.status).toBe(400);
+    expect(notADocument.body.error.code).toBe('RECEIPT_DOCUMENT_INVALID');
+  });
+
+  it('NODE-4.2: فشل الإنشاء (جمعية غير نشطة) بعد رفع إثبات شراء ينظّف الكائن — لا يتيم', async () => {
+    const before = await countObjectsWithPrefix('receipt-admin-proof/');
+    await prisma.association.update({ where: { id: fx.associationBId }, data: { status: AssociationStatus.INACTIVE } });
+    try {
+      const res = await createBatchRequest(app, adminCookie, fx.associationBId, { adminProofFile: JPEG_1X1 });
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('RECEIPT_ASSOCIATION_INACTIVE');
+    } finally {
+      await prisma.association.update({ where: { id: fx.associationBId }, data: { status: AssociationStatus.ACTIVE } });
+    }
+    const after = await countObjectsWithPrefix('receipt-admin-proof/');
+    expect(after).toBe(before);
+  });
+
+  it('NODE-4.2: إعادة تشغيل (replay) إنشاء بنفس opId ونفس إثبات الشراء لا تترك كائنًا يتيمًا', async () => {
+    // بصمة idempotency تشمل كل الحمولة — لا بد من ثبات كل الحقول (بما فيها
+    // supplierName عشوائي افتراضيًا) بين المحاولتين حتى تُعتبر replay حقيقية لا تعارضًا.
+    const opId = newOpId('create-proof-replay');
+    const overrides = { opId, supplierName: 'مورد ثابت لإعادة تشغيل الإنشاء', adminProofFile: JPEG_1X1 };
+    const first = await createBatchRequest(app, adminCookie, fx.associationAId, overrides);
+    expect(first.status).toBe(201);
+    const afterFirst = await countObjectsWithPrefix('receipt-admin-proof/');
+
+    const replay = await createBatchRequest(app, adminCookie, fx.associationAId, overrides);
+    expect(replay.status).toBe(201);
+    expect(replay.body.id).toBe(first.body.id);
+
+    const afterReplay = await countObjectsWithPrefix('receipt-admin-proof/');
+    expect(afterReplay).toBe(afterFirst);
+  });
+
+  it('NODE-4.2: محضر/ختم الجمعية اختياري افتراضيًا — التأكيد ينجح بدونه', async () => {
+    const { batchId } = await createAndSendBatch(app, adminCookie, fx.associationAId);
+    const res = await confirmBatchRequest(app, assocACookie, batchId, {});
+    expect(res.status).toBe(201);
+    const detail = await http().get(`/api/v1/receipts/${batchId}`).set('Cookie', adminCookie);
+    expect(detail.body.hasAssociationReport).toBe(false);
+  });
+
+  it('NODE-4.2: SystemSetting=true (boolean صارم) يجعل محضر/ختم الجمعية إلزاميًا — 400 نظيف بدونه، ينجح معه', async () => {
+    await prisma.systemSetting.upsert({
+      where: { key: RECEIPT_ASSOCIATION_REPORT_REQUIRED_KEY },
+      create: { key: RECEIPT_ASSOCIATION_REPORT_REQUIRED_KEY, value: true },
+      update: { value: true },
+    });
+    try {
+      const { batchId: batchWithout } = await createAndSendBatch(app, adminCookie, fx.associationAId);
+      const withoutReport = await confirmBatchRequest(app, assocACookie, batchWithout, {});
+      expect(withoutReport.status).toBe(400);
+      expect(withoutReport.body.error.code).toBe('RECEIPT_ASSOCIATION_REPORT_REQUIRED');
+
+      const { batchId: batchWith } = await createAndSendBatch(app, adminCookie, fx.associationAId);
+      const withReport = await confirmBatchRequest(app, assocACookie, batchWith, { associationReportFile: PDF_DOC });
+      expect(withReport.status).toBe(201);
+    } finally {
+      await prisma.systemSetting.deleteMany({ where: { key: RECEIPT_ASSOCIATION_REPORT_REQUIRED_KEY } });
+    }
+  });
+
+  it('NODE-4.2: قيمة system_settings غير boolean صارمة ("true" نصية) لا تُفعّل الإلزام — يبقى اختياريًا', async () => {
+    await prisma.systemSetting.upsert({
+      where: { key: RECEIPT_ASSOCIATION_REPORT_REQUIRED_KEY },
+      create: { key: RECEIPT_ASSOCIATION_REPORT_REQUIRED_KEY, value: 'true' },
+      update: { value: 'true' },
+    });
+    try {
+      const { batchId } = await createAndSendBatch(app, adminCookie, fx.associationAId);
+      const res = await confirmBatchRequest(app, assocACookie, batchId, {});
+      expect(res.status).toBe(201);
+    } finally {
+      await prisma.systemSetting.deleteMany({ where: { key: RECEIPT_ASSOCIATION_REPORT_REQUIRED_KEY } });
+    }
+  });
+
+  it('NODE-4.2: محضر/ختم الجمعية يقبل PDF أو صورة', async () => {
+    const { batchId: batchPdf } = await createAndSendBatch(app, adminCookie, fx.associationAId);
+    const pdfRes = await confirmBatchRequest(app, assocACookie, batchPdf, { associationReportFile: PDF_DOC });
+    expect(pdfRes.status).toBe(201);
+
+    const { batchId: batchImg } = await createAndSendBatch(app, adminCookie, fx.associationAId);
+    const imgRes = await confirmBatchRequest(app, assocACookie, batchImg, {
+      associationReportFile: PNG_1X1,
+      associationReportFilename: 'report.png',
+      associationReportContentType: 'image/png',
+    });
+    expect(imgRes.status).toBe(201);
+  });
+
+  it('NODE-4.2: محضر/ختم الجمعية غير الصالح يُرفض (MIME/magic/حجم)', async () => {
+    const { batchId } = await createAndSendBatch(app, adminCookie, fx.associationAId);
+    const res = await confirmBatchRequest(app, assocACookie, batchId, {
+      associationReportFile: JPEG_1X1,
+      associationReportContentType: 'application/pdf',
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('RECEIPT_DOCUMENT_INVALID');
+  });
+
+  it('NODE-4.2: إعادة تشغيل (replay) تأكيد بمحضر/ختم جمعية لا تترك كائنًا مكرَّرًا', async () => {
+    const { batchId } = await createAndSendBatch(app, adminCookie, fx.associationAId);
+    const opId = newOpId('confirm-report-replay');
+    const first = await confirmBatchRequest(app, assocACookie, batchId, { opId, associationReportFile: PDF_DOC });
+    expect(first.status).toBe(201);
+    const afterFirst = await countObjectsWithPrefix('receipt-association-report/');
+
+    const replay = await confirmBatchRequest(app, assocACookie, batchId, { opId, associationReportFile: PDF_DOC });
+    expect(replay.status).toBe(201);
+    const afterReplay = await countObjectsWithPrefix('receipt-association-report/');
+    expect(afterReplay).toBe(afterFirst);
+  });
+
+  it('NODE-4.2: محتوى محضر/ختم الجمعية يشارك في بصمة idempotency — نفس opId بمحتوى مختلف → تعارض', async () => {
+    const { batchId } = await createAndSendBatch(app, adminCookie, fx.associationAId);
+    const opId = newOpId('confirm-report-conflict');
+    const first = await confirmBatchRequest(app, assocACookie, batchId, { opId, associationReportFile: PDF_DOC });
+    expect(first.status).toBe(201);
+
+    const conflict = await confirmBatchRequest(app, assocACookie, batchId, { opId, associationReportFile: undefined });
+    expect(conflict.status).toBe(409);
+    expect(conflict.body.error.code).toBe('APPLICATION_IDEMPOTENCY_CONFLICT');
+  });
+
+  it('NODE-4.2: تفاصيل المحضر النهائية للجمعية تُظهر وجود الإثبات الإداري/محضر الجمعية + ملاحظات الفرق', async () => {
+    const created = await createBatchRequest(app, adminCookie, fx.associationAId, { documentNumber: 'DOC-42', adminProofFile: JPEG_1X1 });
+    expect(created.status).toBe(201);
+    const batchId = created.body.id as string;
+    await http().post(`/api/v1/receipts/${batchId}/send`).set('Cookie', adminCookie).send({ opId: newOpId('send') });
+    const itemsRow = await prisma.receiptItem.findMany({ where: { receiptBatchId: batchId } });
+
+    const confirmRes = await confirmBatchRequest(app, assocACookie, batchId, {
+      items: [{ itemId: itemsRow[0].id, receivedQty: itemsRow[0].sentQty, damagedQty: 0, missingQty: 0, differenceNotes: 'ملاحظة اختبارية للفرق' }],
+      associationReportFile: PDF_DOC,
+    });
+    expect(confirmRes.status).toBe(201);
+
+    const detail = await http().get(`/api/v1/receipts/${batchId}`).set('Cookie', adminCookie);
+    expect(detail.body.documentNumber).toBe('DOC-42');
+    expect(detail.body.hasAdminProof).toBe(true);
+    expect(detail.body.hasAssociationReport).toBe(true);
+    expect(detail.body.items[0].differenceNotes).toBe('ملاحظة اختبارية للفرق');
+  });
+
+  it('NODE-4.2: عزل tenant على أنواع الإثبات الجديدة (إثبات إداري/محضر جمعية)', async () => {
+    const created = await createBatchRequest(app, adminCookie, fx.associationAId, { adminProofFile: JPEG_1X1 });
+    const batchId = created.body.id as string;
+    await http().post(`/api/v1/receipts/${batchId}/send`).set('Cookie', adminCookie).send({ opId: newOpId('send') });
+    await confirmBatchRequest(app, assocACookie, batchId, { associationReportFile: PDF_DOC });
+
+    const adminProofOtherAssoc = await http().get(`/api/v1/receipts/${batchId}/evidence/adminProof`).set('Cookie', assocBCookie);
+    expect(adminProofOtherAssoc.status).toBe(404);
+    const reportOtherAssoc = await http().get(`/api/v1/receipts/${batchId}/evidence/report`).set('Cookie', assocBCookie);
+    expect(reportOtherAssoc.status).toBe(404);
+
+    const adminProofOwner = await http().get(`/api/v1/receipts/${batchId}/evidence/adminProof`).set('Cookie', adminCookie);
+    expect(adminProofOwner.status).toBe(200);
+    const reportOwner = await http().get(`/api/v1/receipts/${batchId}/evidence/report`).set('Cookie', assocACookie);
+    expect(reportOwner.status).toBe(200);
+  });
+
+  it('NODE-4.2: أكثر من صورة تلف مرتبطة ببنود تالفة متعددة — كل بند يُغطَّى بصورته', async () => {
+    const { batchId, itemIds } = await createAndSendBatch(app, adminCookie, fx.associationAId, {
+      items: [
+        { deviceType: DeviceType.REFRIGERATOR, spec: '18 قدم', sentQty: 2 },
+        { deviceType: DeviceType.WASHING_MACHINE, spec: 'أوتوماتيك 7 كجم', sentQty: 2 },
+      ],
+    });
+    const res = await confirmBatchRequest(app, assocACookie, batchId, {
+      items: [
+        { itemId: itemIds[0], receivedQty: 1, damagedQty: 1, missingQty: 0, differenceReason: 'تلف أثناء الشحن' },
+        { itemId: itemIds[1], receivedQty: 1, damagedQty: 1, missingQty: 0, differenceReason: 'تلف أثناء الشحن' },
+      ],
+      damagePhotoLinks: [[itemIds[0]], [itemIds[1]]],
+      damagePhotos: [JPEG_1X1, PNG_1X1],
+    });
+    expect(res.status).toBe(201);
+    const photosItem0 = await prisma.receiptDamagePhoto.findMany({ where: { receiptItemId: itemIds[0] } });
+    const photosItem1 = await prisma.receiptDamagePhoto.findMany({ where: { receiptItemId: itemIds[1] } });
+    expect(photosItem0).toHaveLength(1);
+    expect(photosItem1).toHaveLength(1);
+  });
+
+  it('NODE-4.2: كل بند تالف يجب أن تغطيه صورة — عدم تغطية بند ثانٍ يُرفض حتى مع صورة واحدة صالحة لبند آخر', async () => {
+    const { batchId, itemIds } = await createAndSendBatch(app, adminCookie, fx.associationAId, {
+      items: [
+        { deviceType: DeviceType.REFRIGERATOR, spec: '18 قدم', sentQty: 2 },
+        { deviceType: DeviceType.WASHING_MACHINE, spec: 'أوتوماتيك 7 كجم', sentQty: 2 },
+      ],
+    });
+    const res = await confirmBatchRequest(app, assocACookie, batchId, {
+      items: [
+        { itemId: itemIds[0], receivedQty: 1, damagedQty: 1, missingQty: 0, differenceReason: 'تلف أثناء الشحن' },
+        { itemId: itemIds[1], receivedQty: 1, damagedQty: 1, missingQty: 0, differenceReason: 'تلف أثناء الشحن' },
+      ],
+      damagePhotoLinks: [[itemIds[0]]],
+      damagePhotos: [JPEG_1X1],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('RECEIPT_DAMAGE_PHOTO_ITEM_UNCOVERED');
+  });
+
+  it('NODE-4.2: صورة تلف واحدة يمكن أن تغطي عدة بنود تالفة دفعة واحدة (totalDamaged>1 يقبل صورة واحدة على الأقل)', async () => {
+    const { batchId, itemIds } = await createAndSendBatch(app, adminCookie, fx.associationAId, {
+      items: [
+        { deviceType: DeviceType.REFRIGERATOR, spec: '18 قدم', sentQty: 2 },
+        { deviceType: DeviceType.WASHING_MACHINE, spec: 'أوتوماتيك 7 كجم', sentQty: 2 },
+      ],
+    });
+    const res = await confirmBatchRequest(app, assocACookie, batchId, {
+      items: [
+        { itemId: itemIds[0], receivedQty: 1, damagedQty: 1, missingQty: 0, differenceReason: 'تلف أثناء الشحن' },
+        { itemId: itemIds[1], receivedQty: 1, damagedQty: 1, missingQty: 0, differenceReason: 'تلف أثناء الشحن' },
+      ],
+      damagePhotoLinks: [[itemIds[0], itemIds[1]]],
+      damagePhotos: [JPEG_1X1],
+    });
+    expect(res.status).toBe(201);
+    const photosItem0 = await prisma.receiptDamagePhoto.findMany({ where: { receiptItemId: itemIds[0] } });
+    const photosItem1 = await prisma.receiptDamagePhoto.findMany({ where: { receiptItemId: itemIds[1] } });
+    expect(photosItem0).toHaveLength(1);
+    expect(photosItem1).toHaveLength(1);
   });
 });

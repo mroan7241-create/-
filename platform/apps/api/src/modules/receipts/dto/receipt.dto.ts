@@ -1,33 +1,18 @@
-import { Type } from 'class-transformer';
-import {
-  ArrayMinSize,
-  IsArray,
-  IsIn,
-  IsInt,
-  IsOptional,
-  IsString,
-  IsUUID,
-  Min,
-  ValidateNested,
-} from 'class-validator';
-import { DeviceType, ReceiptBatchStatus } from '@alzad/db';
+import { IsIn, IsOptional, IsString, IsUUID } from 'class-validator';
+import { ReceiptBatchStatus } from '@alzad/db';
 import { PaginationQueryDto } from '../../../common/validation/pagination-query.dto';
 
-const DEVICE_TYPE_VALUES = Object.values(DeviceType);
-
-export class CreateReceiptItemDto {
-  @IsIn(DEVICE_TYPE_VALUES)
-  deviceType!: DeviceType;
-
-  @IsString()
-  spec!: string;
-
-  @IsInt()
-  @Min(1)
-  sentQty!: number;
-}
-
-/** `POST /receipts` — ADMIN فقط؛ إنشاء محضر + بنوده كعملية ذرّية واحدة، الحالة الابتدائية دومًا مسودة. */
+/**
+ * `POST /receipts` — ADMIN فقط؛ إنشاء محضر + بنوده كعملية ذرّية واحدة،
+ * الحالة الابتدائية دومًا مسودة. NODE-4.2: أصبح الـendpoint
+ * multipart-capable (إثبات شراء إداري اختياري عبر حقل `adminProofFile`)
+ * مع بقاء التوافق الخلفي الكامل لطلبات JSON العادية (multer لا يتدخل
+ * إطلاقًا في طلبات غير multipart). لذلك `items` يصل إما مصفوفة حقيقية
+ * (JSON) أو نصًا JSON (multipart) — التحقق الفعلي في `parseCreateItems`
+ * (خارج DTO عمدًا، نفس نمط `items`/`damagePhotoLinks` في
+ * `ConfirmReceiptBatchDto` أدناه)؛ `@IsOptional()` هنا فقط لتفادي حذف
+ * الحقل عبر `whitelist: true` قبل وصوله لِ`parseCreateItems`.
+ */
 export class CreateReceiptBatchDto {
   @IsUUID()
   associationId!: string;
@@ -42,11 +27,13 @@ export class CreateReceiptBatchDto {
   @IsString()
   notes?: string;
 
-  @IsArray()
-  @ArrayMinSize(1)
-  @ValidateNested({ each: true })
-  @Type(() => CreateReceiptItemDto)
-  items!: CreateReceiptItemDto[];
+  /** NODE-4.2 — رقم مستند مرجعي اختياري (لا نظام مشتريات/RFQ/PO). */
+  @IsOptional()
+  @IsString()
+  documentNumber?: string;
+
+  @IsOptional()
+  items?: unknown;
 
   @IsString()
   opId!: string;

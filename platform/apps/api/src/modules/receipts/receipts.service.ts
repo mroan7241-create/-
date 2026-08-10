@@ -19,7 +19,7 @@ import { AuditService } from '../audit/audit.service';
 import { cleanText } from '../../common/validation/text.util';
 import { normalizePagination, toPaginatedResult, type PaginatedResult, type PaginationParams } from '../../common/pagination.util';
 import { validateDeviceSpec, validateDifferenceReason, validateReceiverTitle, validateSupplier } from './receipt-reference.util';
-import { validateReceiptEvidenceFile } from '../files/file-validation.util';
+import { validateReceiptEvidenceFile, validateReceiptDocumentFile } from '../files/file-validation.util';
 import { StorageService } from '../files/storage.service';
 import { storageConfig } from '../../config/storage.config';
 import { ALLOCATION_TRIGGER_PORT, type AllocationTriggerPort } from '../allocation/allocation-trigger.port';
@@ -27,7 +27,16 @@ import type { AuthContext } from '../auth/auth.types';
 
 const NOTES_MAX = 1000;
 const DIFFERENCE_NOTES_MAX = 500;
+const DOCUMENT_NUMBER_MAX = 100;
 const DEVICE_TYPE_VALUES = Object.values(DeviceType);
+
+/**
+ * NODE-4.2 — مفتاح system_settings الوحيد الذي يتحكّم في إلزامية محضر/ختم
+ * الجمعية عند التأكيد. غياب الصف = false (اختياري). فقط `true` boolean
+ * صارم (لا `"true"` نصية ولا `1`) يجعله إلزاميًا — لا UI عام لإدارة
+ * الإعدادات هنا، يُضبَط مباشرة في system_settings.
+ */
+export const RECEIPT_ASSOCIATION_REPORT_REQUIRED_KEY = 'receipt.associationReportRequired';
 
 export interface CreateReceiptItemInput {
   deviceType: DeviceType;
@@ -40,6 +49,7 @@ export interface CreateReceiptBatchInput {
   supplierName: string;
   sentDate: string;
   notes?: string;
+  documentNumber?: string;
   items: CreateReceiptItemInput[];
   opId: string;
 }
@@ -121,11 +131,15 @@ export class ReceiptsService {
 
   // ================================================================
   // CREATE — ADMIN فقط، عملية ذرّية واحدة، الحالة الابتدائية دومًا مسودة.
+  // NODE-4.2: يدعم رقم مستند نصي اختياري + إثبات شراء إداري اختياري
+  // (PDF/صورة، 8 MiB) — يُرفَع خارج معاملة DB (نفس نمط confirmBatch)
+  // وتُنظَّف كائناته best-effort عند أي فشل لاحق أو replay.
   // ================================================================
-  async createBatch(ctx: AuthContext, input: CreateReceiptBatchInput) {
+  async createBatch(ctx: AuthContext, input: CreateReceiptBatchInput, adminProofFile?: UploadedEvidenceFile) {
     const supplierName = await validateSupplier(input.supplierName);
     const sentDate = parseRequiredDate(input.sentDate);
     const notes = input.notes ? cleanText(input.notes, NOTES_MAX) : undefined;
+    const documentNumber = input.documentNumber ? cleanText(input.documentNumber, DOCUMENT_NUMBER_MAX) : undefined;
     if (!input.items?.length) throw new ApiError('RECEIPT_ITEMS_REQUIRED', 'أضف صنفًا واحدًا على الأقل للمحضر', 400);
 
     const items = [] as { deviceType: DeviceType; spec: string; sentQty: number }[];
@@ -138,51 +152,89 @@ export class ReceiptsService {
       items.push({ deviceType: raw.deviceType, spec, sentQty });
     }
 
-    const payload = { associationId: input.associationId, supplierName, sentDate: sentDate.toISOString(), notes, items };
+    const hasProof = !!adminProofFile?.buffer?.length;
+    const validatedProof = hasProof ? validateReceiptDocumentOrThrow(adminProofFile!) : undefined;
 
-    const outcome = await prisma.$transaction(async (tx) => {
-      const claim = await this.idempotency.claim<{ batchId: string }>(tx, ctx.accountId, 'receipt-batch-create', input.opId, payload);
-      if (!claim.claimed) return { replayed: true as const, batchId: claim.existingResponse!.batchId };
+    // بصمة idempotency: محتوى الطلب فقط (sha256 للملف)، بلا مفاتيح كائنات مولَّدة/timestamps.
+    const payload = {
+      associationId: input.associationId,
+      supplierName,
+      sentDate: sentDate.toISOString(),
+      notes,
+      documentNumber: documentNumber ?? null,
+      items,
+      proofSha256: hasProof ? sha256(adminProofFile!.buffer) : null,
+    };
 
-      await assertActiveAssociation(tx, input.associationId);
+    const uploadedKeys: string[] = [];
+    try {
+      const proofKey = hasProof ? await this.uploadEvidence('receipt-admin-proof', validatedProof!, uploadedKeys) : undefined;
 
-      const publicCode = await this.publicCode.nextPublicCode(tx, 'RCB');
-      const batch = await tx.receiptBatch.create({
-        data: {
-          publicCode,
+      const outcome = await prisma.$transaction(async (tx) => {
+        const claim = await this.idempotency.claim<{ batchId: string }>(tx, ctx.accountId, 'receipt-batch-create', input.opId, payload);
+        if (!claim.claimed) return { replayed: true as const, batchId: claim.existingResponse!.batchId };
+
+        await assertActiveAssociation(tx, input.associationId);
+
+        let adminProofFileId: string | undefined;
+        if (hasProof) {
+          const proofFile = await tx.fileObject.create({
+            data: { storageProvider: 'S3', bucket: storageConfig.bucket, objectKey: proofKey!, originalName: 'proof', mimeType: validatedProof!.mime, sizeBytes: BigInt(validatedProof!.buffer.length), category: FileCategory.RECEIPT_ADMIN_PROOF, uploadedById: ctx.accountId },
+          });
+          adminProofFileId = proofFile.id;
+        }
+
+        const publicCode = await this.publicCode.nextPublicCode(tx, 'RCB');
+        const batch = await tx.receiptBatch.create({
+          data: {
+            publicCode,
+            associationId: input.associationId,
+            supplierName,
+            sentAt: sentDate,
+            createdById: ctx.accountId,
+            status: ReceiptBatchStatus.DRAFT,
+            notes: notes ?? null,
+            documentNumber: documentNumber ?? null,
+            adminProofFileId: adminProofFileId ?? null,
+          },
+        });
+
+        // NODE-4.1: حجز نطاق أكواد واحد + createMany بدل استعلامين منفصلين لكل صنف.
+        const itemCodes = await this.publicCode.nextPublicCodes(tx, 'RCI', items.length);
+        await tx.receiptItem.createMany({
+          data: items.map((item, i) => ({
+            publicCode: itemCodes[i],
+            receiptBatchId: batch.id,
+            deviceType: item.deviceType,
+            spec: item.spec,
+            sentQty: item.sentQty,
+          })),
+        });
+
+        await this.idempotency.complete(tx, ctx.accountId, 'receipt-batch-create', input.opId, { batchId: batch.id });
+        return { replayed: false as const, batchId: batch.id };
+      });
+
+      if (outcome.replayed) {
+        // نفس مبدأ NODE-4.1 لـconfirmBatch: كائن هذه المحاولة (المكرَّرة) رُفع فعليًا قبل ادّعاء idempotency لكنه غير مُستخدَم إطلاقًا — يُحذَف فورًا حتى لا يبقى يتيمًا.
+        await Promise.all(uploadedKeys.map((key) => this.storage.deleteObjectBestEffort(key)));
+      }
+
+      if (!outcome.replayed) {
+        await this.audit.log({ id: ctx.accountId, role: ctx.role, associationId: ctx.associationId }, 'RECEIPT_BATCH_CREATED', 'receipt_batches', outcome.batchId, {
           associationId: input.associationId,
-          supplierName,
-          sentAt: sentDate,
-          createdById: ctx.accountId,
-          status: ReceiptBatchStatus.DRAFT,
-          notes: notes ?? null,
-        },
-      });
+          itemCount: items.length,
+          hasDocumentNumber: !!documentNumber,
+          hasAdminProof: hasProof,
+        });
+      }
 
-      // NODE-4.1: حجز نطاق أكواد واحد + createMany بدل استعلامين منفصلين لكل صنف.
-      const itemCodes = await this.publicCode.nextPublicCodes(tx, 'RCI', items.length);
-      await tx.receiptItem.createMany({
-        data: items.map((item, i) => ({
-          publicCode: itemCodes[i],
-          receiptBatchId: batch.id,
-          deviceType: item.deviceType,
-          spec: item.spec,
-          sentQty: item.sentQty,
-        })),
-      });
-
-      await this.idempotency.complete(tx, ctx.accountId, 'receipt-batch-create', input.opId, { batchId: batch.id });
-      return { replayed: false as const, batchId: batch.id };
-    });
-
-    if (!outcome.replayed) {
-      await this.audit.log({ id: ctx.accountId, role: ctx.role, associationId: ctx.associationId }, 'RECEIPT_BATCH_CREATED', 'receipt_batches', outcome.batchId, {
-        associationId: input.associationId,
-        itemCount: items.length,
-      });
+      return { ok: true as const, id: outcome.batchId };
+    } catch (error) {
+      // فشل بعد رفع ناجح (إثبات الشراء الإداري) — حذف best-effort تجنبًا لكائن يتيم.
+      await Promise.all(uploadedKeys.map((key) => this.storage.deleteObjectBestEffort(key)));
+      throw error;
     }
-
-    return { ok: true as const, id: outcome.batchId };
   }
 
   // ================================================================
@@ -222,6 +274,7 @@ export class ReceiptsService {
     quantityPhoto: UploadedEvidenceFile,
     signatureImage: UploadedEvidenceFile,
     damagePhotos: UploadedEvidenceFile[],
+    associationReportFile?: UploadedEvidenceFile,
   ) {
     if (ctx.role !== AccountRole.ASSOCIATION || !ctx.associationId) throw authForbidden();
 
@@ -329,9 +382,16 @@ export class ReceiptsService {
     if (!quantityPhoto?.buffer?.length) throw new ApiError('RECEIPT_EVIDENCE_REQUIRED', 'صورة الكمية المستلمة كاملة عن المحضر إلزامية قبل التأكيد', 400);
     if (!signatureImage?.buffer?.length) throw new ApiError('RECEIPT_EVIDENCE_REQUIRED', 'توقيع المستلم (صورة) إلزامي قبل التأكيد', 400);
 
+    // -------- محضر/ختم الجمعية: اختياري افتراضيًا، إلزامه يُضبَط عبر system_settings فقط (NODE-4.2) --------
+    const hasReport = !!associationReportFile?.buffer?.length;
+    if (!hasReport && (await this.isAssociationReportRequired())) {
+      throw new ApiError('RECEIPT_ASSOCIATION_REPORT_REQUIRED', 'محضر/ختم الجمعية إلزامي حسب إعدادات النظام الحالية', 400);
+    }
+
     const validatedQuantity = validateEvidenceOrThrow(quantityPhoto);
     const validatedSignature = validateEvidenceOrThrow(signatureImage);
     const validatedDamagePhotos = damagePhotos.map(validateEvidenceOrThrow);
+    const validatedReport = hasReport ? validateReceiptDocumentOrThrow(associationReportFile!) : undefined;
 
     // -------- بصمة idempotency: محتوى الطلب فقط (sha256 للملفات)، بلا timestamps ولا مفاتيح كائنات مولَّدة --------
     const idempotencyPayload = {
@@ -342,6 +402,7 @@ export class ReceiptsService {
       quantityPhotoSha256: sha256(quantityPhoto.buffer),
       signatureSha256: sha256(signatureImage.buffer),
       damagePhotoSha256: damagePhotos.map((f) => sha256(f.buffer)),
+      reportSha256: hasReport ? sha256(associationReportFile!.buffer) : null,
     };
 
     // -------- رفع الصور خارج معاملة DB (Object Storage ليست جزءًا من transaction) --------
@@ -353,6 +414,7 @@ export class ReceiptsService {
       for (const evidence of validatedDamagePhotos) {
         damageKeys.push(await this.uploadEvidence('receipt-damage', evidence, uploadedKeys));
       }
+      const reportKey = hasReport ? await this.uploadEvidence('receipt-association-report', validatedReport!, uploadedKeys) : undefined;
 
       const outcome = await prisma.$transaction(async (tx) => {
         const claim = await this.idempotency.claim<{ batchId: string; status: string; deviceUnitsCreated: number }>(
@@ -390,6 +452,13 @@ export class ReceiptsService {
           });
           damageFileRows.push(row);
         }
+        let associationReportFileId: string | undefined;
+        if (hasReport) {
+          const reportFile = await tx.fileObject.create({
+            data: { storageProvider: 'S3', bucket: storageConfig.bucket, objectKey: reportKey!, originalName: 'association-report', mimeType: validatedReport!.mime, sizeBytes: BigInt(validatedReport!.buffer.length), category: FileCategory.RECEIPT_ASSOCIATION_REPORT, uploadedById: ctx.accountId },
+          });
+          associationReportFileId = reportFile.id;
+        }
 
         for (const plan of itemPlans) {
           await tx.receiptItem.update({
@@ -423,6 +492,7 @@ export class ReceiptsService {
             confirmedById: ctx.accountId,
             quantityPhotoFileId: quantityFile.id,
             signatureFileId: signatureFile.id,
+            associationReportFileId: associationReportFileId ?? null,
           },
         });
 
@@ -499,11 +569,25 @@ export class ReceiptsService {
     return objectKey;
   }
 
+  /** NODE-4.2 — فقط `true` boolean صارم من system_settings يجعل محضر/ختم الجمعية إلزاميًا؛ غياب الصف أو أي قيمة أخرى = اختياري. */
+  private async isAssociationReportRequired(): Promise<boolean> {
+    const row = await prisma.systemSetting.findUnique({ where: { key: RECEIPT_ASSOCIATION_REPORT_REQUIRED_KEY } });
+    return row?.value === true;
+  }
+
   // ================================================================
   // إثباتات محضر الاستلام — رابط موقَّع قصير العمر، بنفس نطاق tenant أعلاه.
   // ================================================================
-  async getEvidenceSignedUrl(ctx: AuthContext, batchId: string, evidenceType: 'quantity' | 'signature' | 'damage', damagePhotoId?: string): Promise<{ url: string }> {
-    const batch = await prisma.receiptBatch.findUnique({ where: { id: batchId }, include: { quantityPhotoFile: true, signatureFile: true } });
+  async getEvidenceSignedUrl(
+    ctx: AuthContext,
+    batchId: string,
+    evidenceType: 'quantity' | 'signature' | 'damage' | 'adminProof' | 'report',
+    damagePhotoId?: string,
+  ): Promise<{ url: string }> {
+    const batch = await prisma.receiptBatch.findUnique({
+      where: { id: batchId },
+      include: { quantityPhotoFile: true, signatureFile: true, adminProofFile: true, associationReportFile: true },
+    });
     if (!batch) throw new ApiError('RECEIPT_BATCH_NOT_FOUND', 'محضر الاستلام غير موجود', 404);
     assertTenantAccess(ctx, batch.associationId);
 
@@ -515,6 +599,12 @@ export class ReceiptsService {
     } else if (evidenceType === 'signature') {
       objectKey = batch.signatureFile?.objectKey;
       category = FileCategory.RECEIPT_SIGNATURE_PHOTO;
+    } else if (evidenceType === 'adminProof') {
+      objectKey = batch.adminProofFile?.objectKey;
+      category = FileCategory.RECEIPT_ADMIN_PROOF;
+    } else if (evidenceType === 'report') {
+      objectKey = batch.associationReportFile?.objectKey;
+      category = FileCategory.RECEIPT_ASSOCIATION_REPORT;
     } else {
       if (!damagePhotoId) throw new ApiError('RECEIPT_EVIDENCE_NOT_FOUND', 'معرّف صورة التلف مطلوب', 400);
       const link = await prisma.receiptDamagePhoto.findUnique({ where: { id: damagePhotoId }, include: { file: true, receiptItem: true } });
@@ -539,6 +629,18 @@ function validateEvidenceOrThrow(file: UploadedEvidenceFile): { buffer: Buffer; 
   }
   const mime = result.detectedMimeType!;
   const ext = mime === 'image/jpeg' ? 'jpg' : mime === 'image/png' ? 'png' : 'webp';
+  return { buffer: file.buffer, mime, ext };
+}
+
+/** NODE-4.2 — إثبات شراء إداري (create) / محضر-ختم الجمعية (confirm): PDF أو صورة، 8 MiB. */
+function validateReceiptDocumentOrThrow(file: UploadedEvidenceFile): { buffer: Buffer; mime: string; ext: string } {
+  const result = validateReceiptDocumentFile(file.buffer, file.declaredMimeType);
+  if (!result.valid) {
+    if (result.reason === 'TOO_LARGE') throw new ApiError('RECEIPT_DOCUMENT_TOO_LARGE', 'حجم الملف يتجاوز 8 ميجابايت', 400);
+    throw new ApiError('RECEIPT_DOCUMENT_INVALID', 'أرفق ملفًا بصيغة PDF أو JPG أو PNG أو WEBP', 400);
+  }
+  const mime = result.detectedMimeType!;
+  const ext = mime === 'application/pdf' ? 'pdf' : mime === 'image/jpeg' ? 'jpg' : mime === 'image/png' ? 'png' : 'webp';
   return { buffer: file.buffer, mime, ext };
 }
 
@@ -643,11 +745,14 @@ function mapBatchDetail(row: {
   sentAt: Date | null;
   status: string;
   notes: string | null;
+  documentNumber: string | null;
   receiverName: string | null;
   receiverTitle: string | null;
   confirmedAt: Date | null;
   quantityPhotoFileId: string | null;
   signatureFileId: string | null;
+  adminProofFileId: string | null;
+  associationReportFileId: string | null;
   createdAt: Date;
   updatedAt: Date;
   items: {
@@ -672,11 +777,14 @@ function mapBatchDetail(row: {
     sentDate: row.sentAt,
     status: row.status,
     notes: row.notes,
+    documentNumber: row.documentNumber,
     receiverName: row.receiverName,
     receiverTitle: row.receiverTitle,
     confirmedAt: row.confirmedAt,
     hasQuantityPhoto: !!row.quantityPhotoFileId,
     hasSignature: !!row.signatureFileId,
+    hasAdminProof: !!row.adminProofFileId,
+    hasAssociationReport: !!row.associationReportFileId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     items: row.items.map((item) => ({

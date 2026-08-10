@@ -5,16 +5,24 @@ import { AccountRole } from '@alzad/db';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthContext } from '../auth/auth.types';
-import { RECEIPT_EVIDENCE_MAX_BYTES } from '../files/file-validation.util';
+import { RECEIPT_DOCUMENT_MAX_BYTES } from '../files/file-validation.util';
 import { ReceiptsService } from './receipts.service';
 import { ConfirmReceiptBatchDto, CreateReceiptBatchDto, ListReceiptBatchesQueryDto, ReceiptEvidenceQueryDto, SendReceiptBatchDto } from './dto/receipt.dto';
-import { parseConfirmItems, parseDamagePhotoLinks } from './confirm-multipart.util';
+import { parseConfirmItems, parseCreateItems, parseDamagePhotoLinks } from './confirm-multipart.util';
+
+interface CreateFiles {
+  adminProofFile?: Express.Multer.File[];
+}
 
 interface ConfirmFiles {
   quantityPhoto?: Express.Multer.File[];
   signatureImage?: Express.Multer.File[];
   damagePhotos?: Express.Multer.File[];
+  associationReportFile?: Express.Multer.File[];
 }
+
+const EVIDENCE_TYPES = ['quantity', 'signature', 'damage', 'adminProof', 'report'] as const;
+type EvidenceType = (typeof EVIDENCE_TYPES)[number];
 
 /**
  * محاضر استلام دفعات الأجهزة — NODE-4.
@@ -43,9 +51,21 @@ export class ReceiptsController {
 
   @Post()
   @Roles(AccountRole.ADMIN)
-  @ApiOperation({ summary: 'إنشاء محضر استلام + بنوده — ADMIN فقط، عملية ذرّية واحدة، الحالة الابتدائية دومًا مسودة' })
-  async create(@CurrentUser() ctx: AuthContext, @Body() dto: CreateReceiptBatchDto) {
-    return this.receipts.createBatch(ctx, dto);
+  @UseInterceptors(
+    FileFieldsInterceptor([{ name: 'adminProofFile', maxCount: 1 }], { limits: { fileSize: RECEIPT_DOCUMENT_MAX_BYTES + 1024 } }),
+  )
+  @ApiOperation({
+    summary:
+      'إنشاء محضر استلام + بنوده — ADMIN فقط، عملية ذرّية واحدة، الحالة الابتدائية دومًا مسودة. multipart-capable (إثبات شراء إداري اختياري)؛ يقبل أيضًا JSON عادي بلا ملف (توافق خلفي كامل).',
+  })
+  async create(@CurrentUser() ctx: AuthContext, @Body() dto: CreateReceiptBatchDto, @UploadedFiles() files?: CreateFiles) {
+    const items = parseCreateItems(dto.items);
+    const adminProofFile = files?.adminProofFile?.[0];
+    return this.receipts.createBatch(
+      ctx,
+      { associationId: dto.associationId, supplierName: dto.supplierName, sentDate: dto.sentDate, notes: dto.notes, documentNumber: dto.documentNumber, items, opId: dto.opId },
+      adminProofFile ? { buffer: adminProofFile.buffer, declaredMimeType: adminProofFile.mimetype } : undefined,
+    );
   }
 
   @Get(':id')
@@ -70,11 +90,12 @@ export class ReceiptsController {
         { name: 'quantityPhoto', maxCount: 1 },
         { name: 'signatureImage', maxCount: 1 },
         { name: 'damagePhotos', maxCount: 50 },
+        { name: 'associationReportFile', maxCount: 1 },
       ],
-      { limits: { fileSize: RECEIPT_EVIDENCE_MAX_BYTES + 1024 } },
+      { limits: { fileSize: RECEIPT_DOCUMENT_MAX_BYTES + 1024 } },
     ),
   )
-  @ApiOperation({ summary: 'تأكيد استلام محضر — ASSOCIATION فقط ولجمعيتها حصرًا، multipart/form-data' })
+  @ApiOperation({ summary: 'تأكيد استلام محضر — ASSOCIATION فقط ولجمعيتها حصرًا، multipart/form-data؛ محضر/ختم الجمعية اختياري (إلزامه عبر system_settings)' })
   async confirm(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ConfirmReceiptBatchDto, @UploadedFiles() files: ConfirmFiles) {
     const items = parseConfirmItems(dto.items);
     const damagePhotoItemLinks = parseDamagePhotoLinks(dto.damagePhotoLinks);
@@ -82,6 +103,7 @@ export class ReceiptsController {
     const quantityPhoto = files?.quantityPhoto?.[0];
     const signatureImage = files?.signatureImage?.[0];
     const damagePhotos = files?.damagePhotos ?? [];
+    const associationReportFile = files?.associationReportFile?.[0];
 
     return this.receipts.confirmBatch(
       ctx,
@@ -90,21 +112,22 @@ export class ReceiptsController {
       { buffer: quantityPhoto?.buffer ?? Buffer.alloc(0), declaredMimeType: quantityPhoto?.mimetype },
       { buffer: signatureImage?.buffer ?? Buffer.alloc(0), declaredMimeType: signatureImage?.mimetype },
       damagePhotos.map((f) => ({ buffer: f.buffer, declaredMimeType: f.mimetype })),
+      associationReportFile ? { buffer: associationReportFile.buffer, declaredMimeType: associationReportFile.mimetype } : undefined,
     );
   }
 
   @Get(':id/evidence/:evidenceType')
   @Roles(AccountRole.ADMIN, AccountRole.ASSOCIATION)
-  @ApiOperation({ summary: 'رابط موقَّع قصير العمر لإثبات محضر (كمية/توقيع/تلف) — بنفس عزل tenant، audit عند كل عرض' })
+  @ApiOperation({ summary: 'رابط موقَّع قصير العمر لإثبات محضر (كمية/توقيع/تلف/إثبات إداري/محضر جمعية) — بنفس عزل tenant، audit عند كل عرض' })
   async evidence(
     @CurrentUser() ctx: AuthContext,
     @Param('id', ParseUUIDPipe) id: string,
     @Param('evidenceType') evidenceType: string,
     @Query() query: ReceiptEvidenceQueryDto,
   ) {
-    if (evidenceType !== 'quantity' && evidenceType !== 'signature' && evidenceType !== 'damage') {
+    if (!EVIDENCE_TYPES.includes(evidenceType as EvidenceType)) {
       throw new BadRequestException('نوع إثبات غير معروف');
     }
-    return this.receipts.getEvidenceSignedUrl(ctx, id, evidenceType, query.damagePhotoId);
+    return this.receipts.getEvidenceSignedUrl(ctx, id, evidenceType as EvidenceType, query.damagePhotoId);
   }
 }

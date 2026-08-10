@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { isUUID } from 'class-validator';
-import type { ConfirmItemInput } from './receipts.service';
+import type { DeviceType } from '@alzad/db';
+import type { ConfirmItemInput, CreateReceiptItemInput } from './receipts.service';
 
 /**
  * NODE-4.1 — `JSON.parse` وحدها كانت تضمن فقط "نص JSON صالح"، لا شكل
@@ -71,5 +72,43 @@ export function parseDamagePhotoLinks(raw: string | undefined): string[][] {
       }
       return itemId;
     });
+  });
+}
+
+/**
+ * NODE-4.2 — `POST /receipts` أصبح multipart-capable (إثبات شراء إداري
+ * اختياري)، فـ`items` يصل إما كمصفوفة حقيقية (طلب JSON عادي، التوافق
+ * الخلفي الكامل لعملاء NODE-4/4.1 القائمين) أو كنص JSON (multipart، نفس
+ * مبدأ `parseConfirmItems` أعلاه). التحقق هنا شكلي فقط (نوع الحقول) —
+ * التحقق الحقيقي (عضوية enum، تبعية المواصفة لنوع الجهاز، موجب صحيح)
+ * يبقى داخل `ReceiptsService.createBatch` كما كان.
+ */
+export function parseCreateItems(raw: unknown): CreateReceiptItemInput[] {
+  let parsed: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new BadRequestException('صيغة بيانات أصناف المحضر غير صالحة');
+    }
+  }
+  if (!Array.isArray(parsed)) {
+    throw new BadRequestException('أصناف المحضر يجب أن تكون مصفوفة، وصنف واحد على الأقل');
+  }
+  return parsed.map((entry, index) => {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw new BadRequestException(`الصنف رقم ${index + 1} غير صالح`);
+    }
+    const record = entry as Record<string, unknown>;
+    if (typeof record.deviceType !== 'string') {
+      throw new BadRequestException(`نوع الجهاز للصنف رقم ${index + 1} غير صالح`);
+    }
+    if (typeof record.spec !== 'string') {
+      throw new BadRequestException(`المواصفة للصنف رقم ${index + 1} غير صالحة`);
+    }
+    if (typeof record.sentQty !== 'number') {
+      throw new BadRequestException(`الكمية المرسلة للصنف رقم ${index + 1} يجب أن تكون رقمًا`);
+    }
+    return { deviceType: record.deviceType as DeviceType, spec: record.spec, sentQty: record.sentQty };
   });
 }

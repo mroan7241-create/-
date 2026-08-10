@@ -47,6 +47,8 @@ export default function AdminReceiptsPage() {
   const [supplierName, setSupplierName] = useState('');
   const [sentDate, setSentDate] = useState('');
   const [notes, setNotes] = useState('');
+  const [documentNumber, setDocumentNumber] = useState('');
+  const [adminProofFile, setAdminProofFile] = useState<File | null>(null);
   const [items, setItems] = useState<DraftItem[]>([{ deviceType: 'REFRIGERATOR', spec: '', sentQty: 1 }]);
   const [saving, setSaving] = useState(false);
 
@@ -79,13 +81,23 @@ export default function AdminReceiptsPage() {
     setError('');
     setSaving(true);
     try {
-      const res = await createReceiptBatch({ associationId, supplierName, sentDate, notes: notes || undefined, items });
+      const res = await createReceiptBatch({
+        associationId,
+        supplierName,
+        sentDate,
+        notes: notes || undefined,
+        documentNumber: documentNumber || undefined,
+        items,
+        adminProofFile: adminProofFile ?? undefined,
+      });
       setNotice(`أُنشئ المحضر ${res.id} بنجاح — أرسله للجمعية عند الجاهزية`);
       setShowCreate(false);
       setAssociationId('');
       setSupplierName('');
       setSentDate('');
       setNotes('');
+      setDocumentNumber('');
+      setAdminProofFile(null);
       setItems([{ deviceType: 'REFRIGERATOR', spec: '', sentQty: 1 }]);
       setPage(1);
       await refresh();
@@ -168,6 +180,14 @@ export default function AdminReceiptsPage() {
           <label style={labelStyle}>
             ملاحظات (اختياري)
             <textarea style={{ ...inputStyle, minHeight: 60 }} value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </label>
+          <label style={labelStyle}>
+            رقم المستند (اختياري)
+            <input style={inputStyle} value={documentNumber} onChange={(e) => setDocumentNumber(e.target.value)} />
+          </label>
+          <label style={labelStyle}>
+            إثبات شراء إداري — PDF أو صورة، حتى 8 ميجابايت (اختياري)
+            <input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(e) => setAdminProofFile(e.target.files?.[0] ?? null)} />
           </label>
 
           <div>
@@ -262,7 +282,7 @@ export default function AdminReceiptsPage() {
 function ReceiptDetailPanel({ detail, loading, error, batchId }: { detail: ReceiptBatchDetail | null; loading: boolean; error: string; batchId: string }) {
   const [evidenceError, setEvidenceError] = useState('');
 
-  async function viewEvidence(type: 'quantity' | 'signature' | 'damage', damagePhotoId?: string) {
+  async function viewEvidence(type: 'quantity' | 'signature' | 'damage' | 'adminProof' | 'report', damagePhotoId?: string) {
     setEvidenceError('');
     try {
       const res = await getReceiptEvidenceUrl(batchId, type, damagePhotoId);
@@ -282,10 +302,11 @@ function ReceiptDetailPanel({ detail, loading, error, batchId }: { detail: Recei
         <span>المستلم: {detail.receiverName ?? '—'}</span>
         <span>الصفة: {detail.receiverTitle ?? '—'}</span>
         <span>تاريخ التأكيد: {detail.confirmedAt ? new Date(detail.confirmedAt).toLocaleString('ar-SA') : '—'}</span>
+        <span>رقم المستند: {detail.documentNumber ?? '—'}</span>
         {detail.notes && <span>ملاحظات: {detail.notes}</span>}
       </div>
       {evidenceError && <p style={errorStyle}>{evidenceError}</p>}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
         {detail.hasQuantityPhoto && (
           <button style={secondaryButtonStyle} onClick={() => viewEvidence('quantity')}>
             عرض صورة الكمية
@@ -294,6 +315,16 @@ function ReceiptDetailPanel({ detail, loading, error, batchId }: { detail: Recei
         {detail.hasSignature && (
           <button style={secondaryButtonStyle} onClick={() => viewEvidence('signature')}>
             عرض توقيع المستلم
+          </button>
+        )}
+        {detail.hasAdminProof && (
+          <button style={secondaryButtonStyle} onClick={() => viewEvidence('adminProof')}>
+            عرض إثبات الشراء الإداري
+          </button>
+        )}
+        {detail.hasAssociationReport && (
+          <button style={secondaryButtonStyle} onClick={() => viewEvidence('report')}>
+            عرض محضر/ختم الجمعية
           </button>
         )}
       </div>
@@ -307,6 +338,7 @@ function ReceiptDetailPanel({ detail, loading, error, batchId }: { detail: Recei
             <th style={thStyle}>تالف</th>
             <th style={thStyle}>ناقص</th>
             <th style={thStyle}>سبب الفرق</th>
+            <th style={thStyle}>ملاحظات الفرق</th>
             <th style={thStyle}>صور التلف</th>
           </tr>
         </thead>
@@ -320,6 +352,7 @@ function ReceiptDetailPanel({ detail, loading, error, batchId }: { detail: Recei
               <td style={tdStyle}>{it.damagedQty}</td>
               <td style={tdStyle}>{it.missingQty}</td>
               <td style={tdStyle}>{it.differenceReason || '—'}</td>
+              <td style={tdStyle}>{it.differenceNotes || '—'}</td>
               <td style={tdStyle}>
                 {it.damagePhotos.map((p, i) => (
                   <button key={p.id} style={secondaryButtonStyle} onClick={() => viewEvidence('damage', p.id)}>

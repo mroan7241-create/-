@@ -313,8 +313,11 @@ export interface ReceiptBatchListItem extends ReceiptBatchCore {
   itemCount: number;
 }
 
-/** تفاصيل كاملة — بنود+كميات+صور تلف، تُجلَب فقط عند فتح محضر واحد (`GET /receipts/:id`). */
+/** تفاصيل كاملة — بنود+كميات+صور تلف، تُجلَب فقط عند فتح محضر واحد (`GET /receipts/:id`). NODE-4.2: رقم مستند + إثبات إداري + محضر/ختم الجمعية. */
 export interface ReceiptBatchDetail extends ReceiptBatchCore {
+  documentNumber: string | null;
+  hasAdminProof: boolean;
+  hasAssociationReport: boolean;
   items: ReceiptItemSummary[];
 }
 
@@ -337,8 +340,29 @@ export interface CreateReceiptItemInput {
   sentQty: number;
 }
 
-export function createReceiptBatch(input: { associationId: string; supplierName: string; sentDate: string; notes?: string; items: CreateReceiptItemInput[] }): Promise<{ ok: true; id: string }> {
-  return apiFetch('/receipts', { method: 'POST', body: JSON.stringify({ ...input, opId: newOpId() }) });
+export interface CreateReceiptBatchInput {
+  associationId: string;
+  supplierName: string;
+  sentDate: string;
+  notes?: string;
+  /** NODE-4.2 — رقم مستند مرجعي اختياري. */
+  documentNumber?: string;
+  items: CreateReceiptItemInput[];
+  /** NODE-4.2 — إثبات شراء إداري اختياري (PDF/JPEG/PNG/WEBP، 8 MiB). */
+  adminProofFile?: File;
+}
+
+export function createReceiptBatch(input: CreateReceiptBatchInput): Promise<{ ok: true; id: string }> {
+  const form = new FormData();
+  form.set('associationId', input.associationId);
+  form.set('supplierName', input.supplierName);
+  form.set('sentDate', input.sentDate);
+  if (input.notes) form.set('notes', input.notes);
+  if (input.documentNumber) form.set('documentNumber', input.documentNumber);
+  form.set('items', JSON.stringify(input.items));
+  form.set('opId', newOpId());
+  if (input.adminProofFile) form.set('adminProofFile', input.adminProofFile);
+  return apiUpload(`/receipts`, form);
 }
 
 export function sendReceiptBatch(id: string): Promise<{ ok: true }> {
@@ -361,6 +385,8 @@ export interface ConfirmReceiptBatchInput {
   quantityPhoto: File;
   signatureImage: File;
   damagePhotos: File[];
+  /** NODE-4.2 — محضر/ختم الجمعية اختياري افتراضيًا (PDF/JPEG/PNG/WEBP، 8 MiB) — إلزامه عبر system_settings. */
+  associationReportFile?: File;
 }
 
 export function confirmReceiptBatch(id: string, input: ConfirmReceiptBatchInput): Promise<{ ok: true; id: string; status: ReceiptBatchStatus }> {
@@ -372,10 +398,11 @@ export function confirmReceiptBatch(id: string, input: ConfirmReceiptBatchInput)
   form.set('quantityPhoto', input.quantityPhoto);
   form.set('signatureImage', input.signatureImage);
   for (const photo of input.damagePhotos) form.append('damagePhotos', photo);
+  if (input.associationReportFile) form.set('associationReportFile', input.associationReportFile);
   return apiUpload(`/receipts/${id}/confirm`, form);
 }
 
-export function getReceiptEvidenceUrl(batchId: string, evidenceType: 'quantity' | 'signature' | 'damage', damagePhotoId?: string): Promise<{ url: string }> {
+export function getReceiptEvidenceUrl(batchId: string, evidenceType: 'quantity' | 'signature' | 'damage' | 'adminProof' | 'report', damagePhotoId?: string): Promise<{ url: string }> {
   const q = damagePhotoId ? `?damagePhotoId=${encodeURIComponent(damagePhotoId)}` : '';
   return apiFetch(`/receipts/${batchId}/evidence/${evidenceType}${q}`);
 }

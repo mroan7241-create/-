@@ -59,6 +59,41 @@ export function validateReceiptEvidenceFile(buffer: Buffer, declaredMimeType: st
   return validateImageFile(buffer, declaredMimeType, RECEIPT_EVIDENCE_MAX_BYTES);
 }
 
+/**
+ * NODE-4.2 — مُدقِّق مستندات محضر الاستلام (إثبات شراء إداري عند الإنشاء
+ * + محضر/ختم الجمعية عند التأكيد): صورة (JPEG/PNG/WEBP) **أو** PDF عبر
+ * magic bytes فعليًا (`%PDF-`)، 8 MiB كحد أقصى — نفس سياسة ترخيص الجمعية
+ * المركزية بالضبط، زائدًا PDF. لا صيغ تنفيذية/مكتبية/مضغوطة إطلاقًا.
+ */
+export const RECEIPT_DOCUMENT_MAX_BYTES = 8 * 1024 * 1024; // 8 MiB
+export type DetectedReceiptDocumentType = DetectedImageType | 'application/pdf';
+const RECEIPT_DOCUMENT_ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] as const;
+
+function detectPdfMimeFromBytes(buffer: Buffer): 'application/pdf' | null {
+  return buffer.length >= 5 && buffer.toString('ascii', 0, 5) === '%PDF-' ? 'application/pdf' : null;
+}
+
+export interface ReceiptDocumentValidationResult {
+  valid: boolean;
+  reason?: 'TOO_LARGE' | 'INVALID_TYPE';
+  detectedMimeType?: DetectedReceiptDocumentType;
+}
+
+/** جوهر التحقق: الحجم أولًا، ثم magic bytes (صورة أو PDF)، ثم مطابقة MIME المُعلَن (إن وُجد) لما اكتُشف فعليًا — لا قبول صامت لِMIME خارج القائمة أو غير مطابق. */
+export function validateReceiptDocumentFile(buffer: Buffer, declaredMimeType: string | undefined): ReceiptDocumentValidationResult {
+  if (buffer.length > RECEIPT_DOCUMENT_MAX_BYTES) {
+    return { valid: false, reason: 'TOO_LARGE' };
+  }
+  const detected = detectImageMimeFromBytes(buffer) ?? detectPdfMimeFromBytes(buffer);
+  if (!detected) {
+    return { valid: false, reason: 'INVALID_TYPE' };
+  }
+  if (declaredMimeType && (!RECEIPT_DOCUMENT_ALLOWED_MIME_TYPES.includes(declaredMimeType as DetectedReceiptDocumentType) || declaredMimeType !== detected)) {
+    return { valid: false, reason: 'INVALID_TYPE' };
+  }
+  return { valid: true, detectedMimeType: detected };
+}
+
 /** جوهر التحقق المشترك: الحجم أولًا (رفض مبكر بلا فحص محتوى)، ثم magic bytes، ثم مطابقة MIME المُعلَن (إن وُجد) لما اكتُشف فعليًا. */
 function validateImageFile(buffer: Buffer, declaredMimeType: string | undefined, maxBytes: number): LicenseFileValidationResult {
   if (buffer.length > maxBytes) {

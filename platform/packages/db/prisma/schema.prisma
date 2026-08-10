@@ -175,6 +175,10 @@ enum FileCategory {
   DELIVERY_PROOF_PHOTO
   DELIVERY_RECIPIENT_SIGNATURE
   ACTIVITY_EVIDENCE
+  /// NODE-4.2: إثبات/مستند شراء من طرف الإدارة عند إنشاء محضر الاستلام — PDF أو صورة، اختياري دومًا.
+  RECEIPT_ADMIN_PROOF
+  /// NODE-4.2: محضر/ختم الجمعية عند تأكيد الاستلام — PDF أو صورة، اختياري افتراضيًا (إلزامه عبر system_settings).
+  RECEIPT_ASSOCIATION_REPORT
 }
 
 enum DeviceAllocationStatus {
@@ -550,6 +554,8 @@ model FileObject {
   associationApplications AssociationApplication[]
   receiptBatchQuantityPhoto ReceiptBatch[] @relation("ReceiptBatchQuantityPhoto")
   receiptBatchSignaturePhoto ReceiptBatch[] @relation("ReceiptBatchSignaturePhoto")
+  receiptBatchAdminProof ReceiptBatch[] @relation("ReceiptBatchAdminProof")
+  receiptBatchAssociationReport ReceiptBatch[] @relation("ReceiptBatchAssociationReport")
   receiptDamagePhotos ReceiptDamagePhoto[]
   deliveryAttemptProof DeliveryAttempt[] @relation("AttemptProofFile")
   deliveryAttemptSignature DeliveryAttempt[] @relation("AttemptSignatureFile")
@@ -572,12 +578,18 @@ model ReceiptBatch {
   createdById         String             @map("created_by") @db.Uuid
   status              ReceiptBatchStatus @default(DRAFT)
   notes                String?
+  /// NODE-4.2: رقم مستند مرجعي اختياري (لا نظام مشتريات/RFQ/PO — نص حر فقط).
+  documentNumber       String?           @map("document_number")
 
   receiverName          String?          @map("receiver_name")
   receiverTitle          String?         @map("receiver_title")
 
   quantityPhotoFileId     String?        @map("quantity_photo_file_id") @db.Uuid
   signatureFileId          String?       @map("signature_file_id") @db.Uuid
+  /// NODE-4.2: إثبات/مستند شراء إداري اختياري يُرفَق عند الإنشاء (PDF/صورة).
+  adminProofFileId          String?      @map("admin_proof_file_id") @db.Uuid
+  /// NODE-4.2: محضر/ختم الجمعية اختياري افتراضيًا يُرفَق عند التأكيد (PDF/صورة) — إلزامه عبر system_settings فقط.
+  associationReportFileId    String?     @map("association_report_file_id") @db.Uuid
 
   confirmedAt                DateTime?   @map("confirmed_at")
   /// من يؤكد الاستلام يجب ألا يكون نفس من أنشأ المحضر (نفس قاعدة النظام القديم — تُفرض في خدمة apps/api لاحقًا، لا في القيد البنيوي وحده).
@@ -591,6 +603,8 @@ model ReceiptBatch {
   confirmedBy            Account?        @relation("ReceiptBatchConfirmedBy", fields: [confirmedById], references: [id])
   quantityPhotoFile        FileObject?   @relation("ReceiptBatchQuantityPhoto", fields: [quantityPhotoFileId], references: [id])
   signatureFile              FileObject? @relation("ReceiptBatchSignaturePhoto", fields: [signatureFileId], references: [id])
+  adminProofFile               FileObject? @relation("ReceiptBatchAdminProof", fields: [adminProofFileId], references: [id])
+  associationReportFile          FileObject? @relation("ReceiptBatchAssociationReport", fields: [associationReportFileId], references: [id])
   items                       ReceiptItem[]
 
   @@index([associationId, status])

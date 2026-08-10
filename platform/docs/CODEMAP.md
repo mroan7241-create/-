@@ -1,6 +1,6 @@
 # خريطة الكود (CODEMAP)
 
-مرجع سريع لموقع كل نطاق وظيفي في `platform/`، محدَّث حتى NODE-4.
+مرجع سريع لموقع كل نطاق وظيفي في `platform/`، محدَّث حتى NODE-4.2.
 
 ## Backend — `apps/api/src`
 
@@ -37,7 +37,7 @@
 
 ## Schema — `packages/db/prisma/schema.prisma`
 
-النماذج الخاصة بـNODE-4 (`ReceiptBatch`/`ReceiptItem`/`ReceiptDamagePhoto`/`DeviceUnit`) كانت موجودة بالكامل منذ NODE-0/NODE-0.1 — لم تحتَج أي migration جديدة؛ NODE-4 هو طبقة تطبيق (service/controller) فوق مخطط جاهز مسبقًا.
+النماذج الخاصة بـNODE-4 (`ReceiptBatch`/`ReceiptItem`/`ReceiptDamagePhoto`/`DeviceUnit`) كانت موجودة بالكامل منذ NODE-0/NODE-0.1 — لم تحتَج أي migration جديدة؛ NODE-4 هو طبقة تطبيق (service/controller) فوق مخطط جاهز مسبقًا. **NODE-4.2** أضافت migration واحدة append-only (`20260810120000_node4_2_receipt_document_and_evidence`): `receipt_batches.document_number` + `admin_proof_file_id`/`association_report_file_id` (FK اختياريان إلى `files`)، وقيمتا enum جديدتان على `FileCategory` (`RECEIPT_ADMIN_PROOF`/`RECEIPT_ASSOCIATION_REPORT`). راجع `NODE-4_CONTRACT.md` → قسم NODE-4.2.
 
 ## اختبارات
 

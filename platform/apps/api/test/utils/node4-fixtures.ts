@@ -1,6 +1,7 @@
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import { prisma, DeviceType } from '@alzad/db';
+import { RECEIPT_ASSOCIATION_REPORT_REQUIRED_KEY } from '../../src/modules/receipts/receipts.service';
 import { uniqueSuffix } from './node2-fixtures';
 import { JPEG_1X1, PNG_1X1 } from './node2-fixtures';
 import type { Node3Fixtures } from './node3-fixtures';
@@ -25,7 +26,12 @@ export async function cleanNode4State(fx: Node3Fixtures): Promise<void> {
   }
   await prisma.idempotencyKey.deleteMany({});
   await prisma.auditLog.deleteMany({});
+  // NODE-4.2 — مفتاح إلزامية محضر/ختم الجمعية لا يجب أن يتسرَّب بين الاختبارات.
+  await prisma.systemSetting.deleteMany({ where: { key: RECEIPT_ASSOCIATION_REPORT_REQUIRED_KEY } });
 }
+
+/** NODE-4.2 — نموذج PDF أدنى (magic bytes `%PDF-` فعلية) لاختبار إثبات الشراء الإداري ومحضر/ختم الجمعية. */
+export const PDF_DOC = Buffer.from('%PDF-1.7\n%NODE-4.2 test fixture\n', 'utf8');
 
 export interface CreateBatchOverrides {
   associationId?: string;
@@ -46,6 +52,43 @@ export function createBatchPayload(associationId: string, overrides: CreateBatch
     opId: newOpId('create-batch'),
     ...overrides,
   };
+}
+
+interface CreateBatchWithProofOptions extends CreateBatchOverrides {
+  documentNumber?: string;
+  adminProofFile?: Buffer | null;
+  adminProofFilename?: string;
+  adminProofContentType?: string;
+}
+
+/**
+ * NODE-4.2 — نفس `POST /receipts` لكن عبر multipart/form-data (رقم مستند
+ * + إثبات شراء إداري اختياريان). `createBatchPayload`/`createAndSendBatch`
+ * أعلاه تبقيان JSON بحتًا بلا أي تعديل — endpoint الإنشاء أصبح
+ * multipart-capable لكن يقبل JSON عاديًا أيضًا (توافق خلفي كامل).
+ */
+export function createBatchRequest(
+  app: INestApplication,
+  adminCookie: string,
+  associationId: string,
+  options: CreateBatchWithProofOptions = {},
+) {
+  const payload = createBatchPayload(associationId, options);
+  const req = request(app.getHttpServer()).post('/api/v1/receipts').set('Cookie', adminCookie);
+  req.field('associationId', payload.associationId);
+  req.field('supplierName', payload.supplierName);
+  req.field('sentDate', payload.sentDate);
+  if (payload.notes) req.field('notes', payload.notes);
+  if (options.documentNumber !== undefined) req.field('documentNumber', options.documentNumber);
+  req.field('items', JSON.stringify(payload.items));
+  req.field('opId', payload.opId);
+  if (options.adminProofFile) {
+    req.attach('adminProofFile', options.adminProofFile, {
+      filename: options.adminProofFilename ?? 'proof.pdf',
+      contentType: options.adminProofContentType ?? 'application/pdf',
+    });
+  }
+  return req;
 }
 
 export async function createAndSendBatch(
@@ -79,6 +122,10 @@ interface ConfirmOptions {
   quantityPhoto?: Buffer | null;
   signatureImage?: Buffer | null;
   damagePhotos?: Buffer[];
+  /** NODE-4.2 — محضر/ختم الجمعية (PDF/صورة، اختياري افتراضيًا). */
+  associationReportFile?: Buffer | null;
+  associationReportFilename?: string;
+  associationReportContentType?: string;
 }
 
 export function confirmBatchRequest(app: INestApplication, cookie: string, batchId: string, options: ConfirmOptions = {}) {
@@ -93,6 +140,12 @@ export function confirmBatchRequest(app: INestApplication, cookie: string, batch
   if (signatureImage) req.attach('signatureImage', signatureImage, { filename: 's.png', contentType: 'image/png' });
   for (const photo of options.damagePhotos ?? []) {
     req.attach('damagePhotos', photo, { filename: 'd.jpg', contentType: 'image/jpeg' });
+  }
+  if (options.associationReportFile) {
+    req.attach('associationReportFile', options.associationReportFile, {
+      filename: options.associationReportFilename ?? 'report.pdf',
+      contentType: options.associationReportContentType ?? 'application/pdf',
+    });
   }
   return req;
 }

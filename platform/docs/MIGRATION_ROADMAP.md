@@ -127,6 +127,26 @@ BENEFICIARIES.md §12-§17.
 إنشاء بنود/أجهزة/روابط صور تلف بالجملة. لا migration جديدة، لا
 dependency جديدة. راجع `NODE-4_CONTRACT.md`.
 
+### NODE-4.2 — إغلاق محضر الاستلام ✅ منجزة
+
+رقم مستند نصي اختياري + إثبات شراء إداري اختياري (PDF/صورة، 8 MiB) عند
+الإنشاء (`POST /receipts` أصبح multipart-capable مع توافق خلفي كامل
+لطلبات JSON بلا ملف)، ومحضر/ختم جمعية اختياري افتراضيًا عند التأكيد
+(نفس القيود) — إلزامه يُضبَط حصرًا عبر `system_settings` (المفتاح
+`receipt.associationReportRequired`، فقط `true` boolean صارم يُلزمه).
+مُدقِّق مستندات مخصَّص جديد (`validateReceiptDocumentFile`) يقبل
+JPEG/PNG/WEBP أو PDF بـmagic bytes حقيقية، بلا مساس بمُدقِّق صور
+الإثبات الحالي (6 MiB، صور فقط). بصمتا idempotency (إنشاء/تأكيد) تشملان
+الآن هذين الملفين (sha256 المحتوى، لا مفتاح كائن/timestamp)، مع نفس
+تنظيف compensating best-effort الحالي. واجهة `association/receipts`
+استبدلت اختصار "كل الأصناف التالفة ← أول صورة" بدعم حقيقي لأكثر من صورة
+تلف (اختيار متعدد + ربط كل صورة ببند/بنود محدَّدة + إزالة قبل الإرسال)،
+وأضافت جدول بنود+إثباتات كامل لتفاصيل الاستلام النهائي (لم تكن تُعرَض
+إطلاقًا سابقًا رغم أن الخادم كان يعيدها). لوحة تفاصيل ADMIN أضافت رقم
+المستند/ملاحظات الفرق/زرَّي الإثباتين الجديدين. migration واحدة
+append-only (`20260810120000_node4_2_receipt_document_and_evidence`).
+راجع `NODE-4_CONTRACT.md` → قسم NODE-4.2.
+
 ## NODE-5 — AutoAllocation parity migration
 
 نقل خوارزمية `AutoAllocation.gs` **دون أي تغيير في القواعد المعتمدة**
