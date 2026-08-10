@@ -32,6 +32,59 @@ export interface Coordinates {
 }
 
 /**
+ * ================================================================
+ * NODE-3.3 — تصنيف الزوج `(lat, lng)`: مرجع واحد لا ثانيَ له
+ * ================================================================
+ *
+ * الحالات الصالحة **ثلاث بالضبط**، وما عداها مرفوض:
+ *  - `PRESERVE` — الحقلان غائبان تمامًا (`undefined`) ⇒ لا يُمسّ الموقع.
+ *  - `CLEAR` — الحقلان فارغان صراحةً معًا (`null`) ⇒ مسح كامل.
+ *  - `SET` — الحقلان قيمتان فعليتان معًا.
+ *  - `INVALID` — أي خلط بينها (ستّ صور: غائب مع `null`، غائب مع رقم،
+ *    `null` مع رقم، وعكوسها) ⇒ 400 صريح.
+ *
+ * كان `optionalCoordinate` يطوي `undefined` و`null` في مفهوم «فارغ» واحد،
+ * فيمرّ الزوجان `(null, undefined)` و`(undefined, null)` بوصفهما «كلاهما
+ * فارغ» ⇒ **مسح صامت لموقع مخزَّن** استنادًا إلى طرف واحد فقط من الطلب.
+ * هذه الدالة هي المرجع الوحيد للتصنيف: يستدعيها مسار الكتابة
+ * (`buildLocationWrite`) ومسار بصمة idempotency (`canonicalizeLocationIntent`)
+ * معًا، فيستحيل بناءً أن ينحرف أحدهما عن الآخر.
+ */
+export type LocationPairKind = 'PRESERVE' | 'CLEAR' | 'SET' | 'INVALID';
+
+/** فارغ **صريح**: `null` أو نص فارغ — بخلاف `undefined` الذي يعني «لم يُرسَل». */
+function isExplicitEmpty(value: unknown): boolean {
+  return value === null || value === '';
+}
+
+export function classifyLocationPair(lat: unknown, lng: unknown): LocationPairKind {
+  const latAbsent = lat === undefined;
+  const lngAbsent = lng === undefined;
+  if (latAbsent && lngAbsent) return 'PRESERVE';
+
+  const latEmpty = isExplicitEmpty(lat);
+  const lngEmpty = isExplicitEmpty(lng);
+  if (latEmpty && lngEmpty) return 'CLEAR';
+  if (!latAbsent && !lngAbsent && !latEmpty && !lngEmpty) return 'SET';
+
+  return 'INVALID';
+}
+
+/** خطأ الاقتران الناقص — نفس الرمز والرسالة المعتمدَين في NODE-3.1. */
+function incompleteCoordinates(): ApiError {
+  return new ApiError(
+    'BENEFICIARY_INCOMPLETE_COORDINATES',
+    'أدخل خط العرض وخط الطول معًا، أو اترك الحقلين فارغين معًا',
+    400,
+  );
+}
+
+/** أمر المسح الكامل — لا معنى لمصدر أو تاريخ تحديث بلا موقع. */
+function clearWrite(): LocationWrite {
+  return { latitude: null, longitude: null, locationSource: null, locationUpdatedAt: null };
+}
+
+/**
  * `optionalCoordinate_` حرفيًا:
  *  - كلاهما فارغ ⇒ `null` (لا إحداثيات — وهذا **صالح تمامًا**، الحفظ بلا
  *    موقع مسموح دائمًا).
@@ -39,18 +92,14 @@ export interface Coordinates {
  *  - غير رقمي/NaN/Infinity ⇒ خطأ.
  *  - المدى العالمي القياسي: [-90, 90] و[-180, 180] (لا يُحصَر بمربع
  *    السعودية — توسعة مقصودة في المصدر القديم نفسه).
+ *
+ * NODE-3.3 — قرار «فارغ/ناقص/كامل» صار مفوَّضًا كليًا إلى
+ * `classifyLocationPair`، فلا نسخة ثانية من القاعدة هنا.
  */
 export function optionalCoordinate(lat: unknown, lng: unknown): Coordinates | null {
-  const latEmpty = lat === '' || lat === null || lat === undefined;
-  const lngEmpty = lng === '' || lng === null || lng === undefined;
-  if (latEmpty && lngEmpty) return null;
-  if (latEmpty !== lngEmpty) {
-    throw new ApiError(
-      'BENEFICIARY_INCOMPLETE_COORDINATES',
-      'أدخل خط العرض وخط الطول معًا، أو اترك الحقلين فارغين معًا',
-      400,
-    );
-  }
+  const pair = classifyLocationPair(lat, lng);
+  if (pair === 'INVALID') throw incompleteCoordinates();
+  if (pair !== 'SET') return null;
 
   const latNum = Number(lat);
   const lngNum = Number(lng);
@@ -129,14 +178,15 @@ export function buildLocationWrite(
   existing: { latitude: Prisma.Decimal | null; longitude: Prisma.Decimal | null } | null,
   now: Date,
 ): LocationWrite {
-  if (input.lat === undefined && input.lng === undefined) return {};
+  // NODE-3.3 — نفس تصنيف بصمة idempotency حرفيًا (دالة واحدة مشتركة):
+  // الاقتران الناقص يُرفض **قبل** أي قرار كتابة، فلا يمسّ الموقع المخزَّن.
+  const pair = classifyLocationPair(input.lat, input.lng);
+  if (pair === 'INVALID') throw incompleteCoordinates();
+  if (pair === 'PRESERVE') return {};
+  if (pair === 'CLEAR') return clearWrite();
 
   const coordinates = optionalCoordinate(input.lat, input.lng);
-
-  if (!coordinates) {
-    // مسح صريح — لا معنى لمصدر أو تاريخ تحديث بلا موقع.
-    return { latitude: null, longitude: null, locationSource: null, locationUpdatedAt: null };
-  }
+  if (!coordinates) return clearWrite();
 
   const unchanged =
     !!existing &&
@@ -202,7 +252,12 @@ export function canonicalizeLocationIntent(input: {
   // نفس شرط `buildLocationWrite` حرفيًا — الغياب التام وحده هو "لا تمسّ".
   // لا `?? null` هنا بحال: طيّ `undefined` و`null` في قيمة واحدة هو ما كان
   // يجعل «احفظ الموقع كما هو» و«امسح الموقع» يتقاسمان بصمة واحدة.
-  if (input.lat === undefined && input.lng === undefined) return { intent: 'PRESERVE' };
+  // NODE-3.3 — التصنيف نفسه المستعمَل في `buildLocationWrite` بلا استثناء،
+  // فبصمة idempotency ومسار الكتابة لا يمكن أن يختلفا في تعريف «صالح».
+  const pair = classifyLocationPair(input.lat, input.lng);
+  if (pair === 'INVALID') throw incompleteCoordinates();
+  if (pair === 'PRESERVE') return { intent: 'PRESERVE' };
+  if (pair === 'CLEAR') return { intent: 'CLEAR' };
 
   const coordinates = optionalCoordinate(input.lat, input.lng);
   if (!coordinates) return { intent: 'CLEAR' };

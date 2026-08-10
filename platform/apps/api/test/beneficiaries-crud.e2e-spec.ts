@@ -746,6 +746,89 @@ describe('NODE-3 — المستفيدون والاحتياجات (CRUD/عزل/ت
   });
 
   // ================================================================
+  // NODE-3.3 — الاقتران الناقص لِ(lat, lng): رفض 400 بلا أي أثر جانبي
+  // ================================================================
+  //
+  // العطب المُصلَح: `undefined` (لم يُرسَل) و`null` (امسح) كانا يُطويان في
+  // مفهوم «فارغ» واحد داخل `optionalCoordinate`، فكان `{ lat: null }` وحده
+  // — أو `{ lng: null }` وحده — يمرّ بوصفه «كلاهما فارغ» ⇒ **مسح صامت
+  // لموقع مخزَّن** بناءً على طرف واحد من الطلب. الآن الصور الستّ كلها 400.
+  describe('NODE-3.3 — اقتران lat/lng الناقص', () => {
+    /** الصور الستّ المختلطة: غائب/`null`/رقم في كل تركيبة غير متجانسة. */
+    const partialPairs: Array<Record<string, unknown>> = [
+      { lat: null }, // lat = null، lng غائب
+      { lng: null }, // lat غائب، lng = null
+      { lat: 24.7136 }, // lat رقم، lng غائب
+      { lng: 46.6753 }, // lat غائب، lng رقم
+      { lat: null, lng: 46.6753 }, // lat = null، lng رقم
+      { lat: 24.7136, lng: null }, // lat رقم، lng = null
+    ];
+
+    it('الإنشاء يرفض الصور الستّ كلها بـ400', async () => {
+      expect(partialPairs).toHaveLength(6);
+      for (const partial of partialPairs) {
+        await http()
+          .post('/api/v1/beneficiaries')
+          .set('Cookie', assocACookie)
+          .send(beneficiaryPayload(partial))
+          .expect(400);
+      }
+    });
+
+    it('التعديل يرفض الصور الستّ كلها بـ400 دون أن يمسّ الموقع المخزَّن', async () => {
+      const create = await http()
+        .post('/api/v1/beneficiaries')
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ lat: 24.5, lng: 46.5, locationSource: 'MAP' }))
+        .expect(201);
+      const id = create.body.beneficiaryId as string;
+
+      // موقع حقيقي مخزَّن فعلًا — حتى تكون «لم يتغيّر» دعوى ذات معنى.
+      const before = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+      expect(before.latitude).not.toBeNull();
+      expect(before.locationUpdatedAt).not.toBeNull();
+
+      for (const partial of partialPairs) {
+        await http()
+          .patch(`/api/v1/beneficiaries/${id}`)
+          .set('Cookie', assocACookie)
+          .send(beneficiaryPayload({ ...partial, opId: newOpId('upd') }))
+          .expect(400);
+
+        // بعد **كل** محاولة مرفوضة: الأعمدة الأربعة كما كانت بايتًا ببايت.
+        const after = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+        expect(after.latitude?.toString()).toBe(before.latitude?.toString());
+        expect(after.longitude?.toString()).toBe(before.longitude?.toString());
+        expect(after.locationSource).toBe(before.locationSource);
+        expect(after.locationUpdatedAt?.toISOString()).toBe(before.locationUpdatedAt?.toISOString());
+      }
+    });
+
+    it('طلب مرفوض لا يستهلك opId إطلاقًا: الرفض يسبق مطالبة idempotency', async () => {
+      const { id } = await createBeneficiary(app, assocACookie);
+      const opId = newOpId('upd');
+
+      // نفس الـopId يُرفض أولًا لاقترانه الناقص…
+      await http()
+        .patch(`/api/v1/beneficiaries/${id}`)
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ lat: 24.7136, opId }))
+        .expect(400);
+
+      // …ثم يُستعمل نفسه لطلب صالح فينجح: لم تُسجَّل له مطالبة سابقة.
+      await http()
+        .patch(`/api/v1/beneficiaries/${id}`)
+        .set('Cookie', assocACookie)
+        .send(beneficiaryPayload({ lat: 24.7136, lng: 46.6753, locationSource: 'MAP', opId }))
+        .expect(200);
+
+      const after = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
+      expect(Number(after.latitude)).toBeCloseTo(24.7136, 6);
+      expect(after.locationSource).toBe('MAP');
+    });
+  });
+
+  // ================================================================
   // NODE-3.1 — البند 3: تنبيه "مطابق محتمل" غير الحاجب
   // ================================================================
   describe('NODE-3.1 — تنبيه المطابق المحتمل (غير حاجب)', () => {
