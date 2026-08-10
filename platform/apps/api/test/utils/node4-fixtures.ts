@@ -33,6 +33,31 @@ export async function cleanNode4State(fx: Node3Fixtures): Promise<void> {
 /** NODE-4.2 — نموذج PDF أدنى (magic bytes `%PDF-` فعلية) لاختبار إثبات الشراء الإداري ومحضر/ختم الجمعية. */
 export const PDF_DOC = Buffer.from('%PDF-1.7\n%NODE-4.2 test fixture\n', 'utf8');
 
+/**
+ * NODE-4.2.1 — يستنتج filename/contentType المطابقين فعليًا لمحتوى buffer
+ * الاختبار (JPEG/PNG/WEBP/PDF عبر magic bytes، نفس منطق الخادم). الـdefault
+ * الثابت سابقًا (مثلًا `application/pdf` دومًا لملف إثبات الشراء بغضّ النظر
+ * عن نوع buffer الفعلي المُمرَّر) كان يجعل اختبارات صحيحة تصطدم بتحقق
+ * MIME/magic الصارم في الخادم — خطأ اختبار لا خطأ إنتاج. يبقى أي
+ * `filename`/`contentType` صريح من المُستدعي أولوية دومًا (`??`) حتى تبقى
+ * اختبارات عدم التطابق المتعمَّد كما هي بلا مساس.
+ */
+function detectFixtureAttachment(buffer: Buffer): { filename: string; contentType: string } {
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return { filename: 'fixture.jpg', contentType: 'image/jpeg' };
+  }
+  if (buffer.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+    return { filename: 'fixture.png', contentType: 'image/png' };
+  }
+  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') {
+    return { filename: 'fixture.webp', contentType: 'image/webp' };
+  }
+  if (buffer.length >= 5 && buffer.toString('ascii', 0, 5) === '%PDF-') {
+    return { filename: 'fixture.pdf', contentType: 'application/pdf' };
+  }
+  return { filename: 'fixture.bin', contentType: 'application/octet-stream' };
+}
+
 export interface CreateBatchOverrides {
   associationId?: string;
   supplierName?: string;
@@ -83,9 +108,10 @@ export function createBatchRequest(
   req.field('items', JSON.stringify(payload.items));
   req.field('opId', payload.opId);
   if (options.adminProofFile) {
+    const detected = detectFixtureAttachment(options.adminProofFile);
     req.attach('adminProofFile', options.adminProofFile, {
-      filename: options.adminProofFilename ?? 'proof.pdf',
-      contentType: options.adminProofContentType ?? 'application/pdf',
+      filename: options.adminProofFilename ?? detected.filename,
+      contentType: options.adminProofContentType ?? detected.contentType,
     });
   }
   return req;
@@ -139,12 +165,14 @@ export function confirmBatchRequest(app: INestApplication, cookie: string, batch
   if (quantityPhoto) req.attach('quantityPhoto', quantityPhoto, { filename: 'q.jpg', contentType: 'image/jpeg' });
   if (signatureImage) req.attach('signatureImage', signatureImage, { filename: 's.png', contentType: 'image/png' });
   for (const photo of options.damagePhotos ?? []) {
-    req.attach('damagePhotos', photo, { filename: 'd.jpg', contentType: 'image/jpeg' });
+    const detected = detectFixtureAttachment(photo);
+    req.attach('damagePhotos', photo, { filename: detected.filename, contentType: detected.contentType });
   }
   if (options.associationReportFile) {
+    const detected = detectFixtureAttachment(options.associationReportFile);
     req.attach('associationReportFile', options.associationReportFile, {
-      filename: options.associationReportFilename ?? 'report.pdf',
-      contentType: options.associationReportContentType ?? 'application/pdf',
+      filename: options.associationReportFilename ?? detected.filename,
+      contentType: options.associationReportContentType ?? detected.contentType,
     });
   }
   return req;
