@@ -44,7 +44,24 @@ export interface LicenseFileValidationResult {
 
 /** التحقق الكامل: الحجم أولًا (رفض مبكر بلا فحص محتوى)، ثم magic bytes، ثم مطابقة MIME المُعلَن (إن وُجد) لما اكتُشف فعليًا. */
 export function validateLicenseFile(buffer: Buffer, declaredMimeType: string | undefined): LicenseFileValidationResult {
-  if (buffer.length > LICENSE_FILE_MAX_BYTES) {
+  return validateImageFile(buffer, declaredMimeType, LICENSE_FILE_MAX_BYTES);
+}
+
+/**
+ * NODE-4 — حدّ إثباتات محضر الاستلام (صورة كمية/توقيع/تلف): 6 MiB بالضبط،
+ * يطابق `saveReceiptImage_` القديم حرفيًا (`bytes.length > 6*1024*1024`).
+ * أصغر من حدّ ترخيص الجمعية المركزي (8 MiB) — لا حاجة لتشديده، فالقديم
+ * أصلًا أدق من السياسة المركزية الحالية.
+ */
+export const RECEIPT_EVIDENCE_MAX_BYTES = 6 * 1024 * 1024; // 6 MiB
+
+export function validateReceiptEvidenceFile(buffer: Buffer, declaredMimeType: string | undefined): LicenseFileValidationResult {
+  return validateImageFile(buffer, declaredMimeType, RECEIPT_EVIDENCE_MAX_BYTES);
+}
+
+/** جوهر التحقق المشترك: الحجم أولًا (رفض مبكر بلا فحص محتوى)، ثم magic bytes، ثم مطابقة MIME المُعلَن (إن وُجد) لما اكتُشف فعليًا. */
+function validateImageFile(buffer: Buffer, declaredMimeType: string | undefined, maxBytes: number): LicenseFileValidationResult {
+  if (buffer.length > maxBytes) {
     return { valid: false, reason: 'TOO_LARGE' };
   }
   const detected = detectImageMimeFromBytes(buffer);

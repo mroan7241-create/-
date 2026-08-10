@@ -103,11 +103,18 @@ BENEFICIARIES.md §12-§17.
 القديمة في `tools/beneficiary-needs-test.js`** (الأقسام 18-26 خصوصًا)
 قبل وسم `PARITY_VERIFIED`.
 
-## NODE-4 — Receipt batches + files + device inventory
+## NODE-4 — Receipt batches + files + device inventory ✅ منجزة
 
-`ReceiptBatches.gs` كاملًا (إنشاء/إرسال/تأكيد محضر، الفروقات، صور
-التلف)، إنشاء `device_units` من `good_qty` داخل transaction، ونقل
-منطق `saveDevice`/`getDeviceDetail` من `DevicesAssociations.gs`.
+`ReceiptBatches.gs` كاملًا (إنشاء/إرسال/تأكيد محضر، معادلة الكميات،
+الفروقات، صور التلف بقواعد العدد/الربط الحرفية)، إنشاء `device_units`
+من `good_qty` داخل نفس معاملة التأكيد بعد `SELECT...FOR UPDATE`،
+ونقل جزء **القراءة** من `saveDevice`/`getDeviceDetail`
+(`DevicesAssociations.gs`) عبر `InventoryModule` — الكتابة اليدوية
+(ربط/فكّ ربط/اكتمال جماعي) تبقى NOT_STARTED (نطاق لاحق مرتبط
+بـNODE-5/6). بذرة `AllocationTriggerPort` (NODE-3) تُستدعى بعد تأكيد
+ناجح أنتج ≥1 وحدة سليمة، NO-OP حتى NODE-5. راجع `NODE-4_CONTRACT.md`
+للتفاصيل الكاملة والانحرافات المتعمَّدة عن Legacy. الأنموذج (schema)
+كان جاهزًا بالكامل منذ NODE-0/NODE-0.1 — لا migration جديدة.
 
 ## NODE-5 — AutoAllocation parity migration
 

@@ -291,6 +291,14 @@ RECEIVED_WITH_DISCREPANCIES        → (نهائية)
 قاعدة عمل يجب الحفاظ عليها عند نقل `ReceiptBatches.gs` في NODE-4: من
 ينشئ المحضر لا يكون نفس الطرف الذي يؤكد الاستلام.
 
+**NODE-4 ✅**: الانتقالات أعلاه مُنفَّذة حرفيًا في `ReceiptsService`
+(`assertTransition`) — الفحص الحاسم يحدث **داخل** المعاملة بعد
+`SELECT...FOR UPDATE`، لا قبلها (فحص مبكر خارج المعاملة كان يكسر
+إعادة تشغيل idempotent مشروعة لنفس opId، راجع `NODE-4_CONTRACT.md`).
+قاعدة "المُنشئ ≠ المُؤكِّد" مضمونة بنيويًا عبر فصل الأدوار (`createBatch`/`sendBatch`
+= `@Roles(ADMIN)` حصرًا، `confirmBatch` = `@Roles(ASSOCIATION)` حصرًا) —
+لا حاجة لفحص إضافي صريح.
+
 ---
 
 ## 11) DeviceType (أنواع الجهاز المعتمدة)

@@ -263,3 +263,147 @@ export interface BulkReviewResponse {
 export function newOpId(): string {
   return `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
+
+// ============================================================
+// NODE-4 — محاضر استلام دفعات الأجهزة + مخزون الأجهزة
+// ============================================================
+export type ReceiptBatchStatus = 'DRAFT' | 'AWAITING_ASSOCIATION_CONFIRMATION' | 'RECEIVED_COMPLETE' | 'RECEIVED_WITH_DISCREPANCIES';
+
+export const RECEIPT_BATCH_STATUS_LABELS: Record<ReceiptBatchStatus, string> = {
+  DRAFT: 'مسودة',
+  AWAITING_ASSOCIATION_CONFIRMATION: 'بانتظار تأكيد الجمعية',
+  RECEIVED_COMPLETE: 'تم الاستلام كاملًا',
+  RECEIVED_WITH_DISCREPANCIES: 'تم الاستلام مع فروقات',
+};
+
+export interface ReceiptItemSummary {
+  id: string;
+  publicCode: string;
+  deviceType: DeviceType | null;
+  spec: string | null;
+  sentQty: number;
+  receivedQty: number;
+  damagedQty: number;
+  missingQty: number;
+  differenceReason: string | null;
+  differenceNotes: string | null;
+  damagePhotos: { id: string }[];
+  damagePhotoCount: number;
+}
+
+export interface ReceiptBatchSummary {
+  id: string;
+  publicCode: string;
+  associationId: string;
+  supplierName: string;
+  sentDate: string | null;
+  status: ReceiptBatchStatus;
+  notes: string | null;
+  receiverName: string | null;
+  receiverTitle: string | null;
+  confirmedAt: string | null;
+  hasQuantityPhoto: boolean;
+  hasSignature: boolean;
+  createdAt: string;
+  updatedAt: string;
+  items: ReceiptItemSummary[];
+}
+
+export function listReceiptBatches(params: { page?: number; pageSize?: number; associationId?: string; status?: ReceiptBatchStatus } = {}): Promise<Paginated<ReceiptBatchSummary>> {
+  const q = new URLSearchParams();
+  if (params.page) q.set('page', String(params.page));
+  if (params.pageSize) q.set('pageSize', String(params.pageSize));
+  if (params.associationId) q.set('associationId', params.associationId);
+  if (params.status) q.set('status', params.status);
+  return apiFetch(`/receipts?${q.toString()}`);
+}
+
+export function getReceiptBatch(id: string): Promise<ReceiptBatchSummary> {
+  return apiFetch(`/receipts/${id}`);
+}
+
+export interface CreateReceiptItemInput {
+  deviceType: DeviceType;
+  spec: string;
+  sentQty: number;
+}
+
+export function createReceiptBatch(input: { associationId: string; supplierName: string; sentDate: string; notes?: string; items: CreateReceiptItemInput[] }): Promise<{ ok: true; id: string }> {
+  return apiFetch('/receipts', { method: 'POST', body: JSON.stringify({ ...input, opId: newOpId() }) });
+}
+
+export function sendReceiptBatch(id: string): Promise<{ ok: true }> {
+  return apiFetch(`/receipts/${id}/send`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) });
+}
+
+export interface ConfirmReceiptItemInput {
+  itemId: string;
+  receivedQty: number;
+  damagedQty: number;
+  missingQty: number;
+  differenceReason?: string;
+  differenceNotes?: string;
+}
+
+export interface ConfirmReceiptBatchInput {
+  receiverTitle: string;
+  items: ConfirmReceiptItemInput[];
+  damagePhotoLinks: string[][];
+  quantityPhoto: File;
+  signatureImage: File;
+  damagePhotos: File[];
+}
+
+export function confirmReceiptBatch(id: string, input: ConfirmReceiptBatchInput): Promise<{ ok: true; id: string; status: ReceiptBatchStatus }> {
+  const form = new FormData();
+  form.set('receiverTitle', input.receiverTitle);
+  form.set('opId', newOpId());
+  form.set('items', JSON.stringify(input.items));
+  form.set('damagePhotoLinks', JSON.stringify(input.damagePhotoLinks));
+  form.set('quantityPhoto', input.quantityPhoto);
+  form.set('signatureImage', input.signatureImage);
+  for (const photo of input.damagePhotos) form.append('damagePhotos', photo);
+  return apiUpload(`/receipts/${id}/confirm`, form);
+}
+
+export function getReceiptEvidenceUrl(batchId: string, evidenceType: 'quantity' | 'signature' | 'damage', damagePhotoId?: string): Promise<{ url: string }> {
+  const q = damagePhotoId ? `?damagePhotoId=${encodeURIComponent(damagePhotoId)}` : '';
+  return apiFetch(`/receipts/${batchId}/evidence/${evidenceType}${q}`);
+}
+
+export type DeviceStatus = 'WAREHOUSE' | 'ALLOCATED' | 'WITH_DELEGATE' | 'DELIVERED' | 'DAMAGED';
+
+export const DEVICE_STATUS_LABELS: Record<DeviceStatus, string> = {
+  WAREHOUSE: 'بالمستودع',
+  ALLOCATED: 'مخصَّص',
+  WITH_DELEGATE: 'مع المندوب',
+  DELIVERED: 'تم التسليم',
+  DAMAGED: 'تالف',
+};
+
+export interface DeviceUnitSummary {
+  id: string;
+  publicCode: string;
+  associationId: string;
+  deviceType: string | null;
+  spec: string | null;
+  status: DeviceStatus;
+  currentLocationType: string;
+  createdAt: string;
+  updatedAt: string;
+  deliveredAt: string | null;
+}
+
+export function listDeviceUnits(params: { page?: number; pageSize?: number; associationId?: string; deviceType?: DeviceType; status?: DeviceStatus } = {}): Promise<Paginated<DeviceUnitSummary>> {
+  const q = new URLSearchParams();
+  if (params.page) q.set('page', String(params.page));
+  if (params.pageSize) q.set('pageSize', String(params.pageSize));
+  if (params.associationId) q.set('associationId', params.associationId);
+  if (params.deviceType) q.set('deviceType', params.deviceType);
+  if (params.status) q.set('status', params.status);
+  return apiFetch(`/inventory/devices?${q.toString()}`);
+}
+
+export function getDeviceUnit(id: string): Promise<DeviceUnitSummary & { receiptBatchId: string | null; receiptBatchPublicCode: string | null }> {
+  return apiFetch(`/inventory/devices/${id}`);
+}
