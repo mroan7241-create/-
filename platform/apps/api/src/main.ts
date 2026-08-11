@@ -43,7 +43,13 @@ async function bootstrap() {
   const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup(`${basePath.replace(/^\/+/, '')}/docs`, app, swaggerDocument);
 
-  const port = Number(process.env.API_PORT ?? 3001);
+  // PORT: يوفّرها تشغيل Hostinger المُدار (managed runtime) ويجب أن تكون الأولوية.
+  // API_PORT: احتياطي محلي/CI/يدوي. 3001: احتياطي أخير محلي.
+  const rawPort = process.env.PORT ?? process.env.API_PORT ?? '3001';
+  const port = Number(rawPort);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error(`منفذ استماع غير صالح: "${rawPort}" (PORT أو API_PORT). يجب رقمًا صحيحًا بين 1 و65535.`);
+  }
   await app.listen(port);
   // eslint-disable-next-line no-console
   console.log(`API listening on :${port}${basePath}`);

@@ -37,8 +37,13 @@
   أكثر من مرة واحدة في أي حال (لا ازدواج بين `postinstall` والبناء).
 - التشغيل الفعلي: API عبر `node platform/apps/api/dist/main.js`
   (البناء الإنتاجي الحقيقي، لا `nest start`)، Web عبر `npm run start
-  --workspace apps/web` (أي `next start -p 3000`، السكربت القائم أصلًا
-  بلا أي تعديل).
+  --workspace apps/web` (أي `next start`).
+- **منفذ الاستماع لكلا التطبيقين يأتي من `PORT` التي توفّرها بيئة
+  Hostinger المُدارة تلقائيًا — لا يُضبَط أي منفذ يدويًا في لوحة
+  Hostinger.** ترتيب الأولوية في API: `PORT` → `API_PORT` (احتياطي
+  محلي/CI/يدوي فقط) → `3001` (احتياطي أخير محلي). Web يعتمد دعم
+  Next.js الأصلي لـ`PORT` عبر `next start` (بلا `-p` ثابت في
+  السكربت)، والافتراضي المحلي عند غياب `PORT` يبقى 3000.
 
 ## متغيّرات البيئة — تُضبَط حصرًا عبر لوحة Hostinger (Environment
 ## Variables)، أبدًا عبر ملف `.env` مُلتزَم به
@@ -53,7 +58,7 @@
 
 | المتغيّر | الغرض | ملاحظة |
 |---|---|---|
-| `API_PORT` | منفذ الاستماع | **يجب ضبطه `3000`** لمطابقة Hostinger Node.js runtime — الافتراضي محليًا/CI يبقى `3001` بلا مساس |
+| `API_PORT` | منفذ الاستماع (احتياطي فقط) | **لا يُضبَط على Hostinger** — منفذ Hostinger المُدار يأتي عبر `PORT` تلقائيًا وله الأولوية دائمًا. `API_PORT` للاستخدام المحلي/CI/اليدوي فقط، الافتراضي يبقى `3001` بلا مساس |
 | `API_BASE_PATH` | بادئة المسار العامة | اختياري، الافتراضي `/api/v1` |
 | `CORS_ORIGIN` | أصل الواجهة المسموح | يجب أن يكون رابط تطبيق Web على Hostinger (TEST) |
 | `NODE_ENV` | بيئة التشغيل | `production` يُفعِّل `assertProductionSecretsConfigured()` (رفض إقلاع صريح إن بقيت أي مفاتيح HMAC حسّاسة بقيمتها الافتراضية للتطوير) — **موصى به حتى في TEST** لعدم إضعاف الفحص |
@@ -78,6 +83,9 @@
 | المتغيّر | الغرض | ملاحظة |
 |---|---|---|
 | `NEXT_PUBLIC_API_BASE_URL` | رابط الـAPI الكامل الذي تستدعيه الواجهة | **لا يُضبَط داخل الكود إطلاقًا** — يجب أن يشير لرابط تطبيق API على Hostinger (TEST)، مثال شكلي: `https://<hostinger-test-api-app>.example/api/v1` — لا يوجد أي hostname حقيقي مضمَّن في هذا المستند |
+
+> Web أيضًا يستخدم `PORT` التي توفّرها Hostinger تلقائيًا عبر دعم
+> Next.js الأصلي لها في `next start` — **لا يُضبَط أي منفذ يدويًا**.
 
 ## قاعدة البيانات — Supabase PostgreSQL (Session Pooler، منفذ 5432)
 
@@ -115,7 +123,7 @@ DATABASE_URL="<supabase-session-pooler-url>" npm run migrate:deploy --workspace 
 - **Install command**: تلقائي عبر "NPM Install" في اللوحة → يُشغِّل `postinstall` → `npm ci` فقط (بلا بناء).
 - **Build command**: `npm run build` (ينفّذ `node hostinger-app.js build`، يبني API فقط بسبب `HOSTINGER_APP=api`).
 - **Start command / entry (Application Startup File)**: `hostinger-app.js` (بلا وسيط — الوضع الافتراضي `start`؛ أو `npm start` إن كانت اللوحة تتطلب سكربت start بدل ملف بدء تشغيل مباشر — كلاهما ينفّذ نفس المسار).
-- منفذ الاستماع: `3000` عبر `API_PORT=3000` (Hostinger Node.js runtime يتوقع 3000 — لا افتراض معدَّل في الكود نفسه).
+- منفذ الاستماع: **`PORT` يوفّرها Hostinger تلقائيًا ولها الأولوية دائمًا** (ترتيب: `PORT` → `API_PORT` → `3001`) — لا تُضبَط `API_PORT` على Hostinger، ولا يُضبَط أي منفذ يدويًا.
 
 ## إعدادات Hostinger المتوقَّعة — Web
 
@@ -125,7 +133,7 @@ DATABASE_URL="<supabase-session-pooler-url>" npm run migrate:deploy --workspace 
 - **Install command**: تلقائي عبر "NPM Install" في اللوحة → `postinstall` → `npm ci` فقط (بلا بناء).
 - **Build command**: `npm run build` (ينفّذ `node hostinger-app.js build`، يبني Web فقط بسبب `HOSTINGER_APP=web`).
 - **Start command / entry (Application Startup File)**: `hostinger-app.js` (أو `npm start` إن كانت اللوحة تتطلب سكربت start بدل ملف بدء تشغيل مباشر — نفس المسار).
-- منفذ الاستماع: `3000` تلقائيًا (`next start -p 3000` ثابت في `platform/apps/web/package.json`، بلا أي تعديل).
+- منفذ الاستماع: **`PORT` يوفّرها Hostinger تلقائيًا**، يقرأها `next start` أصالةً (Next.js) — لا يُضبَط أي منفذ يدويًا. عند التشغيل المحلي بلا `PORT` يبقى الافتراضي 3000 (سلوك Next.js الأصلي، بلا أي تعديل كود).
 
 ## تأكيد صريح
 
