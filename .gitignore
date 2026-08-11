@@ -4,3 +4,10 @@ node_modules/
 
 # مجلد التحضير المؤقت لحزمة التركيب (يُعاد توليده عبر tools/build-release-package.js)
 dist/alzad-rc-split-18-files/
+
+# HOSTINGER-TEST-0 — أسرار بيئة النشر لا يجوز أبدًا التزامها (المصدر الوحيد
+# لكل متغير حقيقي هو لوحة Hostinger، لا ملف .env مُلتزَم به). راجع
+# platform/docs/HOSTINGER_TEST_DEPLOYMENT.md.
+.env
+.env.*
+!.env.example

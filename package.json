@@ -1,0 +1,14 @@
+{
+  "name": "alzad-hostinger-root",
+  "private": true,
+  "description": "Root deployment shim ONLY — Hostinger requires package.json at the repository root, but /platform remains the sole canonical application source (npm workspaces root). This file does not declare any application dependency and is not a workspace root itself; it only shells out into /platform. See platform/docs/HOSTINGER_TEST_DEPLOYMENT.md.",
+  "version": "0.0.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "postinstall": "node hostinger-app.js install-platform",
+    "build": "node hostinger-app.js build",
+    "start": "node hostinger-app.js start"
+  }
+}
