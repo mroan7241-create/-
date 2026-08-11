@@ -49,9 +49,12 @@ function run(cmd) {
 }
 
 function installPlatform() {
-  // npm ci: تثبيت حتمي بالكامل من platform/package-lock.json الموجود فعلاً
-  // (يحذف/يعيد بناء node_modules من الصفر، لا يكتب على القفل). لا بناء هنا إطلاقًا.
-  run('npm ci');
+  // npm ci --include=dev: تثبيت حتمي بالكامل من platform/package-lock.json
+  // الموجود فعلاً (يحذف/يعيد بناء node_modules من الصفر، لا يكتب على القفل).
+  // --include=dev إلزامي هنا لأن NODE_ENV=production على Hostinger يجعل npm
+  // يتجاهل devDependencies افتراضيًا (مثل typescript اللازم لخطوة البناء
+  // التالية) ما لم يُطلَب صراحةً. لا بناء هنا إطلاقًا.
+  run('npm ci --include=dev');
 }
 
 function build() {
