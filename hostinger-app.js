@@ -70,15 +70,30 @@ function build() {
   }
 }
 
+function startApiInProcess() {
+  // Hostinger's managed Node.js runtime owns and monitors the process it
+  // launches (the one that binds PORT). Spawning the API as a CHILD process
+  // left that managed process idle while the child held the port — a
+  // Hostinger "Restart" only restarts the managed parent, not the orphaned
+  // child, so the port stayed occupied across restarts (EADDRINUSE). Loading
+  // the compiled entry directly makes THIS process the one that binds PORT,
+  // so Hostinger's own process lifecycle (start/stop/restart) controls it
+  // correctly — no detached/background process.
+  process.chdir(PLATFORM_DIR);
+  require(path.join(PLATFORM_DIR, 'apps', 'api', 'dist', 'main.js'));
+}
+
 function start() {
   const app = readApp();
-  const child =
-    app === 'api'
-      ? spawn(process.execPath, [path.join('apps', 'api', 'dist', 'main.js')], { cwd: PLATFORM_DIR, stdio: 'inherit' })
-      : spawn(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'start', '--workspace', 'apps/web'], {
-          cwd: PLATFORM_DIR,
-          stdio: 'inherit',
-        });
+  if (app === 'api') {
+    startApiInProcess();
+    return;
+  }
+
+  const child = spawn(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'start', '--workspace', 'apps/web'], {
+    cwd: PLATFORM_DIR,
+    stdio: 'inherit',
+  });
 
   child.on('exit', (code, signal) => {
     if (signal) process.kill(process.pid, signal);

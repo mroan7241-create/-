@@ -35,9 +35,17 @@
   واحدة بعد "NPM Install" وقبل بدء التشغيل — انظر "إعدادات Hostinger
   المتوقَّعة" أدناه للقيم الدقيقة لكل تطبيق. لا يُنفَّذ البناء تلقائيًا
   أكثر من مرة واحدة في أي حال (لا ازدواج بين `postinstall` والبناء).
-- التشغيل الفعلي: API عبر `node platform/apps/api/dist/main.js`
-  (البناء الإنتاجي الحقيقي، لا `nest start`)، Web عبر `npm run start
-  --workspace apps/web` (أي `next start`).
+- التشغيل الفعلي: **API يُحمَّل داخل نفس عملية Node.js التي تملكها
+  Hostinger مباشرةً** (`process.chdir` إلى `/platform` ثم `require`
+  للمسار المطلق `apps/api/dist/main.js` — البناء الإنتاجي الحقيقي، لا
+  `nest start`، **بلا** `child_process.spawn`). هذا مقصود: عملية
+  Hostinger المُدارة (التي تراقبها لوحة Restart/Stop) يجب أن تكون هي
+  ذاتها التي تربط `PORT` — أي عملية ابن منفصلة تُبقي `PORT` مربوطًا في
+  عملية لا تراقبها Hostinger، فيبقى `EADDRINUSE` عالقًا حتى بعد
+  Restart. Web عبر `npm run start --workspace apps/web` (أي `next
+  start` كعملية ابن — لا يزال هذا يعمل لأن `next start` هو نفسه من
+  يربط `PORT`، ولأن `hostinger-app.js` يمرّر SIGINT/SIGTERM لعملية
+  Web الابن بشكل صريح).
 - **منفذ الاستماع لكلا التطبيقين يأتي من `PORT` التي توفّرها بيئة
   Hostinger المُدارة تلقائيًا — لا يُضبَط أي منفذ يدويًا في لوحة
   Hostinger.** ترتيب الأولوية في API: `PORT` → `API_PORT` (احتياطي
