@@ -43,13 +43,19 @@
   - **API**: `process.chdir` إلى `/platform` ثم `require` للمسار
     المطلق `apps/api/dist/main.js` (البناء الإنتاجي الحقيقي، لا
     `nest start`).
-  - **Web**: Next.js Custom Server رسمي داخل `hostinger-app.js` نفسه
-    — `next` يُحلّ عبر `createRequire` من `apps/web/package.json`
-    تحديدًا (يطابق تفكيك npm workspaces الفعلي)، ثم
-    `next({ dev:false, dir, hostname:'0.0.0.0', port })` →
-    `app.prepare()` → `http.createServer(handle)` → `listen(port,
-    hostname)`. **لا** `npm run start`، **لا** `next start` كعملية
-    منفصلة.
+  - **Web**: `output: 'standalone'` (`apps/web/next.config.js`، مع
+    `experimental.outputFileTracingRoot` مضبوط على `/platform` ليشمل
+    التتبّع تبعيات npm workspaces المُرقّاة). خطوة البناء تُنتج
+    `apps/web/.next/standalone/apps/web/server.js` ذاتي الاحتواء (ينسخ
+    `hostinger-app.js` بعدها static assets و`public/` إليه — Next.js لا
+    يضمّها تلقائيًا في مخرجات standalone)، ثم `start` يكتفي بـ
+    `require()` لهذا الملف مباشرة بعد ضبط `PORT`/`HOSTNAME` في env — هو
+    نفسه يستدعي `app.prepare()` وaَ`.listen()` داخليًا. **لا** `npm run
+    start`، **لا** `next start` كعملية منفصلة، **ولا** أي `next()`
+    مُستدعى يدويًا. (HOSTINGER-TEST-0.4 استخدم custom server يدوي عبر
+    `next()`/`createRequire` — أثبت هذا محليًا نجاحه، لكنه بقي عند 503
+    دائم على Hostinger فعليًا عبر عدة إعادة تشغيل؛ `output: 'standalone'`
+    هو مسار Next.js الرسمي الأبسط لهذا النوع من الاستضافة، فاستُبدِل به.)
   - السبب واحد لكليهما: عملية Hostinger المُدارة (التي تراقبها لوحة
     Restart/Stop، وإليها يُوجَّه الحركة) يجب أن تكون هي ذاتها التي
     تربط `PORT`. أي عملية ابن (child) أو حفيد (grandchild) — مثل

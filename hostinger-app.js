@@ -27,9 +27,15 @@
  */
 
 const path = require('node:path');
+const fs = require('node:fs');
 const { execSync } = require('node:child_process');
 
 const PLATFORM_DIR = path.join(__dirname, 'platform');
+const WEB_DIR = path.join(PLATFORM_DIR, 'apps', 'web');
+// نفس بنية المخرجات التي يولّدها Next.js لـ`output: 'standalone'` مع
+// outputFileTracingRoot مضبوط على PLATFORM_DIR (جذر workspaces) — انظر
+// apps/web/next.config.js. المسار يعكس موضع apps/web نسبةً لهذا الجذر.
+const WEB_STANDALONE_DIR = path.join(WEB_DIR, '.next', 'standalone', 'apps', 'web');
 
 // تشخيص واضح بلا أسرار لأي عطل غير متوقع قبل أو بعد ربط المنفذ — بدون هذا،
 // عطل غير مُمسك يُنهي العملية بصمت من منظور لوحة Hostinger (لا سطر واحد يوضح السبب).
@@ -78,7 +84,25 @@ function build() {
     run('npm run build --workspace apps/api');
   } else {
     run('npm run build --workspace apps/web');
+    copyWebStandaloneAssets();
   }
+}
+
+function copyWebStandaloneAssets() {
+  // مخرجات `output: 'standalone'` لا تتضمن static assets أو public/ تلقائيًا
+  // (توثيق Next.js الرسمي) — يجب نسخها يدويًا بعد البناء ليعمل server.js
+  // المولَّد ذاتيًا بلا اعتماد على أي شيء خارج مجلد standalone.
+  const staticSrc = path.join(WEB_DIR, '.next', 'static');
+  const staticDest = path.join(WEB_STANDALONE_DIR, '.next', 'static');
+  fs.cpSync(staticSrc, staticDest, { recursive: true });
+
+  const publicSrc = path.join(WEB_DIR, 'public');
+  if (fs.existsSync(publicSrc)) {
+    const publicDest = path.join(WEB_STANDALONE_DIR, 'public');
+    fs.cpSync(publicSrc, publicDest, { recursive: true });
+  }
+
+  console.log(`[hostinger-app] > نسخ static assets إلى ${WEB_STANDALONE_DIR}`);
 }
 
 function startApiInProcess() {
@@ -107,61 +131,44 @@ function resolvePort() {
 }
 
 function startWebInProcess() {
-  // نفس السبب الذي أوجب تشغيل API داخل عملية Hostinger نفسها (بلا
-  // child/grandchild process): Hostinger يراقب ويوجّه الحركة إلى العملية
-  // التي أطلقها هو تحديدًا. `spawn('npm', ['run', 'start', ...])` كان
-  // ينتج grandchild فعليًا (hostinger-app.js -> npm -> next) لا تملكه
-  // Hostinger، بالإضافة لاعتماد وقت التشغيل على توفر `npm` في PATH وقت
-  // التشغيل (بيئة مختلفة محتملة عن بيئة البناء) بلا أي معالج لحدث
-  // 'error' على العملية — أي فشل spawn كان يُسقط العملية الأم بصمت.
-  // الحل: تحميل Next.js Custom Server داخل هذه العملية ذاتها.
-  const WEB_DIR = path.join(PLATFORM_DIR, 'apps', 'web');
+  // HOSTINGER-TEST-0.4 (custom server عبر next()/createRequire) بقي عند
+  // 503 دائم — بلا أي علامة حياة عبر عدة إعادة تشغيل حتى بعد أكثر من
+  // دقيقتين انتظار (مقابل نفس نمط "بلا child process" الذي أثبت نجاحه
+  // فعليًا مع API)، رغم إثبات محليًا أن نفس الكود يستمع ويرد 200 خلال
+  // ثوانٍ. السبب الأرجح: custom server المكتوب يدويًا (next() + prepare()
+  // + createRequire عبر حدود npm workspaces) هو الحلقة الأضعف تحديدًا —
+  // انظر البند 7 في خطة التشخيص. الحل الرسمي الأبسط لـNext.js على
+  // منصات Node.js المُدارة: `output: 'standalone'` (انظر
+  // apps/web/next.config.js) يولّد server.js ذاتي الاحتواء يقرأ PORT/
+  // HOSTNAME من env مباشرة بلا أي كود تشغيل يدوي — فقط `require` له داخل
+  // نفس عملية Hostinger (لا فرق عن نمط API: بلا child/grandchild).
   const port = resolvePort();
   const hostname = '0.0.0.0';
 
-  // يحل `next` من workspace apps/web تحديدًا (بدلًا من require عادي من هذا
-  // الملف عند جذر المستودع، حيث لا توجد أي dependency تطبيقية) — يطابق
-  // تفكيك npm workspaces الفعلي لموقع الحزمة.
-  const { createRequire } = require('node:module');
-  const webRequire = createRequire(path.join(WEB_DIR, 'package.json'));
-  const next = webRequire('next');
-  const http = require('node:http');
+  if (!fs.existsSync(path.join(WEB_STANDALONE_DIR, 'server.js'))) {
+    console.error(
+      `[hostinger-app] Web: server.js غير موجود في ${WEB_STANDALONE_DIR} — تأكد أن خطوة البناء (node hostinger-app.js build) نُفِّذت بنجاح قبل start.`,
+    );
+    process.exit(1);
+  }
 
-  process.chdir(WEB_DIR);
+  process.env.PORT = String(port);
+  process.env.HOSTNAME = hostname;
+  process.chdir(WEB_STANDALONE_DIR);
 
-  console.log(`[hostinger-app] Web: بدء التحضير (dir=${WEB_DIR}, hostname=${hostname}, port=${port})`);
+  console.log(`[hostinger-app] Web: بدء server.js المستقل (dir=${WEB_STANDALONE_DIR}, hostname=${hostname}, port=${port})`);
 
-  const app = next({ dev: false, dir: WEB_DIR, hostname, port });
-  const handle = app.getRequestHandler();
+  const shutdown = (sig) => {
+    console.log(`[hostinger-app] Web: استلام ${sig} — إغلاق نظيف...`);
+    process.exit(0);
+  };
+  for (const sig of ['SIGINT', 'SIGTERM']) {
+    process.on(sig, () => shutdown(sig));
+  }
 
-  app
-    .prepare()
-    .then(() => {
-      const server = http.createServer((req, res) => {
-        handle(req, res);
-      });
-
-      server.on('error', (err) => {
-        console.error('[hostinger-app] Web: خطأ في سيرفر HTTP:', err && err.stack ? err.stack : err);
-        process.exit(1);
-      });
-
-      server.listen(port, hostname, () => {
-        console.log(`[hostinger-app] Web listening on ${hostname}:${port}`);
-      });
-
-      const shutdown = (sig) => {
-        console.log(`[hostinger-app] Web: استلام ${sig} — إغلاق نظيف...`);
-        server.close(() => process.exit(0));
-      };
-      for (const sig of ['SIGINT', 'SIGTERM']) {
-        process.on(sig, () => shutdown(sig));
-      }
-    })
-    .catch((err) => {
-      console.error('[hostinger-app] Web: فشل app.prepare():', err && err.stack ? err.stack : err);
-      process.exit(1);
-    });
+  // server.js المولَّد ذاتيًا يستدعي app.prepare() ثم .listen() بنفسه عند
+  // التحميل — لا يُصدِّر أي شيء يُستدعى يدويًا.
+  require(path.join(WEB_STANDALONE_DIR, 'server.js'));
 }
 
 function start() {
