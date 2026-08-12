@@ -13,8 +13,10 @@
   - `package.json` — واجهة/غلاف بلا أي dependency تطبيقي، سكربتاته
     تُفوِّض بالكامل إلى `/platform`.
   - `hostinger-app.js` — مُوزِّع (dispatcher) صغير حتمي، بلا أي
-    dependency جديدة (Node.js `child_process` فقط)، يقرأ متغيّر البيئة
-    `HOSTINGER_APP` (`api` أو `web`) ويبني/يشغّل التطبيق المطابق فقط.
+    dependency جديدة (Node.js core فقط: `child_process` لخطوتَي
+    التثبيت والبناء، `http`/`node:module` لتشغيل Web)، يقرأ متغيّر
+    البيئة `HOSTINGER_APP` (`api` أو `web`) ويبني/يشغّل التطبيق
+    المطابق فقط.
 - **نفس الفرع، نفس الـcommit، تطبيقان منفصلان على Hostinger**، كل
   تطبيق بمتغيّر `HOSTINGER_APP` مختلف:
   - `HOSTINGER_APP=api` → NestJS API (`platform/apps/api`)
@@ -35,23 +37,39 @@
   واحدة بعد "NPM Install" وقبل بدء التشغيل — انظر "إعدادات Hostinger
   المتوقَّعة" أدناه للقيم الدقيقة لكل تطبيق. لا يُنفَّذ البناء تلقائيًا
   أكثر من مرة واحدة في أي حال (لا ازدواج بين `postinstall` والبناء).
-- التشغيل الفعلي: **API يُحمَّل داخل نفس عملية Node.js التي تملكها
-  Hostinger مباشرةً** (`process.chdir` إلى `/platform` ثم `require`
-  للمسار المطلق `apps/api/dist/main.js` — البناء الإنتاجي الحقيقي، لا
-  `nest start`، **بلا** `child_process.spawn`). هذا مقصود: عملية
-  Hostinger المُدارة (التي تراقبها لوحة Restart/Stop) يجب أن تكون هي
-  ذاتها التي تربط `PORT` — أي عملية ابن منفصلة تُبقي `PORT` مربوطًا في
-  عملية لا تراقبها Hostinger، فيبقى `EADDRINUSE` عالقًا حتى بعد
-  Restart. Web عبر `npm run start --workspace apps/web` (أي `next
-  start` كعملية ابن — لا يزال هذا يعمل لأن `next start` هو نفسه من
-  يربط `PORT`، ولأن `hostinger-app.js` يمرّر SIGINT/SIGTERM لعملية
-  Web الابن بشكل صريح).
+- **التشغيل الفعلي لكلا التطبيقين يتم داخل نفس عملية Node.js التي
+  تُطلقها Hostinger مباشرةً — بلا أي `child_process.spawn` إطلاقًا
+  لأي منهما:**
+  - **API**: `process.chdir` إلى `/platform` ثم `require` للمسار
+    المطلق `apps/api/dist/main.js` (البناء الإنتاجي الحقيقي، لا
+    `nest start`).
+  - **Web**: Next.js Custom Server رسمي داخل `hostinger-app.js` نفسه
+    — `next` يُحلّ عبر `createRequire` من `apps/web/package.json`
+    تحديدًا (يطابق تفكيك npm workspaces الفعلي)، ثم
+    `next({ dev:false, dir, hostname:'0.0.0.0', port })` →
+    `app.prepare()` → `http.createServer(handle)` → `listen(port,
+    hostname)`. **لا** `npm run start`، **لا** `next start` كعملية
+    منفصلة.
+  - السبب واحد لكليهما: عملية Hostinger المُدارة (التي تراقبها لوحة
+    Restart/Stop، وإليها يُوجَّه الحركة) يجب أن تكون هي ذاتها التي
+    تربط `PORT`. أي عملية ابن (child) أو حفيد (grandchild) — مثل
+    `hostinger-app.js → npm → next` سابقًا لـWeb — تُبقي `PORT`
+    مربوطًا في عملية لا تملكها/تراقبها Hostinger فعليًا، فإما يبقى
+    `EADDRINUSE` عالقًا بعد Restart (كما ثبت مع API)، أو لا تصل
+    الحركة أبدًا للعملية الابن فيظهر `503 Service Unavailable` (كما
+    ثبت مع أول نشر لـWeb) — بصرف النظر عن نجاح البناء تمامًا.
+  - كلا المسارين يُسجّلان بدء التشغيل والإغلاق النظيف (`SIGINT`/
+    `SIGTERM`) في السجلّ، وتُمسَك أي أخطاء غير متوقعة
+    (`uncaughtException`/`unhandledRejection`) بتسجيل واضح بلا أسرار
+    بدل انهيار صامت.
 - **منفذ الاستماع لكلا التطبيقين يأتي من `PORT` التي توفّرها بيئة
   Hostinger المُدارة تلقائيًا — لا يُضبَط أي منفذ يدويًا في لوحة
   Hostinger.** ترتيب الأولوية في API: `PORT` → `API_PORT` (احتياطي
-  محلي/CI/يدوي فقط) → `3001` (احتياطي أخير محلي). Web يعتمد دعم
-  Next.js الأصلي لـ`PORT` عبر `next start` (بلا `-p` ثابت في
-  السكربت)، والافتراضي المحلي عند غياب `PORT` يبقى 3000.
+  محلي/CI/يدوي فقط) → `3001` (احتياطي أخير محلي). **Web لا يملك أي
+  احتياطي محلي عمدًا** — إن غابت `PORT` أو كانت غير صالحة يرفض
+  `hostinger-app.js` الإقلاع فورًا برسالة واضحة (هذا المسار مخصص
+  للتشغيل المُدار فقط؛ للتطوير المحلي استخدم `npm run dev --workspace
+  apps/web`، الذي يبقى `next dev -p 3000` بلا أي تعديل).
 
 ## متغيّرات البيئة — تُضبَط حصرًا عبر لوحة Hostinger (Environment
 ## Variables)، أبدًا عبر ملف `.env` مُلتزَم به
@@ -92,8 +110,10 @@
 |---|---|---|
 | `NEXT_PUBLIC_API_BASE_URL` | رابط الـAPI الكامل الذي تستدعيه الواجهة | **لا يُضبَط داخل الكود إطلاقًا** — يجب أن يشير لرابط تطبيق API على Hostinger (TEST)، مثال شكلي: `https://<hostinger-test-api-app>.example/api/v1` — لا يوجد أي hostname حقيقي مضمَّن في هذا المستند |
 
-> Web أيضًا يستخدم `PORT` التي توفّرها Hostinger تلقائيًا عبر دعم
-> Next.js الأصلي لها في `next start` — **لا يُضبَط أي منفذ يدويًا**.
+> Web أيضًا يستخدم `PORT` التي توفّرها Hostinger تلقائيًا — يقرؤها
+> `hostinger-app.js` مباشرةً ويمرّرها لـNext.js Custom Server
+> (`listen(port, '0.0.0.0')`) — **لا يُضبَط أي منفذ يدويًا، ولا قيمة
+> احتياطية محلية لهذا المسار.**
 
 ## قاعدة البيانات — Supabase PostgreSQL (Session Pooler، منفذ 5432)
 
@@ -141,7 +161,20 @@ DATABASE_URL="<supabase-session-pooler-url>" npm run migrate:deploy --workspace 
 - **Install command**: تلقائي عبر "NPM Install" في اللوحة → `postinstall` → `npm ci` فقط (بلا بناء).
 - **Build command**: `npm run build` (ينفّذ `node hostinger-app.js build`، يبني Web فقط بسبب `HOSTINGER_APP=web`).
 - **Start command / entry (Application Startup File)**: `hostinger-app.js` (أو `npm start` إن كانت اللوحة تتطلب سكربت start بدل ملف بدء تشغيل مباشر — نفس المسار).
-- منفذ الاستماع: **`PORT` يوفّرها Hostinger تلقائيًا**، يقرأها `next start` أصالةً (Next.js) — لا يُضبَط أي منفذ يدويًا. عند التشغيل المحلي بلا `PORT` يبقى الافتراضي 3000 (سلوك Next.js الأصلي، بلا أي تعديل كود).
+- **Output Directory**: اتركه فارغًا (كما هو). طُبِّق preset "Other" مع
+  Output Directory فارغ محليًا وأثبت أن `platform/apps/web/.next`
+  موجود فعليًا عند وقت التشغيل بعد `npm run build` (تحقّق محلي مباشر
+  — انظر قسم "التحقق المحلي" في تقرير HOSTINGER-TEST-0.4). ضبط Output
+  Directory على قيمة مثل `.next` أو `platform/apps/web/.next` قد
+  يجعل Hostinger يقصر runtime على تلك المجلد فقط، فيختفي
+  `hostinger-app.js` نفسه (الموجود عند جذر المستودع) من بيئة التشغيل
+  — **لا تُغيَّر هذه القيمة**.
+- منفذ الاستماع: **`PORT` يوفّرها Hostinger تلقائيًا وإلزامية** —
+  يقرؤها `hostinger-app.js` مباشرةً ويمرّرها لـNext.js Custom Server.
+  لا يُضبَط أي منفذ يدويًا، ولا يوجد احتياطي محلي لهذا المسار (غياب
+  `PORT` أو قيمة غير صالحة يوقف الإقلاع فورًا برسالة واضحة). للتطوير
+  المحلي استخدم `npm run dev --workspace apps/web` (يبقى `next dev -p
+  3000`، بلا أي تعديل).
 
 ## تأكيد صريح
 

@@ -27,9 +27,20 @@
  */
 
 const path = require('node:path');
-const { execSync, spawn } = require('node:child_process');
+const { execSync } = require('node:child_process');
 
 const PLATFORM_DIR = path.join(__dirname, 'platform');
+
+// تشخيص واضح بلا أسرار لأي عطل غير متوقع قبل أو بعد ربط المنفذ — بدون هذا،
+// عطل غير مُمسك يُنهي العملية بصمت من منظور لوحة Hostinger (لا سطر واحد يوضح السبب).
+process.on('uncaughtException', (err) => {
+  console.error('[hostinger-app] uncaughtException:', err && err.stack ? err.stack : err);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[hostinger-app] unhandledRejection:', reason);
+  process.exit(1);
+});
 
 function readApp() {
   const app = process.env.HOSTINGER_APP;
@@ -83,25 +94,83 @@ function startApiInProcess() {
   require(path.join(PLATFORM_DIR, 'apps', 'api', 'dist', 'main.js'));
 }
 
+function resolvePort() {
+  const raw = process.env.PORT;
+  const port = Number(raw);
+  if (!raw || !Number.isInteger(port) || port <= 0 || port > 65535) {
+    console.error(
+      `[hostinger-app] PORT غير صالح: "${raw ?? ''}". يجب أن توفّره Hostinger كرقم صحيح بين 1 و65535 — لا يوجد احتياطي محلي لـWeb (هذا المسار مخصص للتشغيل المُدار فقط).`,
+    );
+    process.exit(1);
+  }
+  return port;
+}
+
+function startWebInProcess() {
+  // نفس السبب الذي أوجب تشغيل API داخل عملية Hostinger نفسها (بلا
+  // child/grandchild process): Hostinger يراقب ويوجّه الحركة إلى العملية
+  // التي أطلقها هو تحديدًا. `spawn('npm', ['run', 'start', ...])` كان
+  // ينتج grandchild فعليًا (hostinger-app.js -> npm -> next) لا تملكه
+  // Hostinger، بالإضافة لاعتماد وقت التشغيل على توفر `npm` في PATH وقت
+  // التشغيل (بيئة مختلفة محتملة عن بيئة البناء) بلا أي معالج لحدث
+  // 'error' على العملية — أي فشل spawn كان يُسقط العملية الأم بصمت.
+  // الحل: تحميل Next.js Custom Server داخل هذه العملية ذاتها.
+  const WEB_DIR = path.join(PLATFORM_DIR, 'apps', 'web');
+  const port = resolvePort();
+  const hostname = '0.0.0.0';
+
+  // يحل `next` من workspace apps/web تحديدًا (بدلًا من require عادي من هذا
+  // الملف عند جذر المستودع، حيث لا توجد أي dependency تطبيقية) — يطابق
+  // تفكيك npm workspaces الفعلي لموقع الحزمة.
+  const { createRequire } = require('node:module');
+  const webRequire = createRequire(path.join(WEB_DIR, 'package.json'));
+  const next = webRequire('next');
+  const http = require('node:http');
+
+  process.chdir(WEB_DIR);
+
+  console.log(`[hostinger-app] Web: بدء التحضير (dir=${WEB_DIR}, hostname=${hostname}, port=${port})`);
+
+  const app = next({ dev: false, dir: WEB_DIR, hostname, port });
+  const handle = app.getRequestHandler();
+
+  app
+    .prepare()
+    .then(() => {
+      const server = http.createServer((req, res) => {
+        handle(req, res);
+      });
+
+      server.on('error', (err) => {
+        console.error('[hostinger-app] Web: خطأ في سيرفر HTTP:', err && err.stack ? err.stack : err);
+        process.exit(1);
+      });
+
+      server.listen(port, hostname, () => {
+        console.log(`[hostinger-app] Web listening on ${hostname}:${port}`);
+      });
+
+      const shutdown = (sig) => {
+        console.log(`[hostinger-app] Web: استلام ${sig} — إغلاق نظيف...`);
+        server.close(() => process.exit(0));
+      };
+      for (const sig of ['SIGINT', 'SIGTERM']) {
+        process.on(sig, () => shutdown(sig));
+      }
+    })
+    .catch((err) => {
+      console.error('[hostinger-app] Web: فشل app.prepare():', err && err.stack ? err.stack : err);
+      process.exit(1);
+    });
+}
+
 function start() {
   const app = readApp();
   if (app === 'api') {
     startApiInProcess();
     return;
   }
-
-  const child = spawn(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'start', '--workspace', 'apps/web'], {
-    cwd: PLATFORM_DIR,
-    stdio: 'inherit',
-  });
-
-  child.on('exit', (code, signal) => {
-    if (signal) process.kill(process.pid, signal);
-    else process.exit(code ?? 0);
-  });
-  for (const sig of ['SIGINT', 'SIGTERM']) {
-    process.on(sig, () => child.kill(sig));
-  }
+  startWebInProcess();
 }
 
 const mode = process.argv[2] ?? 'start';
