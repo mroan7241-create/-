@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { AppShell } from '../../components/AppShell';
 import { AssociationSelect } from '../../lib/association-select';
+import { initialQueryParam } from '../../lib/query';
 import {
   ApiClientError,
   createReceiptBatch,
@@ -38,7 +40,7 @@ export default function AdminReceiptsPage() {
   const { user, loading } = useRoleGuard(['ADMIN']);
   const [data, setData] = useState<Paginated<ReceiptBatchListItem> | null>(null);
   const [page, setPage] = useState(1);
-  const [statusFilter, setStatusFilter] = useState<ReceiptBatchStatus | ''>('');
+  const [statusFilter, setStatusFilter] = useState<ReceiptBatchStatus | ''>(() => (initialQueryParam('status') as ReceiptBatchStatus) || '');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [showCreate, setShowCreate] = useState(false);
@@ -139,7 +141,7 @@ export default function AdminReceiptsPage() {
   }
 
   return (
-    <main style={pageStyle}>
+    <AppShell user={user}>
       <h1>محاضر استلام دفعات الأجهزة</h1>
       {error && <p style={errorStyle}>{error}</p>}
       {notice && <p style={successStyle}>{notice}</p>}
@@ -275,7 +277,7 @@ export default function AdminReceiptsPage() {
           <button style={secondaryButtonStyle} disabled={page >= data.totalPages} onClick={() => setPage((p) => p + 1)}>التالي</button>
         </div>
       )}
-    </main>
+    </AppShell>
   );
 }
 

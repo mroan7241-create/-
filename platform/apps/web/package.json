@@ -2,10 +2,11 @@
   "name": "@alzad/web",
   "version": "0.0.1",
   "private": true,
-  "description": "الواجهة الجديدة (Next.js App Router) — NODE-0: application shell وRTL foundation وشاشة health/dev فقط، بلا نقل UI كامل بعد.",
+  "description": "الواجهة الجديدة (Next.js App Router) — منصة جمعية الزاد الكاملة: بوابات الإدارة/الجمعية/المندوب.",
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
+    "postbuild": "node scripts/copy-standalone-assets.js",
     "start": "next start",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "next lint"

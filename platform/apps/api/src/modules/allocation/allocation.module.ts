@@ -1,17 +1,18 @@
 import { Module } from '@nestjs/common';
 import { AllocationController } from './allocation.controller';
 import { ALLOCATION_TRIGGER_PORT } from './allocation-trigger.port';
-import { NoopAllocationTriggerService } from './noop-allocation-trigger.service';
+import { AutoAllocationService } from './auto-allocation.service';
 
 /**
- * NODE-3: الوحدة ما زالت بلا أي منطق تخصيص فعلي (`AutoAllocation.gs` غير
- * مُنقَل — نطاق NODE-5). الجديد هنا فقط هو تصدير بذرة
- * `ALLOCATION_TRIGGER_PORT` بتنفيذ NO-OP، حتى يستطيع مسار مراجعة
- * المستفيدين استدعاء نقطة التخصيص بتوقيتها وتجميعها الصحيحين منذ الآن.
+ * NODE-5: `ALLOCATION_TRIGGER_PORT` مربوط الآن بالمحرّك الفعلي
+ * (`AutoAllocationService`، يوازي `AutoAllocation.gs` القديم) بدل
+ * `NoopAllocationTriggerService` — بلا أي تعديل في نقاط الاستدعاء
+ * (`beneficiaries.service.ts`/`receipts.service.ts`)، تمامًا كما وثّق
+ * العقد في allocation-trigger.port.ts منذ NODE-3.
  */
 @Module({
   controllers: [AllocationController],
-  providers: [{ provide: ALLOCATION_TRIGGER_PORT, useClass: NoopAllocationTriggerService }],
+  providers: [AutoAllocationService, { provide: ALLOCATION_TRIGGER_PORT, useClass: AutoAllocationService }],
   exports: [ALLOCATION_TRIGGER_PORT],
 })
 export class AllocationModule {}

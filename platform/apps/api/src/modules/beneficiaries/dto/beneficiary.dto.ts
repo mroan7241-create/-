@@ -243,3 +243,109 @@ export class RemoveNeedDto {
   @MaxLength(120)
   opId!: string;
 }
+
+/** BEN-016/017 — إحداثيات إلزامية (لا مسح عبر هذا المسار)، مصدر اختياري. المسار الوحيد المفتوح لدور DELEGATE. */
+export class UpdateBeneficiaryLocationDto {
+  @IsNumber()
+  lat!: number;
+
+  @IsNumber()
+  lng!: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  locationSource?: string;
+
+  @IsString()
+  @MaxLength(120)
+  opId!: string;
+}
+
+/** صف استيراد واحد — نفس حقول BeneficiaryFieldsDto بلا opId (الـopId على مستوى الدفعة كاملة، لا الصف). راجع BEN-013. */
+export class BeneficiaryImportRowDto {
+  @IsString()
+  @MaxLength(120)
+  name!: string;
+
+  @IsString()
+  @MaxLength(80)
+  region!: string;
+
+  @IsString()
+  @MaxLength(80)
+  city!: string;
+
+  @IsString()
+  @MaxLength(120)
+  district!: string;
+
+  @IsString()
+  phone!: string;
+
+  @IsOptional()
+  @IsString()
+  phone2?: string;
+
+  @IsInt()
+  familyCount!: number;
+
+  @IsOptional()
+  @IsBoolean()
+  socialSecurity?: boolean;
+
+  @IsString()
+  @MaxLength(80)
+  socialStatus!: string;
+
+  @IsOptional()
+  @IsNumber()
+  income?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  notes?: string;
+
+  @IsOptional()
+  @IsNumber()
+  lat?: number | null;
+
+  @IsOptional()
+  @IsNumber()
+  lng?: number | null;
+
+  /**
+   * بلا `@ArrayNotEmpty()` عمدًا خلافًا لِCreateBeneficiaryDto: صف
+   * بلا احتياج يجب أن يُرفَض كخطأ صف مفصَّل (رسالة عربية واضحة عبر
+   * `validateNewNeedDeviceTypes` في الخدمة) ضمن `ok:false/errors`، لا
+   * 400 عام يوقف الطلب بالكامل قبل معرفة أي الصفوف بها المشكلة فعليًا.
+   */
+  @IsArray()
+  @ArrayMaxSize(3)
+  @IsIn(DEVICE_TYPE_VALUES, { each: true })
+  deviceTypes!: DeviceType[];
+}
+
+/** استيراد جماعي — BEN-013. كل الدفعة ذرّية: فشل صف واحد يُسقط الدفعة كاملة قبل أي كتابة. */
+export class ImportBeneficiariesDto {
+  /** ADMIN فقط — يُتجاهَل تمامًا لفاعل ASSOCIATION (جمعيته من الجلسة حصرًا). */
+  @IsOptional()
+  @IsUUID()
+  associationId?: string;
+
+  /** إقرار صريح إلزامي — يوازي acceptedPledge القديمة، لا استيراد بلا موافقة. */
+  @IsBoolean()
+  acceptedPledge!: boolean;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(1000)
+  @ValidateNested({ each: true })
+  @Type(() => BeneficiaryImportRowDto)
+  rows!: BeneficiaryImportRowDto[];
+
+  @IsString()
+  @MaxLength(120)
+  opId!: string;
+}

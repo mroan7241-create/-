@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { AppShell } from '../../components/AppShell';
+import { initialQueryParam } from '../../lib/query';
 import {
   ApiClientError,
   confirmReceiptBatch,
@@ -45,6 +47,7 @@ export default function AssociationReceiptsPage() {
   const { user, loading } = useRoleGuard(['ASSOCIATION']);
   const [data, setData] = useState<Paginated<ReceiptBatchListItem> | null>(null);
   const [page, setPage] = useState(1);
+  const [statusFilter, setStatusFilter] = useState<ReceiptBatchStatus | ''>(() => (initialQueryParam('status') as ReceiptBatchStatus) || '');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
@@ -64,7 +67,7 @@ export default function AssociationReceiptsPage() {
   async function refresh() {
     try {
       setError('');
-      setData(await listReceiptBatches({ page, pageSize: PAGE_SIZE }));
+      setData(await listReceiptBatches({ page, pageSize: PAGE_SIZE, status: statusFilter || undefined }));
     } catch (e) {
       setError(e instanceof ApiClientError ? e.message : 'تعذّر تحميل المحاضر');
     }
@@ -73,7 +76,7 @@ export default function AssociationReceiptsPage() {
   useEffect(() => {
     if (user) refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, page]);
+  }, [user, page, statusFilter]);
 
   if (loading || !user) return <p style={pageStyle}>...جارٍ التحميل</p>;
 
@@ -222,10 +225,27 @@ export default function AssociationReceiptsPage() {
   }
 
   return (
-    <main style={pageStyle}>
+    <AppShell user={user}>
       <h1>محاضر الاستلام الواردة</h1>
       {error && <p style={errorStyle}>{error}</p>}
       {notice && <p style={successStyle}>{notice}</p>}
+
+      <label style={{ ...labelStyle, maxWidth: 260, marginBottom: 16 }}>
+        الحالة
+        <select
+          style={inputStyle}
+          value={statusFilter}
+          onChange={(e) => {
+            setPage(1);
+            setStatusFilter(e.target.value as ReceiptBatchStatus | '');
+          }}
+        >
+          <option value="">الكل</option>
+          <option value="AWAITING_ASSOCIATION_CONFIRMATION">بانتظار تأكيدكم</option>
+          <option value="RECEIVED_COMPLETE">تم الاستلام كاملًا</option>
+          <option value="RECEIVED_WITH_DISCREPANCIES">تم الاستلام مع فروقات</option>
+        </select>
+      </label>
 
       {(data?.items ?? []).map((b) => {
         const damagedItemsInDraft = openId === b.id ? Object.values(lines).filter((l) => l.damagedQty > 0) : [];
@@ -424,6 +444,6 @@ export default function AssociationReceiptsPage() {
           <button style={secondaryButtonStyle} disabled={page >= data.totalPages} onClick={() => setPage((p) => p + 1)}>التالي</button>
         </div>
       )}
-    </main>
+    </AppShell>
   );
 }

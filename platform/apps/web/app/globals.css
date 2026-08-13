@@ -72,3 +72,140 @@ code {
   display: inline-block;
   unicode-bidi: isolate;
 }
+
+/* ---------- Login — هوية الزاد الكاملة (منقولة من Index.html القديم) ----------
+   شعارا الزاد وشريك التمويل (مؤسسة سليمان أبانمي الأهلية) + خلفية معالم
+   سعودية + مخطوطة "أهلًا وسهلًا" + بطاقة زجاجية حقيقية. راجع
+   platform/docs/audit/05-legacy-ui-and-docs.md UI-001. */
+.login-solo {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: var(--canvas);
+  overflow: hidden;
+}
+.login-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(175deg, rgba(58, 8, 27, 0.62) 0%, rgba(94, 14, 44, 0.3) 45%, rgba(58, 8, 27, 0.5) 100%),
+    radial-gradient(circle at 85% 12%, rgba(142, 27, 69, 0.12), transparent 45%),
+    radial-gradient(circle at 8% 92%, rgba(226, 166, 46, 0.16), transparent 45%),
+    url('/brand/loginBg.jpg');
+  background-size: cover, auto, auto, cover;
+  background-position: center, center, center, center bottom;
+  background-repeat: no-repeat;
+}
+.login-bg::before,
+.login-bg::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+}
+.login-bg::before {
+  width: 560px;
+  height: 560px;
+  top: -260px;
+  inset-inline-end: -200px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.login-bg::after {
+  width: 360px;
+  height: 360px;
+  bottom: -180px;
+  inset-inline-start: -140px;
+  border: 1px solid rgba(226, 166, 46, 0.28);
+}
+.login-panel {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  z-index: 1;
+  max-width: 440px;
+  width: 100%;
+  margin: 0;
+  padding: clamp(24px, 4.6vh, 44px) clamp(22px, 4vw, 40px);
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.6) 0%, rgba(255, 255, 255, 0.34) 45%, rgba(255, 255, 255, 0.46) 100%);
+  -webkit-backdrop-filter: blur(34px) saturate(70%) brightness(1.35) contrast(0.94);
+  backdrop-filter: blur(34px) saturate(70%) brightness(1.35) contrast(0.94);
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  border-top-color: rgba(255, 255, 255, 0.9);
+  border-radius: var(--r-lg);
+  box-shadow: 0 44px 90px -18px rgba(58, 8, 27, 0.55), 0 14px 34px rgba(58, 8, 27, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9), inset 0 -22px 44px -30px rgba(255, 255, 255, 0.28);
+}
+.login-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(120% 65% at 12% -12%, rgba(255, 255, 255, 0.7), transparent 60%);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .login-panel {
+    background: var(--paper);
+  }
+  .login-panel::before {
+    display: none;
+  }
+}
+.lockup-duo {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: clamp(18px, 3vh, 30px);
+}
+.lockup-logo {
+  height: clamp(48px, 6.5vh, 72px);
+  width: auto;
+  object-fit: contain;
+  display: block;
+}
+.lockup-partner-logo {
+  height: clamp(40px, 5.5vh, 60px);
+  width: auto;
+  object-fit: contain;
+  display: block;
+}
+.lockup-duo-divider {
+  width: 1px;
+  align-self: stretch;
+  min-height: 44px;
+  background: rgba(58, 8, 27, 0.18);
+  flex: none;
+}
+.login-divider {
+  width: 56px;
+  height: 3px;
+  border-radius: 2px;
+  margin: 0 0 clamp(18px, 3vh, 28px);
+  background: linear-gradient(90deg, var(--gold-600), var(--gold-400));
+}
+.login-calligraphy {
+  display: block;
+  margin: 0 auto 16px;
+  max-width: 150px;
+  width: 38%;
+  height: auto;
+  opacity: 0.92;
+}
+.login-panel .segmented {
+  background: rgba(255, 255, 255, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+}
+.login-panel .control {
+  background: rgba(255, 255, 255, 0.55);
+  border-color: rgba(255, 255, 255, 0.7);
+}
+.login-panel .btn-ghost {
+  background: rgba(255, 255, 255, 0.4);
+  border-color: rgba(255, 255, 255, 0.75);
+}

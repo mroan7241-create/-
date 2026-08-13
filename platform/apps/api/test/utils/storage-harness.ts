@@ -1,3 +1,4 @@
+import { createConnection } from 'node:net';
 import { CreateBucketCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
 import { startTestS3Server } from './s3-test-server';
 import { TEST_S3_BUCKET, TEST_S3_PORT } from './setup-env';
@@ -15,9 +16,38 @@ const external = process.env.OBJECT_STORAGE_EXTERNAL === 'true';
 
 let server: { close: () => Promise<void> } | null = null;
 
+/**
+ * فحص TCP سريع: هل ثمة خادم مستمع فعلًا على هذا المنفذ؟ يحمي من سباق
+ * تراكمي بين ملفات اختبار متعددة تحت `--runInBand`: إن سبق لملف آخر أن
+ * ترك خادم s3rver يتيمًا (مثلًا afterAll لم يُنفَّذ بعد تعليق شبكي غير
+ * مرتبط إطلاقًا)، فمحاولة `listen()` جديدة على نفس المنفذ تُعلِّق/تفشل
+ * بـEADDRINUSE — وهو ما كان يُسقِط كل ملف لاحق في التشغيل بالكامل بلا
+ * علاقة بأي عطل حقيقي في التطبيق. إن وُجد خادم مستمع بالفعل، نتجاهل
+ * تشغيل خادم جديد (bucket الاختبار موجود مسبقًا فعليًا من ذلك الخادم،
+ * والمسار أدناه يتعامل مع "موجود مسبقًا" بصمت أصلًا) ولا نُسجِّل ملكية
+ * الخادم في `server` هنا، فلا يحاول هذا الملف إغلاق خادم لا يملكه.
+ */
+function portInUse(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection({ port, host: '127.0.0.1' });
+    const done = (inUse: boolean) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(inUse);
+    };
+    socket.once('connect', () => done(true));
+    socket.once('error', () => done(false));
+    socket.setTimeout(500, () => done(false));
+  });
+}
+
 export async function startTestStorage(): Promise<void> {
   if (!external) {
-    server = await startTestS3Server(TEST_S3_PORT, TEST_S3_BUCKET);
+    if (await portInUse(TEST_S3_PORT)) {
+      server = null;
+    } else {
+      server = await startTestS3Server(TEST_S3_PORT, TEST_S3_BUCKET);
+    }
   }
   // الـbucket قد يكون منشأً مسبقًا (s3rver configureBuckets / خطوة mc في CI) —
   // ننشئه هنا أيضًا حتى يكون تشغيل أي ملف اختبار منفردًا مكتفيًا بذاته.

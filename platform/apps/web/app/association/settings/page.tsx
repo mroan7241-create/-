@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ApiClientError, apiFetch } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { AppShell } from '../../components/AppShell';
 import {
   cardStyle,
   errorStyle,
@@ -10,7 +11,6 @@ import {
   labelStyle,
   ltrStyle,
   mutedStyle,
-  narrowPageStyle,
   primaryButtonStyle,
   successStyle,
 } from '../../lib/ui';
@@ -24,9 +24,20 @@ export default function AssociationSettingsPage() {
   const { user, loading } = useRoleGuard(['ASSOCIATION']);
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!user) return;
+    apiFetch<{ phone: string; email: string }>('/associations/me/settings')
+      .then((res) => {
+        setPhone(res.phone);
+        setEmail(res.email);
+      })
+      .catch((err) => setLoadError(err instanceof ApiClientError ? err.message : 'تعذّر تحميل الإعدادات الحالية.'));
+  }, [user]);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -46,13 +57,19 @@ export default function AssociationSettingsPage() {
   if (loading || !user) return null;
 
   return (
-    <main style={narrowPageStyle}>
-      <h1 style={{ fontSize: 22, marginBottom: 8 }}>إعدادات الجمعية</h1>
-      <p style={{ ...mutedStyle, marginTop: 0, marginBottom: 24 }}>
-        يمكن تحديث بيانات التواصل فقط. لتغيير اسم الجمعية أو تصنيفها أو حالتها تواصل مع إدارة المشروع.
-      </p>
+    <AppShell user={user}>
+      <div style={{ maxWidth: 480 }}>
+        <h1 style={{ fontSize: 22, marginBottom: 8 }}>إعدادات الجمعية</h1>
+        <p style={{ ...mutedStyle, marginTop: 0, marginBottom: 24 }}>
+          يمكن تحديث بيانات التواصل فقط. لتغيير اسم الجمعية أو تصنيفها أو حالتها تواصل مع إدارة المشروع.
+        </p>
 
-      <form onSubmit={save} style={{ ...cardStyle, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {loadError && (
+          <p role="alert" style={errorStyle}>
+            {loadError}
+          </p>
+        )}
+        <form onSubmit={save} style={{ ...cardStyle, display: 'flex', flexDirection: 'column', gap: 14 }}>
         <label style={labelStyle}>
           رقم الجوال
           <input
@@ -76,12 +93,13 @@ export default function AssociationSettingsPage() {
         )}
         {saved && <p style={successStyle}>تم حفظ الإعدادات.</p>}
 
-        <div>
-          <button type="submit" disabled={busy} style={primaryButtonStyle}>
-            {busy ? 'جارٍ الحفظ…' : 'حفظ'}
-          </button>
-        </div>
-      </form>
-    </main>
+          <div>
+            <button type="submit" disabled={busy} style={primaryButtonStyle}>
+              {busy ? 'جارٍ الحفظ…' : 'حفظ'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </AppShell>
   );
 }

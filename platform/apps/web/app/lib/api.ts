@@ -57,6 +57,11 @@ export interface ReferenceData {
   associationSectors: string[];
   /** NODE-3: قائمة الحالات الاجتماعية المعتمدة — يعيدها الخادم أصلًا منذ NODE-1. */
   socialStatuses: string[];
+  deviceTypes: string[];
+  deviceSpecsByType: Record<string, string[]>;
+  suppliers: string[];
+  differenceReasons: string[];
+  receiverTitles: string[];
   applicationQuestions: { key: string; label: string }[];
   pledgeText: string;
   ready: boolean;
@@ -64,6 +69,41 @@ export interface ReferenceData {
 
 export function getReferenceData(): Promise<ReferenceData> {
   return apiFetch<ReferenceData>('/reference-values');
+}
+
+export type ReferenceValueType =
+  | 'REGION'
+  | 'CITY'
+  | 'ASSOCIATION_CATEGORY'
+  | 'SOCIAL_STATUS'
+  | 'DEVICE_TYPE'
+  | 'ASSOCIATION_SECTOR'
+  | 'DEVICE_SPEC'
+  | 'SUPPLIER'
+  | 'DIFFERENCE_REASON'
+  | 'RECEIVER_TITLE';
+
+export const REFERENCE_VALUE_TYPE_LABELS: Record<ReferenceValueType, string> = {
+  REGION: 'منطقة',
+  CITY: 'مدينة',
+  ASSOCIATION_CATEGORY: 'تصنيف جمعية',
+  SOCIAL_STATUS: 'حالة اجتماعية',
+  DEVICE_TYPE: 'نوع جهاز',
+  ASSOCIATION_SECTOR: 'قطاع جمعية',
+  DEVICE_SPEC: 'مواصفة جهاز',
+  SUPPLIER: 'مورّد',
+  DIFFERENCE_REASON: 'سبب فرق',
+  RECEIVER_TITLE: 'صفة المستلم',
+};
+
+/** الأنواع التي تشترط اختيار أب (REGION لِCITY، DEVICE_TYPE لِDEVICE_SPEC) — يطابق REQUIRED_PARENT_TYPE في الخادم. */
+export const REFERENCE_VALUE_PARENT_TYPE: Partial<Record<ReferenceValueType, ReferenceValueType>> = {
+  CITY: 'REGION',
+  DEVICE_SPEC: 'DEVICE_TYPE',
+};
+
+export function addReferenceValue(input: { type: ReferenceValueType; value: string; parentValue?: string }): Promise<{ ok: true; id: string; value: string }> {
+  return apiFetch(`/reference-values`, { method: 'POST', body: JSON.stringify({ ...input, opId: newOpId() }) });
 }
 
 export type ApplicationStatus = 'UNDER_REVIEW' | 'ACCEPTED' | 'REJECTED';
@@ -185,6 +225,60 @@ export const DEVICE_TYPE_LABELS: Record<DeviceType, string> = {
 };
 
 export const DEVICE_TYPES: DeviceType[] = ['REFRIGERATOR', 'OVEN', 'WASHING_MACHINE'];
+
+/** BEN-013 — صف استيراد واحد، يطابق BeneficiaryImportRowDto (بلا opId — على مستوى الدفعة كاملة). */
+export interface BeneficiaryImportRow {
+  name: string;
+  region: string;
+  city: string;
+  district: string;
+  phone: string;
+  phone2?: string;
+  familyCount: number;
+  socialSecurity?: boolean;
+  socialStatus: string;
+  income?: number;
+  notes?: string;
+  lat?: number | null;
+  lng?: number | null;
+  deviceTypes: DeviceType[];
+}
+
+export type BeneficiaryImportResult =
+  | { ok: true; createdCount: number; beneficiaryIds: string[]; replayed: boolean }
+  | { ok: false; errors: { row: number; message: string }[] };
+
+export function importBeneficiaries(input: { associationId?: string; acceptedPledge: boolean; rows: BeneficiaryImportRow[] }): Promise<BeneficiaryImportResult> {
+  return apiFetch(`/beneficiaries/import`, { method: 'POST', body: JSON.stringify({ ...input, opId: newOpId() }) });
+}
+
+/** BEN-014 — معاينة ملف Excel فقط، بلا أي كتابة (يوازي inspectBeneficiaryExcel). */
+export interface XlsxPreviewRow {
+  row: number;
+  raw: Record<string, string>;
+  valid: boolean;
+  error?: string;
+  parsed?: BeneficiaryImportRow;
+}
+
+export function previewXlsxImport(file: File): Promise<{ ok: true; headers: string[]; rows: XlsxPreviewRow[] }> {
+  const form = new FormData();
+  form.set('file', file);
+  return apiUpload('/beneficiaries/import/preview-xlsx', form);
+}
+
+/** يوازي downloadImportTemplateXlsx القديمة — يبدأ تنزيل قالب Excel حقيقي من الخادم. */
+export async function downloadXlsxTemplate(): Promise<void> {
+  const res = await fetch(`${API_BASE}/beneficiaries/import/template.xlsx`, { credentials: 'include' });
+  if (!res.ok) throw new ApiClientError('DOWNLOAD_FAILED', 'تعذّر تنزيل القالب.');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'beneficiary-import-template.xlsx';
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export interface BeneficiaryNeed {
   id: string;
@@ -442,4 +536,233 @@ export function listDeviceUnits(params: { page?: number; pageSize?: number; asso
 
 export function getDeviceUnit(id: string): Promise<DeviceUnitSummary & { receiptBatchId: string | null; receiptBatchPublicCode: string | null }> {
   return apiFetch(`/inventory/devices/${id}`);
+}
+
+/** DEV-005/006 (نطاق مصغَّر) — تصحيح نوع/مواصفة جهاز لا يزال بالمستودع فقط. */
+export function updateDeviceUnit(id: string, input: { deviceType?: DeviceType; spec?: string }): Promise<{ ok: true; id: string }> {
+  return apiFetch(`/inventory/devices/${id}`, { method: 'PATCH', body: JSON.stringify({ ...input, opId: newOpId() }) });
+}
+
+export function markDeviceDamaged(id: string, notes?: string): Promise<{ ok: true; id: string }> {
+  return apiFetch(`/inventory/devices/${id}/mark-damaged`, { method: 'POST', body: JSON.stringify({ notes, opId: newOpId() }) });
+}
+
+// ============================================================
+// NODE-6 — المناديب + الإسناد + مهام التسليم
+// ============================================================
+export type AccountStatus = 'ACTIVE' | 'SUSPENDED';
+
+export const ACCOUNT_STATUS_LABELS: Record<AccountStatus, string> = { ACTIVE: 'نشط', SUSPENDED: 'معطَّل' };
+
+export interface DelegateSummary {
+  id: string;
+  publicCode: string;
+  name: string;
+  phone: string | null;
+  status: AccountStatus;
+  associationId: string;
+  lastLoginAt: string | null;
+  createdAt: string;
+}
+
+export function listDelegates(params: { page?: number; pageSize?: number; search?: string; associationId?: string; status?: AccountStatus } = {}): Promise<Paginated<DelegateSummary>> {
+  const q = new URLSearchParams();
+  if (params.page) q.set('page', String(params.page));
+  if (params.pageSize) q.set('pageSize', String(params.pageSize));
+  if (params.search) q.set('search', params.search);
+  if (params.associationId) q.set('associationId', params.associationId);
+  if (params.status) q.set('status', params.status);
+  return apiFetch(`/delegates?${q.toString()}`);
+}
+
+export function getDelegate(id: string): Promise<DelegateSummary> {
+  return apiFetch(`/delegates/${id}`);
+}
+
+export function createDelegate(input: { name: string; phone: string; associationId?: string }): Promise<{ ok: true; delegateId: string; accessCode: string | null }> {
+  return apiFetch(`/delegates`, { method: 'POST', body: JSON.stringify({ ...input, opId: newOpId() }) });
+}
+
+export function updateDelegate(id: string, input: { name?: string; phone?: string }): Promise<{ ok: true }> {
+  return apiFetch(`/delegates/${id}`, { method: 'PATCH', body: JSON.stringify(input) });
+}
+
+export function setDelegateStatus(id: string, status: AccountStatus): Promise<{ ok: true }> {
+  return apiFetch(`/delegates/${id}/status`, { method: 'POST', body: JSON.stringify({ status }) });
+}
+
+export function regenerateDelegateCode(id: string): Promise<{ ok: true; accessCode: string }> {
+  return apiFetch(`/delegates/${id}/regenerate-code`, { method: 'POST' });
+}
+
+export type DeliveryStatus = 'NOT_STARTED' | 'PREPARING' | 'OUT_WITH_DELEGATE' | 'DELIVERED' | 'DELIVERY_FAILED' | 'RETURNED';
+
+export const DELIVERY_STATUS_LABELS: Record<DeliveryStatus, string> = {
+  NOT_STARTED: 'لم يبدأ',
+  PREPARING: 'جاري التجهيز',
+  OUT_WITH_DELEGATE: 'مع المندوب',
+  DELIVERED: 'تم التسليم',
+  DELIVERY_FAILED: 'تعذّر التسليم',
+  RETURNED: 'أعيد للمستودع',
+};
+
+export type DeliveryFailureReason = 'COULD_NOT_REACH' | 'NO_ANSWER' | 'POSTPONEMENT_REQUESTED' | 'INCORRECT_ADDRESS' | 'NOT_FOUND' | 'RECEIPT_REFUSED';
+
+export const DELIVERY_FAILURE_REASON_LABELS: Record<DeliveryFailureReason, string> = {
+  COULD_NOT_REACH: 'لم يتم التواصل',
+  NO_ANSWER: 'لا يرد',
+  POSTPONEMENT_REQUESTED: 'طلب تأجيل',
+  INCORRECT_ADDRESS: 'العنوان غير صحيح',
+  NOT_FOUND: 'غير موجود',
+  RECEIPT_REFUSED: 'رفض الاستلام',
+};
+
+export interface DeliveryMissionSummary {
+  id: string;
+  publicCode: string;
+  status: DeliveryStatus;
+  assignedAt: string | null;
+  createdAt: string;
+  beneficiaryId: string;
+  associationId: string;
+  delegateAccountId: string | null;
+  beneficiary: { name: string; region: string; city: string; district: string | null; phone: string; latitude: number | null; longitude: number | null };
+  delegate: { name: string; phone: string | null } | null;
+}
+
+export interface DeliveryAttemptSummary {
+  id: string;
+  publicCode: string;
+  status: DeliveryStatus;
+  failureReason: DeliveryFailureReason | null;
+  notes: string | null;
+  attemptedAt: string;
+  hasProof: boolean;
+}
+
+export interface DeliveryMissionDetail extends DeliveryMissionSummary {
+  beneficiary: DeliveryMissionSummary['beneficiary'] & { address: string };
+  delegate: (DeliveryMissionSummary['delegate'] & { publicCode: string }) | null;
+  attempts: DeliveryAttemptSummary[];
+}
+
+export function listDeliveries(params: { page?: number; pageSize?: number; associationId?: string; delegateId?: string; beneficiaryId?: string; status?: DeliveryStatus } = {}): Promise<Paginated<DeliveryMissionSummary>> {
+  const q = new URLSearchParams();
+  if (params.page) q.set('page', String(params.page));
+  if (params.pageSize) q.set('pageSize', String(params.pageSize));
+  if (params.associationId) q.set('associationId', params.associationId);
+  if (params.delegateId) q.set('delegateId', params.delegateId);
+  if (params.beneficiaryId) q.set('beneficiaryId', params.beneficiaryId);
+  if (params.status) q.set('status', params.status);
+  return apiFetch(`/deliveries?${q.toString()}`);
+}
+
+export function getDelivery(id: string): Promise<DeliveryMissionDetail> {
+  return apiFetch(`/deliveries/${id}`);
+}
+
+export function assignDelegate(beneficiaryId: string, delegateId: string): Promise<{ ok: true; missionId: string }> {
+  return apiFetch(`/deliveries/assign`, { method: 'POST', body: JSON.stringify({ beneficiaryId, delegateId, opId: newOpId() }) });
+}
+
+export function confirmDelivery(missionId: string, proofPhoto: File): Promise<{ ok: true; attemptId: string }> {
+  const form = new FormData();
+  form.set('opId', newOpId());
+  form.set('proofPhoto', proofPhoto);
+  return apiUpload(`/deliveries/${missionId}/confirm`, form);
+}
+
+export function failDelivery(missionId: string, failureReason: DeliveryFailureReason, notes?: string): Promise<{ ok: true; attemptId: string }> {
+  return apiFetch(`/deliveries/${missionId}/fail`, { method: 'POST', body: JSON.stringify({ failureReason, notes, opId: newOpId() }) });
+}
+
+export function retryDelivery(missionId: string): Promise<{ ok: true }> {
+  return apiFetch(`/deliveries/${missionId}/retry`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) });
+}
+
+/** تخلٍّ نهائي عن التسليم — الجهاز يعود فعليًا للمستودع (يوازي "أعيد للجمعية/المستودع" القديمة). */
+export function returnDelivery(missionId: string, notes?: string): Promise<{ ok: true; attemptId: string }> {
+  return apiFetch(`/deliveries/${missionId}/return`, { method: 'POST', body: JSON.stringify({ notes, opId: newOpId() }) });
+}
+
+export function getDeliveryProofUrl(attemptId: string): Promise<{ url: string }> {
+  return apiFetch(`/deliveries/attempts/${attemptId}/proof`);
+}
+
+/** BEN-016/017 — تعديل/تأكيد موقع مستفيد فقط (لا حقول أخرى) — متاح لِADMIN/ASSOCIATION/DELEGATE (الأخير لمستفيده المُسنَد حاليًا حصرًا). */
+export function updateBeneficiaryLocation(beneficiaryId: string, input: { lat: number; lng: number; locationSource?: string }): Promise<{ ok: true }> {
+  return apiFetch(`/beneficiaries/${beneficiaryId}/location`, { method: 'PATCH', body: JSON.stringify({ ...input, opId: newOpId() }) });
+}
+
+// ============================================================
+// NODE-7 — متابعة المشروع (أنشطة) + سجل العمليات
+// ============================================================
+export type ActivityStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'LATE' | 'COMPLETED';
+
+export const ACTIVITY_STATUS_LABELS: Record<ActivityStatus, string> = {
+  NOT_STARTED: 'لم يبدأ',
+  IN_PROGRESS: 'جارٍ',
+  LATE: 'متأخر',
+  COMPLETED: 'مكتمل',
+};
+
+export interface Activity {
+  id: string;
+  phaseOrder: number;
+  phaseName: string;
+  mainActivityOrder: number;
+  mainActivityName: string;
+  subActivityName: string | null;
+  responsible: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  completionPercent: string;
+  status: ActivityStatus;
+  notes: string | null;
+  evidenceUrl: string | null;
+  evidence: { id: string; approvalStatus: string; notes: string | null; uploadedAt: string }[];
+}
+
+export function listActivities(): Promise<Activity[]> {
+  return apiFetch(`/activities`);
+}
+
+export interface SaveActivityInput {
+  id?: string;
+  phaseOrder: number;
+  phaseName: string;
+  mainActivityOrder: number;
+  mainActivityName: string;
+  subActivityName?: string;
+  responsible?: string;
+  startDate?: string;
+  endDate?: string;
+  completionPercent?: number;
+  status: ActivityStatus;
+  notes?: string;
+  evidenceUrl?: string;
+}
+
+export function saveActivity(input: SaveActivityInput): Promise<{ ok: true; activityId: string }> {
+  return apiFetch(`/activities`, { method: 'POST', body: JSON.stringify(input) });
+}
+
+export interface AuditLogEntry {
+  id: string;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+  actorAccount: { name: string; role: string; publicCode: string } | null;
+}
+
+export function listAuditLog(params: { page?: number; pageSize?: number; associationId?: string; entityType?: string; entityId?: string } = {}): Promise<Paginated<AuditLogEntry>> {
+  const q = new URLSearchParams();
+  if (params.page) q.set('page', String(params.page));
+  if (params.pageSize) q.set('pageSize', String(params.pageSize));
+  if (params.associationId) q.set('associationId', params.associationId);
+  if (params.entityType) q.set('entityType', params.entityType);
+  if (params.entityId) q.set('entityId', params.entityId);
+  return apiFetch(`/audit?${q.toString()}`);
 }

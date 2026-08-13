@@ -1,0 +1,297 @@
+'use client';
+
+import { useCallback, useEffect, useState } from 'react';
+import {
+  ApiClientError,
+  ACCOUNT_STATUS_LABELS,
+  createDelegate,
+  listDelegates,
+  regenerateDelegateCode,
+  setDelegateStatus,
+  updateDelegate,
+  type AccountStatus,
+  type DelegateSummary,
+  type Paginated,
+} from '../../lib/api';
+import { useRoleGuard } from '../../lib/use-role-guard';
+import { AppShell } from '../../components/AppShell';
+import { AssociationSelect } from '../../lib/association-select';
+import { initialQueryParam } from '../../lib/query';
+import { buildWhatsAppShareUrl, delegateWelcomeMessage } from '../../lib/credential-share';
+import {
+  cardStyle,
+  errorStyle,
+  inputStyle,
+  labelStyle,
+  ltrStyle,
+  modalOverlayStyle,
+  modalStyle,
+  mutedStyle,
+  primaryButtonStyle,
+  secondaryButtonStyle,
+  statusBadgeStyle,
+  successStyle,
+  tableStyle,
+  tdStyle,
+  thStyle,
+} from '../../lib/ui';
+
+const PAGE_SIZE = 25;
+
+/** ADMIN — إدارة المناديب عبر كل الجمعيات: إنشاء (يصدر رمز دخول مرة واحدة)، تفعيل/تعطيل، إعادة توليد الرمز. يوازي Delegates.gs (DEL-001..004). */
+export default function AdminDelegatesPage() {
+  const { user, loading: guardLoading } = useRoleGuard(['ADMIN']);
+
+  const [data, setData] = useState<Paginated<DelegateSummary> | null>(null);
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [associationId, setAssociationId] = useState('');
+  const [status, setStatus] = useState<'' | AccountStatus>(() => (initialQueryParam('status') as AccountStatus) || '');
+  const [listError, setListError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const [editing, setEditing] = useState<DelegateSummary | 'new' | null>(null);
+  const [revealedCode, setRevealedCode] = useState<{ name: string; code: string; phone: string } | null>(null);
+
+  const load = useCallback(async () => {
+    setListError(null);
+    try {
+      setData(await listDelegates({ page, pageSize: PAGE_SIZE, search: search || undefined, associationId: associationId || undefined, status: status || undefined }));
+    } catch (err) {
+      setListError(err instanceof ApiClientError ? err.message : 'تعذّر تحميل قائمة المناديب.');
+    }
+  }, [page, search, associationId, status]);
+
+  useEffect(() => {
+    if (user) void load();
+  }, [user, load]);
+
+  async function toggleStatus(row: DelegateSummary) {
+    const next = row.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
+    const confirmed = window.confirm(next === 'SUSPENDED' ? `تعطيل «${row.name}» سيُنهي جلسته فورًا. متابعة؟` : `إعادة تفعيل «${row.name}»؟`);
+    if (!confirmed) return;
+    try {
+      await setDelegateStatus(row.id, next);
+      setNotice(next === 'SUSPENDED' ? 'تم تعطيل المندوب وإنهاء جلسته.' : 'تم تفعيل المندوب.');
+      await load();
+    } catch (err) {
+      setListError(err instanceof ApiClientError ? err.message : 'تعذّر تغيير حالة المندوب.');
+    }
+  }
+
+  async function regenerateCode(row: DelegateSummary) {
+    if (!window.confirm(`إعادة توليد رمز دخول «${row.name}»؟ الرمز الحالي سيتوقف عن العمل فورًا، وستُنهى أي جلسة مفتوحة له.`)) return;
+    try {
+      const res = await regenerateDelegateCode(row.id);
+      setRevealedCode({ name: row.name, code: res.accessCode, phone: row.phone ?? '' });
+    } catch (err) {
+      setListError(err instanceof ApiClientError ? err.message : 'تعذّرت إعادة توليد الرمز.');
+    }
+  }
+
+  if (guardLoading || !user) return null;
+
+  return (
+    <AppShell user={user}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+        <h1 style={{ fontSize: 22 }}>المناديب</h1>
+        <button type="button" style={primaryButtonStyle} onClick={() => setEditing('new')}>
+          إضافة مندوب
+        </button>
+      </div>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          setPage(1);
+          setSearch(searchInput.trim());
+        }}
+        style={{ ...cardStyle, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 16 }}
+      >
+        <label style={{ ...labelStyle, flex: '1 1 220px' }}>
+          بحث (اسم/رمز/جوال)
+          <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} style={inputStyle} />
+        </label>
+        <div style={{ minWidth: 220 }}>
+          <AssociationSelect value={associationId} onChange={(id) => { setPage(1); setAssociationId(id); }} />
+        </div>
+        <label style={{ ...labelStyle, flex: '0 1 180px' }}>
+          الحالة
+          <select value={status} onChange={(e) => { setPage(1); setStatus(e.target.value as '' | AccountStatus); }} style={inputStyle}>
+            <option value="">الكل</option>
+            <option value="ACTIVE">نشط</option>
+            <option value="SUSPENDED">معطَّل</option>
+          </select>
+        </label>
+        <button type="submit" style={primaryButtonStyle}>بحث</button>
+      </form>
+
+      {listError && <p role="alert" style={errorStyle}>{listError}</p>}
+      {notice && <p style={successStyle}>{notice}</p>}
+
+      <div style={{ ...cardStyle, padding: 0, overflowX: 'auto' }}>
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={thStyle}>الاسم</th>
+              <th style={thStyle}>الرمز</th>
+              <th style={thStyle}>الجوال</th>
+              <th style={thStyle}>الحالة</th>
+              <th style={thStyle}>آخر دخول</th>
+              <th style={thStyle} />
+            </tr>
+          </thead>
+          <tbody>
+            {data?.items.length === 0 && (
+              <tr><td style={{ ...tdStyle, textAlign: 'center' }} colSpan={6}>لا يوجد مناديب مطابقون.</td></tr>
+            )}
+            {data?.items.map((row) => (
+              <tr key={row.id}>
+                <td style={tdStyle}>{row.name}</td>
+                <td style={{ ...tdStyle, ...ltrStyle }}>{row.publicCode}</td>
+                <td style={{ ...tdStyle, ...ltrStyle }}>{row.phone ?? '—'}</td>
+                <td style={tdStyle}>
+                  <span style={statusBadgeStyle(row.status === 'ACTIVE' ? 'good' : 'bad')}>{ACCOUNT_STATUS_LABELS[row.status]}</span>
+                </td>
+                <td style={tdStyle}>{row.lastLoginAt ? new Date(row.lastLoginAt).toLocaleString('ar-SA') : 'لم يسجّل دخول بعد'}</td>
+                <td style={tdStyle}>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button type="button" style={secondaryButtonStyle} onClick={() => setEditing(row)}>تعديل</button>
+                    <button type="button" style={secondaryButtonStyle} onClick={() => toggleStatus(row)}>
+                      {row.status === 'ACTIVE' ? 'تعطيل' : 'تفعيل'}
+                    </button>
+                    <button type="button" style={secondaryButtonStyle} onClick={() => regenerateCode(row)}>إعادة توليد الرمز</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {data && data.totalPages > 1 && (
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 16, flexWrap: 'wrap' }}>
+          <button type="button" style={secondaryButtonStyle} disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>السابق</button>
+          <span style={mutedStyle}>صفحة {data.page} من {data.totalPages} — {data.total} مندوب</span>
+          <button type="button" style={secondaryButtonStyle} disabled={page >= data.totalPages} onClick={() => setPage((p) => p + 1)}>التالي</button>
+        </div>
+      )}
+
+      {editing && (
+        <DelegateForm
+          delegate={editing === 'new' ? null : editing}
+          onClose={() => setEditing(null)}
+          onSaved={(message, code, phone, name) => {
+            setEditing(null);
+            setNotice(message);
+            if (code) setRevealedCode({ name: name ?? 'المندوب الجديد', code, phone: phone ?? '' });
+            void load();
+          }}
+        />
+      )}
+
+      {revealedCode && (
+        <div style={modalOverlayStyle} role="dialog" aria-modal="true">
+          <section style={{ ...modalStyle, maxWidth: 520 }}>
+            <h2 style={{ fontSize: 19, marginBottom: 12 }}>رمز دخول المندوب — {revealedCode.name}</h2>
+            <p style={{ ...cardStyle, background: 'var(--zad-100)', borderColor: 'var(--zad-300)', fontWeight: 700 }}>
+              يظهر مرة واحدة فقط ولن يُعرض مجددًا — انسخه وسلّمه للمندوب الآن.
+            </p>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+              <code style={{ ...ltrStyle, fontSize: 20, padding: '10px 14px', background: 'var(--canvas)', borderRadius: 'var(--r-sm)' }}>{revealedCode.code}</code>
+              <button type="button" style={secondaryButtonStyle} onClick={() => navigator.clipboard.writeText(revealedCode.code)}>نسخ</button>
+            </div>
+            <div style={{ marginTop: 14, display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+              <button
+                type="button"
+                style={secondaryButtonStyle}
+                onClick={() => navigator.clipboard.writeText(delegateWelcomeMessage(revealedCode.name, revealedCode.code))}
+              >
+                ⧉ نسخ الرسالة كاملة
+              </button>
+              {(() => {
+                const waUrl = buildWhatsAppShareUrl(revealedCode.phone, delegateWelcomeMessage(revealedCode.name, revealedCode.code));
+                return waUrl ? (
+                  <a href={waUrl} target="_blank" rel="noopener noreferrer" style={{ ...primaryButtonStyle, textDecoration: 'none', display: 'inline-block' }}>
+                    إرسال عبر واتساب
+                  </a>
+                ) : (
+                  <span style={mutedStyle}>رقم الجوال غير صالح لإرسال واتساب مباشر.</span>
+                );
+              })()}
+            </div>
+            <div style={{ marginTop: 20 }}>
+              <button type="button" style={primaryButtonStyle} onClick={() => setRevealedCode(null)}>إغلاق</button>
+            </div>
+          </section>
+        </div>
+      )}
+    </AppShell>
+  );
+}
+
+function DelegateForm({ delegate, onClose, onSaved }: { delegate: DelegateSummary | null; onClose: () => void; onSaved: (message: string, code?: string, phone?: string, name?: string) => void }) {
+  const isNew = delegate === null;
+  const [name, setName] = useState(delegate?.name ?? '');
+  const [phone, setPhone] = useState(delegate?.phone ?? '');
+  const [associationId, setAssociationId] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    try {
+      if (isNew) {
+        if (!associationId) throw new ApiClientError('DELEGATE_ASSOCIATION_REQUIRED', 'يجب اختيار الجمعية');
+        const res = await createDelegate({ name, phone, associationId });
+        onSaved('تم إنشاء المندوب وإصدار رمز دخوله.', res.accessCode ?? undefined, phone, name);
+      } else {
+        await updateDelegate(delegate.id, { name, phone });
+        onSaved('تم حفظ تعديلات المندوب.');
+      }
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : 'تعذّر الحفظ. حاول مرة أخرى.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={modalOverlayStyle} role="dialog" aria-modal="true">
+      <form onSubmit={save} style={{ ...modalStyle, maxWidth: 480, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+          <h2 style={{ fontSize: 19 }}>{isNew ? 'إضافة مندوب' : `تعديل — ${delegate.name}`}</h2>
+          <button type="button" style={secondaryButtonStyle} onClick={onClose}>إغلاق</button>
+        </div>
+
+        {isNew && (
+          <label style={labelStyle}>
+            الجمعية
+            <AssociationSelect value={associationId} onChange={setAssociationId} />
+          </label>
+        )}
+
+        <label style={labelStyle}>
+          اسم المندوب
+          <input required maxLength={120} value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
+        </label>
+
+        <label style={labelStyle}>
+          رقم الجوال
+          <input required placeholder="05XXXXXXXX" value={phone} onChange={(e) => setPhone(e.target.value)} style={{ ...inputStyle, ...ltrStyle }} />
+        </label>
+
+        {isNew && <p style={mutedStyle}>سيُصدَر رمز دخول عشوائي (MND-XXXXXX) ويظهر مرة واحدة فقط بعد الحفظ.</p>}
+
+        {error && <p role="alert" style={errorStyle}>{error}</p>}
+
+        <div>
+          <button type="submit" disabled={busy} style={primaryButtonStyle}>{busy ? 'جارٍ الحفظ…' : 'حفظ'}</button>
+        </div>
+      </form>
+    </div>
+  );
+}

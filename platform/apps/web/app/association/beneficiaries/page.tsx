@@ -18,7 +18,10 @@ import {
   type ReferenceData,
   type SaveResult,
 } from '../../lib/api';
+import { BulkImportButton } from '../../lib/beneficiary-import';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { AppShell } from '../../components/AppShell';
+import { initialQueryParam } from '../../lib/query';
 import {
   cardStyle,
   errorStyle,
@@ -27,7 +30,6 @@ import {
   modalOverlayStyle,
   modalStyle,
   mutedStyle,
-  pageStyle,
   primaryButtonStyle,
   secondaryButtonStyle,
   statusBadgeStyle,
@@ -102,6 +104,7 @@ export default function AssociationBeneficiariesPage() {
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [locationStatus, setLocationStatus] = useState('');
+  const [reviewStatus, setReviewStatus] = useState<'' | BeneficiaryReviewStatus>(() => (initialQueryParam('reviewStatus') as BeneficiaryReviewStatus) || '');
   const [loading, setLoading] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -113,6 +116,7 @@ export default function AssociationBeneficiariesPage() {
     const params = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE) });
     if (search) params.set('search', search);
     if (locationStatus) params.set('locationStatus', locationStatus);
+    if (reviewStatus) params.set('reviewStatus', reviewStatus);
     try {
       setData(await apiFetch<Paginated<BeneficiarySummary>>(`/beneficiaries?${params.toString()}`));
     } catch (err) {
@@ -120,7 +124,7 @@ export default function AssociationBeneficiariesPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, locationStatus]);
+  }, [page, search, locationStatus, reviewStatus]);
 
   useEffect(() => {
     if (!user) return;
@@ -144,7 +148,7 @@ export default function AssociationBeneficiariesPage() {
   if (guardLoading || !user) return null;
 
   return (
-    <main style={pageStyle}>
+    <AppShell user={user}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h1 style={{ color: 'var(--zad-800)', marginBottom: 4 }}>المستفيدون</h1>
@@ -152,9 +156,12 @@ export default function AssociationBeneficiariesPage() {
             كل مستفيد جديد يجب أن يحمل احتياجًا واحدًا على الأقل. الاحتياجات قابلة للتعديل ما دام المستفيد تحت المراجعة.
           </p>
         </div>
-        <button type="button" style={primaryButtonStyle} onClick={() => setEditing('new')}>
-          ＋ إضافة مستفيد
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <BulkImportButton isAdmin={false} onImported={() => void load()} />
+          <button type="button" style={primaryButtonStyle} onClick={() => setEditing('new')}>
+            ＋ إضافة مستفيد
+          </button>
+        </div>
       </div>
 
       <div style={{ ...cardStyle, marginTop: 16, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
@@ -187,6 +194,22 @@ export default function AssociationBeneficiariesPage() {
             <option value="">الكل</option>
             <option value="PENDING">بانتظار تحديد الموقع</option>
             <option value="CONFIRMED">موقع مؤكد</option>
+          </select>
+        </label>
+        <label style={{ ...labelStyle, flex: '0 1 220px' }}>
+          حالة المراجعة
+          <select
+            style={inputStyle}
+            value={reviewStatus}
+            onChange={(e) => {
+              setPage(1);
+              setReviewStatus(e.target.value as '' | BeneficiaryReviewStatus);
+            }}
+          >
+            <option value="">الكل</option>
+            <option value="UNDER_REVIEW">تحت المراجعة</option>
+            <option value="APPROVED">معتمد</option>
+            <option value="REJECTED">مرفوض</option>
           </select>
         </label>
         <button
@@ -275,7 +298,7 @@ export default function AssociationBeneficiariesPage() {
           }}
         />
       )}
-    </main>
+    </AppShell>
   );
 }
 
@@ -559,6 +582,16 @@ function BeneficiaryForm({
           <button type="button" style={secondaryButtonStyle} onClick={clearLocation}>
             ✕ مسح الموقع
           </button>
+          {form.lat && form.lng && (
+            <a
+              href={`https://www.google.com/maps?q=${form.lat},${form.lng}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ ...secondaryButtonStyle, textDecoration: 'none', display: 'inline-block' }}
+            >
+              فتح في خرائط Google
+            </a>
+          )}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
           <label style={labelStyle}>

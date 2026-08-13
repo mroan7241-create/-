@@ -11,6 +11,9 @@ import {
   type ReviewResult,
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { AppShell } from '../../components/AppShell';
+import { initialQueryParam } from '../../lib/query';
+import { associationAcceptMessage, buildWhatsAppShareUrl } from '../../lib/credential-share';
 import {
   cardStyle,
   dangerButtonStyle,
@@ -21,7 +24,6 @@ import {
   modalOverlayStyle,
   modalStyle,
   mutedStyle,
-  pageStyle,
   primaryButtonStyle,
   secondaryButtonStyle,
   statusBadgeStyle,
@@ -40,7 +42,7 @@ export default function AdminApplicationsPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
-  const [status, setStatus] = useState<'' | ApplicationStatus>('');
+  const [status, setStatus] = useState<'' | ApplicationStatus>(() => (initialQueryParam('status') as ApplicationStatus) || '');
   const [listError, setListError] = useState<string | null>(null);
   const [selected, setSelected] = useState<ApplicationSummary | null>(null);
 
@@ -63,7 +65,7 @@ export default function AdminApplicationsPage() {
   if (guardLoading || !user) return null;
 
   return (
-    <main style={pageStyle}>
+    <AppShell user={user}>
       <h1 style={{ fontSize: 22, marginBottom: 16 }}>طلبات انضمام الجمعيات</h1>
 
       <form
@@ -178,7 +180,7 @@ export default function AdminApplicationsPage() {
           }}
         />
       )}
-    </main>
+    </AppShell>
   );
 }
 
@@ -272,6 +274,32 @@ function ApplicationDetail({
                 >
                   {copied ? 'تم النسخ' : 'نسخ'}
                 </button>
+              </div>
+              <div style={{ marginTop: 14, display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                <button
+                  type="button"
+                  style={secondaryButtonStyle}
+                  onClick={() =>
+                    navigator.clipboard.writeText(
+                      associationAcceptMessage(application.name, application.email ?? '', outcome.temporaryPassword ?? ''),
+                    )
+                  }
+                >
+                  ⧉ نسخ الرسالة كاملة
+                </button>
+                {(() => {
+                  const waUrl = buildWhatsAppShareUrl(
+                    application.phone,
+                    associationAcceptMessage(application.name, application.email ?? '', outcome.temporaryPassword ?? ''),
+                  );
+                  return waUrl ? (
+                    <a href={waUrl} target="_blank" rel="noopener noreferrer" style={{ ...primaryButtonStyle, textDecoration: 'none', display: 'inline-block' }}>
+                      إرسال عبر واتساب
+                    </a>
+                  ) : (
+                    <span style={mutedStyle}>رقم الجوال غير صالح لإرسال واتساب مباشر.</span>
+                  );
+                })()}
               </div>
             </>
           )}

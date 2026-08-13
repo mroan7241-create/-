@@ -13,6 +13,13 @@ export class AssociationsController {
   constructor(private readonly associations: AssociationsService) {}
 
   // ملاحظة ترتيب: 'me/settings' يجب أن يسبق ':id' حتى لا يُلتقَط كـid.
+  @Get('me/settings')
+  @Roles(AccountRole.ASSOCIATION)
+  @ApiOperation({ summary: 'قراءة إعدادات الجمعية الذاتية الحالية — لتعبئة نموذج التعديل مسبقًا' })
+  async getSelfSettings(@CurrentUser() ctx: AuthContext) {
+    return this.associations.getSelfSettings(ctx);
+  }
+
   @Patch('me/settings')
   @Roles(AccountRole.ASSOCIATION)
   @ApiOperation({ summary: 'إعدادات الجمعية الذاتية — phone/email فقط، associationId من الجلسة حصرًا' })

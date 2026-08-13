@@ -3,9 +3,11 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
+import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/http-exception.filter';
 import { assertProductionSecretsConfigured } from './config/auth.config';
+import { JSON_BODY_LIMIT } from './common/body-limit.const';
 
 async function bootstrap() {
   // يرفض الإقلاع بوضوح إن كان NODE_ENV=production وأي مفتاح HMAC أمني حسّاس ما زال بقيمته الافتراضية للتطوير.
@@ -14,7 +16,12 @@ async function bootstrap() {
   const corsOrigin = process.env.CORS_ORIGIN ?? 'http://localhost:3000';
   const app = await NestFactory.create(AppModule, {
     cors: { origin: corsOrigin, credentials: true },
+    // bodyParser الافتراضي حدّه 100kb (body-parser)، غير كافٍ لِBEN-013
+    // (استيراد حتى 1000 صف مستفيد دفعة JSON واحدة) — راجع body-limit.const.ts.
+    bodyParser: false,
   });
+  app.use(json({ limit: JSON_BODY_LIMIT }));
+  app.use(urlencoded({ extended: true, limit: JSON_BODY_LIMIT }));
 
   // HttpOnly session cookie (alzad_session) يُقرَأ من req.cookies هنا — لا localStorage/sessionStorage إطلاقًا.
   app.use(cookieParser());

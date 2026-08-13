@@ -171,9 +171,15 @@ REJECTED → REJECTED (حلقة ذاتية فقط — لا انتقال آخر)
 | أعيد للجمعية/المستودع | `RETURNED_TO_ASSOCIATION_WAREHOUSE` |
 | تم التسليم | `DELIVERED` |
 
-**حالة التنفيذ في NODE-3**: `APPROVED_ENTITLEMENT` وحدها هي التي تُكتب
-فعليًا حتى الآن (لحظة اعتماد الاحتياج). كل الحالات التسع الباقية تتطلب
-مخزون أجهزة/عهدة/تسليم لم تُهاجَر بعد — تُكتب في NODE-4/NODE-5.
+**حالة التنفيذ (محدَّثة 2026-08-13)**: 6 من 9 حالات تُكتب فعليًا الآن —
+`APPROVED_ENTITLEMENT` (NODE-3، لحظة اعتماد الاحتياج)، `AWAITING_DEVICE`/
+`DEVICE_READY`/`AWAITING_DELEGATE_ASSIGNMENT` (NODE-5، `auto-allocation.service.ts`)،
+`OUT_WITH_DELEGATE`/`DELIVERED` (NODE-6، `deliveries.service.ts`).
+`ASSIGNED_TO_DELEGATE_PENDING` دُمِجت عمدًا في خطوة الإسناد (قرار موثَّق —
+راجع أعلى `deliveries.service.ts`). أما `DEFERRED`/
+`AWAITING_RETURN_CONFIRMATION`/`RETURNED_TO_ASSOCIATION_WAREHOUSE` فلا
+تزال **غير منفَّذة** — لا مسار حاليًا للتخلي عن تسليم وإرجاع الجهاز
+للمستودع رسميًا؛ راجع PRODUCT_PARITY_MASTER.md §5.
 
 **جدول الانتقالات الكامل** (حرفيًا من `NEED_FULFILLMENT_TRANSITIONS_`):
 

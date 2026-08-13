@@ -10,6 +10,9 @@ import {
   type ReferenceData,
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { AppShell } from '../../components/AppShell';
+import { initialQueryParam } from '../../lib/query';
+import { associationAcceptMessage, buildWhatsAppShareUrl } from '../../lib/credential-share';
 import {
   cardStyle,
   dangerButtonStyle,
@@ -20,7 +23,6 @@ import {
   modalOverlayStyle,
   modalStyle,
   mutedStyle,
-  pageStyle,
   primaryButtonStyle,
   secondaryButtonStyle,
   statusBadgeStyle,
@@ -63,12 +65,12 @@ export default function AdminAssociationsPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
-  const [status, setStatus] = useState<'' | 'ACTIVE' | 'INACTIVE'>('');
+  const [status, setStatus] = useState<'' | 'ACTIVE' | 'INACTIVE'>(() => (initialQueryParam('status') as 'ACTIVE' | 'INACTIVE') || '');
   const [listError, setListError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const [editing, setEditing] = useState<AssociationSummary | 'new' | null>(null);
-  const [resetResult, setResetResult] = useState<{ name: string; password: string } | null>(null);
+  const [resetResult, setResetResult] = useState<{ name: string; password: string; phone: string; email: string } | null>(null);
 
   const load = useCallback(async () => {
     setListError(null);
@@ -110,7 +112,7 @@ export default function AdminAssociationsPage() {
     if (!window.confirm(`إعادة تعيين كلمة مرور حساب «${row.name}»؟ ستظهر كلمة المرور الجديدة مرة واحدة فقط.`)) return;
     try {
       const res = await apiFetch<{ temporaryPassword: string }>(`/auth/associations/${row.id}/reset-password`, { method: 'POST' });
-      setResetResult({ name: row.name, password: res.temporaryPassword });
+      setResetResult({ name: row.name, password: res.temporaryPassword, phone: row.phone ?? '', email: row.email ?? '' });
     } catch (err) {
       setListError(err instanceof ApiClientError ? err.message : 'تعذّرت إعادة تعيين كلمة المرور.');
     }
@@ -119,7 +121,7 @@ export default function AdminAssociationsPage() {
   if (guardLoading || !user) return null;
 
   return (
-    <main style={pageStyle}>
+    <AppShell user={user}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
         <h1 style={{ fontSize: 22 }}>الجمعيات</h1>
         <button type="button" style={primaryButtonStyle} onClick={() => setEditing('new')}>
@@ -262,6 +264,27 @@ export default function AdminAssociationsPage() {
                 نسخ
               </button>
             </div>
+            <div style={{ marginTop: 14, display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+              <button
+                type="button"
+                style={secondaryButtonStyle}
+                onClick={() =>
+                  navigator.clipboard.writeText(associationAcceptMessage(resetResult.name, resetResult.email, resetResult.password))
+                }
+              >
+                ⧉ نسخ الرسالة كاملة
+              </button>
+              {(() => {
+                const waUrl = buildWhatsAppShareUrl(resetResult.phone, associationAcceptMessage(resetResult.name, resetResult.email, resetResult.password));
+                return waUrl ? (
+                  <a href={waUrl} target="_blank" rel="noopener noreferrer" style={{ ...primaryButtonStyle, textDecoration: 'none', display: 'inline-block' }}>
+                    إرسال عبر واتساب
+                  </a>
+                ) : (
+                  <span style={mutedStyle}>رقم الجوال غير صالح لإرسال واتساب مباشر.</span>
+                );
+              })()}
+            </div>
             <div style={{ marginTop: 20 }}>
               <button type="button" style={primaryButtonStyle} onClick={() => setResetResult(null)}>
                 إغلاق
@@ -270,7 +293,7 @@ export default function AdminAssociationsPage() {
           </section>
         </div>
       )}
-    </main>
+    </AppShell>
   );
 }
 

@@ -247,6 +247,18 @@ export class AssociationsService {
   }
 
   // ================================================================
+  // ASSOCIATION self-settings — قراءة القيم الحالية (لتعبئة النموذج مسبقًا)
+  // ================================================================
+  async getSelfSettings(ctx: AuthContext): Promise<{ phone: string; email: string }> {
+    if (ctx.role !== AccountRole.ASSOCIATION || !ctx.associationId) throw authForbidden();
+    const [association, account] = await Promise.all([
+      prisma.association.findUniqueOrThrow({ where: { id: ctx.associationId }, select: { phones: true } }),
+      prisma.account.findUniqueOrThrow({ where: { id: ctx.accountId }, select: { email: true } }),
+    ]);
+    return { phone: association.phones[0] ?? '', email: account.email ?? '' };
+  }
+
+  // ================================================================
   // ASSOCIATION self-settings — phone/email فقط
   // ================================================================
   async updateSelfSettings(ctx: AuthContext, input: SelfSettingsInput) {

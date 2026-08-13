@@ -15,6 +15,9 @@ import {
   type Paginated,
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { AppShell } from '../../components/AppShell';
+import { initialQueryParam } from '../../lib/query';
+import { BulkImportButton } from '../../lib/beneficiary-import';
 import {
   cardStyle,
   errorStyle,
@@ -23,7 +26,6 @@ import {
   modalOverlayStyle,
   modalStyle,
   mutedStyle,
-  pageStyle,
   primaryButtonStyle,
   secondaryButtonStyle,
   statusBadgeStyle,
@@ -54,7 +56,7 @@ export default function AdminBeneficiariesPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
-  const [reviewStatus, setReviewStatus] = useState<'' | BeneficiaryReviewStatus>('');
+  const [reviewStatus, setReviewStatus] = useState<'' | BeneficiaryReviewStatus>(() => (initialQueryParam('reviewStatus') as BeneficiaryReviewStatus) || '');
   const [sortBy, setSortBy] = useState<'' | 'name' | 'city' | 'createdAt'>('');
   const [loading, setLoading] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
@@ -166,12 +168,17 @@ export default function AdminBeneficiariesPage() {
   if (guardLoading || !user) return null;
 
   return (
-    <main style={pageStyle}>
-      <h1 style={{ color: 'var(--zad-800)', marginBottom: 4 }}>مراجعة المستفيدين</h1>
-      <p style={mutedStyle}>
-        اعتماد المستفيد يستلزم اعتماد احتياج واحد على الأقل، ورفضه يغلق كل احتياجاته المعلَّقة بنفس السبب. القرار نهائي
-        ولا يُعاد فتحه.
-      </p>
+    <AppShell user={user}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h1 style={{ color: 'var(--zad-800)', marginBottom: 4 }}>مراجعة المستفيدين</h1>
+          <p style={mutedStyle}>
+            اعتماد المستفيد يستلزم اعتماد احتياج واحد على الأقل، ورفضه يغلق كل احتياجاته المعلَّقة بنفس السبب. القرار
+            نهائي ولا يُعاد فتحه.
+          </p>
+        </div>
+        <BulkImportButton isAdmin={true} onImported={() => void load()} />
+      </div>
 
       {/* شريط الأدوات — بحث/تصفية/ترتيب خادمية بالكامل */}
       <div style={{ ...cardStyle, marginTop: 16, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
@@ -383,7 +390,7 @@ export default function AdminBeneficiariesPage() {
           }}
         />
       )}
-    </main>
+    </AppShell>
   );
 }
 
@@ -452,6 +459,19 @@ function ReviewModal({
           <div>الحالة الاجتماعية: {detail.socialStatus}</div>
           <div>ضمان اجتماعي: {detail.socialSecurity ? 'نعم' : 'لا'}</div>
           <div style={{ gridColumn: '1 / -1' }}>العنوان: {detail.address}</div>
+          <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 10 }}>
+            الموقع: {detail.locationConfirmed ? 'مؤكَّد' : 'بانتظار تحديد الموقع'}
+            {detail.lat != null && detail.lng != null && (
+              <a
+                href={`https://www.google.com/maps?q=${detail.lat},${detail.lng}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ ...secondaryButtonStyle, textDecoration: 'none', display: 'inline-block', padding: '4px 10px', fontSize: 13 }}
+              >
+                فتح في خرائط Google
+              </a>
+            )}
+          </div>
         </div>
 
         <h3 style={{ marginBottom: 6 }}>الاحتياجات</h3>

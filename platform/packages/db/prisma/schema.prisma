@@ -127,6 +127,10 @@ enum DeliveryStatus {
   OUT_WITH_DELEGATE
   DELIVERED
   DELIVERY_FAILED
+  /// يوازي "أعيد للجمعية/المستودع" القديمة (النهاية الثانية الممكنة من "خرج مع المندوب"،
+  /// راجع STATE_MAPPING.md § need-fulfillment): تخلٍّ نهائي عن التسليم لا إعادة محاولة —
+  /// الجهاز يعود فعليًا للمستودع ويُعاد تقييم الاحتياج عبر AutoAllocation من جديد.
+  RETURNED
 }
 
 enum DeliveryFailureReason {
@@ -219,6 +223,11 @@ model Account {
   publicCode        String        @unique @map("public_code")
   name              String
   email             String?
+  /// NODE-6: رقم جوال المندوب (Delegates.gs — عمود "الهاتف"). عمود عام على
+  /// Account لا على جدول منفصل لأنه نفس الكيان الذي يحمل بالفعل ADMIN/
+  /// ASSOCIATION بلا جوال (nullable لهما). إضافة بحتة اختيارية — لا NOT NULL
+  /// على جدول يحمل صفوفًا فعلًا.
+  phone             String?
   role              AccountRole
   associationId     String?       @map("association_id") @db.Uuid
   status            AccountStatus @default(ACTIVE)
@@ -865,6 +874,10 @@ model Activity {
   completionPercent           Decimal @default(0) @map("completion_percent") @db.Decimal(5, 2)
   status                        String
   notes                            String?
+  /// EXEC-004 — يوازي "رابط الشاهد" (evidenceUrl) القديمة حرفيًا (Index.html activityForm):
+  /// حقل رابط نصي بسيط، لا رفع ملف. جدول ActivityEvidence (fileId+approvalStatus) بديل حديث
+  /// اختياري أثرى — لا مقابل له في القديم، لم يُبنَ بعد، ليس فجوة توافق.
+  evidenceUrl                        String? @map("evidence_url")
 
   createdAt                          DateTime @default(now()) @map("created_at")
   updatedAt                            DateTime @updatedAt @map("updated_at")

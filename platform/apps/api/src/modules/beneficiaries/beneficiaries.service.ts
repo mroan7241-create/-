@@ -25,6 +25,7 @@ import {
   normalizeNameForMatch,
 } from './beneficiary-location.util';
 import { acquirePhoneLocks } from './beneficiary-phone-lock.util';
+import { parseXlsxBeneficiaryRows, parseXlsxRowToImportRow } from './xlsx-import.util';
 import { ALLOCATION_TRIGGER_PORT, type AllocationTriggerPort } from '../allocation/allocation-trigger.port';
 import type { AuthContext } from '../auth/auth.types';
 
@@ -299,6 +300,191 @@ export class BeneficiariesService {
   }
 
   // ================================================================
+  // importBeneficiaries — BEN-013: استيراد جماعي ذرّي (JSON/CSV-row)
+  // ================================================================
+  /**
+   * يوازي `importBeneficiaries` القديمة (Beneficiaries.gs:363-517):
+   * تحقق كامل لكل صف أولًا (بلا أي كتابة) — أي خطأ في أي صف يُسقط الدفعة
+   * كاملة، حتى 50 خطأً تُعاد. عند النجاح: حجز نطاقات أكواد BEN/NED ذرّية
+   * دفعة واحدة + `createMany` بدل حلقة إنشاء لكل صف (لازم أداءً حتى
+   * 1000 صف، خلافًا لـLegacy الذي لم يواجه هذا القيد على Sheets المتسلسلة
+   * أصلًا). المعاملة الحقيقية هنا تُغني عن "لقطة/تراجع يدوي" التي كان
+   * Legacy يحتاجها — فشل أي خطوة يُرجع كل شيء تلقائيًا (rule B).
+   */
+  async importBeneficiaries(
+    ctx: AuthContext,
+    input: { associationId?: string; acceptedPledge: boolean; rows: Omit<BeneficiaryWriteInput, 'opId'>[]; opId: string },
+  ): Promise<
+    | { ok: true; createdCount: number; beneficiaryIds: string[]; replayed: boolean }
+    | { ok: false; errors: { row: number; message: string }[] }
+  > {
+    if (!input.acceptedPledge) {
+      throw new ApiError('BENEFICIARY_IMPORT_PLEDGE_REQUIRED', 'يجب تأكيد الإقرار قبل الاستيراد', 400);
+    }
+    if (!Array.isArray(input.rows) || input.rows.length === 0) {
+      throw new ApiError('BENEFICIARY_IMPORT_EMPTY', 'لا توجد صفوف للاستيراد', 400);
+    }
+
+    const associationId = this.resolveWriteAssociation(ctx, input.associationId);
+    const { ok, errors } = await this.validateImportRows(input.rows);
+
+    if (errors.length > 0) {
+      return { ok: false as const, errors };
+    }
+
+    const payload = { associationId, rows: input.rows };
+
+    const outcome = await prisma.$transaction(
+      async (tx) => {
+        const claim = await this.idempotency.claim<{ ok: true; createdCount: number; beneficiaryIds: string[] }>(
+          tx,
+          ctx.accountId,
+          'beneficiary-import',
+          input.opId,
+          payload,
+        );
+        if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse! };
+
+        const association = await tx.association.findUnique({ where: { id: associationId }, select: { id: true } });
+        if (!association) throw new ApiError('BENEFICIARY_ASSOCIATION_NOT_FOUND', 'اختر جمعية صحيحة', 400);
+
+        const allPhones = ok.flatMap((r) => [r.fields.phone, r.fields.secondaryPhone]);
+        await acquirePhoneLocks(tx, associationId, allPhones);
+
+        // إعادة فحص التكرار مقابل القاعدة **بعد** اكتساب الأقفال — يغلق
+        // نافذة TOCTOU لسباق كتابة متزامنة بنفس الرقم أثناء الانتظار،
+        // تمامًا كإعادة الفحص بعد القفل في createBeneficiary.
+        for (const r of ok) {
+          await this.assertNoConfirmedDuplicate(tx, associationId, r.fields.phone, r.fields.secondaryPhone, null);
+        }
+
+        const beneficiaryCodes = await this.publicCode.nextPublicCodes(tx, 'BEN', ok.length);
+        const idRows = await tx.$queryRaw<{ id: string }[]>`SELECT uuidv7()::text AS id FROM generate_series(1, ${ok.length})`;
+        const beneficiaryIds = idRows.map((r) => r.id);
+
+        await tx.beneficiary.createMany({
+          data: ok.map((r, i) => ({
+            id: beneficiaryIds[i],
+            publicCode: beneficiaryCodes[i],
+            associationId,
+            ...r.fields,
+            ...r.location,
+            reviewStatus: BeneficiaryReviewStatus.UNDER_REVIEW,
+          })),
+        });
+
+        const totalNeeds = ok.reduce((sum, r) => sum + r.deviceTypes.length, 0);
+        const needCodes = await this.publicCode.nextPublicCodes(tx, 'NED', totalNeeds);
+        const needRows: Prisma.BeneficiaryNeedCreateManyInput[] = [];
+        let needCursor = 0;
+        for (let i = 0; i < ok.length; i++) {
+          for (const deviceType of ok[i].deviceTypes) {
+            needRows.push({
+              publicCode: needCodes[needCursor++],
+              beneficiaryId: beneficiaryIds[i],
+              associationId,
+              deviceType,
+              decisionStatus: NeedDecisionStatus.PENDING,
+            });
+          }
+        }
+        await tx.beneficiaryNeed.createMany({ data: needRows });
+
+        const response = { ok: true as const, createdCount: ok.length, beneficiaryIds };
+        await this.idempotency.complete(tx, ctx.accountId, 'beneficiary-import', input.opId, response);
+        return { replayed: false as const, response };
+      },
+      { timeout: 30000, maxWait: 10000 },
+    );
+
+    if (!outcome.replayed) {
+      await this.audit.log(this.actor(ctx), 'BENEFICIARIES_IMPORTED', 'beneficiaries', null, {
+        associationId,
+        createdCount: outcome.response.createdCount,
+      });
+    }
+
+    return { ...outcome.response, replayed: outcome.replayed };
+  }
+
+  /**
+   * تحقق تنسيقي بحت لصفوف استيراد (JSON/CSV/XLSX) — بلا أي I/O كتابة،
+   * مُستخرَجة من `importBeneficiaries` نفسها حتى يشترك مساران (الالتزام
+   * الفعلي، والمعاينة قبل الالتزام في مسار XLSX) بنفس منطق التحقق حرفيًا
+   * بلا ازدواج. يتضمَّن كشف تكرار الجوال **داخل الملف نفسه** فقط — تكرار
+   * القاعدة الفعلي يُكتشَف عند الالتزام الحقيقي حصرًا (بعد قفل استشاري).
+   */
+  private async validateImportRows(rows: Omit<BeneficiaryWriteInput, 'opId'>[]): Promise<{
+    ok: { index: number; fields: Awaited<ReturnType<BeneficiariesService['buildFieldValues']>>; location: ReturnType<typeof buildLocationWrite>; deviceTypes: DeviceType[] }[];
+    errors: { row: number; message: string }[];
+  }> {
+    const now = new Date();
+    const ok: { index: number; fields: Awaited<ReturnType<BeneficiariesService['buildFieldValues']>>; location: ReturnType<typeof buildLocationWrite>; deviceTypes: DeviceType[] }[] = [];
+    const errors: { row: number; message: string }[] = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      if (errors.length >= 50) break;
+      try {
+        const deviceTypes = validateNewNeedDeviceTypes(rows[i].deviceTypes);
+        const fields = await this.buildFieldValues(rows[i] as BeneficiaryWriteInput, null);
+        const location = buildLocationWrite(rows[i], null, now);
+        ok.push({ index: i, fields, location, deviceTypes });
+      } catch (err) {
+        errors.push({ row: i + 1, message: err instanceof ApiError ? err.message : 'بيانات غير صالحة' });
+      }
+    }
+
+    if (errors.length < 50) {
+      const seenPhones = new Map<string, number>();
+      outer: for (const r of ok) {
+        for (const p of [r.fields.phone, r.fields.secondaryPhone]) {
+          if (!p) continue;
+          const firstRow = seenPhones.get(p);
+          if (firstRow !== undefined) {
+            errors.push({ row: r.index + 1, message: `رقم الجوال مكرَّر داخل الملف نفسه (يطابق الصف ${firstRow})` });
+            if (errors.length >= 50) break outer;
+          } else {
+            seenPhones.set(p, r.index + 1);
+          }
+        }
+      }
+    }
+
+    return { ok, errors };
+  }
+
+  // ================================================================
+  // previewXlsxImport — BEN-014: معاينة فقط، بلا أي كتابة (يوازي inspectBeneficiaryExcel)
+  // ================================================================
+  async previewXlsxImport(ctx: AuthContext, buffer: Buffer): Promise<{
+    ok: true;
+    headers: string[];
+    rows: { row: number; raw: Record<string, string>; valid: boolean; error?: string; parsed?: Omit<BeneficiaryWriteInput, 'opId'> }[];
+  }> {
+    const { headers, rows: rawRows } = await parseXlsxBeneficiaryRows(buffer);
+
+    const parsedRows: Omit<BeneficiaryWriteInput, 'opId'>[] = rawRows.map((r) => parseXlsxRowToImportRow(r.raw));
+    const { errors } = await this.validateImportRows(parsedRows);
+    const errorByRow = new Map(errors.map((e) => [e.row, e.message]));
+
+    return {
+      ok: true as const,
+      headers,
+      rows: rawRows.map((r, i) => {
+        const rowNumber = i + 1;
+        const error = errorByRow.get(rowNumber);
+        return {
+          row: r.index,
+          raw: r.raw,
+          valid: !error,
+          error,
+          parsed: error ? undefined : parsedRows[i],
+        };
+      }),
+    };
+  }
+
+  // ================================================================
   // updateBeneficiaryWithNeeds_ — تعديل + مزامنة قائمة الاحتياجات
   // ================================================================
   async updateBeneficiary(ctx: AuthContext, id: string, input: BeneficiaryWriteInput) {
@@ -446,6 +632,58 @@ export class BeneficiariesService {
           decisionStatus: NeedDecisionStatus.PENDING,
         },
       });
+    }
+  }
+
+  // ================================================================
+  // updateBeneficiaryLocation — BEN-016/017 (نطاق ضيّق، DELEGATE-writable)
+  // ================================================================
+  /**
+   * يوازي `updateBeneficiaryLocation`/`assertLocationUpdatePermission_`
+   * القديمتين (Beneficiaries.gs:855-911): مسار ضيّق يمسّ الموقع فقط — لا
+   * اسم/جوال/احتياجات مهما كان محتوى الطلب. إحداثيات إلزامية (لا مسح عبر
+   * هذا المسار). المسار الوحيد المفتوح لدور DELEGATE في وحدة المستفيدين
+   * كلها. مقفَل تمامًا لمستفيد اكتمل تسليمه.
+   */
+  async updateBeneficiaryLocation(ctx: AuthContext, id: string, input: { lat: number; lng: number; locationSource?: string; opId: string }) {
+    const outcome = await prisma.$transaction(async (tx) => {
+      const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'beneficiary-location-update', input.opId, { id, lat: input.lat, lng: input.lng });
+      if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse! };
+
+      const beneficiary = await tx.beneficiary.findFirst({ where: { id, archivedAt: null } });
+      if (!beneficiary) throw beneficiaryNotFound();
+
+      await this.assertLocationUpdatePermission(tx, ctx, beneficiary.associationId, beneficiary.id);
+
+      const location = buildLocationWrite(input, beneficiary, new Date());
+      await tx.beneficiary.update({ where: { id }, data: location });
+
+      const response = { ok: true as const };
+      await this.idempotency.complete(tx, ctx.accountId, 'beneficiary-location-update', input.opId, response);
+      return { replayed: false as const, response };
+    });
+
+    if (!outcome.replayed) {
+      await this.audit.log(this.actor(ctx), 'BENEFICIARY_LOCATION_UPDATED', 'beneficiaries', id, {});
+    }
+    return outcome.response;
+  }
+
+  /** `assertLocationUpdatePermission_` — يُعاد الفحص **داخل** المعاملة (بعد أي انتظار قفل ضمني) تمامًا كالقديم. */
+  private async assertLocationUpdatePermission(tx: Prisma.TransactionClient, ctx: AuthContext, associationId: string, beneficiaryId: string): Promise<void> {
+    if (ctx.role === AccountRole.ASSOCIATION && ctx.associationId !== associationId) throw beneficiaryNotFound();
+
+    // "مقفَل تمامًا لمستفيد اكتمل تسليمه" — لكل الأدوار، لا استثناء لِADMIN/ASSOCIATION.
+    const mission = await tx.deliveryMission.findFirst({ where: { beneficiaryId }, orderBy: { createdAt: 'desc' } });
+    if (mission?.status === 'DELIVERED') {
+      throw new ApiError('BENEFICIARY_ALREADY_DELIVERED', 'لا يمكن تعديل موقع مستفيد اكتمل تسليمه', 409);
+    }
+
+    if (ctx.role === AccountRole.ADMIN || ctx.role === AccountRole.ASSOCIATION) return;
+
+    // DELEGATE: فقط مستفيد مُسنَد له حاليًا فعليًا (عهدة نشطة أو تعذّر قابل لإعادة المحاولة) — لا كشف عن وجود مستفيد لا يخصّه.
+    if (!mission || mission.delegateAccountId !== ctx.accountId || (mission.status !== 'OUT_WITH_DELEGATE' && mission.status !== 'DELIVERY_FAILED')) {
+      throw beneficiaryNotFound();
     }
   }
 
