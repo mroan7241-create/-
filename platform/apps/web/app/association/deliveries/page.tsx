@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import {
   ApiClientError,
@@ -77,9 +78,12 @@ export default function AssociationDeliveriesPage() {
             </div>
             <p style={{ ...mutedStyle, margin: '2px 0' }}>{row.beneficiary.region} / {row.beneficiary.city}</p>
             <p style={{ ...mutedStyle, margin: '2px 0' }}>المندوب: {row.delegate?.name ?? '—'}</p>
-            {row.status === 'DELIVERY_FAILED' && (
-              <button type="button" style={{ ...secondaryButtonStyle, marginTop: 10 }} onClick={() => doRetry(row.id)}>↻ إعادة المحاولة</button>
-            )}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+              <Link href={`/association/deliveries/${row.id}`} style={{ ...secondaryButtonStyle, textDecoration: 'none' }}>التفاصيل</Link>
+              {row.status === 'DELIVERY_FAILED' && (
+                <button type="button" style={secondaryButtonStyle} onClick={() => doRetry(row.id)}>↻ إعادة المحاولة</button>
+              )}
+            </div>
           </div>
         ))}
       </div>

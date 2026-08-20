@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import {
   ApiClientError,
@@ -100,9 +101,12 @@ export default function AdminDeliveriesPage() {
                 <td style={tdStyle}><span style={statusBadgeStyle(STATUS_TONE[row.status])}>{DELIVERY_STATUS_LABELS[row.status]}</span></td>
                 <td style={tdStyle}>{row.assignedAt ? new Date(row.assignedAt).toLocaleDateString('ar-SA') : '—'}</td>
                 <td style={tdStyle}>
-                  {row.status === 'DELIVERY_FAILED' && (
-                    <button type="button" style={secondaryButtonStyle} onClick={() => doRetry(row.id)}>↻ إعادة المحاولة</button>
-                  )}
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <Link href={`/admin/deliveries/${row.id}`} style={{ ...secondaryButtonStyle, textDecoration: 'none' }}>التفاصيل</Link>
+                    {row.status === 'DELIVERY_FAILED' && (
+                      <button type="button" style={secondaryButtonStyle} onClick={() => doRetry(row.id)}>↻ إعادة المحاولة</button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
