@@ -7,11 +7,13 @@ import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/http-exception.filter';
 import { assertProductionSecretsConfigured } from './config/auth.config';
+import { assertProductionStorageConfigured } from './config/storage.config';
 import { JSON_BODY_LIMIT } from './common/body-limit.const';
 
 async function bootstrap() {
   // يرفض الإقلاع بوضوح إن كان NODE_ENV=production وأي مفتاح HMAC أمني حسّاس ما زال بقيمته الافتراضية للتطوير.
   assertProductionSecretsConfigured();
+  assertProductionStorageConfigured();
 
   const corsOrigin = process.env.CORS_ORIGIN ?? 'http://localhost:3000';
   const app = await NestFactory.create(AppModule, {
