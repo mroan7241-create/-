@@ -32,10 +32,11 @@ const { execSync } = require('node:child_process');
 
 const PLATFORM_DIR = path.join(__dirname, 'platform');
 const WEB_DIR = path.join(PLATFORM_DIR, 'apps', 'web');
+const WEB_DIST_DIR = 'next-build';
 // نفس بنية المخرجات التي يولّدها Next.js لـ`output: 'standalone'` مع
 // outputFileTracingRoot مضبوط على PLATFORM_DIR (جذر workspaces) — انظر
 // apps/web/next.config.js. المسار يعكس موضع apps/web نسبةً لهذا الجذر.
-const WEB_STANDALONE_DIR = path.join(WEB_DIR, '.next', 'standalone', 'apps', 'web');
+const WEB_STANDALONE_DIR = path.join(WEB_DIR, WEB_DIST_DIR, 'standalone', 'apps', 'web');
 
 // تشخيص واضح بلا أسرار لأي عطل غير متوقع قبل أو بعد ربط المنفذ — بدون هذا،
 // عطل غير مُمسك يُنهي العملية بصمت من منظور لوحة Hostinger (لا سطر واحد يوضح السبب).
@@ -92,8 +93,8 @@ function copyWebStandaloneAssets() {
   // مخرجات `output: 'standalone'` لا تتضمن static assets أو public/ تلقائيًا
   // (توثيق Next.js الرسمي) — يجب نسخها يدويًا بعد البناء ليعمل server.js
   // المولَّد ذاتيًا بلا اعتماد على أي شيء خارج مجلد standalone.
-  const staticSrc = path.join(WEB_DIR, '.next', 'static');
-  const staticDest = path.join(WEB_STANDALONE_DIR, '.next', 'static');
+  const staticSrc = path.join(WEB_DIR, WEB_DIST_DIR, 'static');
+  const staticDest = path.join(WEB_STANDALONE_DIR, WEB_DIST_DIR, 'static');
   fs.cpSync(staticSrc, staticDest, { recursive: true });
 
   const publicSrc = path.join(WEB_DIR, 'public');
@@ -119,11 +120,14 @@ function startApiInProcess() {
 }
 
 function resolvePort() {
-  const raw = process.env.PORT;
+  // Hostinger's managed Web Apps proxy targets port 3000 and does not always
+  // inject a PORT variable. Honour an explicit runtime value when present,
+  // otherwise use the platform's documented listening port.
+  const raw = process.env.PORT ?? '3000';
   const port = Number(raw);
-  if (!raw || !Number.isInteger(port) || port <= 0 || port > 65535) {
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     console.error(
-      `[hostinger-app] PORT غير صالح: "${raw ?? ''}". يجب أن توفّره Hostinger كرقم صحيح بين 1 و65535 — لا يوجد احتياطي محلي لـWeb (هذا المسار مخصص للتشغيل المُدار فقط).`,
+      `[hostinger-app] PORT غير صالح: "${raw}". يجب أن يكون رقمًا صحيحًا بين 1 و65535.`,
     );
     process.exit(1);
   }
