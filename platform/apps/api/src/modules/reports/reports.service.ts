@@ -10,6 +10,15 @@ function countMap<T extends { _count: { _all: number } }>(rows: T[], key: keyof 
   return Object.fromEntries(rows.map((row) => [String(row[key]), row._count._all]));
 }
 
+async function reportQuery<T>(section: string, query: Promise<T>): Promise<T> {
+  try {
+    return await query;
+  } catch (error) {
+    console.error(`[reports] ${section} query failed`, error);
+    throw new ApiError(`REPORT_${section}_FAILED`, 'تعذّر احتساب أحد أقسام التقرير', HttpStatus.INTERNAL_SERVER_ERROR);
+  }
+}
+
 @Injectable()
 export class ReportsService {
   async associationReport(ctx: AuthContext, query: AssociationReportQueryDto) {
@@ -46,31 +55,31 @@ export class ReportsService {
       movementsInPeriod,
       recentOperations,
     ] = await Promise.all([
-      prisma.association.findUniqueOrThrow({
+      reportQuery('ASSOCIATION', prisma.association.findUniqueOrThrow({
         where: { id: associationId },
         select: { id: true, publicCode: true, name: true, region: true, city: true },
-      }),
-      prisma.beneficiary.count({ where: { associationId, archivedAt: null } }),
-      prisma.beneficiary.groupBy({ by: ['reviewStatus'], where: { associationId, archivedAt: null }, _count: { _all: true } }),
-      prisma.beneficiaryNeed.count({ where: { associationId } }),
-      prisma.beneficiaryNeed.groupBy({ by: ['decisionStatus'], where: { associationId }, _count: { _all: true } }),
-      prisma.beneficiaryNeed.groupBy({ by: ['fulfillmentStatus'], where: { associationId }, _count: { _all: true } }),
-      prisma.deviceUnit.count({ where: { associationId } }),
-      prisma.deviceUnit.groupBy({ by: ['status'], where: { associationId }, _count: { _all: true } }),
-      prisma.deviceUnit.groupBy({ by: ['deviceType'], where: { associationId }, _count: { _all: true } }),
-      prisma.receiptBatch.count({ where: { associationId, createdAt: inPeriod } }),
-      prisma.receiptBatch.groupBy({ by: ['status'], where: { associationId, createdAt: inPeriod }, _count: { _all: true } }),
-      prisma.deliveryMission.count({ where: { associationId } }),
-      prisma.deliveryMission.groupBy({ by: ['status'], where: { associationId }, _count: { _all: true } }),
-      prisma.deliveryAttempt.count({ where: { mission: { associationId }, attemptedAt: inPeriod } }),
-      prisma.deliveryAttempt.groupBy({ by: ['status'], where: { mission: { associationId }, attemptedAt: inPeriod }, _count: { _all: true } }),
-      prisma.deviceMovement.count({ where: { associationId, createdAt: inPeriod } }),
-      prisma.auditLog.findMany({
+      })),
+      reportQuery('BENEFICIARY_TOTAL', prisma.beneficiary.count({ where: { associationId, archivedAt: null } })),
+      reportQuery('BENEFICIARY_STATUS', prisma.beneficiary.groupBy({ by: ['reviewStatus'], where: { associationId, archivedAt: null }, _count: { _all: true } })),
+      reportQuery('NEED_TOTAL', prisma.beneficiaryNeed.count({ where: { associationId } })),
+      reportQuery('NEED_DECISION', prisma.beneficiaryNeed.groupBy({ by: ['decisionStatus'], where: { associationId }, _count: { _all: true } })),
+      reportQuery('NEED_FULFILLMENT', prisma.beneficiaryNeed.groupBy({ by: ['fulfillmentStatus'], where: { associationId }, _count: { _all: true } })),
+      reportQuery('INVENTORY_TOTAL', prisma.deviceUnit.count({ where: { associationId } })),
+      reportQuery('INVENTORY_STATUS', prisma.deviceUnit.groupBy({ by: ['status'], where: { associationId }, _count: { _all: true } })),
+      reportQuery('INVENTORY_TYPE', prisma.deviceUnit.groupBy({ by: ['deviceType'], where: { associationId }, _count: { _all: true } })),
+      reportQuery('RECEIPT_TOTAL', prisma.receiptBatch.count({ where: { associationId, createdAt: inPeriod } })),
+      reportQuery('RECEIPT_STATUS', prisma.receiptBatch.groupBy({ by: ['status'], where: { associationId, createdAt: inPeriod }, _count: { _all: true } })),
+      reportQuery('DELIVERY_TOTAL', prisma.deliveryMission.count({ where: { associationId } })),
+      reportQuery('DELIVERY_STATUS', prisma.deliveryMission.groupBy({ by: ['status'], where: { associationId }, _count: { _all: true } })),
+      reportQuery('ATTEMPT_TOTAL', prisma.deliveryAttempt.count({ where: { mission: { associationId }, attemptedAt: inPeriod } })),
+      reportQuery('ATTEMPT_STATUS', prisma.deliveryAttempt.groupBy({ by: ['status'], where: { mission: { associationId }, attemptedAt: inPeriod }, _count: { _all: true } })),
+      reportQuery('MOVEMENT_TOTAL', prisma.deviceMovement.count({ where: { associationId, createdAt: inPeriod } })),
+      reportQuery('AUDIT', prisma.auditLog.findMany({
         where: { associationId, createdAt: inPeriod },
         orderBy: { createdAt: 'desc' },
         take: 20,
         select: { action: true, entityType: true, createdAt: true },
-      }),
+      })),
     ]);
 
     return {
