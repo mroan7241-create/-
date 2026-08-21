@@ -28,6 +28,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/admin/beneficiaries', label: 'المستفيدون', icon: '\u{1F465}', roles: ['ADMIN'], available: true },
   { href: '/association/beneficiaries', label: 'المستفيدون', icon: '\u{1F465}', roles: ['ASSOCIATION'], available: true },
   { href: '/admin/inventory', label: 'المخزون', icon: '\u{1F4E6}', roles: ['ADMIN'], available: true },
+  { href: '/admin/allocation', label: 'التخصيص', icon: '\u{1F4E6}', roles: ['ADMIN'], available: true },
   { href: '/admin/receipts', label: 'محاضر الاستلام', icon: '\u{1F4CB}', roles: ['ADMIN'], available: true },
   { href: '/association/receipts', label: 'محاضر الاستلام', icon: '\u{1F4CB}', roles: ['ASSOCIATION'], available: true },
   // NODE-6

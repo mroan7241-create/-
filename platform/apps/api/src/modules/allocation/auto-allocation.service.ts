@@ -9,10 +9,15 @@ import {
   DeviceStatus,
   DeviceAllocationStatus,
   DeviceType,
+  AccountRole,
 } from '@alzad/db';
 import type { AllocationTriggerPort } from './allocation-trigger.port';
 import { AuditService } from '../audit/audit.service';
 import { planAutoAllocation, type CandidateBeneficiary } from './auto-allocation-planner';
+import type { AuthContext } from '../auth/auth.types';
+import { ApiError, authForbidden } from '../../common/api-error';
+
+type AllocationRunSummary = { skipped: string | null; completed: number; filled: number; reclaimed: number };
 
 /**
  * ============================================================
@@ -37,7 +42,114 @@ export class AutoAllocationService implements AllocationTriggerPort {
   constructor(private readonly audit: AuditService) {}
 
   async triggerForAssociation(associationId: string): Promise<void> {
-    const summary = await prisma.$transaction(
+    const summary = await this.executeForAssociation(associationId);
+
+    if (!summary.skipped) {
+      await this.audit.log(null, 'AUTO_ALLOCATION_RUN', 'associations', associationId, {
+        completedBeneficiaries: summary.completed,
+        devicesFilled: summary.filled,
+        devicesReclaimed: summary.reclaimed,
+      });
+      this.logger.log(
+        `تخصيص تلقائي — جمعية ${associationId}: ${summary.completed} مستفيدًا مكتمِلًا، ${summary.filled} جهازًا مخصَّصًا (${summary.reclaimed} منها مسترجَع).`,
+      );
+    }
+  }
+
+  /** شاشة التشغيل تقرأ نفس الحقيقة التي يكتبها المحرك؛ لا توجد حالة عرض مشتقة أو مخزنة. */
+  async getBaskets(ctx: AuthContext, requestedAssociationId?: string) {
+    const associationId = this.resolveAssociationScope(ctx, requestedAssociationId);
+    const [association, beneficiaries, stock] = await Promise.all([
+      prisma.association.findUnique({ where: { id: associationId }, select: { id: true, publicCode: true, name: true } }),
+      prisma.beneficiary.findMany({
+        where: {
+          associationId,
+          archivedAt: null,
+          reviewStatus: BeneficiaryReviewStatus.APPROVED,
+          needs: { some: { decisionStatus: NeedDecisionStatus.APPROVED } },
+        },
+        select: {
+          id: true,
+          publicCode: true,
+          name: true,
+          needs: {
+            where: { decisionStatus: NeedDecisionStatus.APPROVED },
+            select: {
+              id: true,
+              publicCode: true,
+              deviceType: true,
+              fulfillmentStatus: true,
+              allocations: {
+                where: { status: DeviceAllocationStatus.ACTIVE },
+                select: { id: true, device: { select: { id: true, publicCode: true, status: true } } },
+              },
+            },
+            orderBy: { createdAt: 'asc' },
+          },
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.loadFreeStock(prisma, associationId),
+    ]);
+
+    if (!association) throw new ApiError('ASSOCIATION_NOT_FOUND', 'الجمعية غير موجودة', 404);
+
+    const rows = beneficiaries.map((beneficiary) => {
+      const missing = beneficiary.needs.filter((need) => need.allocations.length === 0).map((need) => ({
+        needId: need.id,
+        needPublicCode: need.publicCode,
+        deviceType: need.deviceType,
+        reason: stock[need.deviceType] > 0 ? 'بانتظار تنفيذ المطابقة' : 'لا يوجد جهاز متاح من هذا النوع في مخزون الجمعية',
+      }));
+      const complete = missing.length === 0;
+      return {
+        beneficiary: { id: beneficiary.id, publicCode: beneficiary.publicCode, name: beneficiary.name },
+        association,
+        complete,
+        readyForAssignment: complete && beneficiary.needs.every((need) => need.fulfillmentStatus === NeedFulfillmentStatus.AWAITING_DELEGATE_ASSIGNMENT),
+        missing,
+        needs: beneficiary.needs.map((need) => ({
+          id: need.id,
+          publicCode: need.publicCode,
+          deviceType: need.deviceType,
+          fulfillmentStatus: need.fulfillmentStatus,
+          allocation: need.allocations[0] ? { id: need.allocations[0].id, device: need.allocations[0].device } : null,
+        })),
+      };
+    });
+    const complete = rows.filter((row) => row.complete);
+    const incomplete = rows.filter((row) => !row.complete);
+    return {
+      association,
+      stock,
+      summary: { total: rows.length, complete: complete.length, incomplete: incomplete.length, readyForAssignment: rows.filter((row) => row.readyForAssignment).length },
+      complete,
+      incomplete,
+    };
+  }
+
+  async runForAssociation(ctx: AuthContext, associationId: string, opId: string) {
+    if (ctx.role !== AccountRole.ADMIN) throw authForbidden();
+    const summary = await this.executeForAssociation(associationId);
+    await this.audit.log({ id: ctx.accountId, role: ctx.role, associationId: null }, 'ALLOCATION_RUN_REQUESTED', 'associations', associationId, {
+      opId,
+      ...summary,
+    });
+    return { ...summary, baskets: await this.getBaskets(ctx, associationId) };
+  }
+
+  private resolveAssociationScope(ctx: AuthContext, requestedAssociationId?: string): string {
+    if (ctx.role === AccountRole.ASSOCIATION) {
+      if (!ctx.associationId) throw authForbidden();
+      if (requestedAssociationId && requestedAssociationId !== ctx.associationId) throw authForbidden();
+      return ctx.associationId;
+    }
+    if (!requestedAssociationId) throw new ApiError('ASSOCIATION_ID_REQUIRED', 'معرّف الجمعية مطلوب', 400);
+    return requestedAssociationId;
+  }
+
+  private async executeForAssociation(associationId: string): Promise<AllocationRunSummary> {
+    return prisma.$transaction(
       async (tx) => {
         await this.acquireAssociationLock(tx, associationId);
 
@@ -67,17 +179,6 @@ export class AutoAllocationService implements AllocationTriggerPort {
       // أخرى لنفس الجمعية، وحساب الحقيبة (DP) قد يستغرق وقتًا ملموسًا عند مرشَّحين كثر.
       { timeout: 15000, maxWait: 10000 },
     );
-
-    if (!summary.skipped) {
-      await this.audit.log(null, 'AUTO_ALLOCATION_RUN', 'associations', associationId, {
-        completedBeneficiaries: summary.completed,
-        devicesFilled: summary.filled,
-        devicesReclaimed: summary.reclaimed,
-      });
-      this.logger.log(
-        `تخصيص تلقائي — جمعية ${associationId}: ${summary.completed} مستفيدًا مكتمِلًا، ${summary.filled} جهازًا مخصَّصًا (${summary.reclaimed} منها مسترجَع).`,
-      );
-    }
   }
 
   /** قفل استشاري واحد لكل association+نطاق "allocation" — نفس مبدأ acquirePhoneLocks (NODE-3.1) بلا أي تغيير مخطط. */
@@ -127,7 +228,7 @@ export class AutoAllocationService implements AllocationTriggerPort {
     return candidates;
   }
 
-  private async loadFreeStock(tx: Prisma.TransactionClient, associationId: string): Promise<Record<DeviceType, number>> {
+  private async loadFreeStock(tx: Prisma.TransactionClient | typeof prisma, associationId: string): Promise<Record<DeviceType, number>> {
     const grouped = await tx.deviceUnit.groupBy({
       by: ['deviceType'],
       where: { associationId, status: DeviceStatus.WAREHOUSE, deviceType: { not: null } },

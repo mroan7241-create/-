@@ -689,6 +689,31 @@ export function getDeliveryProofUrl(attemptId: string): Promise<{ url: string }>
   return apiFetch(`/deliveries/attempts/${attemptId}/proof`);
 }
 
+export interface AllocationBasket {
+  beneficiary: { id: string; publicCode: string; name: string };
+  association: { id: string; publicCode: string; name: string };
+  complete: boolean;
+  readyForAssignment: boolean;
+  missing: { needId: string; deviceType: DeviceType; reason: string }[];
+  needs: { id: string; deviceType: DeviceType; fulfillmentStatus: string | null; allocation: { id: string; device: { id: string; publicCode: string; status: DeviceStatus } } | null }[];
+}
+
+export interface AllocationBaskets {
+  association: { id: string; publicCode: string; name: string };
+  stock: Record<DeviceType, number>;
+  summary: { total: number; complete: number; incomplete: number; readyForAssignment: number };
+  complete: AllocationBasket[];
+  incomplete: AllocationBasket[];
+}
+
+export function getAllocationBaskets(associationId: string): Promise<AllocationBaskets> {
+  return apiFetch(`/allocation/baskets?associationId=${encodeURIComponent(associationId)}`);
+}
+
+export function runAllocation(associationId: string): Promise<{ skipped: string | null; completed: number; filled: number; reclaimed: number; baskets: AllocationBaskets }> {
+  return apiFetch('/allocation/run', { method: 'POST', body: JSON.stringify({ associationId, opId: newOpId() }) });
+}
+
 /** BEN-016/017 — تعديل/تأكيد موقع مستفيد فقط (لا حقول أخرى) — متاح لِADMIN/ASSOCIATION/DELEGATE (الأخير لمستفيده المُسنَد حاليًا حصرًا). */
 export function updateBeneficiaryLocation(beneficiaryId: string, input: { lat: number; lng: number; locationSource?: string }): Promise<{ ok: true }> {
   return apiFetch(`/beneficiaries/${beneficiaryId}/location`, { method: 'PATCH', body: JSON.stringify({ ...input, opId: newOpId() }) });
