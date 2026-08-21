@@ -91,10 +91,10 @@ export default function AssociationDashboardPage() {
             <StatCard label="إجمالي المستفيدين" value={counts.beneficiariesTotal} href="/association/beneficiaries" />
             <StatCard label="بانتظار مراجعة الإدارة" value={counts.beneficiariesPendingReview} href="/association/beneficiaries?reviewStatus=UNDER_REVIEW" tone={counts.beneficiariesPendingReview > 0 ? 'warn' : 'default'} />
             <StatCard label="محاضر بانتظار تأكيدكم" value={counts.receiptsAwaitingConfirmation} href="/association/receipts?status=AWAITING_ASSOCIATION_CONFIRMATION" tone={counts.receiptsAwaitingConfirmation > 0 ? 'warn' : 'default'} />
-            <StatCard label="أجهزة مخصَّصة لمستفيدين" value={counts.devicesAllocated} />
+            <StatCard label="أجهزة مخصَّصة لمستفيدين" value={counts.devicesAllocated} href="/association/inventory?status=ALLOCATED" />
             <StatCard label="مناديبنا" value={counts.delegates} href="/association/delegates" />
-            <StatCard label="أجهزة مع مناديب" value={counts.devicesWithDelegate} />
-            <StatCard label="أجهزة مُسلَّمة" value={counts.devicesDelivered} />
+            <StatCard label="أجهزة مع مناديب" value={counts.devicesWithDelegate} href="/association/inventory?status=WITH_DELEGATE" />
+            <StatCard label="أجهزة مُسلَّمة" value={counts.devicesDelivered} href="/association/inventory?status=DELIVERED" />
             <StatCard label="تسليمات متعذّرة" value={counts.deliveriesFailed} href="/association/deliveries?status=DELIVERY_FAILED" tone={counts.deliveriesFailed > 0 ? 'warn' : 'default'} />
           </div>
 
