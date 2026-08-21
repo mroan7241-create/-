@@ -796,3 +796,20 @@ export function listAuditLog(params: { page?: number; pageSize?: number; associa
   if (params.entityId) q.set('entityId', params.entityId);
   return apiFetch(`/audit?${q.toString()}`);
 }
+
+export interface AssociationReport {
+  association: { id: string; publicCode: string; name: string; region: string; city: string };
+  period: { from: string; to: string; generatedAt: string };
+  beneficiaries: { total: number; byReviewStatus: Record<string, number> };
+  needs: { total: number; byDecisionStatus: Record<string, number>; byFulfillmentStatus: Record<string, number> };
+  inventory: { total: number; byStatus: Record<string, number>; byDeviceType: Record<string, number> };
+  receipts: { periodTotal: number; byStatus: Record<string, number> };
+  deliveries: { currentTotal: number; byStatus: Record<string, number>; attemptsInPeriod: number; attemptsByStatus: Record<string, number> };
+  custody: { movementsInPeriod: number };
+  recentOperations: { action: string; entityType: string; createdAt: string }[];
+}
+
+export function getAssociationReport(from: string, to: string): Promise<AssociationReport> {
+  const query = new URLSearchParams({ from, to });
+  return apiFetch(`/reports/association?${query.toString()}`);
+}

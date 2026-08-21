@@ -19,6 +19,7 @@ import { ActivitiesModule } from './modules/activities/activities.module';
 import { FilesModule } from './modules/files/files.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { SettingsModule } from './modules/settings/settings.module';
+import { ReportsModule } from './modules/reports/reports.module';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { SettingsModule } from './modules/settings/settings.module';
     FilesModule,
     AuditModule,
     SettingsModule,
+    ReportsModule,
   ],
 })
 export class AppModule implements NestModule {

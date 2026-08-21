@@ -41,6 +41,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/admin/activities', label: 'متابعة المشروع', icon: '\u{1F4C8}', roles: ['ADMIN'], available: true },
   { href: '/admin/audit', label: 'سجل العمليات', icon: '\u{1F4DC}', roles: ['ADMIN'], available: true },
   { href: '/association/audit', label: 'سجل العمليات', icon: '\u{1F4DC}', roles: ['ASSOCIATION'], available: true },
+  { href: '/association/reports', label: 'التقارير', icon: '\u{1F4CA}', roles: ['ASSOCIATION'], available: true },
   { href: '/association/settings', label: 'الإعدادات', icon: '\u{2699}', roles: ['ASSOCIATION'], available: true },
   { href: '/admin/reference-data', label: 'البيانات المرجعية', icon: '\u{1F5C2}', roles: ['ADMIN'], available: true },
 ];
