@@ -96,6 +96,8 @@ describe('DELIVERY-RETURN — إرجاع جهاز للمستودع نهائيً�
 
     const assignRes = await http().post('/api/v1/deliveries/assign').set('Cookie', adminCookie).send({ beneficiaryId, delegateId, opId: newOpId('assign') });
     if (assignRes.status !== 201) throw new Error(`assign failed: ${assignRes.status} ${JSON.stringify(assignRes.body)}`);
+    const handoverRes = await http().post(`/api/v1/deliveries/${assignRes.body.missionId}/confirm-handover`).set('Cookie', delegateCookie).send({ opId: newOpId('handover') });
+    if (handoverRes.status !== 201) throw new Error(`handover failed: ${handoverRes.status} ${JSON.stringify(handoverRes.body)}`);
 
     return { beneficiaryId, delegateCookie, missionId: assignRes.body.missionId, deviceId: device.id };
   }
@@ -119,6 +121,10 @@ describe('DELIVERY-RETURN — إرجاع جهاز للمستودع نهائيً�
     const allocation = await prisma.deviceAllocation.findFirst({ where: { deviceId }, orderBy: { allocatedAt: 'desc' } });
     expect(allocation?.status).toBe('RELEASED');
     expect(allocation?.releaseReason).toBe('delegate-return');
+
+    const movement = await prisma.deviceMovement.findFirstOrThrow({ where: { deviceId, referenceId: missionId, reason: 'delegate-return' } });
+    expect(movement.fromLocationType).toBe('DELEGATE');
+    expect(movement.toLocationType).toBe('WAREHOUSE');
   });
 
   it('إرجاع جهاز محرَّر يُعاد تخصيصه فورًا لمستفيد آخر جاهز (allocation trigger يعمل بعد الإرجاع)', async () => {

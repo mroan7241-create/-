@@ -418,6 +418,20 @@ export class DeliveriesService {
           where: { id: { in: allocations.map((a) => a.id) } },
           data: { status: DeviceAllocationStatus.RELEASED, releasedAt: now, releaseReason: 'delegate-return' },
         });
+        await tx.deviceMovement.createMany({
+          data: allocations.map((allocation) => ({
+            deviceId: allocation.deviceId,
+            associationId: mission.associationId,
+            fromLocationType: DeviceMovementLocationType.DELEGATE,
+            fromLocationRef: mission.delegateAccountId,
+            toLocationType: DeviceMovementLocationType.WAREHOUSE,
+            toLocationRef: null,
+            reason: 'delegate-return',
+            referenceType: 'delivery_mission',
+            referenceId: mission.id,
+            performedById: ctx.accountId,
+          })),
+        });
         await tx.deviceUnit.updateMany({
           where: { id: { in: allocations.map((a) => a.deviceId) } },
           data: { status: DeviceStatus.WAREHOUSE, currentLocationType: DeviceMovementLocationType.WAREHOUSE, currentLocationRef: null },

@@ -14,6 +14,7 @@ export function newOpId(prefix = 'op4'): string {
 /** ينظّف كل ما تُنشئه اختبارات NODE-4 لجمعيتَي NODE-3 المشتركتين، بلا مساس ببذور seed. */
 export async function cleanNode4State(fx: Node3Fixtures): Promise<void> {
   const associationIds = [fx.associationAId, fx.associationBId];
+  await prisma.deviceMovement.deleteMany({ where: { associationId: { in: associationIds } } });
   // NODE-5: device_allocations قد تشير إلى device_units (محرّك التخصيص التلقائي) — يجب حذفها أولًا وإلا فشل حذف device_units بقيد FK.
   await prisma.deviceAllocation.deleteMany({ where: { associationId: { in: associationIds } } });
   await prisma.deviceUnit.deleteMany({ where: { associationId: { in: associationIds } } });
