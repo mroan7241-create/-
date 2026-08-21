@@ -69,6 +69,8 @@ export class DeliveriesService {
       const claim = await this.idempotency.claim<{ missionId: string }>(tx, ctx.accountId, 'delivery-assign', input.opId, input);
       if (!claim.claimed) return { replayed: true as const, missionId: claim.existingResponse!.missionId };
 
+      await tx.$queryRaw<{ id: string }[]>`SELECT id FROM beneficiaries WHERE id = ${input.beneficiaryId}::uuid FOR UPDATE`;
+
       const beneficiary = await tx.beneficiary.findUnique({ where: { id: input.beneficiaryId } });
       if (!beneficiary || beneficiary.archivedAt) throw new ApiError('BENEFICIARY_NOT_FOUND', 'المستفيد غير موجود', 404);
       if (ctx.role === AccountRole.ASSOCIATION && ctx.associationId !== beneficiary.associationId) {
@@ -120,7 +122,7 @@ export class DeliveriesService {
                 beneficiaryId: beneficiary.id,
                 associationId: beneficiary.associationId,
                 delegateAccountId: delegate.id,
-                status: DeliveryStatus.OUT_WITH_DELEGATE,
+                status: DeliveryStatus.PENDING_DELEGATE_ACKNOWLEDGEMENT,
                 assignedAt: new Date(),
               },
             })
@@ -129,17 +131,13 @@ export class DeliveriesService {
       if (existingMission) {
         await tx.deliveryMission.update({
           where: { id: existingMission.id },
-          data: { delegateAccountId: delegate.id, status: DeliveryStatus.OUT_WITH_DELEGATE, assignedAt: new Date() },
+          data: { delegateAccountId: delegate.id, status: DeliveryStatus.PENDING_DELEGATE_ACKNOWLEDGEMENT, assignedAt: new Date() },
         });
       }
 
-      await tx.deviceUnit.updateMany({
-        where: { id: { in: allocations.map((a) => a.deviceId) } },
-        data: { status: DeviceStatus.WITH_DELEGATE, currentLocationType: DeviceMovementLocationType.DELEGATE, currentLocationRef: delegate.id },
-      });
       await tx.beneficiaryNeed.updateMany({
         where: { id: { in: needs.map((n) => n.id) } },
-        data: { fulfillmentStatus: NeedFulfillmentStatus.OUT_WITH_DELEGATE },
+        data: { fulfillmentStatus: NeedFulfillmentStatus.ASSIGNED_TO_DELEGATE_PENDING },
       });
 
       const response = { missionId };
@@ -154,6 +152,95 @@ export class DeliveriesService {
       });
     }
     return { ok: true as const, missionId: outcome.missionId };
+  }
+
+  // ================================================================
+  // confirmHandover — custody moves only after the assigned delegate acknowledges receipt
+  // ================================================================
+  async confirmHandover(ctx: AuthContext, missionId: string, opId: string) {
+    if (ctx.role !== AccountRole.DELEGATE) throw authForbidden();
+
+    const outcome = await prisma.$transaction(async (tx) => {
+      const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'delivery-confirm-handover', opId, { missionId });
+      if (!claim.claimed) return { replayed: true as const };
+
+      const mission = await tx.deliveryMission.findUnique({ where: { id: missionId } });
+      if (!mission || mission.delegateAccountId !== ctx.accountId) {
+        throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
+      }
+      if (mission.status !== DeliveryStatus.PENDING_DELEGATE_ACKNOWLEDGEMENT) {
+        throw new ApiError('DELIVERY_INVALID_TRANSITION', `لا يمكن تأكيد استلام العهدة من الحالة الحالية (${mission.status})`, 409);
+      }
+
+      const needs = await tx.beneficiaryNeed.findMany({
+        where: {
+          beneficiaryId: mission.beneficiaryId,
+          decisionStatus: NeedDecisionStatus.APPROVED,
+        },
+      });
+      if (needs.length === 0 || needs.some((need) => need.fulfillmentStatus !== NeedFulfillmentStatus.ASSIGNED_TO_DELEGATE_PENDING)) {
+        throw new ApiError('DELIVERY_CUSTODY_MISMATCH', 'لا توجد عهدة معلّقة لهذه المهمة', 409);
+      }
+      const allocations = await tx.deviceAllocation.findMany({
+        where: { beneficiaryNeedId: { in: needs.map((need) => need.id) }, status: DeviceAllocationStatus.ACTIVE },
+      });
+      if (allocations.length !== needs.length) {
+        throw new ApiError('DELIVERY_CUSTODY_MISMATCH', 'بيانات العهدة لا تطابق سلة المستفيد', 409);
+      }
+
+      const deviceIds = allocations.map((allocation) => allocation.deviceId);
+      const devices = await tx.deviceUnit.findMany({ where: { id: { in: deviceIds } } });
+      if (
+        devices.length !== deviceIds.length ||
+        devices.some(
+          (device) =>
+            device.associationId !== mission.associationId ||
+            device.status !== DeviceStatus.ALLOCATED ||
+            device.currentLocationType !== DeviceMovementLocationType.WAREHOUSE ||
+            device.currentLocationRef !== null,
+        )
+      ) {
+        throw new ApiError('DELIVERY_CUSTODY_MISMATCH', 'موقع الأجهزة أو حالتها لا يسمحان بتسليم العهدة', 409);
+      }
+
+      const transition = await tx.deliveryMission.updateMany({
+        where: { id: mission.id, status: DeliveryStatus.PENDING_DELEGATE_ACKNOWLEDGEMENT },
+        data: { status: DeliveryStatus.OUT_WITH_DELEGATE },
+      });
+      if (transition.count !== 1) {
+        throw new ApiError('DELIVERY_INVALID_TRANSITION', 'تم تأكيد استلام هذه العهدة بالفعل', 409);
+      }
+      await tx.deviceUnit.updateMany({
+        where: { id: { in: deviceIds } },
+        data: { status: DeviceStatus.WITH_DELEGATE, currentLocationType: DeviceMovementLocationType.DELEGATE, currentLocationRef: ctx.accountId },
+      });
+      await tx.beneficiaryNeed.updateMany({
+        where: { id: { in: needs.map((need) => need.id) } },
+        data: { fulfillmentStatus: NeedFulfillmentStatus.OUT_WITH_DELEGATE },
+      });
+      await tx.deviceMovement.createMany({
+        data: devices.map((device) => ({
+          deviceId: device.id,
+          associationId: mission.associationId,
+          fromLocationType: device.currentLocationType,
+          fromLocationRef: device.currentLocationRef,
+          toLocationType: DeviceMovementLocationType.DELEGATE,
+          toLocationRef: ctx.accountId,
+          reason: 'delivery-handover-confirmed',
+          referenceType: 'delivery_mission',
+          referenceId: mission.id,
+          performedById: ctx.accountId,
+        })),
+      });
+
+      await this.idempotency.complete(tx, ctx.accountId, 'delivery-confirm-handover', opId, { ok: true });
+      return { replayed: false as const };
+    });
+
+    if (!outcome.replayed) {
+      await this.audit.log(this.actor(ctx), 'DELIVERY_HANDOVER_CONFIRMED', 'delivery_missions', missionId);
+    }
+    return { ok: true as const };
   }
 
   // ================================================================

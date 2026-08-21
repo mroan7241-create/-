@@ -22,7 +22,7 @@ import { cardStyle, errorStyle, inputStyle, labelStyle, mutedStyle, primaryButto
 
 const PAGE_SIZE = 25;
 const STATUS_TONE: Record<DeliveryStatus, 'neutral' | 'good' | 'bad'> = {
-  NOT_STARTED: 'neutral', PREPARING: 'neutral', OUT_WITH_DELEGATE: 'neutral', DELIVERED: 'good', DELIVERY_FAILED: 'bad', RETURNED: 'bad',
+  NOT_STARTED: 'neutral', PREPARING: 'neutral', PENDING_DELEGATE_ACKNOWLEDGEMENT: 'neutral', OUT_WITH_DELEGATE: 'neutral', DELIVERED: 'good', DELIVERY_FAILED: 'bad', RETURNED: 'bad',
 };
 
 /** ADMIN — عمليات التسليم: إسناد مندوب لمستفيد مكتمِل التخصيص + متابعة كل المهام عبر الجمعيات. يوازي assignDelegate/listBeneficiaryDeliveryAttempts القديمتين. */
@@ -149,7 +149,7 @@ function AssignModal({ onClose, onDone }: { onClose: () => void; onDone: (messag
     setBusy(true);
     try {
       await assignDelegate(beneficiaryId, delegateId);
-      onDone('تم إسناد المندوب — أصبحت الأجهزة معه.');
+      onDone('تم إسناد المندوب — العهدة بانتظار تأكيد استلامه.');
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : 'تعذّر الإسناد.');
     } finally {

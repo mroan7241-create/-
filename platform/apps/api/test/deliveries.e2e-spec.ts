@@ -137,14 +137,33 @@ describe('NODE-6 — مناديب وتسليمات (تكامل حقيقي)', () 
     const missionId = assignRes.body.missionId;
 
     const device = await prisma.deviceUnit.findFirstOrThrow({ where: { associationId: fx.associationAId } });
-    expect(device.status).toBe(DeviceStatus.WITH_DELEGATE);
+    expect(device.status).toBe(DeviceStatus.ALLOCATED);
     const need = await prisma.beneficiaryNeed.findFirstOrThrow({ where: { beneficiaryId } });
-    expect(need.fulfillmentStatus).toBe(NeedFulfillmentStatus.OUT_WITH_DELEGATE);
+    expect(need.fulfillmentStatus).toBe(NeedFulfillmentStatus.ASSIGNED_TO_DELEGATE_PENDING);
+    const missionBeforeHandover = await prisma.deliveryMission.findUniqueOrThrow({ where: { id: missionId } });
+    expect(missionBeforeHandover.status).toBe(DeliveryStatus.PENDING_DELEGATE_ACKNOWLEDGEMENT);
+    expect(await prisma.deviceMovement.count({ where: { deviceId: device.id } })).toBe(0);
 
     // المندوب يرى مهمته في قائمته الخاصة.
     const listRes = await http().get('/api/v1/deliveries').set('Cookie', delegateCookie);
     expect(listRes.status).toBe(200);
     expect(listRes.body.items.map((m: { id: string }) => m.id)).toContain(missionId);
+
+    const handoverOp = newOpId('handover');
+    await http()
+      .post(`/api/v1/deliveries/${missionId}/confirm-handover`)
+      .set('Cookie', delegateCookie)
+      .send({ opId: handoverOp })
+      .expect(201);
+    await http()
+      .post(`/api/v1/deliveries/${missionId}/confirm-handover`)
+      .set('Cookie', delegateCookie)
+      .send({ opId: handoverOp })
+      .expect(201);
+    expect((await prisma.deliveryMission.findUniqueOrThrow({ where: { id: missionId } })).status).toBe(DeliveryStatus.OUT_WITH_DELEGATE);
+    expect((await prisma.deviceUnit.findUniqueOrThrow({ where: { id: device.id } })).status).toBe(DeviceStatus.WITH_DELEGATE);
+    expect((await prisma.beneficiaryNeed.findUniqueOrThrow({ where: { id: need.id } })).fulfillmentStatus).toBe(NeedFulfillmentStatus.OUT_WITH_DELEGATE);
+    expect(await prisma.deviceMovement.count({ where: { deviceId: device.id, referenceId: missionId } })).toBe(1);
 
     const confirmRes = await http()
       .post(`/api/v1/deliveries/${missionId}/confirm`)
@@ -178,6 +197,12 @@ describe('NODE-6 — مناديب وتسليمات (تكامل حقيقي)', () 
 
     const assignRes = await http().post('/api/v1/deliveries/assign').set('Cookie', adminCookie).send({ beneficiaryId, delegateId, opId: newOpId('assign') });
     const missionId = assignRes.body.missionId;
+
+    await http()
+      .post(`/api/v1/deliveries/${missionId}/confirm-handover`)
+      .set('Cookie', delegateCookie)
+      .send({ opId: newOpId('handover') })
+      .expect(201);
 
     const failRes = await http()
       .post(`/api/v1/deliveries/${missionId}/fail`)
@@ -232,6 +257,12 @@ describe('NODE-6 — مناديب وتسليمات (تكامل حقيقي)', () 
 
     const assignRes = await http().post('/api/v1/deliveries/assign').set('Cookie', adminCookie).send({ beneficiaryId, delegateId, opId: newOpId('assign') });
     const missionId = assignRes.body.missionId;
+
+    await http()
+      .post(`/api/v1/deliveries/${missionId}/confirm-handover`)
+      .set('Cookie', otherDelegateCookie)
+      .send({ opId: newOpId('handover-other') })
+      .expect(404);
 
     const detailRes = await http().get(`/api/v1/deliveries/${missionId}`).set('Cookie', otherDelegateCookie);
     expect(detailRes.status).toBe(404); // لا كشف عن وجود المهمة أصلًا لمندوب لا يملكها

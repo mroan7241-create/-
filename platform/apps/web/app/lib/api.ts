@@ -595,11 +595,12 @@ export function regenerateDelegateCode(id: string): Promise<{ ok: true; accessCo
   return apiFetch(`/delegates/${id}/regenerate-code`, { method: 'POST' });
 }
 
-export type DeliveryStatus = 'NOT_STARTED' | 'PREPARING' | 'OUT_WITH_DELEGATE' | 'DELIVERED' | 'DELIVERY_FAILED' | 'RETURNED';
+export type DeliveryStatus = 'NOT_STARTED' | 'PREPARING' | 'PENDING_DELEGATE_ACKNOWLEDGEMENT' | 'OUT_WITH_DELEGATE' | 'DELIVERED' | 'DELIVERY_FAILED' | 'RETURNED';
 
 export const DELIVERY_STATUS_LABELS: Record<DeliveryStatus, string> = {
   NOT_STARTED: 'لم يبدأ',
   PREPARING: 'جاري التجهيز',
+  PENDING_DELEGATE_ACKNOWLEDGEMENT: 'بانتظار تأكيد استلام المندوب',
   OUT_WITH_DELEGATE: 'مع المندوب',
   DELIVERED: 'تم التسليم',
   DELIVERY_FAILED: 'تعذّر التسليم',
@@ -663,6 +664,10 @@ export function getDelivery(id: string): Promise<DeliveryMissionDetail> {
 
 export function assignDelegate(beneficiaryId: string, delegateId: string): Promise<{ ok: true; missionId: string }> {
   return apiFetch(`/deliveries/assign`, { method: 'POST', body: JSON.stringify({ beneficiaryId, delegateId, opId: newOpId() }) });
+}
+
+export function confirmHandover(missionId: string): Promise<{ ok: true }> {
+  return apiFetch(`/deliveries/${missionId}/confirm-handover`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) });
 }
 
 export function confirmDelivery(missionId: string, proofPhoto: File): Promise<{ ok: true; attemptId: string }> {

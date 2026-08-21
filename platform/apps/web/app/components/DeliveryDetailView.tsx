@@ -30,6 +30,7 @@ import {
 const STATUS_TONE: Record<DeliveryStatus, 'neutral' | 'good' | 'bad'> = {
   NOT_STARTED: 'neutral',
   PREPARING: 'neutral',
+  PENDING_DELEGATE_ACKNOWLEDGEMENT: 'neutral',
   OUT_WITH_DELEGATE: 'neutral',
   DELIVERED: 'good',
   DELIVERY_FAILED: 'bad',

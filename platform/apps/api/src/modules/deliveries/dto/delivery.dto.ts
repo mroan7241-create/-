@@ -14,6 +14,11 @@ export class AssignDelegateDto {
   opId!: string;
 }
 
+export class ConfirmHandoverDto {
+  @IsString()
+  opId!: string;
+}
+
 export class ConfirmDeliveryDto {
   @IsString()
   opId!: string;

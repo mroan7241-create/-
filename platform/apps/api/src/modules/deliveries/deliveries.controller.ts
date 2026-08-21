@@ -7,7 +7,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthContext } from '../auth/auth.types';
 import { RECEIPT_EVIDENCE_MAX_BYTES } from '../files/file-validation.util';
 import { DeliveriesService } from './deliveries.service';
-import { AssignDelegateDto, ConfirmDeliveryDto, FailDeliveryDto, ListDeliveriesQueryDto, RetryDeliveryDto, ReturnDeliveryDto } from './dto/delivery.dto';
+import { AssignDelegateDto, ConfirmDeliveryDto, ConfirmHandoverDto, FailDeliveryDto, ListDeliveriesQueryDto, RetryDeliveryDto, ReturnDeliveryDto } from './dto/delivery.dto';
 
 interface ConfirmFiles {
   proofPhoto?: Express.Multer.File[];
@@ -43,6 +43,13 @@ export class DeliveriesController {
   @ApiOperation({ summary: 'تفاصيل مهمة تسليم + سجل محاولاتها الكامل' })
   async detail(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string) {
     return this.deliveries.getDeliveryDetail(ctx, id);
+  }
+
+  @Post(':id/confirm-handover')
+  @Roles(AccountRole.DELEGATE)
+  @ApiOperation({ summary: 'تأكيد المندوب استلام عهدة المهمة فعليًا بعد الإسناد' })
+  async confirmHandover(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ConfirmHandoverDto) {
+    return this.deliveries.confirmHandover(ctx, id, dto.opId);
   }
 
   @Post(':id/confirm')

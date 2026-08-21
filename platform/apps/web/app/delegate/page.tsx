@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import {
   ApiClientError,
   DELIVERY_FAILURE_REASON_LABELS,
+  confirmHandover,
   confirmDelivery,
   failDelivery,
   getDelivery,
@@ -48,6 +49,7 @@ export default function DelegatePortalPage() {
   const [failTarget, setFailTarget] = useState<DeliveryMissionSummary | null>(null);
   const [locationTarget, setLocationTarget] = useState<DeliveryMissionSummary | null>(null);
   const [proofError, setProofError] = useState('');
+  const [handoverBusyId, setHandoverBusyId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -73,6 +75,19 @@ export default function DelegatePortalPage() {
       await load();
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : 'تعذّرت إعادة المحاولة.');
+    }
+  }
+
+  async function doConfirmHandover(mission: DeliveryMissionSummary) {
+    setHandoverBusyId(mission.id);
+    setError('');
+    try {
+      await confirmHandover(mission.id);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : 'تعذّر تأكيد استلام العهدة.');
+    } finally {
+      setHandoverBusyId(null);
     }
   }
 
@@ -106,6 +121,7 @@ export default function DelegatePortalPage() {
 
   if (loading || !user) return null;
 
+  const pendingHandover = (missions ?? []).filter((m) => m.status === 'PENDING_DELEGATE_ACKNOWLEDGEMENT');
   const active = (missions ?? []).filter((m) => m.status === 'OUT_WITH_DELEGATE');
   const failedMissions = (missions ?? []).filter((m) => m.status === 'DELIVERY_FAILED');
   const delivered = (missions ?? []).filter((m) => m.status === 'DELIVERED');
@@ -115,7 +131,7 @@ export default function DelegatePortalPage() {
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 0', marginBottom: 8 }}>
         <div>
           <h1 style={{ fontSize: 19 }}>مرحبًا، {user.name}</h1>
-          <p style={mutedStyle}>{active.length} مهمة متبقية اليوم</p>
+          <p style={mutedStyle}>{active.length + pendingHandover.length} مهمة متبقية اليوم</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button type="button" onClick={() => router.push('/delegate/log')} style={secondaryButtonStyle}>سجل حركاتي</button>
@@ -124,6 +140,20 @@ export default function DelegatePortalPage() {
       </header>
 
       {error && <p role="alert" style={errorStyle}>{error}</p>}
+
+      {pendingHandover.length > 0 && (
+        <>
+          <h2 style={{ fontSize: 16, margin: '16px 0 8px' }}>عهدة بانتظار تأكيد الاستلام</h2>
+          {pendingHandover.map((mission) => (
+            <MissionCard
+              key={mission.id}
+              mission={mission}
+              onConfirmHandover={() => doConfirmHandover(mission)}
+              handoverBusy={handoverBusyId === mission.id}
+            />
+          ))}
+        </>
+      )}
 
       <h2 style={{ fontSize: 16, margin: '16px 0 8px' }}>المهام الحالية</h2>
       {active.length === 0 && <p style={mutedStyle}>لا توجد مهام حالية.</p>}
@@ -189,6 +219,8 @@ export default function DelegatePortalPage() {
 function MissionCard({
   mission,
   onConfirm,
+  onConfirmHandover,
+  handoverBusy,
   onFail,
   onRetry,
   onReturn,
@@ -197,6 +229,8 @@ function MissionCard({
 }: {
   mission: DeliveryMissionSummary;
   onConfirm?: () => void;
+  onConfirmHandover?: () => void;
+  handoverBusy?: boolean;
   onFail?: () => void;
   onRetry?: () => void;
   onReturn?: () => void;
@@ -228,6 +262,11 @@ function MissionCard({
           <button type="button" style={secondaryButtonStyle} onClick={onUpdateLocation}>📍 تحديث الموقع</button>
         )}
       </div>
+      {onConfirmHandover && (
+        <button type="button" disabled={handoverBusy} style={primaryButtonStyle} onClick={onConfirmHandover}>
+          {handoverBusy ? 'جارٍ تأكيد الاستلام…' : 'تأكيد استلام العهدة'}
+        </button>
+      )}
       {onConfirm && onFail && (
         <div style={{ display: 'flex', gap: 8 }}>
           <button type="button" style={primaryButtonStyle} onClick={onConfirm}>تأكيد التسليم</button>
