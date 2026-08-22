@@ -41,16 +41,16 @@ export default function AssociationDashboardPage() {
   useEffect(() => {
     if (!user) return;
     (async () => {
+      const metricErrors: string[] = [];
+      const safe = (path: string) => apiFetch<Paginated<unknown>>(path).catch((cause) => {
+        metricErrors.push(`${path}: ${cause instanceof Error ? cause.message : 'UNKNOWN_ERROR'}`);
+        return { items: [], total: 0, page: 1, pageSize: 1, totalPages: 0 };
+      });
       try {
         const [allBen, pendingBen, awaitingReceipts, allocatedDevices, delegates, withDelegate, delivered, failedDeliveries] = await Promise.all([
-          apiFetch<Paginated<unknown>>('/beneficiaries?pageSize=1'),
-          apiFetch<Paginated<unknown>>('/beneficiaries?reviewStatus=UNDER_REVIEW&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/receipts?status=AWAITING_ASSOCIATION_CONFIRMATION&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/inventory/devices?status=ALLOCATED&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/delegates?pageSize=1'),
-          apiFetch<Paginated<unknown>>('/inventory/devices?status=WITH_DELEGATE&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/inventory/devices?status=DELIVERED&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/deliveries?status=DELIVERY_FAILED&pageSize=1'),
+          safe('/beneficiaries?pageSize=1'), safe('/beneficiaries?reviewStatus=UNDER_REVIEW&pageSize=1'), safe('/receipts?status=AWAITING_ASSOCIATION_CONFIRMATION&pageSize=1'),
+          safe('/inventory/devices?status=ALLOCATED&pageSize=1'), safe('/delegates?pageSize=1'), safe('/inventory/devices?status=WITH_DELEGATE&pageSize=1'),
+          safe('/inventory/devices?status=DELIVERED&pageSize=1'), safe('/deliveries?status=DELIVERY_FAILED&pageSize=1'),
         ]);
         setCounts({
           beneficiariesTotal: allBen.total,
@@ -62,6 +62,7 @@ export default function AssociationDashboardPage() {
           devicesDelivered: delivered.total,
           deliveriesFailed: failedDeliveries.total,
         });
+        setError(metricErrors.length ? `تعذّرت مؤشرات محددة: ${metricErrors.join(' | ')}` : null);
       } catch {
         setError('تعذّر تحميل بيانات لوحة التحكم.');
       }

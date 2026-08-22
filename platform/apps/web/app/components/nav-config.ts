@@ -21,6 +21,9 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: NavItem[] = [
+  { href: '/admin/selection', label: 'التقييم والاختيار', icon: '🎯', roles: ['ADMIN'], available: true },
+  { href: '/admin/operations', label: 'دورات العمل', icon: '🔁', roles: ['ADMIN'], available: true },
+  { href: '/association/operations', label: 'دورات العمل', icon: '🔁', roles: ['ASSOCIATION'], available: true },
   { href: '/admin', label: 'لوحة التحكم', icon: '\u{1F3E0}', roles: ['ADMIN'], available: true },
   { href: '/association', label: 'لوحة التحكم', icon: '\u{1F3E0}', roles: ['ASSOCIATION'], available: true },
   { href: '/admin/applications', label: 'طلبات الانضمام', icon: '\u{1F4E5}', roles: ['ADMIN'], available: true },

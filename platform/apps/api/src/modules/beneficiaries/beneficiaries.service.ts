@@ -7,6 +7,10 @@ import {
   DeviceType,
   NeedDecisionStatus,
   NeedFulfillmentStatus,
+  BeneficiaryListType,
+  DeviceAllocationStatus,
+  DeliveryStatus,
+  EscalationStatus,
 } from '@alzad/db';
 import { ApiError, authForbidden } from '../../common/api-error';
 import { PublicCodeService } from '../../common/public-code.service';
@@ -1004,6 +1008,58 @@ export class BeneficiariesService {
       };
       await this.idempotency.complete(tx, ctx.accountId, scope, input.opId, result);
       return { replayed: false as const, result };
+    });
+  }
+
+  // ================================================================
+  // Approved beneficiary MAIN/RESERVE policy and immutable replacement
+  // ================================================================
+  async setListDecision(ctx: AuthContext, id: string, listType: BeneficiaryListType, listRank: number | undefined, reasonRaw: string, opId: string) {
+    const reason = requiredText(reasonRaw, 'سبب قرار القائمة', 1000);
+    return prisma.$transaction(async (tx) => {
+      const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'beneficiary-list-decision', opId, { id, listType, listRank: listRank ?? null, reason }); if (!claim.claimed) return claim.existingResponse!;
+      await tx.$queryRaw`SELECT id FROM beneficiaries WHERE id=${id}::uuid FOR UPDATE`;
+      const beneficiary = await tx.beneficiary.findUnique({ where: { id } });
+      if (!beneficiary || beneficiary.reviewStatus !== BeneficiaryReviewStatus.APPROVED) throw new ApiError('BENEFICIARY_LIST_INELIGIBLE', 'المستفيد غير معتمد للقائمة', 409);
+      if ((listType === BeneficiaryListType.MAIN || listType === BeneficiaryListType.RESERVE) && (!listRank || listRank < 1)) throw new ApiError('BENEFICIARY_LIST_RANK_REQUIRED', 'ترتيب القائمة مطلوب', 400);
+      await tx.beneficiary.update({ where: { id }, data: { listType, listRank: listType === BeneficiaryListType.REJECTED ? null : listRank, listReason: reason, listApprovedAt: new Date(), listApprovedById: ctx.accountId } });
+      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'BENEFICIARY_LIST_DECIDED', entityType: 'beneficiaries', entityId: id, associationId: beneficiary.associationId, metadata: { listType, listRank: listRank ?? null, reason } } });
+      const response = { ok: true as const }; await this.idempotency.complete(tx, ctx.accountId, 'beneficiary-list-decision', opId, response); return response;
+    });
+  }
+
+  async promoteReserve(ctx: AuthContext, id: string, listRank: number | undefined, reasonRaw: string, opId: string) {
+    const reason = requiredText(reasonRaw, 'سبب الترقية', 1000);
+    return prisma.$transaction(async (tx) => {
+      const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'beneficiary-reserve-promotion', opId, { id, listRank: listRank ?? null, reason }); if (!claim.claimed) return claim.existingResponse!;
+      await tx.$queryRaw`SELECT id FROM beneficiaries WHERE id=${id}::uuid FOR UPDATE`;
+      const beneficiary = await tx.beneficiary.findUnique({ where: { id } });
+      if (!beneficiary || beneficiary.listType !== BeneficiaryListType.RESERVE || beneficiary.reviewStatus !== BeneficiaryReviewStatus.APPROVED) throw new ApiError('BENEFICIARY_NOT_RESERVE', 'المستفيد ليس احتياطيًا معتمدًا', 409);
+      await tx.beneficiary.update({ where: { id }, data: { listType: BeneficiaryListType.MAIN, listRank: listRank ?? beneficiary.listRank, listReason: reason, listApprovedAt: new Date(), listApprovedById: ctx.accountId } });
+      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, associationId: beneficiary.associationId, action: 'BENEFICIARY_RESERVE_PROMOTED', entityType: 'beneficiaries', entityId: id, metadata: { reason, listRank: listRank ?? beneficiary.listRank } } });
+      const response = { ok: true as const }; await this.idempotency.complete(tx, ctx.accountId, 'beneficiary-reserve-promotion', opId, response); return response;
+    });
+  }
+
+  async replaceBeneficiary(ctx: AuthContext, oldId: string, newId: string, escalationCaseId: string, reasonRaw: string, opId: string) {
+    const reason = requiredText(reasonRaw, 'سبب الاستبدال', 1000);
+    return prisma.$transaction(async (tx) => {
+      const claim = await this.idempotency.claim<{ ok: true; replacementId: string }>(tx, ctx.accountId, 'beneficiary-replacement', opId, { oldId, newId, escalationCaseId, reason }); if (!claim.claimed) return claim.existingResponse!;
+      await tx.$queryRaw`SELECT id FROM beneficiaries WHERE id IN (${oldId}::uuid, ${newId}::uuid) ORDER BY id FOR UPDATE`;
+      const [oldBeneficiary, newBeneficiary, escalation] = await Promise.all([tx.beneficiary.findUnique({ where: { id: oldId } }), tx.beneficiary.findUnique({ where: { id: newId } }), tx.escalationCase.findUnique({ where: { id: escalationCaseId } })]);
+      if (!oldBeneficiary || !newBeneficiary || oldBeneficiary.associationId !== newBeneficiary.associationId) throw new ApiError('BENEFICIARY_REPLACEMENT_INVALID', 'المستفيدان غير موجودين ضمن الجمعية نفسها', 409);
+      if (newBeneficiary.listType !== BeneficiaryListType.RESERVE || newBeneficiary.reviewStatus !== BeneficiaryReviewStatus.APPROVED) throw new ApiError('REPLACEMENT_NOT_ELIGIBLE_RESERVE', 'البديل يجب أن يكون احتياطيًا معتمدًا', 409);
+      if (!escalation || escalation.associationId !== oldBeneficiary.associationId || escalation.status !== EscalationStatus.APPROVED) throw new ApiError('REPLACEMENT_NOT_AUTHORIZED', 'الاستبدال يحتاج تصعيدًا معتمدًا من زاد', 409);
+      const [activeAllocations, custody] = await Promise.all([
+        tx.deviceAllocation.count({ where: { beneficiaryId: oldId, status: DeviceAllocationStatus.ACTIVE } }),
+        tx.deliveryMission.count({ where: { beneficiaryId: oldId, status: { in: [DeliveryStatus.OUT_WITH_DELEGATE, DeliveryStatus.DEFERRED, DeliveryStatus.PENDING_RETURN_APPROVAL, DeliveryStatus.PENDING_DELIVERY_APPROVAL] } } }),
+      ]);
+      if (activeAllocations || custody) throw new ApiError('REPLACEMENT_CUSTODY_CONFLICT', 'لا يمكن الاستبدال قبل إغلاق العهدة والإرجاع والتسوية', 409);
+      const replacement = await tx.beneficiaryReplacement.create({ data: { associationId: oldBeneficiary.associationId, oldBeneficiaryId: oldId, newBeneficiaryId: newId, escalationCaseId, reason, authorizedById: ctx.accountId } });
+      await tx.beneficiary.update({ where: { id: oldId }, data: { listType: BeneficiaryListType.REJECTED, listRank: null, listReason: reason, listApprovedAt: new Date(), listApprovedById: ctx.accountId } });
+      await tx.beneficiary.update({ where: { id: newId }, data: { listType: BeneficiaryListType.MAIN, listRank: oldBeneficiary.listRank, listReason: reason, listApprovedAt: new Date(), listApprovedById: ctx.accountId } });
+      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, associationId: oldBeneficiary.associationId, action: 'BENEFICIARY_REPLACED', entityType: 'beneficiary_replacements', entityId: replacement.id, metadata: { oldId, newId, escalationCaseId, reason } } });
+      const response = { ok: true as const, replacementId: replacement.id }; await this.idempotency.complete(tx, ctx.accountId, 'beneficiary-replacement', opId, response); return response;
     });
   }
 

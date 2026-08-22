@@ -9,6 +9,10 @@ import {
   AssociationStatus,
   AuthCredentialType,
   FileCategory,
+  EligibilityStatus,
+  AssociationSelectionList,
+  ParticipationStatus,
+  ActivationBasis,
 } from '@alzad/db';
 import { LEGACY_APPLICATION_QUESTIONS } from '@alzad/shared';
 import { ApiError } from '../../common/api-error';
@@ -27,6 +31,8 @@ import { storageConfig } from '../../config/storage.config';
 import { applicationConfig } from '../../config/application.config';
 import type { AuthContext } from '../auth/auth.types';
 import { normalizePagination, toPaginatedResult, type PaginatedResult, type PaginationParams } from '../../common/pagination.util';
+import { SettingsService } from '../settings/settings.service';
+import { rankApplications, scoreApplication, type EvaluationInput } from './application-evaluation.util';
 
 const QUESTION_KEYS = LEGACY_APPLICATION_QUESTIONS.map((q) => q.key);
 
@@ -40,6 +46,14 @@ export interface SubmitApplicationInput {
   phone: string;
   email: string;
   contactName: string;
+  address?: string;
+  serviceScope?: string;
+  coordinatorPhone?: string;
+  coordinatorEmail?: string;
+  coordinatorTitle?: string;
+  beneficiaryDatabaseUpdatedAt?: string;
+  approxBeneficiaryCount?: string;
+  approxNeedCount?: string;
   notes?: string;
   licenseNumber: string;
   licenseExpiryDate: string;
@@ -60,6 +74,7 @@ export class ApplicationsService {
     private readonly idempotency: IdempotencyService,
     private readonly audit: AuditService,
     private readonly storage: StorageService,
+    private readonly settings: SettingsService,
   ) {}
 
   // ================================================================
@@ -69,6 +84,7 @@ export class ApplicationsService {
     input: SubmitApplicationInput,
     licenseFileBuffer: Buffer,
     declaredMimeType: string | undefined,
+    initialBeneficiaryFile?: Express.Multer.File,
   ): Promise<{ ok: true; id: string; message: string; duplicate?: boolean }> {
     // 1) Honeypot — لا قراءة/كتابة/rate-limit/audit إطلاقًا، رد نجاح وهمي فوري.
     if (input.website && input.website.trim().length > 0) {
@@ -89,6 +105,14 @@ export class ApplicationsService {
     const sector = await validateAssociationSector(input.sector);
     const name = requiredText(input.name, 'اسم الجمعية', applicationConfig.nameMaxLength);
     const contactName = requiredText(input.contactName, 'اسم المسؤول', applicationConfig.contactNameMaxLength);
+    const address = input.address ? requiredText(input.address, 'العنوان', 500) : undefined;
+    const serviceScope = input.serviceScope ? requiredText(input.serviceScope, 'نطاق الخدمة', 1000) : undefined;
+    const coordinatorPhone = input.coordinatorPhone ? normalizeSaudiPhone(input.coordinatorPhone) : undefined;
+    const coordinatorEmail = input.coordinatorEmail ? requiredEmail(input.coordinatorEmail) : undefined;
+    const coordinatorTitle = input.coordinatorTitle ? requiredText(input.coordinatorTitle, 'صفة المنسق', 120) : undefined;
+    const beneficiaryDatabaseUpdatedAt = input.beneficiaryDatabaseUpdatedAt ? parseRequiredDate(input.beneficiaryDatabaseUpdatedAt) : undefined;
+    const approxBeneficiaryCount = optionalNonNegativeInteger(input.approxBeneficiaryCount, 'العدد التقريبي للمستفيدين');
+    const approxNeedCount = optionalNonNegativeInteger(input.approxNeedCount, 'العدد التقريبي للاحتياجات');
     const notes = input.notes ? requiredText(input.notes, 'ملاحظات', applicationConfig.notesMaxLength) : undefined;
     const licenseNumber = requiredText(input.licenseNumber, 'رقم الترخيص', applicationConfig.licenseNumberMaxLength);
     const licenseExpiryDate = parseRequiredDate(input.licenseExpiryDate);
@@ -140,10 +164,12 @@ export class ApplicationsService {
     const detectedMime = fileValidation.detectedMimeType!;
     const extension = detectedMime === 'image/jpeg' ? 'jpg' : detectedMime === 'image/png' ? 'png' : 'webp';
     const objectKey = `association-licenses/${randomUUID()}.${extension}`;
-
-    await this.storage.uploadPrivateObject(objectKey, licenseFileBuffer, detectedMime);
+    const initialUpload = initialBeneficiaryFile ? validateInitialBeneficiaryEvidence(initialBeneficiaryFile) : null;
+    const initialObjectKey = initialUpload ? `application-initial-beneficiaries/${randomUUID()}.xlsx` : null;
 
     try {
+      await this.storage.uploadPrivateObject(objectKey, licenseFileBuffer, detectedMime);
+      if (initialUpload && initialObjectKey) await this.storage.uploadPrivateObject(initialObjectKey, initialBeneficiaryFile!.buffer, initialUpload.mimeType);
       const result = await prisma.$transaction(async (tx) => {
         const fileObject = await tx.fileObject.create({
           data: {
@@ -159,6 +185,11 @@ export class ApplicationsService {
         });
 
         const publicCode = await this.publicCode.nextPublicCode(tx, 'APP');
+        const initialFileObject = initialUpload && initialObjectKey ? await tx.fileObject.create({ data: {
+          storageProvider: 'S3', bucket: storageConfig.bucket, objectKey: initialObjectKey,
+          originalName: 'initial-beneficiaries.xlsx', mimeType: initialUpload.mimeType,
+          sizeBytes: BigInt(initialBeneficiaryFile!.buffer.length), category: FileCategory.APPLICATION_INITIAL_BENEFICIARIES,
+        } }) : null;
         const application = await tx.associationApplication.create({
           data: {
             publicCode,
@@ -171,6 +202,15 @@ export class ApplicationsService {
             phone,
             email,
             contactName,
+            address: address ?? null,
+            serviceScope: serviceScope ?? null,
+            coordinatorPhone: coordinatorPhone ?? null,
+            coordinatorEmail: coordinatorEmail ?? null,
+            coordinatorTitle: coordinatorTitle ?? null,
+            beneficiaryDatabaseUpdatedAt: beneficiaryDatabaseUpdatedAt ?? null,
+            approxBeneficiaryCount: approxBeneficiaryCount ?? null,
+            approxNeedCount: approxNeedCount ?? null,
+            initialBeneficiaryFileId: initialFileObject?.id ?? null,
             notes: notes ?? null,
             licenseNumber,
             licenseExpiryDate,
@@ -192,6 +232,7 @@ export class ApplicationsService {
     } catch (error) {
       // فشل بعد رفع ناجح للملف — حذف best-effort لتجنّب كائن يتيم.
       await this.storage.deleteObjectBestEffort(objectKey);
+      if (initialObjectKey) await this.storage.deleteObjectBestEffort(initialObjectKey);
 
       if (isUniqueConstraintError(error, ...UNIQUE_CLIENT_REQUEST_ID)) {
         // سباق: طلب متزامن آخر بنفس clientRequestId فاز — نتيجة idempotent، وليست خطأ.
@@ -293,8 +334,71 @@ export class ApplicationsService {
   // REVIEW — accept/reject
   // ================================================================
   async reviewApplication(ctx: AuthContext, id: string, decision: 'accept' | 'reject', reason: string | undefined, opId: string) {
-    if (decision === 'accept') return this.acceptApplication(ctx, id, opId);
+    if (decision === 'accept') return this.decideEligibility(ctx, id, EligibilityStatus.PASSED, reason, opId);
     return this.rejectApplication(ctx, id, reason, opId);
+  }
+
+  async decideEligibility(ctx: AuthContext, id: string, decision: EligibilityStatus, notes: string | undefined, opId: string) {
+    if (decision === EligibilityStatus.PENDING) throw new ApiError('ELIGIBILITY_DECISION_INVALID', 'قرار الأهلية غير صالح', 400);
+    return prisma.$transaction(async (tx) => {
+      const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'application-eligibility', opId, { id, decision, notes: notes ?? null });
+      if (!claim.claimed) return claim.existingResponse!;
+      const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM association_applications WHERE id=${id}::uuid FOR UPDATE`;
+      if (!locked[0]) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب الانضمام غير موجود', 404);
+      const application = await tx.associationApplication.findUniqueOrThrow({ where: { id }, include: { answers: true } });
+      if (application.status !== ApplicationStatus.UNDER_REVIEW) throw new ApiError('APPLICATION_ALREADY_REVIEWED', 'سبق البتّ في هذا الطلب', 409);
+      if (application.answers.length !== QUESTION_KEYS.length) throw new ApiError('ELIGIBILITY_ANSWERS_INCOMPLETE', 'إجابات بوابة الأهلية غير مكتملة', 409);
+      await tx.associationApplication.update({ where: { id }, data: { eligibilityStatus: decision, eligibilityNotes: notes?.trim() || null, eligibilityReviewedAt: new Date(), eligibilityReviewedById: ctx.accountId, ...(decision !== EligibilityStatus.PASSED ? { evaluationBreakdown: Prisma.DbNull, evaluationScore: null, evaluationRank: null, selectionList: AssociationSelectionList.NONE } : {}) } });
+      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_ELIGIBILITY_DECIDED', entityType: 'association_applications', entityId: id, metadata: { decision, notes: notes ?? null } } });
+      const response = { ok: true as const }; await this.idempotency.complete(tx, ctx.accountId, 'application-eligibility', opId, response); return response;
+    });
+  }
+
+  async evaluate(ctx: AuthContext, id: string, input: EvaluationInput, opId: string) {
+    let scored: ReturnType<typeof scoreApplication>;
+    try { scored = scoreApplication(input); } catch { throw new ApiError('APPLICATION_EVALUATION_INVALID', 'قيم التقييم يجب أن تكون بين 0 و100', 400); }
+    return prisma.$transaction(async (tx) => {
+      const claim = await this.idempotency.claim<{ ok: true; score: number }>(tx, ctx.accountId, 'application-evaluation', opId, { id, input });
+      if (!claim.claimed) return claim.existingResponse!;
+      await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${id}::uuid FOR UPDATE`;
+      const application = await tx.associationApplication.findUnique({ where: { id } });
+      if (!application) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب الانضمام غير موجود', 404);
+      if (application.eligibilityStatus !== EligibilityStatus.PASSED) throw new ApiError('APPLICATION_NOT_ELIGIBLE', 'لا يمكن تقييم طلب قبل اجتياز بوابة الأهلية', 409);
+      await tx.associationApplication.update({ where: { id }, data: { evaluationBreakdown: scored.breakdown, evaluationScore: scored.total, geographicNeedScore: input.geographicProjectNeed, evaluatedAt: new Date(), evaluatedById: ctx.accountId } });
+      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_EVALUATED', entityType: 'association_applications', entityId: id, metadata: { score: scored.total, breakdown: scored.breakdown } } });
+      const response = { ok: true as const, score: scored.total }; await this.idempotency.complete(tx, ctx.accountId, 'application-evaluation', opId, response); return response;
+    });
+  }
+
+  async previewSelection() {
+    const threshold = await this.settings.requireNumber('selection.passThreshold');
+    const rows = await prisma.associationApplication.findMany({ where: { eligibilityStatus: EligibilityStatus.PASSED, evaluationScore: { not: null }, selectionList: AssociationSelectionList.NONE }, select: { id: true, publicCode: true, name: true, evaluationScore: true, evaluationBreakdown: true, geographicNeedScore: true } });
+    const ranked = rankApplications(rows.map((row) => {
+      const raw = ((row.evaluationBreakdown as { raw?: Partial<EvaluationInput> } | null)?.raw ?? {});
+      return { ...row, score: Number(row.evaluationScore), operationalReadiness: Number(raw.operationalReadiness ?? 0), technicalCapability: Number(raw.technicalCapability ?? 0), geographicProjectNeed: Number(row.geographicNeedScore ?? 0) };
+    }));
+    return { threshold, items: ranked.map((item, index) => ({ ...item, rank: index + 1, passesThreshold: item.score >= threshold })) };
+  }
+
+  async commitSelection(ctx: AuthContext, mainTargetCount: number, supporterApprovalReferenceRaw: string, opId: string) {
+    const threshold = await this.settings.requireNumber('selection.passThreshold');
+    const supporterApprovalReference = requiredText(supporterApprovalReferenceRaw, 'مرجع اعتماد الداعم', 200);
+    if (!Number.isInteger(mainTargetCount) || mainTargetCount < 1) throw new ApiError('SELECTION_TARGET_INVALID', 'عدد القائمة الأساسية غير صالح', 400);
+    return prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
+      const claim = await this.idempotency.claim<{ ok: true; main: number; reserve: number; rejected: number }>(tx, ctx.accountId, 'application-selection', opId, { mainTargetCount, supporterApprovalReference, threshold });
+      if (!claim.claimed) return claim.existingResponse!;
+      const rows = await tx.associationApplication.findMany({ where: { status: ApplicationStatus.UNDER_REVIEW, eligibilityStatus: EligibilityStatus.PASSED, evaluationScore: { not: null }, selectionList: AssociationSelectionList.NONE }, select: { id: true, evaluationScore: true, evaluationBreakdown: true, geographicNeedScore: true, contactName: true, coordinatorPhone: true, coordinatorEmail: true, coordinatorTitle: true } });
+      const ranked = rankApplications(rows.map((row) => { const raw = ((row.evaluationBreakdown as { raw?: Partial<EvaluationInput> } | null)?.raw ?? {}); return { ...row, score: Number(row.evaluationScore), operationalReadiness: Number(raw.operationalReadiness ?? 0), technicalCapability: Number(raw.technicalCapability ?? 0), geographicProjectNeed: Number(row.geographicNeedScore ?? 0) }; }));
+      const passing = ranked.filter((row) => row.score >= threshold); const main = passing.slice(0, mainTargetCount); const reserve = passing.slice(mainTargetCount); const rejected = ranked.filter((row) => row.score < threshold); const now = new Date();
+      for (let i = 0; i < ranked.length; i += 1) await tx.associationApplication.update({ where: { id: ranked[i].id }, data: { evaluationRank: i + 1 } });
+      if (main.length) await tx.associationApplication.updateMany({ where: { id: { in: main.map((r) => r.id) } }, data: { selectionList: AssociationSelectionList.MAIN, status: ApplicationStatus.ACCEPTED, selectionApprovedAt: now, selectionApprovedById: ctx.accountId, supporterApprovedAt: now, supporterApprovalReference } });
+      if (reserve.length) await tx.associationApplication.updateMany({ where: { id: { in: reserve.map((r) => r.id) } }, data: { selectionList: AssociationSelectionList.RESERVE, status: ApplicationStatus.ACCEPTED, selectionApprovedAt: now, selectionApprovedById: ctx.accountId, supporterApprovedAt: now, supporterApprovalReference } });
+      if (rejected.length) await tx.associationApplication.updateMany({ where: { id: { in: rejected.map((r) => r.id) } }, data: { status: ApplicationStatus.REJECTED, rejectReason: 'لم يحقق حد الاجتياز المعتمد', reviewedAt: now, reviewedById: ctx.accountId } });
+      for (const row of main) await tx.projectParticipation.create({ data: { applicationId: row.id, status: ParticipationStatus.APPROVED_AWAITING_SETUP, activationBasis: ActivationBasis.AGREEMENT_COMPLETED, coordinatorName: row.contactName, coordinatorPhone: row.coordinatorPhone, coordinatorEmail: row.coordinatorEmail, coordinatorTitle: row.coordinatorTitle } });
+      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_SELECTION_COMMITTED', entityType: 'association_applications', metadata: { mainIds: main.map((r) => r.id), reserveIds: reserve.map((r) => r.id), rejectedIds: rejected.map((r) => r.id), threshold, supporterApprovalReference } } });
+      const response = { ok: true as const, main: main.length, reserve: reserve.length, rejected: rejected.length }; await this.idempotency.complete(tx, ctx.accountId, 'application-selection', opId, response); return response;
+    });
   }
 
   private async acceptApplication(ctx: AuthContext, id: string, opId: string) {
@@ -614,4 +718,20 @@ function isUniqueConstraintError(error: unknown, ...constraintNames: string[]): 
     return constraintNames.some((name) => error.message.includes(name));
   }
   return false;
+}
+
+function optionalNonNegativeInteger(value: string | undefined, label: string): number | undefined {
+  if (value === undefined || value.trim() === '') return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 10_000_000) throw new ApiError('APPLICATION_VALIDATION_FAILED', `${label} غير صالح`, 400);
+  return parsed;
+}
+
+function validateInitialBeneficiaryEvidence(file: Express.Multer.File): { mimeType: string } {
+  const max = 8 * 1024 * 1024;
+  const xlsxMime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  if (file.buffer.length === 0 || file.buffer.length > max || file.mimetype !== xlsxMime || file.buffer[0] !== 0x50 || file.buffer[1] !== 0x4b) {
+    throw new ApiError('APPLICATION_INITIAL_FILE_INVALID', 'ملف المستفيدين الأولي يجب أن يكون XLSX صالحًا وبحجم لا يتجاوز 8 ميجابايت', 400);
+  }
+  return { mimeType: xlsxMime };
 }

@@ -68,6 +68,57 @@ enum ApplicationStatus {
   REJECTED
 }
 
+enum EligibilityStatus {
+  PENDING
+  PASSED
+  FAILED
+  NEEDS_INFO
+}
+
+enum AssociationSelectionList {
+  NONE
+  MAIN
+  RESERVE
+}
+
+enum ParticipationStatus {
+  APPROVED_AWAITING_SETUP
+  ACTIVE
+  EXECUTING
+  READY_TO_CLOSE
+  CLOSURE_SUBMITTED
+  CLOSED
+  SUSPENDED
+  WITHDRAWN
+}
+
+enum ActivationBasis {
+  AGREEMENT_COMPLETED
+  LEGACY_MIGRATION
+  ADMIN_REOPEN
+}
+
+enum AgreementStatus {
+  DRAFT
+  SENT
+  SIGNED_BY_ORG
+  SIGNED
+  CANCELLED
+  SUPERSEDED
+}
+
+enum CoordinatorChangeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum BeneficiaryListType {
+  MAIN
+  RESERVE
+  REJECTED
+}
+
 enum BeneficiaryReviewStatus {
   UNDER_REVIEW
   APPROVED
@@ -119,6 +170,7 @@ enum DeviceStatus {
   WITH_DELEGATE
   DELIVERED
   DAMAGED
+  WITH_BENEFICIARY_PENDING_APPROVAL
 }
 
 enum DeliveryStatus {
@@ -132,6 +184,9 @@ enum DeliveryStatus {
   /// راجع STATE_MAPPING.md § need-fulfillment): تخلٍّ نهائي عن التسليم لا إعادة محاولة —
   /// الجهاز يعود فعليًا للمستودع ويُعاد تقييم الاحتياج عبر AutoAllocation من جديد.
   RETURNED
+  PENDING_DELIVERY_APPROVAL
+  DEFERRED
+  PENDING_RETURN_APPROVAL
 }
 
 enum DeliveryFailureReason {
@@ -184,6 +239,11 @@ enum FileCategory {
   RECEIPT_ADMIN_PROOF
   /// NODE-4.2: محضر/ختم الجمعية عند تأكيد الاستلام — PDF أو صورة، اختياري افتراضيًا (إلزامه عبر system_settings).
   RECEIPT_ASSOCIATION_REPORT
+  APPLICATION_INITIAL_BENEFICIARIES
+  PARTICIPATION_AGREEMENT
+  ESCALATION_EVIDENCE
+  PURCHASE_ORDER_DOCUMENT
+  RETURN_EVIDENCE
 }
 
 enum DeviceAllocationStatus {
@@ -201,6 +261,11 @@ enum OutboxEventType {
   BENEFICIARY_APPROVED
   RECEIPT_CONFIRMED
   STOCK_INCREASED
+  DELIVERY_SUBMITTED
+  DELIVERY_ASSOCIATION_APPROVED
+  RETURN_REQUESTED
+  ESCALATION_OPENED
+  SLA_ALERT_DUE
 }
 
 enum OutboxEventStatus {
@@ -214,6 +279,113 @@ enum DeviceMovementLocationType {
   DELEGATE
   BENEFICIARY
   DAMAGED_HOLDING
+}
+
+enum DeliveryApprovalStage {
+  ASSOCIATION
+  ZAAD
+}
+
+enum DeliveryApprovalDecision {
+  APPROVED
+  RETURNED_FOR_FIX
+  REJECTED
+}
+
+enum ReturnCondition {
+  GOOD
+  DAMAGED
+}
+
+enum EscalationStatus {
+  OPEN
+  NEEDS_INFO
+  APPROVED
+  REJECTED
+  RESOLVED
+}
+
+enum EscalationSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  APPROVED
+  PARTIALLY_DELIVERED
+  FULFILLED
+  CANCELLED
+}
+
+enum ShipmentRoute {
+  SUPPLIER_TO_ORGANIZATION
+  ORGANIZATION_PICKUP_FROM_SUPPLIER
+  ORGANIZATION_PICKUP_FROM_ZAAD
+}
+
+enum ShipmentStatus {
+  PLANNED
+  DISPATCHED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  RECONCILIATION_REQUIRED
+  CLOSED
+  CANCELLED
+}
+
+enum DamageCaseStatus {
+  OPEN
+  UNDER_REVIEW
+  AWAITING_RETURN
+  RETURNED
+  AWAITING_REPLACEMENT
+  REPLACED
+  SETTLED
+  CLOSED
+}
+
+enum ReconciliationIssueType {
+  MISSING
+  OVERAGE
+  QUANTITY_MISMATCH
+  OTHER
+}
+
+enum ReconciliationIssueStatus {
+  OPEN
+  UNDER_REVIEW
+  SETTLED
+  CLOSED
+}
+
+enum NotificationSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum OrganizationClosureStatus {
+  DRAFT
+  GENERATED
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  CLOSED
+  REOPENED
+}
+
+enum ProjectClosureStatus {
+  GENERATED
+  UNDER_INTERNAL_REVIEW
+  APPROVED_INTERNAL
+  SUBMITTED_TO_DONOR
+  DONOR_FEEDBACK
+  RESUBMITTED
+  DONOR_APPROVED
+  PROJECT_CLOSED
 }
 
 // ============================================================
@@ -253,6 +425,29 @@ model Account {
   deviceMovementsPerformed DeviceMovement[] @relation("MovementPerformedBy")
   deliveryMissionsAsDelegate DeliveryMission[] @relation("MissionDelegate")
   deliveryAttemptsAsDelegate DeliveryAttempt[] @relation("AttemptDelegate")
+  eligibilityReviews AssociationApplication[] @relation("ApplicationEligibilityReviewer")
+  selectionApprovals AssociationApplication[] @relation("ApplicationSelectionApprover")
+  evaluatedApplications AssociationApplication[] @relation("ApplicationEvaluator")
+  participationSetupCompletions ProjectParticipation[] @relation("ParticipationSetupCompletedBy")
+  agreementsCreated ParticipationAgreement[] @relation("AgreementCreatedBy")
+  coordinatorChangesRequested CoordinatorChangeRequest[] @relation("CoordinatorChangeRequestedBy")
+  coordinatorChangesDecided CoordinatorChangeRequest[] @relation("CoordinatorChangeDecidedBy")
+  beneficiaryListApprovals Beneficiary[] @relation("BeneficiaryListApprovedBy")
+  beneficiaryReplacements BeneficiaryReplacement[] @relation("ReplacementAuthorizedBy")
+  deliveryApprovals DeliveryApproval[]
+  escalationsCreated EscalationCase[] @relation("EscalationCreatedBy")
+  escalationsDecided EscalationCase[] @relation("EscalationDecidedBy")
+  purchaseOrdersCreated PurchaseOrder[] @relation("PurchaseOrderCreatedBy")
+  purchaseOrdersApproved PurchaseOrder[] @relation("PurchaseOrderApprovedBy")
+  damageCasesClosed DamageCase[] @relation("DamageCaseClosedBy")
+  reconciliationIssuesDecided ShipmentReconciliationIssue[] @relation("ReconciliationIssueDecidedBy")
+  notifications Notification[]
+  organizationReportsGenerated OrganizationClosureReport[] @relation("OrganizationReportGeneratedBy")
+  organizationReportsSubmitted OrganizationClosureReport[] @relation("OrganizationReportSubmittedBy")
+  organizationReportsReviewed OrganizationClosureReport[] @relation("OrganizationReportReviewedBy")
+  organizationReportsClosed OrganizationClosureReport[] @relation("OrganizationReportClosedBy")
+  organizationReportsReopened OrganizationClosureReport[] @relation("OrganizationReportReopenedBy")
+  projectReportsActors ProjectClosureReport[] @relation("ProjectReportLastActor")
   auditLogs         AuditLog[]
   idempotencyKeys   IdempotencyKey[]
 
@@ -333,6 +528,14 @@ model Association {
   deliveryMissions     DeliveryMission[]
   resultingApplication AssociationApplication[] @relation("ApplicationResultingAssociation")
   auditLogs            AuditLog[]
+  participation        ProjectParticipation?
+  beneficiaryReplacements BeneficiaryReplacement[]
+  escalationCases      EscalationCase[]
+  purchaseOrders       PurchaseOrder[]
+  shipments            Shipment[]
+  damageCases          DamageCase[]
+  reconciliationIssues ShipmentReconciliationIssue[]
+  notifications        Notification[]
 
   @@index([status])
   @@map("associations")
@@ -374,11 +577,41 @@ model AssociationApplication {
   submittedAt            DateTime          @default(now()) @map("submitted_at")
   reviewedAt             DateTime?         @map("reviewed_at")
   reviewedById           String?           @map("reviewed_by") @db.Uuid
+  address                String?
+  serviceScope           String?           @map("service_scope")
+  coordinatorPhone       String?           @map("coordinator_phone")
+  coordinatorEmail       String?           @map("coordinator_email")
+  coordinatorTitle       String?           @map("coordinator_title")
+  beneficiaryDatabaseUpdatedAt DateTime?   @map("beneficiary_database_updated_at")
+  approxBeneficiaryCount Int?              @map("approx_beneficiary_count")
+  approxNeedCount        Int?              @map("approx_need_count")
+  initialBeneficiaryFileId String?          @unique @map("initial_beneficiary_file_id") @db.Uuid
+  eligibilityStatus      EligibilityStatus @default(PENDING) @map("eligibility_status")
+  eligibilityReviewedAt  DateTime?          @map("eligibility_reviewed_at")
+  eligibilityReviewedById String?           @map("eligibility_reviewed_by") @db.Uuid
+  eligibilityNotes       String?            @map("eligibility_notes")
+  evaluationBreakdown    Json?              @map("evaluation_breakdown")
+  evaluationScore        Decimal?           @map("evaluation_score") @db.Decimal(5, 2)
+  evaluationRank         Int?               @map("evaluation_rank")
+  evaluatedAt            DateTime?          @map("evaluated_at")
+  evaluatedById          String?            @map("evaluated_by") @db.Uuid
+  geographicNeedScore    Decimal?           @map("geographic_need_score") @db.Decimal(5, 2)
+  selectionList          AssociationSelectionList @default(NONE) @map("selection_list")
+  selectionReason        String?            @map("selection_reason")
+  selectionApprovedAt    DateTime?          @map("selection_approved_at")
+  selectionApprovedById  String?            @map("selection_approved_by") @db.Uuid
+  supporterApprovedAt    DateTime?          @map("supporter_approved_at")
+  supporterApprovalReference String?        @map("supporter_approval_reference")
 
   licenseFile             FileObject?  @relation(fields: [licenseFileId], references: [id])
+  initialBeneficiaryFile  FileObject?  @relation("ApplicationInitialBeneficiaryFile", fields: [initialBeneficiaryFileId], references: [id])
   resultingAssociation    Association? @relation("ApplicationResultingAssociation", fields: [resultingAssociationId], references: [id])
   reviewedBy               Account?    @relation("ApplicationReviewedBy", fields: [reviewedById], references: [id])
+  eligibilityReviewedBy    Account?    @relation("ApplicationEligibilityReviewer", fields: [eligibilityReviewedById], references: [id])
+  selectionApprovedBy      Account?    @relation("ApplicationSelectionApprover", fields: [selectionApprovedById], references: [id])
+  evaluatedBy              Account?    @relation("ApplicationEvaluator", fields: [evaluatedById], references: [id])
   answers                  ApplicationAnswer[]
+  participation            ProjectParticipation?
 
   /// NODE-2: partial unique indexes حقيقية (raw SQL في migration.sql —
   /// Prisma @@unique العادي لا يدعم شرط WHERE) تمنع أكثر من طلب
@@ -467,6 +700,11 @@ model Beneficiary {
   beneficiaryRejectReason String?                @map("beneficiary_reject_reason")
   reviewedById            String?                @map("reviewed_by") @db.Uuid
   reviewedAt              DateTime?              @map("reviewed_at")
+  listType                BeneficiaryListType?    @map("list_type")
+  listRank                Int?                    @map("list_rank")
+  listReason              String?                 @map("list_reason")
+  listApprovedAt          DateTime?               @map("list_approved_at")
+  listApprovedById        String?                 @map("list_approved_by") @db.Uuid
 
   /// الحقل القديم "حالة المستفيد" (Config.gs BENEFICIARY_STATUSES) — يُحفظ للقراءة التاريخية فقط أثناء الهجرة، ليس Source of Truth جديدًا (انظر platform/docs/STATE_MAPPING.md).
   legacyStatus            LegacyBeneficiaryStatus? @map("legacy_status")
@@ -479,10 +717,14 @@ model Beneficiary {
 
   association              Association           @relation(fields: [associationId], references: [id])
   reviewedBy                Account?             @relation("BeneficiaryReviewedBy", fields: [reviewedById], references: [id])
+  listApprovedBy            Account?             @relation("BeneficiaryListApprovedBy", fields: [listApprovedById], references: [id])
   needs                      BeneficiaryNeed[]
   deviceAllocations          DeviceAllocation[]
   deliveryMissions            DeliveryMission[]
   deliveryAttempts             DeliveryAttempt[]
+  replacementsAsOld            BeneficiaryReplacement[] @relation("ReplacementOldBeneficiary")
+  replacementsAsNew            BeneficiaryReplacement[] @relation("ReplacementNewBeneficiary")
+  escalationCases              EscalationCase[]
 
   /// NODE-0.1: مفتاح فريد مركَّب (id, associationId) — يسمح لكيانات تابعة
   /// (BeneficiaryNeed, DeviceAllocation, DeliveryMission...) بالإشارة إلى
@@ -562,6 +804,7 @@ model FileObject {
   uploadedBy      Account?     @relation(fields: [uploadedById], references: [id])
 
   associationApplications AssociationApplication[]
+  applicationInitialBeneficiary AssociationApplication[] @relation("ApplicationInitialBeneficiaryFile")
   receiptBatchQuantityPhoto ReceiptBatch[] @relation("ReceiptBatchQuantityPhoto")
   receiptBatchSignaturePhoto ReceiptBatch[] @relation("ReceiptBatchSignaturePhoto")
   receiptBatchAdminProof ReceiptBatch[] @relation("ReceiptBatchAdminProof")
@@ -570,6 +813,9 @@ model FileObject {
   deliveryAttemptProof DeliveryAttempt[] @relation("AttemptProofFile")
   deliveryAttemptSignature DeliveryAttempt[] @relation("AttemptSignatureFile")
   activityEvidence  ActivityEvidence[]
+  participationAgreements ParticipationAgreement[]
+  escalationEvidence EscalationCase[]
+  purchaseOrderDocuments PurchaseOrder[]
 
   @@unique([bucket, objectKey])
   @@index([category])
@@ -583,6 +829,7 @@ model ReceiptBatch {
   id                  String             @id @default(dbgenerated("uuidv7()")) @db.Uuid
   publicCode          String             @unique @map("public_code")
   associationId       String             @map("association_id") @db.Uuid
+  shipmentId          String?            @map("shipment_id") @db.Uuid
   supplierName        String             @map("supplier_name")
   sentAt              DateTime?          @map("sent_at")
   createdById         String             @map("created_by") @db.Uuid
@@ -609,6 +856,7 @@ model ReceiptBatch {
   updatedAt                     DateTime @updatedAt @map("updated_at")
 
   association          Association       @relation(fields: [associationId], references: [id])
+  shipment             Shipment?         @relation(fields: [shipmentId], references: [id])
   createdBy             Account          @relation("ReceiptBatchCreatedBy", fields: [createdById], references: [id])
   confirmedBy            Account?        @relation("ReceiptBatchConfirmedBy", fields: [confirmedById], references: [id])
   quantityPhotoFile        FileObject?   @relation("ReceiptBatchQuantityPhoto", fields: [quantityPhotoFileId], references: [id])
@@ -616,6 +864,7 @@ model ReceiptBatch {
   adminProofFile               FileObject? @relation("ReceiptBatchAdminProof", fields: [adminProofFileId], references: [id])
   associationReportFile          FileObject? @relation("ReceiptBatchAssociationReport", fields: [associationReportFileId], references: [id])
   items                       ReceiptItem[]
+  escalationCases             EscalationCase[]
 
   @@index([associationId, status])
   @@map("receipt_batches")
@@ -656,6 +905,8 @@ model ReceiptItem {
   receiptBatch     ReceiptBatch @relation(fields: [receiptBatchId], references: [id])
   damagePhotos     ReceiptDamagePhoto[]
   deviceUnits      DeviceUnit[]
+  damageCases      DamageCase[]
+  reconciliationIssues ShipmentReconciliationIssue[]
 
   @@index([receiptBatchId])
   @@map("receipt_items")
@@ -721,6 +972,7 @@ model DeviceUnit {
   receiptItem          ReceiptItem? @relation(fields: [receiptItemId], references: [id])
   allocations           DeviceAllocation[]
   movements              DeviceMovement[]
+  damageCases            DamageCase[]
 
   /// NODE-0.1 (القسم 1): أُزيل الربط المباشر deviceUnit → beneficiaryNeed
   /// (beneficiaryNeedId/beneficiaryNeed) الذي كان موجودًا في NODE-0 —
@@ -810,6 +1062,7 @@ model DeliveryMission {
   status            DeliveryStatus  @default(NOT_STARTED)
   assignedAt        DateTime?       @map("assigned_at")
   scheduledFor      DateTime?       @map("scheduled_for")
+  returnCondition   ReturnCondition? @map("return_condition")
 
   createdAt         DateTime        @default(now()) @map("created_at")
   updatedAt         DateTime        @updatedAt @map("updated_at")
@@ -823,6 +1076,8 @@ model DeliveryMission {
   /// بند 8 في تقرير الإغلاق.
   delegate          Account?        @relation("MissionDelegate", fields: [delegateAccountId], references: [id])
   attempts          DeliveryAttempt[]
+  approvals         DeliveryApproval[]
+  escalationCases   EscalationCase[]
 
   @@index([delegateAccountId, status])
   @@index([associationId, status])
@@ -977,6 +1232,359 @@ model OutboxEvent {
 
   @@index([status, createdAt])
   @@map("outbox_events")
+}
+
+model ProjectParticipation {
+  id                     String              @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  associationId          String?             @unique @map("association_id") @db.Uuid
+  applicationId          String?             @unique @map("application_id") @db.Uuid
+  status                 ParticipationStatus
+  activationBasis        ActivationBasis     @map("activation_basis")
+  coordinatorName        String?             @map("coordinator_name")
+  coordinatorPhone       String?             @map("coordinator_phone")
+  coordinatorEmail       String?             @map("coordinator_email")
+  coordinatorTitle       String?             @map("coordinator_title")
+  setupCompletedAt       DateTime?           @map("setup_completed_at")
+  setupCompletedById     String?              @map("setup_completed_by") @db.Uuid
+  activatedAt            DateTime?           @map("activated_at")
+  closedAt               DateTime?           @map("closed_at")
+  activationAnomaly      Boolean             @default(false) @map("activation_anomaly")
+  activationAnomalyReason String?             @map("activation_anomaly_reason")
+  createdAt              DateTime            @default(now()) @map("created_at")
+  updatedAt              DateTime            @updatedAt @map("updated_at")
+
+  association            Association?        @relation(fields: [associationId], references: [id])
+  application            AssociationApplication? @relation(fields: [applicationId], references: [id])
+  setupCompletedBy       Account?            @relation("ParticipationSetupCompletedBy", fields: [setupCompletedById], references: [id])
+  agreements             ParticipationAgreement[]
+  coordinatorChanges     CoordinatorChangeRequest[]
+  closureReport          OrganizationClosureReport?
+
+  @@index([status])
+  @@map("project_participations")
+}
+
+model ParticipationAgreement {
+  id                 String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  participationId    String          @map("participation_id") @db.Uuid
+  version            Int
+  templateVersion    String          @map("template_version")
+  status             AgreementStatus @default(DRAFT)
+  fileId             String?         @map("file_id") @db.Uuid
+  reference          String?
+  sentAt             DateTime?       @map("sent_at")
+  signedByOrgAt      DateTime?       @map("signed_by_org_at")
+  signedByZaadAt     DateTime?       @map("signed_by_zaad_at")
+  orgSignerName      String?         @map("org_signer_name")
+  zaadSignerName     String?         @map("zaad_signer_name")
+  createdById        String          @map("created_by") @db.Uuid
+  createdAt          DateTime        @default(now()) @map("created_at")
+  updatedAt          DateTime        @updatedAt @map("updated_at")
+
+  participation      ProjectParticipation @relation(fields: [participationId], references: [id])
+  file               FileObject?     @relation(fields: [fileId], references: [id])
+  createdBy          Account         @relation("AgreementCreatedBy", fields: [createdById], references: [id])
+
+  @@unique([participationId, version])
+  @@index([participationId, status])
+  @@map("participation_agreements")
+}
+
+model CoordinatorChangeRequest {
+  id                 String                  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  participationId    String                  @map("participation_id") @db.Uuid
+  proposedName       String                  @map("proposed_name")
+  proposedPhone      String                  @map("proposed_phone")
+  proposedEmail      String?                 @map("proposed_email")
+  proposedTitle      String?                 @map("proposed_title")
+  reason             String
+  status             CoordinatorChangeStatus @default(PENDING)
+  requestedById      String                  @map("requested_by") @db.Uuid
+  decidedById        String?                 @map("decided_by") @db.Uuid
+  decidedAt          DateTime?               @map("decided_at")
+  decisionNotes      String?                 @map("decision_notes")
+  createdAt          DateTime                @default(now()) @map("created_at")
+  updatedAt          DateTime                @updatedAt @map("updated_at")
+
+  participation      ProjectParticipation @relation(fields: [participationId], references: [id])
+  requestedBy        Account @relation("CoordinatorChangeRequestedBy", fields: [requestedById], references: [id])
+  decidedBy          Account? @relation("CoordinatorChangeDecidedBy", fields: [decidedById], references: [id])
+
+  @@index([participationId, status])
+  @@map("coordinator_change_requests")
+}
+
+model BeneficiaryReplacement {
+  id                 String      @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  associationId      String      @map("association_id") @db.Uuid
+  oldBeneficiaryId   String      @map("old_beneficiary_id") @db.Uuid
+  newBeneficiaryId   String      @map("new_beneficiary_id") @db.Uuid
+  escalationCaseId   String?     @unique @map("escalation_case_id") @db.Uuid
+  reason             String
+  authorizedById     String      @map("authorized_by") @db.Uuid
+  createdAt          DateTime    @default(now()) @map("created_at")
+
+  association        Association @relation(fields: [associationId], references: [id])
+  oldBeneficiary     Beneficiary @relation("ReplacementOldBeneficiary", fields: [oldBeneficiaryId], references: [id])
+  newBeneficiary     Beneficiary @relation("ReplacementNewBeneficiary", fields: [newBeneficiaryId], references: [id])
+  escalationCase     EscalationCase? @relation(fields: [escalationCaseId], references: [id])
+  authorizedBy       Account     @relation("ReplacementAuthorizedBy", fields: [authorizedById], references: [id])
+
+  @@index([associationId, createdAt])
+  @@map("beneficiary_replacements")
+}
+
+model DeliveryApproval {
+  id                 String                   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  missionId          String                   @map("mission_id") @db.Uuid
+  stage              DeliveryApprovalStage
+  decision           DeliveryApprovalDecision
+  actorId            String                   @map("actor_id") @db.Uuid
+  reason             String?
+  createdAt          DateTime                 @default(now()) @map("created_at")
+
+  mission            DeliveryMission @relation(fields: [missionId], references: [id])
+  actor              Account @relation(fields: [actorId], references: [id])
+
+  @@index([missionId, createdAt])
+  @@map("delivery_approvals")
+}
+
+model EscalationCase {
+  id                 String             @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  associationId      String             @map("association_id") @db.Uuid
+  beneficiaryId      String?            @map("beneficiary_id") @db.Uuid
+  deliveryMissionId  String?            @map("delivery_mission_id") @db.Uuid
+  receiptBatchId     String?            @map("receipt_batch_id") @db.Uuid
+  evidenceFileId     String?            @map("evidence_file_id") @db.Uuid
+  category           String
+  severity           EscalationSeverity
+  description        String
+  requestedAction    String             @map("requested_action")
+  status             EscalationStatus   @default(OPEN)
+  resolution         String?
+  createdById        String             @map("created_by") @db.Uuid
+  decidedById        String?            @map("decided_by") @db.Uuid
+  decidedAt          DateTime?          @map("decided_at")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  association        Association @relation(fields: [associationId], references: [id])
+  beneficiary        Beneficiary? @relation(fields: [beneficiaryId], references: [id])
+  deliveryMission    DeliveryMission? @relation(fields: [deliveryMissionId], references: [id])
+  receiptBatch       ReceiptBatch? @relation(fields: [receiptBatchId], references: [id])
+  evidenceFile       FileObject? @relation(fields: [evidenceFileId], references: [id])
+  createdBy          Account @relation("EscalationCreatedBy", fields: [createdById], references: [id])
+  decidedBy          Account? @relation("EscalationDecidedBy", fields: [decidedById], references: [id])
+  replacement        BeneficiaryReplacement?
+
+  @@index([associationId, status, severity])
+  @@map("escalation_cases")
+}
+
+model PurchaseOrder {
+  id                 String              @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  publicCode         String              @unique @map("public_code")
+  orderNumber        String              @unique @map("order_number")
+  associationId      String              @map("association_id") @db.Uuid
+  supplierName       String              @map("supplier_name")
+  status             PurchaseOrderStatus @default(DRAFT)
+  orderedAt          DateTime?           @map("ordered_at")
+  expectedDeliveryAt DateTime?           @map("expected_delivery_at")
+  documentFileId     String?             @map("document_file_id") @db.Uuid
+  createdById        String              @map("created_by") @db.Uuid
+  approvedById       String?             @map("approved_by") @db.Uuid
+  approvedAt         DateTime?           @map("approved_at")
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+
+  association        Association @relation(fields: [associationId], references: [id])
+  documentFile       FileObject? @relation(fields: [documentFileId], references: [id])
+  createdBy          Account @relation("PurchaseOrderCreatedBy", fields: [createdById], references: [id])
+  approvedBy         Account? @relation("PurchaseOrderApprovedBy", fields: [approvedById], references: [id])
+  items              PurchaseOrderItem[]
+  shipments          Shipment[]
+
+  @@index([associationId, status])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id                 String      @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  purchaseOrderId    String      @map("purchase_order_id") @db.Uuid
+  deviceType         DeviceType  @map("device_type")
+  spec               String?
+  approvedQty        Int         @map("approved_qty")
+
+  purchaseOrder      PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  shipmentItems      ShipmentItem[]
+
+  @@index([purchaseOrderId])
+  @@map("purchase_order_items")
+}
+
+model Shipment {
+  id                 String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  publicCode         String         @unique @map("public_code")
+  purchaseOrderId    String         @map("purchase_order_id") @db.Uuid
+  associationId      String         @map("association_id") @db.Uuid
+  route              ShipmentRoute
+  status             ShipmentStatus @default(PLANNED)
+  scheduledAt        DateTime?      @map("scheduled_at")
+  location           String?
+  receiverInstructions String?      @map("receiver_instructions")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+
+  purchaseOrder      PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  association        Association @relation(fields: [associationId], references: [id])
+  items              ShipmentItem[]
+  receiptBatches     ReceiptBatch[]
+  reconciliationIssues ShipmentReconciliationIssue[]
+
+  @@index([associationId, status])
+  @@map("shipments")
+}
+
+model ShipmentItem {
+  id                 String @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  shipmentId         String @map("shipment_id") @db.Uuid
+  purchaseOrderItemId String @map("purchase_order_item_id") @db.Uuid
+  shippedQty         Int    @map("shipped_qty")
+
+  shipment           Shipment @relation(fields: [shipmentId], references: [id])
+  purchaseOrderItem  PurchaseOrderItem @relation(fields: [purchaseOrderItemId], references: [id])
+
+  @@unique([shipmentId, purchaseOrderItemId])
+  @@map("shipment_items")
+}
+
+model DamageCase {
+  id                 String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  receiptItemId      String?          @map("receipt_item_id") @db.Uuid
+  deviceId           String?          @map("device_id") @db.Uuid
+  associationId      String           @map("association_id") @db.Uuid
+  quantity           Int              @default(1)
+  description        String
+  status             DamageCaseStatus @default(OPEN)
+  returnRequired     Boolean          @default(false) @map("return_required")
+  returnedAt         DateTime?        @map("returned_at")
+  replacementExpected Boolean        @default(false) @map("replacement_expected")
+  replacementReceivedAt DateTime?     @map("replacement_received_at")
+  resolution         String?
+  closedAt           DateTime?        @map("closed_at")
+  closedById         String?          @map("closed_by") @db.Uuid
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
+
+  receiptItem        ReceiptItem? @relation(fields: [receiptItemId], references: [id])
+  device             DeviceUnit? @relation(fields: [deviceId], references: [id])
+  association        Association @relation(fields: [associationId], references: [id])
+  closedBy           Account? @relation("DamageCaseClosedBy", fields: [closedById], references: [id])
+
+  @@index([associationId, status])
+  @@map("damage_cases")
+}
+
+model ShipmentReconciliationIssue {
+  id                 String                    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  shipmentId         String                    @map("shipment_id") @db.Uuid
+  receiptItemId      String?                   @map("receipt_item_id") @db.Uuid
+  associationId      String                    @map("association_id") @db.Uuid
+  type               ReconciliationIssueType
+  expectedQty        Int                       @map("expected_qty")
+  actualQty          Int                       @map("actual_qty")
+  status             ReconciliationIssueStatus @default(OPEN)
+  reason             String?
+  resolution         String?
+  decidedById        String?                   @map("decided_by") @db.Uuid
+  decidedAt          DateTime?                 @map("decided_at")
+  createdAt          DateTime                  @default(now()) @map("created_at")
+  updatedAt          DateTime                  @updatedAt @map("updated_at")
+
+  shipment           Shipment @relation(fields: [shipmentId], references: [id])
+  receiptItem        ReceiptItem? @relation(fields: [receiptItemId], references: [id])
+  association        Association @relation(fields: [associationId], references: [id])
+  decidedBy          Account? @relation("ReconciliationIssueDecidedBy", fields: [decidedById], references: [id])
+
+  @@index([associationId, status])
+  @@map("shipment_reconciliation_issues")
+}
+
+model Notification {
+  id                 String               @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  accountId          String?              @map("account_id") @db.Uuid
+  associationId      String?              @map("association_id") @db.Uuid
+  audienceRole       AccountRole?         @map("audience_role")
+  type               String
+  title              String
+  body               String
+  severity           NotificationSeverity @default(INFO)
+  entityType         String               @map("entity_type")
+  entityId           String?              @map("entity_id")
+  dedupeKey          String               @unique @map("dedupe_key")
+  createdAt          DateTime             @default(now()) @map("created_at")
+  readAt             DateTime?            @map("read_at")
+
+  account            Account? @relation(fields: [accountId], references: [id])
+  association        Association? @relation(fields: [associationId], references: [id])
+
+  @@index([accountId, readAt, createdAt])
+  @@index([associationId, audienceRole, readAt])
+  @@map("notifications")
+}
+
+model OrganizationClosureReport {
+  id                 String                    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  participationId    String                    @unique @map("participation_id") @db.Uuid
+  status             OrganizationClosureStatus @default(DRAFT)
+  snapshotJson       Json?                     @map("snapshot_json")
+  challenges         String?
+  lessonsLearned     String?                   @map("lessons_learned")
+  recommendations    String?
+  finalNotes         String?                   @map("final_notes")
+  generatedAt        DateTime?                 @map("generated_at")
+  generatedById      String?                   @map("generated_by") @db.Uuid
+  submittedAt        DateTime?                 @map("submitted_at")
+  submittedById      String?                   @map("submitted_by") @db.Uuid
+  reviewedAt         DateTime?                 @map("reviewed_at")
+  reviewedById       String?                   @map("reviewed_by") @db.Uuid
+  closedAt           DateTime?                 @map("closed_at")
+  closedById         String?                   @map("closed_by") @db.Uuid
+  reopenedAt         DateTime?                 @map("reopened_at")
+  reopenedById       String?                   @map("reopened_by") @db.Uuid
+  reopenReason       String?                   @map("reopen_reason")
+  createdAt          DateTime                  @default(now()) @map("created_at")
+  updatedAt          DateTime                  @updatedAt @map("updated_at")
+
+  participation      ProjectParticipation @relation(fields: [participationId], references: [id])
+  generatedBy        Account? @relation("OrganizationReportGeneratedBy", fields: [generatedById], references: [id])
+  submittedBy        Account? @relation("OrganizationReportSubmittedBy", fields: [submittedById], references: [id])
+  reviewedBy         Account? @relation("OrganizationReportReviewedBy", fields: [reviewedById], references: [id])
+  closedBy           Account? @relation("OrganizationReportClosedBy", fields: [closedById], references: [id])
+  reopenedBy         Account? @relation("OrganizationReportReopenedBy", fields: [reopenedById], references: [id])
+
+  @@map("organization_closure_reports")
+}
+
+model ProjectClosureReport {
+  id                 String               @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  projectKey         String               @unique @map("project_key")
+  status             ProjectClosureStatus @default(GENERATED)
+  snapshotJson       Json                 @map("snapshot_json")
+  executiveSummary   String?              @map("executive_summary")
+  projectAnalysis    String?              @map("project_analysis")
+  consolidatedLessons String?             @map("consolidated_lessons")
+  recommendations    String?
+  managementCommentary String?            @map("management_commentary")
+  donorFeedbackNotes String?              @map("donor_feedback_notes")
+  lastActorId        String?              @map("last_actor_id") @db.Uuid
+  createdAt          DateTime             @default(now()) @map("created_at")
+  updatedAt          DateTime             @updatedAt @map("updated_at")
+
+  lastActor          Account? @relation("ProjectReportLastActor", fields: [lastActorId], references: [id])
+
+  @@map("project_closure_reports")
 }
 
 // ============================================================

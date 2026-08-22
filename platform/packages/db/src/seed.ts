@@ -7,6 +7,7 @@ import { PrismaClient, AccountRole, AccountStatus, AssociationStatus, AuthCreden
 import * as argon2 from 'argon2';
 import { computeCredentialLookupHash, normalizeDelegateCode, AUTH_CREDENTIAL_LOOKUP_HMAC_KEY_DEV_DEFAULT } from '@alzad/shared';
 import { seedReferenceData } from './reference-data.seed';
+import { assertSeedNotTargetingProduction } from './production-seed.guard';
 
 const prisma = new PrismaClient();
 
@@ -28,6 +29,7 @@ function generateDelegateCode(): string {
 }
 
 async function main() {
+  assertSeedNotTargetingProduction();
   const admin = await prisma.account.upsert({
     where: { publicCode: 'ADM-000001' },
     update: {},

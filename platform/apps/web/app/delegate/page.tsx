@@ -290,6 +290,7 @@ function MissionCard({
 
 function ConfirmDeliveryModal({ mission, onClose, onDone }: { mission: DeliveryMissionSummary; onClose: () => void; onDone: () => void }) {
   const [file, setFile] = useState<File | null>(null);
+  const [signature, setSignature] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [pledged, setPledged] = useState(false);
   const [error, setError] = useState('');
@@ -314,14 +315,14 @@ function ConfirmDeliveryModal({ mission, onClose, onDone }: { mission: DeliveryM
     setPreviewUrl(URL.createObjectURL(f));
   }
 
-  const canSubmit = !!file && pledged;
+  const canSubmit = !!file && !!signature && pledged;
 
   async function submit() {
-    if (!file) return;
+    if (!file || !signature) return;
     setBusy(true);
     setError('');
     try {
-      await confirmDelivery(mission.id, file);
+      await confirmDelivery(mission.id, file, signature);
       onDone();
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : 'تعذّر تأكيد التسليم.');
@@ -347,6 +348,12 @@ function ConfirmDeliveryModal({ mission, onClose, onDone }: { mission: DeliveryM
           // eslint-disable-next-line @next/next/no-img-element
           <img src={previewUrl} alt="معاينة صورة الإثبات" style={{ maxWidth: '100%', borderRadius: 'var(--r-sm)', border: '1px solid var(--line)' }} />
         )}
+
+        <label style={labelStyle}>
+          صورة توقيع المستلم
+          <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(e) => setSignature(e.target.files?.[0] ?? null)} style={inputStyle} />
+          <span style={mutedStyle}>التوقيع إلزامي ويُحفظ كملف خاص.</span>
+        </label>
 
         <label style={{ ...labelStyle, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <input type="checkbox" checked={pledged} onChange={(e) => setPledged(e.target.checked)} />

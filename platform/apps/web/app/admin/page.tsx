@@ -45,19 +45,17 @@ export default function AdminDashboardPage() {
   useEffect(() => {
     if (!user) return;
     (async () => {
+      const metricErrors: string[] = [];
+      const safe = (path: string) => apiFetch<Paginated<unknown>>(path).catch((cause) => {
+        metricErrors.push(`${path}: ${cause instanceof Error ? cause.message : 'UNKNOWN_ERROR'}`);
+        return { items: [], total: 0, page: 1, pageSize: 1, totalPages: 0 };
+      });
       try {
         const [pendingApps, allAssoc, inactiveAssoc, pendingBen, whDevices, draftReceipts, awaitingReceipts, delegates, withDelegate, delivered, failedDeliveries] = await Promise.all([
-          apiFetch<Paginated<unknown>>('/association-applications?status=UNDER_REVIEW&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/associations?pageSize=1'),
-          apiFetch<Paginated<unknown>>('/associations?status=INACTIVE&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/beneficiaries?reviewStatus=UNDER_REVIEW&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/inventory/devices?status=WAREHOUSE&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/receipts?status=DRAFT&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/receipts?status=AWAITING_ASSOCIATION_CONFIRMATION&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/delegates?pageSize=1'),
-          apiFetch<Paginated<unknown>>('/inventory/devices?status=WITH_DELEGATE&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/inventory/devices?status=DELIVERED&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/deliveries?status=DELIVERY_FAILED&pageSize=1'),
+          safe('/association-applications?status=UNDER_REVIEW&pageSize=1'), safe('/associations?pageSize=1'), safe('/associations?status=INACTIVE&pageSize=1'),
+          safe('/beneficiaries?reviewStatus=UNDER_REVIEW&pageSize=1'), safe('/inventory/devices?status=WAREHOUSE&pageSize=1'), safe('/receipts?status=DRAFT&pageSize=1'),
+          safe('/receipts?status=AWAITING_ASSOCIATION_CONFIRMATION&pageSize=1'), safe('/delegates?pageSize=1'), safe('/inventory/devices?status=WITH_DELEGATE&pageSize=1'),
+          safe('/inventory/devices?status=DELIVERED&pageSize=1'), safe('/deliveries?status=DELIVERY_FAILED&pageSize=1'),
         ]);
         setCounts({
           pendingApplications: pendingApps.total,
@@ -72,6 +70,7 @@ export default function AdminDashboardPage() {
           devicesDelivered: delivered.total,
           deliveriesFailed: failedDeliveries.total,
         });
+        setError(metricErrors.length ? `تعذّرت مؤشرات محددة: ${metricErrors.join(' | ')}` : null);
       } catch {
         setError('تعذّر تحميل بيانات لوحة التحكم.');
       }

@@ -4,6 +4,7 @@ import {
   Prisma,
   AssociationStatus,
   BeneficiaryReviewStatus,
+  BeneficiaryListType,
   NeedDecisionStatus,
   NeedFulfillmentStatus,
   DeviceStatus,
@@ -201,9 +202,10 @@ export class AutoAllocationService implements AllocationTriggerPort {
     ];
 
     const beneficiaries = await tx.beneficiary.findMany({
-      where: { associationId, archivedAt: null, reviewStatus: BeneficiaryReviewStatus.APPROVED },
+      where: { associationId, archivedAt: null, reviewStatus: BeneficiaryReviewStatus.APPROVED, listType: BeneficiaryListType.MAIN },
       select: {
         id: true,
+        listRank: true,
         needs: {
           where: { decisionStatus: NeedDecisionStatus.APPROVED },
           select: { id: true, deviceType: true, fulfillmentStatus: true },
@@ -218,6 +220,7 @@ export class AutoAllocationService implements AllocationTriggerPort {
       if (hasCustodyStarted) continue;
       candidates.push({
         beneficiaryId: b.id,
+        listRank: b.listRank,
         needs: b.needs.map((n) => ({
           needId: n.id,
           deviceType: n.deviceType,

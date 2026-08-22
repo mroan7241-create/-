@@ -670,12 +670,39 @@ export function confirmHandover(missionId: string): Promise<{ ok: true }> {
   return apiFetch(`/deliveries/${missionId}/confirm-handover`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) });
 }
 
-export function confirmDelivery(missionId: string, proofPhoto: File): Promise<{ ok: true; attemptId: string }> {
+export function confirmDelivery(missionId: string, proofPhoto: File, recipientSignature: File): Promise<{ ok: true; attemptId: string }> {
   const form = new FormData();
   form.set('opId', newOpId());
   form.set('proofPhoto', proofPhoto);
+  form.set('recipientSignature', recipientSignature);
   return apiUpload(`/deliveries/${missionId}/confirm`, form);
 }
+
+// PASS B workflow clients. Every mutation receives a fresh idempotency key;
+// bulk defaults in the UI are advisory and the API remains authoritative.
+export type WorkflowRecord = Record<string, unknown> & { id: string };
+export function listParticipations(): Promise<WorkflowRecord[]> { return apiFetch('/participations'); }
+export function transitionAgreement(id: string, status: string, signerName?: string) { return apiFetch(`/participations/agreements/${id}/transition`, { method: 'POST', body: JSON.stringify({ status, signerName, opId: newOpId() }) }); }
+export function completeParticipationSetup(id: string) { return apiFetch(`/participations/${id}/setup-complete`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) }); }
+export function activateParticipation(id: string) { return apiFetch(`/participations/${id}/activate`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) }); }
+export function listProcurement(): Promise<WorkflowRecord[]> { return apiFetch('/procurement/orders'); }
+export function listEscalations(): Promise<WorkflowRecord[]> { return apiFetch('/escalations'); }
+export function decideEscalation(id: string, decision: 'APPROVED' | 'REJECTED' | 'RESOLVED', resolution: string) { return apiFetch(`/escalations/${id}/decision`, { method: 'POST', body: JSON.stringify({ decision, resolution, opId: newOpId() }) }); }
+export function listNotifications(): Promise<WorkflowRecord[]> { return apiFetch('/notifications'); }
+export function markNotificationRead(id: string) { return apiFetch(`/notifications/${id}/read`, { method: 'POST' }); }
+export function listSystemSettings(): Promise<Record<string, unknown>> { return apiFetch('/settings'); }
+export function saveSystemSetting(key: string, value: unknown) { return apiFetch('/settings', { method: 'PUT', body: JSON.stringify({ key, value }) }); }
+export function decideDelivery(missionId: string, stage: 'association' | 'zaad', decision: 'APPROVED' | 'RETURNED_FOR_FIX' | 'REJECTED', reason?: string) { return apiFetch(`/deliveries/${missionId}/${stage}-approval`, { method: 'POST', body: JSON.stringify({ decision, reason, opId: newOpId() }) }); }
+export function rescheduleDelivery(missionId: string, reason: string, scheduledFor: string) { return apiFetch(`/deliveries/${missionId}/reschedule`, { method: 'POST', body: JSON.stringify({ reason, scheduledFor, opId: newOpId() }) }); }
+export function resumeDelivery(missionId: string) { return apiFetch(`/deliveries/${missionId}/resume`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) }); }
+export function confirmPhysicalReturn(missionId: string, condition: 'GOOD' | 'DAMAGED', notes: string) { return apiFetch(`/deliveries/${missionId}/confirm-return`, { method: 'POST', body: JSON.stringify({ condition, notes, opId: newOpId() }) }); }
+export function getRecipientSignatureUrl(attemptId: string): Promise<{ url: string }> { return apiFetch(`/deliveries/attempts/${attemptId}/signature`); }
+export function setBeneficiaryList(id: string, listType: 'MAIN' | 'RESERVE' | 'REJECTED', listRank: number | null, reason: string) { return apiFetch(`/beneficiaries/${id}/list-decision`, { method: 'POST', body: JSON.stringify({ listType, listRank, reason, opId: newOpId() }) }); }
+export function promoteReserve(id: string, reason: string) { return apiFetch(`/beneficiaries/${id}/promote-reserve`, { method: 'POST', body: JSON.stringify({ reason, opId: newOpId() }) }); }
+export function decideApplicationEligibility(id: string, decision: 'PASSED' | 'FAILED' | 'NEEDS_INFO', notes?: string) { return apiFetch(`/association-applications/${id}/eligibility`, { method: 'POST', body: JSON.stringify({ decision, notes, opId: newOpId() }) }); }
+export function evaluateApplication(id: string, scores: { operationalReadiness: number; technicalCapability: number; previousExperience: number; integrityTransparency: number; participationCommitment: number; sustainabilityImpact: number; geographicProjectNeed: number }) { return apiFetch(`/association-applications/${id}/evaluation`, { method: 'POST', body: JSON.stringify({ ...scores, opId: newOpId() }) }); }
+export function previewApplicationSelection(): Promise<{ threshold: number; items: WorkflowRecord[] }> { return apiFetch('/association-applications/selection/preview', { method: 'POST' }); }
+export function commitApplicationSelection(mainTargetCount: number, supporterApprovalReference: string) { return apiFetch('/association-applications/selection/commit', { method: 'POST', body: JSON.stringify({ mainTargetCount, supporterApprovalReference, opId: newOpId() }) }); }
 
 export function failDelivery(missionId: string, failureReason: DeliveryFailureReason, notes?: string): Promise<{ ok: true; attemptId: string }> {
   return apiFetch(`/deliveries/${missionId}/fail`, { method: 'POST', body: JSON.stringify({ failureReason, notes, opId: newOpId() }) });

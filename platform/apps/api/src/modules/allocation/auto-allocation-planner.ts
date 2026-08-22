@@ -40,6 +40,7 @@ export interface CandidateNeed {
 
 export interface CandidateBeneficiary {
   beneficiaryId: string;
+  listRank?: number | null;
   /** فقط الاحتياجات المعتمدة (decisionStatus=APPROVED) غير المبدوء عهدتها. */
   needs: CandidateNeed[];
 }
@@ -81,6 +82,7 @@ export interface AllocationPlan {
 
 interface InternalCandidate {
   beneficiaryId: string;
+  listRank: number | null;
   /** فجوة لكل نوع (0 أو 1 — لا يمكن لمستفيد واحد أن يملك أكثر من احتياج واحد لنفس النوع). */
   gap: Record<DeviceType, 0 | 1>;
   totalGap: number;
@@ -102,7 +104,7 @@ function buildInternalCandidates(candidates: CandidateBeneficiary[]): InternalCa
         }
       }
       const totalGap = gapNeeds.length;
-      return { beneficiaryId: c.beneficiaryId, gap, totalGap, readyNeeds, gapNeeds };
+      return { beneficiaryId: c.beneficiaryId, listRank: c.listRank ?? null, gap, totalGap, readyNeeds, gapNeeds };
     })
     // ALLOC-003: مستفيد كل احتياجاته جاهزة بالفعل (لا فجوة) مكتمل فعليًا — يُستبعَد من هذه التشغيلة (مسؤولية الخطوة اللاحقة: الانتقال الجماعي فقط).
     .filter((c) => c.totalGap > 0);
@@ -119,7 +121,7 @@ export function planAutoAllocation(candidates: CandidateBeneficiary[], freeStock
   // ترتيب حتمي **قبل** الحقيبة نفسها: عند تعادل قيمة/وزن بين مرشَّحين، تفضّل إعادة البناء رجوعًا العنصر
   // الأسبق فهرسًا (راجع حلقة الإرجاع أدناه: `withItem > cur[cell]` بمقارنة صارمة تُبقي أول كاتب فائزًا
   // عند التعادل) — الفرز هنا بالمعرّف تصاعديًا يجعل "الفهرس الأسبق" مطابقًا حرفيًا لـ"أصغر معرّف" (ALLOC-004، كسر التعادل الرابع).
-  internal.sort((a, b) => a.beneficiaryId.localeCompare(b.beneficiaryId));
+  internal.sort(compareCandidatePriority);
 
   // وعاء الموارد الكلي لكل نوع = مخزون حر + كل الأجهزة "الجاهزة" لدى مرشَّحين (سواء اختِيروا لاحقًا أم لا).
   const readyPoolByType: Record<DeviceType, number> = { REFRIGERATOR: 0, OVEN: 0, WASHING_MACHINE: 0 };
@@ -197,7 +199,7 @@ export function planAutoAllocation(candidates: CandidateBeneficiary[], freeStock
   }
   const selectedIds = new Set(selected.map((c) => c.beneficiaryId));
   // ترتيب حتمي للكتابة (لا يؤثر في اختيار DP نفسه، فقط في ترتيب استهلاك المخزون الفعلي لاحقًا).
-  selected.sort((a, b) => a.beneficiaryId.localeCompare(b.beneficiaryId));
+  selected.sort(compareCandidatePriority);
 
   // مِرْجَل استرجاع: أجهزة "جاهزة" لدى مرشَّحين غير مُختارين، مُتاحة للاسترجاع فقط لصالح مُختارين.
   const reclaimPoolByType: Record<DeviceType, ReclaimInstruction[]> = { REFRIGERATOR: [], OVEN: [], WASHING_MACHINE: [] };
@@ -235,7 +237,7 @@ export function planAutoAllocation(candidates: CandidateBeneficiary[], freeStock
   // خطوة 2 — تخصيص جزئي لغير المكتمِلين من المخزون الحر المتبقي فقط (بلا استرجاع) — أقل فجوات أولًا، ثم ترتيب حتمي بالمعرّف.
   const leftovers = internal
     .filter((c) => !selectedIds.has(c.beneficiaryId))
-    .sort((a, b) => a.totalGap - b.totalGap || a.beneficiaryId.localeCompare(b.beneficiaryId));
+    .sort((a, b) => a.totalGap - b.totalGap || compareCandidatePriority(a, b));
   for (const cand of leftovers) {
     for (const need of cand.gapNeeds) {
       const type = need.deviceType;
@@ -247,4 +249,10 @@ export function planAutoAllocation(candidates: CandidateBeneficiary[], freeStock
   }
 
   return { completedBeneficiaryIds: selected.map((c) => c.beneficiaryId), fills, reclaims };
+}
+
+function compareCandidatePriority(a: Pick<InternalCandidate, 'listRank' | 'beneficiaryId'>, b: Pick<InternalCandidate, 'listRank' | 'beneficiaryId'>) {
+  const ar = a.listRank ?? Number.MAX_SAFE_INTEGER;
+  const br = b.listRank ?? Number.MAX_SAFE_INTEGER;
+  return ar - br || a.beneficiaryId.localeCompare(b.beneficiaryId);
 }

@@ -15,6 +15,9 @@ import { PaginationQueryDto } from '../../../common/validation/pagination-query.
  */
 export class CreateReceiptBatchDto {
   @IsUUID()
+  shipmentId!: string;
+
+  @IsUUID()
   associationId!: string;
 
   @IsString()
