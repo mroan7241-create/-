@@ -91,14 +91,14 @@ export default function DelegatePortalPage() {
     }
   }
 
-  /** تخلٍّ نهائي — لا تراجع بعده من هنا (يبقى ممكنًا لاحقًا عبر تخصيص تلقائي جديد). */
+  /** طلب إرجاع؛ تبقى العهدة قائمة حتى تؤكد الجمعية الاستلام الفعلي. */
   async function doReturn(mission: DeliveryMissionSummary) {
-    if (!window.confirm(`إرجاع جهاز «${mission.beneficiary.name}» نهائيًا للمستودع؟ لن تعود هذه المهمة تظهر لديك، وسيُعاد تقييم الاحتياج تلقائيًا.`)) return;
+    if (!window.confirm(`طلب إرجاع جهاز «${mission.beneficiary.name}»؟ ستبقى العهدة قائمة حتى تؤكد الجمعية الاستلام الفعلي.`)) return;
     try {
       await returnDelivery(mission.id);
       await load();
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : 'تعذّر إرجاع الجهاز.');
+      setError(err instanceof ApiClientError ? err.message : 'تعذّر طلب إرجاع الجهاز.');
     }
   }
 
@@ -107,7 +107,7 @@ export default function DelegatePortalPage() {
     setProofError('');
     try {
       const detail = await getDelivery(mission.id);
-      const deliveredAttempt = detail.attempts.find((a) => a.status === 'DELIVERED' && a.hasProof);
+      const deliveredAttempt = detail.attempts.find((a) => (a.status === 'DELIVERED' || a.status === 'DELIVERY_CLOSED') && a.hasProof);
       if (!deliveredAttempt) {
         setProofError('لا توجد صورة إثبات لهذا التسليم.');
         return;
@@ -124,7 +124,7 @@ export default function DelegatePortalPage() {
   const pendingHandover = (missions ?? []).filter((m) => m.status === 'PENDING_DELEGATE_ACKNOWLEDGEMENT');
   const active = (missions ?? []).filter((m) => m.status === 'OUT_WITH_DELEGATE');
   const failedMissions = (missions ?? []).filter((m) => m.status === 'DELIVERY_FAILED');
-  const delivered = (missions ?? []).filter((m) => m.status === 'DELIVERED');
+  const delivered = (missions ?? []).filter((m) => m.status === 'DELIVERED' || m.status === 'DELIVERY_CLOSED');
 
   return (
     <main style={{ maxWidth: 640, margin: '0 auto', padding: '16px 16px 60px' }}>

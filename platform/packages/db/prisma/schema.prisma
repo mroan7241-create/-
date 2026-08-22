@@ -187,6 +187,7 @@ enum DeliveryStatus {
   PENDING_DELIVERY_APPROVAL
   DEFERRED
   PENDING_RETURN_APPROVAL
+  DELIVERY_CLOSED
 }
 
 enum DeliveryFailureReason {

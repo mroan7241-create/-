@@ -35,6 +35,10 @@ const STATUS_TONE: Record<DeliveryStatus, 'neutral' | 'good' | 'bad'> = {
   DELIVERED: 'good',
   DELIVERY_FAILED: 'bad',
   RETURNED: 'bad',
+  PENDING_DELIVERY_APPROVAL: 'neutral',
+  DEFERRED: 'neutral',
+  PENDING_RETURN_APPROVAL: 'neutral',
+  DELIVERY_CLOSED: 'good',
 };
 
 function formatDate(value: string | null) {
@@ -174,7 +178,7 @@ export function DeliveryDetailView({ missionId, listHref }: { missionId: string;
                   <textarea value={returnNotes} onChange={(event) => setReturnNotes(event.target.value)} rows={2} style={{ ...inputStyle, resize: 'vertical' }} />
                 </label>
                 <button type="button" style={dangerButtonStyle} disabled={busyAction !== null} onClick={runReturn}>
-                  {busyAction === 'return' ? 'جارٍ تسجيل الإرجاع…' : 'إرجاع إلى المستودع'}
+                  {busyAction === 'return' ? 'جارٍ طلب الإرجاع…' : 'طلب إرجاع بانتظار تأكيد الجمعية'}
                 </button>
               </div>
             </section>

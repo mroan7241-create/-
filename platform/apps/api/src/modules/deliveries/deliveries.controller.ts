@@ -81,7 +81,7 @@ export class DeliveriesController {
   @Roles(AccountRole.ADMIN, AccountRole.ASSOCIATION, AccountRole.DELEGATE)
   @ApiOperation({
     summary:
-      'تخلٍّ نهائي عن التسليم — الجهاز يعود فعليًا للمستودع ويُعاد تقييم الاحتياج عبر AutoAllocation (يوازي "أعيد للجمعية/المستودع" القديمة)',
+      'طلب إرجاع فقط — تبقى العهدة كما هي حتى تأكيد الجمعية للاستلام الفعلي',
   })
   async returnToWarehouse(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ReturnDeliveryDto) {
     return this.deliveries.requestReturn(ctx, id, dto);

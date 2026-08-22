@@ -104,6 +104,7 @@ export const DELIVERY_STATUS_LABELS_AR: Record<DeliveryStatus, string> = {
   [DeliveryStatus.DEFERRED]: 'مؤجل',
   [DeliveryStatus.PENDING_RETURN_APPROVAL]: 'بانتظار تأكيد الإرجاع',
   [DeliveryStatus.RETURNED]: 'أعيد للمستودع',
+  [DeliveryStatus.DELIVERY_CLOSED]: 'أغلق التسليم نهائيًا',
 };
 
 export const DELIVERY_FAILURE_REASON_LABELS_AR: Record<DeliveryFailureReason, string> = {

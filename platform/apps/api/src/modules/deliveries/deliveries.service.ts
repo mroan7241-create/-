@@ -113,7 +113,7 @@ export class DeliveriesService {
 
       // مهمة تسليم واحدة لكل مستفيد — يُعاد استخدام آخر مهمة غير مكتملة (النادر: إسناد ثانٍ بعد استرجاع NODE-5) بدل تكديس صفوف يتيمة.
       const existingMission = await tx.deliveryMission.findFirst({
-        where: { beneficiaryId: beneficiary.id, status: { notIn: [DeliveryStatus.DELIVERED] } },
+        where: { beneficiaryId: beneficiary.id, status: { notIn: [DeliveryStatus.DELIVERED, DeliveryStatus.DELIVERY_CLOSED] } },
         orderBy: { createdAt: 'desc' },
       });
 
@@ -417,7 +417,8 @@ export class DeliveriesService {
       if (stage === DeliveryApprovalStage.ZAAD && input.decision === DeliveryApprovalDecision.APPROVED) {
         const needs = await tx.beneficiaryNeed.findMany({ where: { beneficiaryId: mission.beneficiaryId, decisionStatus: NeedDecisionStatus.APPROVED } });
         const allocations = await tx.deviceAllocation.findMany({ where: { beneficiaryNeedId: { in: needs.map((n) => n.id) }, status: DeviceAllocationStatus.ACTIVE } }); const now = new Date();
-        await tx.deliveryMission.update({ where: { id: missionId }, data: { status: DeliveryStatus.DELIVERED } });
+        await tx.deliveryMission.update({ where: { id: missionId }, data: { status: DeliveryStatus.DELIVERY_CLOSED } });
+        await tx.deliveryAttempt.update({ where: { id: attempt.id }, data: { status: DeliveryStatus.DELIVERY_CLOSED } });
         await tx.deviceUnit.updateMany({ where: { id: { in: allocations.map((a) => a.deviceId) }, status: DeviceStatus.WITH_BENEFICIARY_PENDING_APPROVAL }, data: { status: DeviceStatus.DELIVERED, deliveredAt: now } });
         await tx.beneficiaryNeed.updateMany({ where: { id: { in: needs.map((n) => n.id) } }, data: { fulfillmentStatus: NeedFulfillmentStatus.DELIVERED } }); finalized = true;
       } else if (stage === DeliveryApprovalStage.ASSOCIATION && input.decision === DeliveryApprovalDecision.APPROVED) {

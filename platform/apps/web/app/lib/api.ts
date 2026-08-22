@@ -595,7 +595,7 @@ export function regenerateDelegateCode(id: string): Promise<{ ok: true; accessCo
   return apiFetch(`/delegates/${id}/regenerate-code`, { method: 'POST' });
 }
 
-export type DeliveryStatus = 'NOT_STARTED' | 'PREPARING' | 'PENDING_DELEGATE_ACKNOWLEDGEMENT' | 'OUT_WITH_DELEGATE' | 'DELIVERED' | 'DELIVERY_FAILED' | 'RETURNED';
+export type DeliveryStatus = 'NOT_STARTED' | 'PREPARING' | 'PENDING_DELEGATE_ACKNOWLEDGEMENT' | 'OUT_WITH_DELEGATE' | 'DELIVERED' | 'DELIVERY_FAILED' | 'RETURNED' | 'PENDING_DELIVERY_APPROVAL' | 'DEFERRED' | 'PENDING_RETURN_APPROVAL' | 'DELIVERY_CLOSED';
 
 export const DELIVERY_STATUS_LABELS: Record<DeliveryStatus, string> = {
   NOT_STARTED: 'لم يبدأ',
@@ -605,6 +605,10 @@ export const DELIVERY_STATUS_LABELS: Record<DeliveryStatus, string> = {
   DELIVERED: 'تم التسليم',
   DELIVERY_FAILED: 'تعذّر التسليم',
   RETURNED: 'أعيد للمستودع',
+  PENDING_DELIVERY_APPROVAL: 'بانتظار اعتماد التسليم',
+  DEFERRED: 'مؤجل',
+  PENDING_RETURN_APPROVAL: 'بانتظار تأكيد الاستلام الفعلي من الجمعية',
+  DELIVERY_CLOSED: 'أغلق التسليم نهائيًا',
 };
 
 export type DeliveryFailureReason = 'COULD_NOT_REACH' | 'NO_ANSWER' | 'POSTPONEMENT_REQUESTED' | 'INCORRECT_ADDRESS' | 'NOT_FOUND' | 'RECEIPT_REFUSED';
@@ -682,6 +686,7 @@ export function confirmDelivery(missionId: string, proofPhoto: File, recipientSi
 // bulk defaults in the UI are advisory and the API remains authoritative.
 export type WorkflowRecord = Record<string, unknown> & { id: string };
 export function listParticipations(): Promise<WorkflowRecord[]> { return apiFetch('/participations'); }
+export function createAgreement(participationId: string, version: number, templateVersion: string) { return apiFetch(`/participations/${participationId}/agreements`, { method: 'POST', body: JSON.stringify({ version, templateVersion, opId: newOpId() }) }); }
 export function transitionAgreement(id: string, status: string, signerName?: string) { return apiFetch(`/participations/agreements/${id}/transition`, { method: 'POST', body: JSON.stringify({ status, signerName, opId: newOpId() }) }); }
 export function completeParticipationSetup(id: string) { return apiFetch(`/participations/${id}/setup-complete`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) }); }
 export function activateParticipation(id: string) { return apiFetch(`/participations/${id}/activate`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) }); }
@@ -696,6 +701,11 @@ export function decideDelivery(missionId: string, stage: 'association' | 'zaad',
 export function rescheduleDelivery(missionId: string, reason: string, scheduledFor: string) { return apiFetch(`/deliveries/${missionId}/reschedule`, { method: 'POST', body: JSON.stringify({ reason, scheduledFor, opId: newOpId() }) }); }
 export function resumeDelivery(missionId: string) { return apiFetch(`/deliveries/${missionId}/resume`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) }); }
 export function confirmPhysicalReturn(missionId: string, condition: 'GOOD' | 'DAMAGED', notes: string) { return apiFetch(`/deliveries/${missionId}/confirm-return`, { method: 'POST', body: JSON.stringify({ condition, notes, opId: newOpId() }) }); }
+export function generateOrganizationClosure(participationId: string) { return apiFetch('/reports/closure/organization/generate', { method: 'POST', body: JSON.stringify({ participationId, opId: newOpId() }) }); }
+export function getOrganizationClosure(id: string) { return apiFetch(`/reports/closure/organization/${id}`); }
+export function transitionOrganizationClosure(id: string, status: string) { return apiFetch(`/reports/closure/organization/${id}/transition`, { method: 'POST', body: JSON.stringify({ status, opId: newOpId() }) }); }
+export function updateOrganizationClosure(id: string, fields: { challenges?: string; lessonsLearned?: string; recommendations?: string; finalNotes?: string }) { return apiFetch(`/reports/closure/organization/${id}`, { method: 'PATCH', body: JSON.stringify(fields) }); }
+export function reopenOrganizationClosure(id: string, reason: string) { return apiFetch(`/reports/closure/organization/${id}/reopen`, { method: 'POST', body: JSON.stringify({ reason }) }); }
 export function getRecipientSignatureUrl(attemptId: string): Promise<{ url: string }> { return apiFetch(`/deliveries/attempts/${attemptId}/signature`); }
 export function setBeneficiaryList(id: string, listType: 'MAIN' | 'RESERVE' | 'REJECTED', listRank: number | null, reason: string) { return apiFetch(`/beneficiaries/${id}/list-decision`, { method: 'POST', body: JSON.stringify({ listType, listRank, reason, opId: newOpId() }) }); }
 export function promoteReserve(id: string, reason: string) { return apiFetch(`/beneficiaries/${id}/promote-reserve`, { method: 'POST', body: JSON.stringify({ reason, opId: newOpId() }) }); }
@@ -713,6 +723,7 @@ export function retryDelivery(missionId: string): Promise<{ ok: true }> {
 }
 
 /** تخلٍّ نهائي عن التسليم — الجهاز يعود فعليًا للمستودع (يوازي "أعيد للجمعية/المستودع" القديمة). */
+/** طلب إرجاع؛ لا يعيد جهازًا للمستودع قبل تأكيد الاستلام الفعلي من الجمعية. */
 export function returnDelivery(missionId: string, notes?: string): Promise<{ ok: true; attemptId: string }> {
   return apiFetch(`/deliveries/${missionId}/return`, { method: 'POST', body: JSON.stringify({ notes, opId: newOpId() }) });
 }
