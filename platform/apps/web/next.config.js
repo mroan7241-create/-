@@ -8,11 +8,9 @@ const nextConfig = {
   // build-to-runtime handoff does not depend on preserving hidden artifacts.
   distDir: 'next-build',
   output: 'standalone',
-  experimental: {
-    // Monorepo root (platform/) so file tracing picks up hoisted npm
-    // workspace dependencies instead of only apps/web's own node_modules.
-    outputFileTracingRoot: path.join(__dirname, '..', '..'),
-  },
+  // Monorepo root (platform/) so file tracing picks up hoisted npm
+  // workspace dependencies instead of only apps/web's own node_modules.
+  outputFileTracingRoot: path.join(__dirname, '..', '..'),
 };
 
 module.exports = nextConfig;

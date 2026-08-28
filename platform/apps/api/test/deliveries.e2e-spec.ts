@@ -72,6 +72,7 @@ describe('NODE-6 — مناديب وتسليمات (تكامل حقيقي)', () 
   }
 
   beforeEach(async () => {
+    await prisma.deliveryApproval.deleteMany({ where: { mission: { associationId: { in: [fx.associationAId, fx.associationBId] } } } });
     await prisma.deliveryAttempt.deleteMany({ where: { mission: { associationId: { in: [fx.associationAId, fx.associationBId] } } } });
     await prisma.deliveryMission.deleteMany({ where: { associationId: { in: [fx.associationAId, fx.associationBId] } } });
     await purgeDelegateAccounts();
@@ -83,6 +84,7 @@ describe('NODE-6 — مناديب وتسليمات (تكامل حقيقي)', () 
   });
 
   afterAll(async () => {
+    await prisma.deliveryApproval.deleteMany({ where: { mission: { associationId: { in: [fx.associationAId, fx.associationBId] } } } });
     await prisma.deliveryAttempt.deleteMany({ where: { mission: { associationId: { in: [fx.associationAId, fx.associationBId] } } } });
     await prisma.deliveryMission.deleteMany({ where: { associationId: { in: [fx.associationAId, fx.associationBId] } } });
     await purgeDelegateAccounts();
@@ -114,6 +116,8 @@ describe('NODE-6 — مناديب وتسليمات (تكامل حقيقي)', () 
       .set('Cookie', adminCookie)
       .send({ opId: newOpId('rev'), beneficiaryDecision: 'APPROVED', needDecisions: [{ needId: needIds[0], decision: 'APPROVED' }] });
     if (res.status !== 201) throw new Error(`review failed: ${res.status} ${JSON.stringify(res.body)}`);
+    const listRes = await http().post(`/api/v1/beneficiaries/${id}/list-decision`).set('Cookie', adminCookie).send({ listType: 'MAIN', listRank: 1, reason: 'اختبار مسار التسليم', opId: newOpId('list') });
+    if (listRes.status !== 201) throw new Error(`list decision failed: ${listRes.status} ${JSON.stringify(listRes.body)}`);
     return id;
   }
 
@@ -121,6 +125,13 @@ describe('NODE-6 — مناديب وتسليمات (تكامل حقيقي)', () 
     const res = await http().post('/api/v1/delegates').set('Cookie', assocACookie).send({ name: 'مندوب اختبار', phone: '0500000001', opId: newOpId('del') });
     if (res.status !== 201) throw new Error(`createDelegate failed: ${res.status} ${JSON.stringify(res.body)}`);
     return { id: res.body.delegateId, code: res.body.accessCode };
+  }
+
+  async function approveCompletedDelivery(missionId: string): Promise<void> {
+    await http().post(`/api/v1/deliveries/${missionId}/association-approval`).set('Cookie', assocACookie)
+      .send({ decision: 'APPROVED', opId: newOpId('assoc-approval') }).expect(201);
+    await http().post(`/api/v1/deliveries/${missionId}/zaad-approval`).set('Cookie', adminCookie)
+      .send({ decision: 'APPROVED', opId: newOpId('zaad-approval') }).expect(201);
   }
 
   it('السلسلة الكاملة: مندوب حقيقي يسجّل دخوله ← إسناد ← تأكيد تسليم بإثبات ← حالة DB نهائية صحيحة', async () => {
@@ -169,18 +180,22 @@ describe('NODE-6 — مناديب وتسليمات (تكامل حقيقي)', () 
       .post(`/api/v1/deliveries/${missionId}/confirm`)
       .set('Cookie', delegateCookie)
       .field('opId', newOpId('confirm'))
-      .attach('proofPhoto', JPEG_PROOF, { filename: 'proof.jpg', contentType: 'image/jpeg' });
+      .attach('proofPhoto', JPEG_PROOF, { filename: 'proof.jpg', contentType: 'image/jpeg' })
+      .attach('recipientSignature', JPEG_PROOF, { filename: 'signature.jpg', contentType: 'image/jpeg' });
     expect(confirmRes.status).toBe(201);
 
+    expect((await prisma.deliveryMission.findUniqueOrThrow({ where: { id: missionId } })).status).toBe(DeliveryStatus.PENDING_DELIVERY_APPROVAL);
+    await approveCompletedDelivery(missionId);
+
     const missionAfter = await prisma.deliveryMission.findUniqueOrThrow({ where: { id: missionId } });
-    expect(missionAfter.status).toBe(DeliveryStatus.DELIVERED);
+    expect(missionAfter.status).toBe(DeliveryStatus.DELIVERY_CLOSED);
     const deviceAfter = await prisma.deviceUnit.findUniqueOrThrow({ where: { id: device.id } });
     expect(deviceAfter.status).toBe(DeviceStatus.DELIVERED);
     const needAfter = await prisma.beneficiaryNeed.findUniqueOrThrow({ where: { id: need.id } });
     expect(needAfter.fulfillmentStatus).toBe(NeedFulfillmentStatus.DELIVERED);
 
     const attempt = await prisma.deliveryAttempt.findFirstOrThrow({ where: { missionId } });
-    expect(attempt.status).toBe(DeliveryStatus.DELIVERED);
+    expect(attempt.status).toBe(DeliveryStatus.DELIVERY_CLOSED);
     expect(attempt.proofFileId).not.toBeNull();
 
     // إثبات التسليم قابل للعرض عبر رابط موقَّت.
@@ -224,11 +239,13 @@ describe('NODE-6 — مناديب وتسليمات (تكامل حقيقي)', () 
       .post(`/api/v1/deliveries/${missionId}/confirm`)
       .set('Cookie', delegateCookie)
       .field('opId', newOpId('confirm'))
-      .attach('proofPhoto', JPEG_PROOF, { filename: 'proof.jpg', contentType: 'image/jpeg' });
+      .attach('proofPhoto', JPEG_PROOF, { filename: 'proof.jpg', contentType: 'image/jpeg' })
+      .attach('recipientSignature', JPEG_PROOF, { filename: 'signature.jpg', contentType: 'image/jpeg' });
     expect(confirmRes.status).toBe(201);
+    await approveCompletedDelivery(missionId);
 
     const attempts = await prisma.deliveryAttempt.findMany({ where: { missionId }, orderBy: { attemptedAt: 'asc' } });
-    expect(attempts.map((a) => a.status)).toEqual([DeliveryStatus.DELIVERY_FAILED, DeliveryStatus.DELIVERED]); // السجل تراكمي، لا يُمحى شيء
+    expect(attempts.map((a) => a.status)).toEqual([DeliveryStatus.DELIVERY_FAILED, DeliveryStatus.DELIVERY_CLOSED]); // السجل تراكمي، لا يُمحى شيء
   });
 
   it('يرفض الإسناد قبل اكتمال التخصيص التلقائي (لا مخزون بعد)', async () => {
@@ -271,7 +288,8 @@ describe('NODE-6 — مناديب وتسليمات (تكامل حقيقي)', () 
       .post(`/api/v1/deliveries/${missionId}/confirm`)
       .set('Cookie', otherDelegateCookie)
       .field('opId', newOpId('confirm'))
-      .attach('proofPhoto', JPEG_PROOF, { filename: 'proof.jpg', contentType: 'image/jpeg' });
+      .attach('proofPhoto', JPEG_PROOF, { filename: 'proof.jpg', contentType: 'image/jpeg' })
+      .attach('recipientSignature', JPEG_PROOF, { filename: 'signature.jpg', contentType: 'image/jpeg' });
     expect(confirmRes.status).toBe(404);
   });
 

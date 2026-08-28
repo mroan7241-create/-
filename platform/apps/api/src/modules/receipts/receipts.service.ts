@@ -45,7 +45,7 @@ export interface CreateReceiptItemInput {
 }
 
 export interface CreateReceiptBatchInput {
-  shipmentId: string;
+  shipmentId?: string;
   associationId: string;
   supplierName: string;
   sentDate: string;
@@ -177,9 +177,11 @@ export class ReceiptsService {
         if (!claim.claimed) return { replayed: true as const, batchId: claim.existingResponse!.batchId };
 
         await assertActiveAssociation(tx, input.associationId);
-        const shipment = await tx.shipment.findUnique({ where: { id: input.shipmentId } });
-        if (!shipment || shipment.associationId !== input.associationId || shipment.status === 'CANCELLED') {
-          throw new ApiError('RECEIPT_SHIPMENT_INVALID', 'يجب ربط محضر الاستلام بشحنة صالحة للجمعية نفسها', 409);
+        if (input.shipmentId) {
+          const shipment = await tx.shipment.findUnique({ where: { id: input.shipmentId } });
+          if (!shipment || shipment.associationId !== input.associationId || shipment.status === 'CANCELLED') {
+            throw new ApiError('RECEIPT_SHIPMENT_INVALID', 'يجب ربط محضر الاستلام بشحنة صالحة للجمعية نفسها', 409);
+          }
         }
 
         let adminProofFileId: string | undefined;
@@ -194,7 +196,7 @@ export class ReceiptsService {
         const batch = await tx.receiptBatch.create({
           data: {
             publicCode,
-            shipmentId: input.shipmentId,
+            shipmentId: input.shipmentId ?? null,
             associationId: input.associationId,
             supplierName,
             sentAt: sentDate,

@@ -815,6 +815,60 @@ export function saveActivity(input: SaveActivityInput): Promise<{ ok: true; acti
   return apiFetch(`/activities`, { method: 'POST', body: JSON.stringify(input) });
 }
 
+export const PROJECT_ACTIVITY_DRILLDOWN: Record<number, { label: string; href: string }> = {
+  5: { label: 'طلبات انضمام الجمعيات', href: '/admin/applications' },
+  6: { label: 'نتائج تقييم الطلبات', href: '/admin/applications?status=UNDER_REVIEW' },
+  7: { label: 'الجمعيات المفعَّلة', href: '/admin/associations' },
+  10: { label: 'محاضر استلام الأجهزة', href: '/admin/receipts' },
+  11: { label: 'عمليات تسليم الأجهزة', href: '/admin/deliveries' },
+  12: { label: 'الجمعيات (إغلاق التقارير)', href: '/admin/associations' },
+};
+
+export interface ProjectActivityScheduleSummary {
+  total: number;
+  actualCompleted: number;
+  current: { order: number; name: string; planned: boolean } | null;
+  upcoming: { order: number; name: string; startDate: string | null } | null;
+  delayedCount: number;
+}
+
+export function computeProjectActivitySchedule(
+  activities: Activity[],
+  today: Date = new Date(),
+): ProjectActivityScheduleSummary {
+  const headers = activities
+    .filter((activity) => activity.subActivityName === null)
+    .sort((a, b) => a.mainActivityOrder - b.mainActivityOrder);
+  const total = new Set(activities.map((activity) => activity.mainActivityOrder)).size;
+  const actualCompleted = headers.filter((activity) => activity.status === 'COMPLETED').length;
+  const todayTime = today.getTime();
+  let current: ProjectActivityScheduleSummary['current'] = null;
+  let upcoming: ProjectActivityScheduleSummary['upcoming'] = null;
+  let delayedCount = 0;
+
+  for (let index = 0; index < headers.length; index += 1) {
+    const activity = headers[index];
+    const start = activity.startDate ? new Date(activity.startDate).getTime() : null;
+    const end = activity.endDate ? new Date(activity.endDate).getTime() : null;
+    if (start != null && end != null && todayTime >= start && todayTime <= end) {
+      current = { order: activity.mainActivityOrder, name: activity.mainActivityName, planned: true };
+      const next = headers[index + 1];
+      upcoming = next
+        ? { order: next.mainActivityOrder, name: next.mainActivityName, startDate: next.startDate }
+        : null;
+    }
+    if (end != null && todayTime > end && activity.status !== 'COMPLETED') delayedCount += 1;
+  }
+  if (!current) {
+    const next = headers.find(
+      (activity) => activity.startDate && new Date(activity.startDate).getTime() > todayTime,
+    );
+    if (next) upcoming = { order: next.mainActivityOrder, name: next.mainActivityName, startDate: next.startDate };
+  }
+
+  return { total, actualCompleted, current, upcoming, delayedCount };
+}
+
 export interface AuditLogEntry {
   id: string;
   action: string;

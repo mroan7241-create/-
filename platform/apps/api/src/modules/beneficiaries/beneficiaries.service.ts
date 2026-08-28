@@ -679,7 +679,7 @@ export class BeneficiariesService {
 
     // "مقفَل تمامًا لمستفيد اكتمل تسليمه" — لكل الأدوار، لا استثناء لِADMIN/ASSOCIATION.
     const mission = await tx.deliveryMission.findFirst({ where: { beneficiaryId }, orderBy: { createdAt: 'desc' } });
-    if (mission?.status === 'DELIVERED') {
+    if (mission?.status === 'DELIVERED' || mission?.status === 'DELIVERY_CLOSED') {
       throw new ApiError('BENEFICIARY_ALREADY_DELIVERED', 'لا يمكن تعديل موقع مستفيد اكتمل تسليمه', 409);
     }
 
@@ -1016,16 +1016,21 @@ export class BeneficiariesService {
   // ================================================================
   async setListDecision(ctx: AuthContext, id: string, listType: BeneficiaryListType, listRank: number | undefined, reasonRaw: string, opId: string) {
     const reason = requiredText(reasonRaw, 'سبب قرار القائمة', 1000);
-    return prisma.$transaction(async (tx) => {
-      const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'beneficiary-list-decision', opId, { id, listType, listRank: listRank ?? null, reason }); if (!claim.claimed) return claim.existingResponse!;
+    const outcome = await prisma.$transaction(async (tx) => {
+      const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'beneficiary-list-decision', opId, { id, listType, listRank: listRank ?? null, reason });
+      if (!claim.claimed) return { response: claim.existingResponse!, associationId: null as string | null, triggerAllocation: false };
       await tx.$queryRaw`SELECT id FROM beneficiaries WHERE id=${id}::uuid FOR UPDATE`;
       const beneficiary = await tx.beneficiary.findUnique({ where: { id } });
       if (!beneficiary || beneficiary.reviewStatus !== BeneficiaryReviewStatus.APPROVED) throw new ApiError('BENEFICIARY_LIST_INELIGIBLE', 'المستفيد غير معتمد للقائمة', 409);
       if ((listType === BeneficiaryListType.MAIN || listType === BeneficiaryListType.RESERVE) && (!listRank || listRank < 1)) throw new ApiError('BENEFICIARY_LIST_RANK_REQUIRED', 'ترتيب القائمة مطلوب', 400);
       await tx.beneficiary.update({ where: { id }, data: { listType, listRank: listType === BeneficiaryListType.REJECTED ? null : listRank, listReason: reason, listApprovedAt: new Date(), listApprovedById: ctx.accountId } });
       await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'BENEFICIARY_LIST_DECIDED', entityType: 'beneficiaries', entityId: id, associationId: beneficiary.associationId, metadata: { listType, listRank: listRank ?? null, reason } } });
-      const response = { ok: true as const }; await this.idempotency.complete(tx, ctx.accountId, 'beneficiary-list-decision', opId, response); return response;
+      const response = { ok: true as const };
+      await this.idempotency.complete(tx, ctx.accountId, 'beneficiary-list-decision', opId, response);
+      return { response, associationId: beneficiary.associationId, triggerAllocation: listType === BeneficiaryListType.MAIN };
     });
+    if (outcome.triggerAllocation && outcome.associationId) await this.fireAllocationTrigger(outcome.associationId);
+    return outcome.response;
   }
 
   async promoteReserve(ctx: AuthContext, id: string, listRank: number | undefined, reasonRaw: string, opId: string) {
