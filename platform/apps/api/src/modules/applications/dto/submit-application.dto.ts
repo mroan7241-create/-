@@ -34,15 +34,6 @@ export class SubmitApplicationDto {
   @IsString()
   contactName!: string;
 
-  @IsOptional() @IsString() address?: string;
-  @IsOptional() @IsString() serviceScope?: string;
-  @IsOptional() @IsString() coordinatorPhone?: string;
-  @IsOptional() @IsString() coordinatorEmail?: string;
-  @IsOptional() @IsString() coordinatorTitle?: string;
-  @IsOptional() @IsString() beneficiaryDatabaseUpdatedAt?: string;
-  @IsOptional() @IsString() approxBeneficiaryCount?: string;
-  @IsOptional() @IsString() approxNeedCount?: string;
-
   @IsOptional()
   @IsString()
   notes?: string;

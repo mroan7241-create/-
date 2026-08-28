@@ -14,10 +14,6 @@ import {
   DeliveryStatus,
   DeliveryFailureReason,
   FileCategory,
-  DeliveryApprovalDecision,
-  DeliveryApprovalStage,
-  ReturnCondition,
-  OutboxEventType,
 } from '@alzad/db';
 import { ApiError, authForbidden } from '../../common/api-error';
 import { PublicCodeService } from '../../common/public-code.service';
@@ -113,7 +109,7 @@ export class DeliveriesService {
 
       // مهمة تسليم واحدة لكل مستفيد — يُعاد استخدام آخر مهمة غير مكتملة (النادر: إسناد ثانٍ بعد استرجاع NODE-5) بدل تكديس صفوف يتيمة.
       const existingMission = await tx.deliveryMission.findFirst({
-        where: { beneficiaryId: beneficiary.id, status: { notIn: [DeliveryStatus.DELIVERED, DeliveryStatus.DELIVERY_CLOSED] } },
+        where: { beneficiaryId: beneficiary.id, status: { notIn: [DeliveryStatus.DELIVERED] } },
         orderBy: { createdAt: 'desc' },
       });
 
@@ -250,12 +246,10 @@ export class DeliveriesService {
   // ================================================================
   // confirmDelivery — DEL-008 (تأكيد التسليم بإثبات صورة)
   // ================================================================
-  async confirmDelivery(ctx: AuthContext, missionId: string, proof: { buffer: Buffer; declaredMimeType?: string }, signature: { buffer: Buffer; declaredMimeType?: string }, opId: string) {
+  async confirmDelivery(ctx: AuthContext, missionId: string, proof: { buffer: Buffer; declaredMimeType?: string }, opId: string) {
     if (ctx.role !== AccountRole.DELEGATE) throw authForbidden();
     if (!proof.buffer.length) throw new ApiError('DELIVERY_PROOF_REQUIRED', 'صورة إثبات التسليم مطلوبة', 400);
-    if (!signature.buffer.length) throw new ApiError('DELIVERY_SIGNATURE_REQUIRED', 'توقيع المستفيد مطلوب', 400);
     const validated = validateReceiptEvidenceFile(proof.buffer, proof.declaredMimeType);
-    const validatedSignature = validateReceiptEvidenceFile(signature.buffer, signature.declaredMimeType);
     if (!validated.valid) {
       throw new ApiError(
         validated.reason === 'TOO_LARGE' ? 'DELIVERY_PROOF_TOO_LARGE' : 'DELIVERY_PROOF_INVALID_TYPE',
@@ -263,9 +257,8 @@ export class DeliveriesService {
         400,
       );
     }
-    if (!validatedSignature.valid) throw new ApiError(validatedSignature.reason === 'TOO_LARGE' ? 'DELIVERY_SIGNATURE_TOO_LARGE' : 'DELIVERY_SIGNATURE_INVALID_TYPE', 'صورة توقيع المستفيد غير صالحة', 400);
 
-    const uploadedKeys: string[] = [];
+    let uploadedKey: string | undefined;
     try {
       const outcome = await prisma.$transaction(async (tx) => {
         const claim = await this.idempotency.claim<{ attemptId: string }>(tx, ctx.accountId, 'delivery-confirm', opId, { missionId });
@@ -286,7 +279,7 @@ export class DeliveriesService {
 
         const objectKey = `delivery-proof/${randomUUID()}.${validated.detectedMimeType === 'image/png' ? 'png' : validated.detectedMimeType === 'image/webp' ? 'webp' : 'jpg'}`;
         await this.storage.uploadPrivateObject(objectKey, proof.buffer, validated.detectedMimeType!);
-        uploadedKeys.push(objectKey);
+        uploadedKey = objectKey;
         const proofFile = await tx.fileObject.create({
           data: {
             storageProvider: 's3', bucket: storageConfig.bucket, objectKey,
@@ -294,26 +287,22 @@ export class DeliveriesService {
             category: FileCategory.DELIVERY_PROOF_PHOTO, uploadedById: ctx.accountId,
           },
         });
-        const signatureKey = `delivery-signature/${randomUUID()}.${validatedSignature.detectedMimeType === 'image/png' ? 'png' : validatedSignature.detectedMimeType === 'image/webp' ? 'webp' : 'jpg'}`;
-        await this.storage.uploadPrivateObject(signatureKey, signature.buffer, validatedSignature.detectedMimeType!); uploadedKeys.push(signatureKey);
-        const signatureFile = await tx.fileObject.create({ data: { storageProvider: 's3', bucket: storageConfig.bucket, objectKey: signatureKey, originalName: 'recipient-signature', mimeType: validatedSignature.detectedMimeType!, sizeBytes: BigInt(signature.buffer.length), category: FileCategory.DELIVERY_RECIPIENT_SIGNATURE, uploadedById: ctx.accountId } });
 
         const now = new Date();
-        await tx.deliveryMission.update({ where: { id: mission.id }, data: { status: DeliveryStatus.PENDING_DELIVERY_APPROVAL } });
+        await tx.deliveryMission.update({ where: { id: mission.id }, data: { status: DeliveryStatus.DELIVERED } });
         await tx.deviceUnit.updateMany({
           where: { id: { in: allocations.map((a) => a.deviceId) } },
-          data: { status: DeviceStatus.WITH_BENEFICIARY_PENDING_APPROVAL, currentLocationType: DeviceMovementLocationType.BENEFICIARY, currentLocationRef: mission.beneficiaryId, deliveredAt: null },
+          data: { status: DeviceStatus.DELIVERED, currentLocationType: DeviceMovementLocationType.BENEFICIARY, currentLocationRef: mission.beneficiaryId, deliveredAt: now },
         });
-        if (allocations.length) await tx.deviceMovement.createMany({ data: allocations.map((allocation) => ({ deviceId: allocation.deviceId, associationId: mission.associationId, fromLocationType: DeviceMovementLocationType.DELEGATE, fromLocationRef: mission.delegateAccountId, toLocationType: DeviceMovementLocationType.BENEFICIARY, toLocationRef: mission.beneficiaryId, reason: 'delivery-submitted-pending-approval', referenceType: 'delivery_mission', referenceId: mission.id, performedById: ctx.accountId })) });
+        await tx.beneficiaryNeed.updateMany({ where: { id: { in: needs.map((n) => n.id) } }, data: { fulfillmentStatus: NeedFulfillmentStatus.DELIVERED } });
 
         const attempt = await tx.deliveryAttempt.create({
           data: {
             publicCode: await this.publicCode.nextPublicCode(tx, 'DAT'),
             missionId: mission.id, beneficiaryId: mission.beneficiaryId, delegateAccountId: ctx.accountId,
-            status: DeliveryStatus.PENDING_DELIVERY_APPROVAL, proofFileId: proofFile.id, recipientSignatureFileId: signatureFile.id, attemptedAt: now,
+            status: DeliveryStatus.DELIVERED, proofFileId: proofFile.id, attemptedAt: now,
           },
         });
-        await tx.outboxEvent.create({ data: { type: OutboxEventType.DELIVERY_SUBMITTED, payload: { missionId: mission.id, associationId: mission.associationId } } });
 
         const response = { attemptId: attempt.id };
         await this.idempotency.complete(tx, ctx.accountId, 'delivery-confirm', opId, response);
@@ -321,11 +310,11 @@ export class DeliveriesService {
       });
 
       if (!outcome.replayed) {
-        await this.audit.log(this.actor(ctx), 'DELIVERY_SUBMITTED_FOR_APPROVAL', 'delivery_missions', missionId, { attemptId: outcome.attemptId });
+        await this.audit.log(this.actor(ctx), 'DELIVERY_CONFIRMED', 'delivery_missions', missionId, { attemptId: outcome.attemptId });
       }
       return { ok: true as const, attemptId: outcome.attemptId };
     } catch (error) {
-      for (const key of uploadedKeys) await this.storage.deleteObjectBestEffort(key);
+      if (uploadedKey) await this.storage.deleteObjectBestEffort(uploadedKey);
       throw error;
     }
   }
@@ -392,89 +381,6 @@ export class DeliveriesService {
     if (!outcome.replayed) {
       await this.audit.log(this.actor(ctx), 'DELIVERY_RETRIED', 'delivery_missions', missionId);
     }
-    return { ok: true as const };
-  }
-
-  // ================================================================
-  // Approval, reschedule and physical return workflows
-  // ================================================================
-  async approveDelivery(ctx: AuthContext, missionId: string, stageRaw: 'ASSOCIATION' | 'ZAAD', input: { decision: DeliveryApprovalDecision; reason?: string; opId: string }) {
-    const stage = stageRaw === 'ASSOCIATION' ? DeliveryApprovalStage.ASSOCIATION : DeliveryApprovalStage.ZAAD;
-    if (input.decision !== DeliveryApprovalDecision.APPROVED && !input.reason?.trim()) throw new ApiError('DELIVERY_APPROVAL_REASON_REQUIRED', 'سبب القرار مطلوب', 400);
-    return prisma.$transaction(async (tx) => {
-      const claim = await this.idempotency.claim<{ ok: true; finalized: boolean }>(tx, ctx.accountId, `delivery-approval-${stage}`, input.opId, { missionId, decision: input.decision, reason: input.reason ?? null }); if (!claim.claimed) return claim.existingResponse!;
-      await tx.$queryRaw`SELECT id FROM delivery_missions WHERE id=${missionId}::uuid FOR UPDATE`;
-      const mission = await tx.deliveryMission.findUnique({ where: { id: missionId }, include: { attempts: { orderBy: { attemptedAt: 'desc' }, take: 1 }, approvals: { orderBy: { createdAt: 'desc' } } } });
-      if (!mission || (stage === DeliveryApprovalStage.ASSOCIATION && ctx.associationId !== mission.associationId)) throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
-      if (mission.status !== DeliveryStatus.PENDING_DELIVERY_APPROVAL) throw new ApiError('DELIVERY_APPROVAL_INVALID_STATE', 'المهمة ليست بانتظار اعتماد التسليم', 409);
-      const attempt = mission.attempts[0]; if (!attempt?.proofFileId || !attempt.recipientSignatureFileId) throw new ApiError('DELIVERY_EVIDENCE_INCOMPLETE', 'إثبات التسليم أو توقيع المستفيد غير مكتمل', 409);
-      if (stage === DeliveryApprovalStage.ZAAD) {
-        const latestAssociation = mission.approvals.find((a) => a.stage === DeliveryApprovalStage.ASSOCIATION);
-        if (!latestAssociation || latestAssociation.decision !== DeliveryApprovalDecision.APPROVED) throw new ApiError('ASSOCIATION_APPROVAL_REQUIRED', 'اعتماد الجمعية مطلوب قبل اعتماد زاد النهائي', 409);
-      }
-      await tx.deliveryApproval.create({ data: { missionId, stage, decision: input.decision, actorId: ctx.accountId, reason: input.reason?.trim() || null } });
-      let finalized = false;
-      if (stage === DeliveryApprovalStage.ZAAD && input.decision === DeliveryApprovalDecision.APPROVED) {
-        const needs = await tx.beneficiaryNeed.findMany({ where: { beneficiaryId: mission.beneficiaryId, decisionStatus: NeedDecisionStatus.APPROVED } });
-        const allocations = await tx.deviceAllocation.findMany({ where: { beneficiaryNeedId: { in: needs.map((n) => n.id) }, status: DeviceAllocationStatus.ACTIVE } }); const now = new Date();
-        await tx.deliveryMission.update({ where: { id: missionId }, data: { status: DeliveryStatus.DELIVERY_CLOSED } });
-        await tx.deliveryAttempt.update({ where: { id: attempt.id }, data: { status: DeliveryStatus.DELIVERY_CLOSED } });
-        await tx.deviceUnit.updateMany({ where: { id: { in: allocations.map((a) => a.deviceId) }, status: DeviceStatus.WITH_BENEFICIARY_PENDING_APPROVAL }, data: { status: DeviceStatus.DELIVERED, deliveredAt: now } });
-        await tx.beneficiaryNeed.updateMany({ where: { id: { in: needs.map((n) => n.id) } }, data: { fulfillmentStatus: NeedFulfillmentStatus.DELIVERED } }); finalized = true;
-      } else if (stage === DeliveryApprovalStage.ASSOCIATION && input.decision === DeliveryApprovalDecision.APPROVED) {
-        await tx.outboxEvent.create({ data: { type: OutboxEventType.DELIVERY_ASSOCIATION_APPROVED, payload: { missionId, associationId: mission.associationId } } });
-      }
-      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, associationId: mission.associationId, action: finalized ? 'DELIVERY_ZAAD_APPROVED_FINAL' : 'DELIVERY_APPROVAL_RECORDED', entityType: 'delivery_missions', entityId: missionId, metadata: { stage, decision: input.decision, reason: input.reason ?? null } } });
-      const response = { ok: true as const, finalized }; await this.idempotency.complete(tx, ctx.accountId, `delivery-approval-${stage}`, input.opId, response); return response;
-    });
-  }
-
-  async reschedule(ctx: AuthContext, missionId: string, input: { reason: string; scheduledFor: string; opId: string }) {
-    const scheduledFor = new Date(input.scheduledFor); if (!input.reason?.trim() || Number.isNaN(scheduledFor.getTime()) || scheduledFor <= new Date()) throw new ApiError('DELIVERY_RESCHEDULE_INVALID', 'سبب وموعد مستقبلي صالح مطلوبان', 400);
-    return this.simpleMissionTransition(ctx, missionId, input.opId, DeliveryStatus.DELIVERY_FAILED, DeliveryStatus.DEFERRED, { scheduledFor }, 'DELIVERY_RESCHEDULED', { reason: input.reason.trim(), scheduledFor: scheduledFor.toISOString() });
-  }
-
-  resumeDeferred(ctx: AuthContext, missionId: string, opId: string) { return this.simpleMissionTransition(ctx, missionId, opId, DeliveryStatus.DEFERRED, DeliveryStatus.OUT_WITH_DELEGATE, { scheduledFor: null }, 'DELIVERY_RESUMED'); }
-
-  private async simpleMissionTransition(ctx: AuthContext, missionId: string, opId: string, from: DeliveryStatus, to: DeliveryStatus, data: Prisma.DeliveryMissionUpdateInput, action: string, metadata?: Prisma.InputJsonObject) {
-    return prisma.$transaction(async (tx) => {
-      const scope = `delivery-${action.toLowerCase()}`; const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, scope, opId, { missionId, to, metadata: metadata ?? null }); if (!claim.claimed) return claim.existingResponse!;
-      const mission = await tx.deliveryMission.findUnique({ where: { id: missionId } }); if (!mission || (ctx.role === AccountRole.DELEGATE && mission.delegateAccountId !== ctx.accountId) || (ctx.role === AccountRole.ASSOCIATION && mission.associationId !== ctx.associationId)) throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
-      if (mission.status !== from) throw new ApiError('DELIVERY_INVALID_TRANSITION', 'انتقال حالة التسليم غير مسموح', 409);
-      await tx.deliveryMission.update({ where: { id: missionId }, data: { ...data, status: to } }); await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, associationId: mission.associationId, action, entityType: 'delivery_missions', entityId: missionId, metadata } }); const response = { ok: true as const }; await this.idempotency.complete(tx, ctx.accountId, scope, opId, response); return response;
-    });
-  }
-
-  async requestReturn(ctx: AuthContext, missionId: string, input: { notes?: string; opId: string }) {
-    return prisma.$transaction(async (tx) => {
-      const claim = await this.idempotency.claim<{ ok: true; attemptId: string }>(tx, ctx.accountId, 'delivery-return-request', input.opId, { missionId, notes: input.notes ?? null }); if (!claim.claimed) return claim.existingResponse!;
-      await tx.$queryRaw`SELECT id FROM delivery_missions WHERE id=${missionId}::uuid FOR UPDATE`;
-      const mission = await tx.deliveryMission.findUnique({ where: { id: missionId } }); if (!mission || (ctx.role === AccountRole.DELEGATE && mission.delegateAccountId !== ctx.accountId) || (ctx.role === AccountRole.ASSOCIATION && mission.associationId !== ctx.associationId)) throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
-      if (mission.status !== DeliveryStatus.OUT_WITH_DELEGATE && mission.status !== DeliveryStatus.DELIVERY_FAILED && mission.status !== DeliveryStatus.DEFERRED) throw new ApiError('DELIVERY_INVALID_TRANSITION', 'لا يمكن طلب الإرجاع من الحالة الحالية', 409);
-      const now = new Date(); await tx.deliveryMission.update({ where: { id: missionId }, data: { status: DeliveryStatus.PENDING_RETURN_APPROVAL } });
-      await tx.beneficiaryNeed.updateMany({ where: { beneficiaryId: mission.beneficiaryId, decisionStatus: NeedDecisionStatus.APPROVED }, data: { fulfillmentStatus: NeedFulfillmentStatus.AWAITING_RETURN_CONFIRMATION } });
-      const attempt = await tx.deliveryAttempt.create({ data: { publicCode: await this.publicCode.nextPublicCode(tx, 'DAT'), missionId, beneficiaryId: mission.beneficiaryId, delegateAccountId: mission.delegateAccountId ?? ctx.accountId, status: DeliveryStatus.PENDING_RETURN_APPROVAL, notes: input.notes ?? null, attemptedAt: now } });
-      await tx.outboxEvent.create({ data: { type: OutboxEventType.RETURN_REQUESTED, payload: { missionId, associationId: mission.associationId } } }); await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, associationId: mission.associationId, action: 'DELIVERY_RETURN_REQUESTED', entityType: 'delivery_missions', entityId: missionId } });
-      const response = { ok: true as const, attemptId: attempt.id }; await this.idempotency.complete(tx, ctx.accountId, 'delivery-return-request', input.opId, response); return response;
-    });
-  }
-
-  async confirmPhysicalReturn(ctx: AuthContext, missionId: string, input: { condition: ReturnCondition; notes: string; opId: string }, adminOverride = false) {
-    if (!input.notes?.trim()) throw new ApiError('RETURN_CONFIRMATION_REASON_REQUIRED', 'ملاحظات/سبب تأكيد الإرجاع مطلوبة', 400);
-    const outcome = await prisma.$transaction(async (tx) => {
-      const scope = adminOverride ? 'delivery-return-admin-override' : 'delivery-return-confirm'; const claim = await this.idempotency.claim<{ ok: true; associationId: string }>(tx, ctx.accountId, scope, input.opId, { missionId, condition: input.condition, notes: input.notes }); if (!claim.claimed) return { replayed: true as const, ...claim.existingResponse! };
-      await tx.$queryRaw`SELECT id FROM delivery_missions WHERE id=${missionId}::uuid FOR UPDATE`;
-      const mission = await tx.deliveryMission.findUnique({ where: { id: missionId } }); if (!mission || (!adminOverride && mission.associationId !== ctx.associationId)) throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
-      if (mission.status !== DeliveryStatus.PENDING_RETURN_APPROVAL) throw new ApiError('RETURN_CONFIRMATION_INVALID', 'المهمة ليست بانتظار تأكيد الإرجاع', 409);
-      const needs = await tx.beneficiaryNeed.findMany({ where: { beneficiaryId: mission.beneficiaryId, decisionStatus: NeedDecisionStatus.APPROVED } }); const allocations = await tx.deviceAllocation.findMany({ where: { beneficiaryNeedId: { in: needs.map((n) => n.id) }, status: DeviceAllocationStatus.ACTIVE } }); const now = new Date();
-      await tx.deviceAllocation.updateMany({ where: { id: { in: allocations.map((a) => a.id) } }, data: { status: DeviceAllocationStatus.RELEASED, releasedAt: now, releaseReason: input.condition === ReturnCondition.GOOD ? 'physical-return-confirmed' : 'physical-return-damaged' } });
-      await tx.deviceMovement.createMany({ data: allocations.map((a) => ({ deviceId: a.deviceId, associationId: mission.associationId, fromLocationType: DeviceMovementLocationType.DELEGATE, fromLocationRef: mission.delegateAccountId, toLocationType: input.condition === ReturnCondition.GOOD ? DeviceMovementLocationType.WAREHOUSE : DeviceMovementLocationType.DAMAGED_HOLDING, toLocationRef: null, reason: input.condition === ReturnCondition.GOOD ? 'physical-return-confirmed' : 'physical-return-damaged', referenceType: 'delivery_mission', referenceId: missionId, performedById: ctx.accountId })) });
-      await tx.deviceUnit.updateMany({ where: { id: { in: allocations.map((a) => a.deviceId) } }, data: input.condition === ReturnCondition.GOOD ? { status: DeviceStatus.WAREHOUSE, currentLocationType: DeviceMovementLocationType.WAREHOUSE, currentLocationRef: null } : { status: DeviceStatus.DAMAGED, currentLocationType: DeviceMovementLocationType.DAMAGED_HOLDING, currentLocationRef: null } });
-      if (input.condition === ReturnCondition.DAMAGED) await tx.damageCase.createMany({ data: allocations.map((a) => ({ deviceId: a.deviceId, associationId: mission.associationId, quantity: 1, description: input.notes.trim() })) });
-      await tx.beneficiaryNeed.updateMany({ where: { id: { in: needs.map((n) => n.id) } }, data: { fulfillmentStatus: NeedFulfillmentStatus.AWAITING_DEVICE } }); await tx.deliveryMission.update({ where: { id: missionId }, data: { status: DeliveryStatus.RETURNED, returnCondition: input.condition } });
-      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, associationId: mission.associationId, action: adminOverride ? 'DELIVERY_RETURN_ADMIN_OVERRIDE' : 'DELIVERY_PHYSICAL_RETURN_CONFIRMED', entityType: 'delivery_missions', entityId: missionId, metadata: { condition: input.condition, notes: input.notes } } }); const response = { ok: true as const, associationId: mission.associationId }; await this.idempotency.complete(tx, ctx.accountId, scope, input.opId, response); return { replayed: false as const, ...response };
-    });
-    if (!outcome.replayed) try { await this.allocationTrigger.triggerForAssociation(outcome.associationId); } catch { /* committed return remains authoritative */ }
     return { ok: true as const };
   }
 
@@ -607,8 +513,7 @@ export class DeliveriesService {
       include: {
         beneficiary: { select: { name: true, region: true, city: true, district: true, phone: true, address: true, latitude: true, longitude: true } },
         delegate: { select: { name: true, phone: true, publicCode: true } },
-        attempts: { orderBy: { attemptedAt: 'desc' }, select: { id: true, publicCode: true, status: true, failureReason: true, notes: true, attemptedAt: true, proofFileId: true, recipientSignatureFileId: true } },
-        approvals: { orderBy: { createdAt: 'asc' } },
+        attempts: { orderBy: { attemptedAt: 'desc' }, select: { id: true, publicCode: true, status: true, failureReason: true, notes: true, attemptedAt: true, proofFileId: true } },
       },
     });
     if (!mission) throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
@@ -617,7 +522,7 @@ export class DeliveriesService {
 
     return {
       ...mission,
-      attempts: mission.attempts.map((a) => ({ ...a, hasProof: !!a.proofFileId, hasRecipientSignature: !!a.recipientSignatureFileId, proofFileId: undefined, recipientSignatureFileId: undefined })),
+      attempts: mission.attempts.map((a) => ({ ...a, hasProof: !!a.proofFileId, proofFileId: undefined })),
     };
   }
 
@@ -633,14 +538,5 @@ export class DeliveriesService {
     const url = await this.storage.getSignedGetUrl(attempt.proofFile.objectKey, storageConfig.licenseSignedUrlSeconds);
     await this.audit.log(this.actor(ctx), 'DELIVERY_PROOF_VIEWED', 'delivery_attempts', attemptId);
     return { url };
-  }
-
-  async getDeliverySignatureUrl(ctx: AuthContext, attemptId: string): Promise<{ url: string }> {
-    const attempt = await prisma.deliveryAttempt.findUnique({ where: { id: attemptId }, include: { mission: true, signatureFile: true } });
-    if (!attempt?.signatureFile || attempt.signatureFile.category !== FileCategory.DELIVERY_RECIPIENT_SIGNATURE) throw new ApiError('DELIVERY_SIGNATURE_NOT_FOUND', 'لا يوجد توقيع مستفيد لهذه المحاولة', 404);
-    if (ctx.role === AccountRole.DELEGATE && attempt.delegateAccountId !== ctx.accountId) throw new ApiError('DELIVERY_SIGNATURE_NOT_FOUND', 'لا يوجد توقيع مستفيد لهذه المحاولة', 404);
-    if (ctx.role === AccountRole.ASSOCIATION && ctx.associationId !== attempt.mission.associationId) throw new ApiError('DELIVERY_SIGNATURE_NOT_FOUND', 'لا يوجد توقيع مستفيد لهذه المحاولة', 404);
-    const url = await this.storage.getSignedGetUrl(attempt.signatureFile.objectKey, storageConfig.licenseSignedUrlSeconds);
-    await this.audit.log(this.actor(ctx), 'DELIVERY_SIGNATURE_VIEWED', 'delivery_attempts', attemptId); return { url };
   }
 }

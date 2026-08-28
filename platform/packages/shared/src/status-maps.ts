@@ -90,7 +90,6 @@ export const DEVICE_STATUS_LABELS_AR: Record<DeviceStatus, string> = {
   [DeviceStatus.WITH_DELEGATE]: 'مع المندوب',
   [DeviceStatus.DELIVERED]: 'تم التسليم',
   [DeviceStatus.DAMAGED]: 'تالف',
-  [DeviceStatus.WITH_BENEFICIARY_PENDING_APPROVAL]: 'لدى المستفيد — بانتظار الاعتماد',
 };
 
 export const DELIVERY_STATUS_LABELS_AR: Record<DeliveryStatus, string> = {
@@ -99,12 +98,6 @@ export const DELIVERY_STATUS_LABELS_AR: Record<DeliveryStatus, string> = {
   [DeliveryStatus.OUT_WITH_DELEGATE]: 'خرج مع المندوب',
   [DeliveryStatus.DELIVERED]: 'تم التسليم',
   [DeliveryStatus.DELIVERY_FAILED]: 'تعذر التسليم',
-  [DeliveryStatus.PENDING_DELEGATE_ACKNOWLEDGEMENT]: 'بانتظار استلام المندوب للعهدة',
-  [DeliveryStatus.PENDING_DELIVERY_APPROVAL]: 'بانتظار اعتماد التسليم',
-  [DeliveryStatus.DEFERRED]: 'مؤجل',
-  [DeliveryStatus.PENDING_RETURN_APPROVAL]: 'بانتظار تأكيد الإرجاع',
-  [DeliveryStatus.RETURNED]: 'أعيد للمستودع',
-  [DeliveryStatus.DELIVERY_CLOSED]: 'أغلق التسليم نهائيًا',
 };
 
 export const DELIVERY_FAILURE_REASON_LABELS_AR: Record<DeliveryFailureReason, string> = {

@@ -20,10 +20,6 @@ import { FilesModule } from './modules/files/files.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { ReportsModule } from './modules/reports/reports.module';
-import { ParticipationsModule } from './modules/participations/participations.module';
-import { EscalationsModule } from './modules/escalations/escalations.module';
-import { ProcurementModule } from './modules/procurement/procurement.module';
-import { NotificationsModule } from './modules/notifications/notifications.module';
 
 @Module({
   imports: [
@@ -46,10 +42,6 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     AuditModule,
     SettingsModule,
     ReportsModule,
-    ParticipationsModule,
-    EscalationsModule,
-    ProcurementModule,
-    NotificationsModule,
   ],
 })
 export class AppModule implements NestModule {

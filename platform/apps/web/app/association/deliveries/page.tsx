@@ -20,7 +20,7 @@ import { cardStyle, errorStyle, labelStyle, mutedStyle, primaryButtonStyle, seco
 
 const PAGE_SIZE = 25;
 const STATUS_TONE: Record<DeliveryStatus, 'neutral' | 'good' | 'bad'> = {
-  NOT_STARTED: 'neutral', PREPARING: 'neutral', PENDING_DELEGATE_ACKNOWLEDGEMENT: 'neutral', OUT_WITH_DELEGATE: 'neutral', DELIVERED: 'good', DELIVERY_FAILED: 'bad', RETURNED: 'bad', PENDING_DELIVERY_APPROVAL: 'neutral', DEFERRED: 'neutral', PENDING_RETURN_APPROVAL: 'neutral', DELIVERY_CLOSED: 'good',
+  NOT_STARTED: 'neutral', PREPARING: 'neutral', PENDING_DELEGATE_ACKNOWLEDGEMENT: 'neutral', OUT_WITH_DELEGATE: 'neutral', DELIVERED: 'good', DELIVERY_FAILED: 'bad', RETURNED: 'bad',
 };
 
 /** ASSOCIATION — عمليات تسليم مستفيديها: إسناد مندوب + متابعة تقدُّم التسليم. بطاقات لا جدول (نفس نمط بقية شاشات ASSOCIATION). */

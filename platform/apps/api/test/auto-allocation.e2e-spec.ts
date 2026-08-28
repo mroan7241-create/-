@@ -91,10 +91,6 @@ describe('NODE-5 — AutoAllocationService (تكامل حقيقي)', () => {
   const review = (id: string, body: Record<string, unknown>) =>
     http().post(`/api/v1/beneficiaries/${id}/review`).set('Cookie', adminCookie).send({ opId: newOpId('rev'), ...body });
 
-  const setMain = (id: string, listRank: number) =>
-    http().post(`/api/v1/beneficiaries/${id}/list-decision`).set('Cookie', adminCookie)
-      .send({ listType: 'MAIN', listRank, reason: 'اختبار التخصيص التلقائي', opId: newOpId('list') });
-
   it('اعتماد احتياج واحد بمخزون كافٍ ⇒ تخصيص فعلي حقيقي + انتقال جماعي لبانتظار تعيين مندوب', async () => {
     await stockWarehouse(fx.associationAId, DeviceType.REFRIGERATOR, 1);
 
@@ -107,7 +103,6 @@ describe('NODE-5 — AutoAllocationService (تكامل حقيقي)', () => {
       beneficiaryDecision: 'APPROVED',
       needDecisions: [{ needId: needIds[0], decision: 'APPROVED' }],
     }).expect(201);
-    await setMain(beneficiaryId, 1).expect(201);
 
     // المحرّك الحقيقي يعمل بعد commit المراجعة مباشرة — لا استقصاء/انتظار، المعاملة تكون قد التزمت فعليًا عند عودة الاستجابة.
     const need = await prisma.beneficiaryNeed.findUniqueOrThrow({ where: { id: needIds[0] } });
@@ -132,7 +127,6 @@ describe('NODE-5 — AutoAllocationService (تكامل حقيقي)', () => {
       needDecisions: [{ needId: needIds[0], decision: 'APPROVED' }],
     });
     expect(res.status).toBe(201); // القرار ينجح دومًا حتى لو فشل/تعذّر التخصيص التالي له
-    await setMain(beneficiaryId, 1).expect(201);
 
     const need = await prisma.beneficiaryNeed.findUniqueOrThrow({ where: { id: needIds[0] } });
     expect(need.fulfillmentStatus).toBe(NeedFulfillmentStatus.APPROVED_ENTITLEMENT);
@@ -152,7 +146,6 @@ describe('NODE-5 — AutoAllocationService (تكامل حقيقي)', () => {
       beneficiaryDecision: 'APPROVED',
       needDecisions: beneficiaryC.needIds.map((needId) => ({ needId, decision: 'APPROVED' })),
     }).expect(201);
-    await setMain(beneficiaryC.id, 2).expect(201);
 
     const cNeeds = await prisma.beneficiaryNeed.findMany({ where: { beneficiaryId: beneficiaryC.id } });
     const cFridgeNeed = cNeeds.find((n) => n.deviceType === DeviceType.REFRIGERATOR)!;
@@ -169,7 +162,6 @@ describe('NODE-5 — AutoAllocationService (تكامل حقيقي)', () => {
       beneficiaryDecision: 'APPROVED',
       needDecisions: [{ needId: beneficiaryD.needIds[0], decision: 'APPROVED' }],
     }).expect(201);
-    await setMain(beneficiaryD.id, 1).expect(201);
 
     const dNeed = await prisma.beneficiaryNeed.findUniqueOrThrow({ where: { id: beneficiaryD.needIds[0] } });
     expect(dNeed.fulfillmentStatus).toBe(NeedFulfillmentStatus.AWAITING_DELEGATE_ASSIGNMENT); // D اكتمل
@@ -197,7 +189,6 @@ describe('NODE-5 — AutoAllocationService (تكامل حقيقي)', () => {
       beneficiaryDecision: 'APPROVED',
       needDecisions: [{ needId: needIds[0], decision: 'APPROVED' }],
     }).expect(201);
-    await setMain(beneficiaryId, 1).expect(201);
 
     const need = await prisma.beneficiaryNeed.findUniqueOrThrow({ where: { id: needIds[0] } });
     expect(need.fulfillmentStatus).toBe(NeedFulfillmentStatus.APPROVED_ENTITLEMENT); // لم يُخصَّص رغم توفر مخزون — لكنه في جمعية أخرى

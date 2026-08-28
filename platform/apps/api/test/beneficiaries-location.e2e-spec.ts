@@ -42,7 +42,6 @@ describe('BEN-016/017 — تعديل موقع المستفيد (تكامل حق�
   }, 60000);
 
   beforeEach(async () => {
-    await prisma.deliveryApproval.deleteMany({ where: { mission: { associationId: { in: [fx.associationAId, fx.associationBId] } } } });
     await prisma.deliveryAttempt.deleteMany({ where: { mission: { associationId: { in: [fx.associationAId, fx.associationBId] } } } });
     await prisma.deliveryMission.deleteMany({ where: { associationId: { in: [fx.associationAId, fx.associationBId] } } });
     const delegateAccounts = await prisma.account.findMany({ where: { role: 'DELEGATE', associationId: { in: [fx.associationAId, fx.associationBId] } }, select: { id: true } });
@@ -61,7 +60,6 @@ describe('BEN-016/017 — تعديل موقع المستفيد (تكامل حق�
   });
 
   afterAll(async () => {
-    await prisma.deliveryApproval.deleteMany({ where: { mission: { associationId: { in: [fx.associationAId, fx.associationBId] } } } });
     await prisma.deliveryAttempt.deleteMany({ where: { mission: { associationId: { in: [fx.associationAId, fx.associationBId] } } } });
     await prisma.deliveryMission.deleteMany({ where: { associationId: { in: [fx.associationAId, fx.associationBId] } } });
     await cleanNode4State(fx);
@@ -72,13 +70,6 @@ describe('BEN-016/017 — تعديل موقع المستفيد (تكامل حق�
 
   const http = () => request(app.getHttpServer());
 
-  async function approveCompletedDelivery(missionId: string): Promise<void> {
-    await http().post(`/api/v1/deliveries/${missionId}/association-approval`).set('Cookie', assocACookie)
-      .send({ decision: 'APPROVED', opId: newOpId('assoc-approval') }).expect(201);
-    await http().post(`/api/v1/deliveries/${missionId}/zaad-approval`).set('Cookie', adminCookie)
-      .send({ decision: 'APPROVED', opId: newOpId('zaad-approval') }).expect(201);
-  }
-
   async function assignedBeneficiary(): Promise<{ beneficiaryId: string; delegateCookie: string; missionId: string }> {
     const { batchId, itemIds } = await createAndSendBatch(app, adminCookie, fx.associationAId, { items: [{ deviceType: DeviceType.REFRIGERATOR, spec: '18 قدم', sentQty: 1 }] });
     const confirmRes = await confirmBatchRequest(app, assocACookie, batchId, { items: [{ itemId: itemIds[0], receivedQty: 1, damagedQty: 0, missingQty: 0 }] });
@@ -87,8 +78,6 @@ describe('BEN-016/017 — تعديل موقع المستفيد (تكامل حق�
     const { id: beneficiaryId, needIds } = await createBeneficiary(app, assocACookie, { associationId: fx.associationAId, deviceTypes: [DeviceType.REFRIGERATOR] });
     const reviewRes = await http().post(`/api/v1/beneficiaries/${beneficiaryId}/review`).set('Cookie', adminCookie).send({ opId: newOpId('rev'), beneficiaryDecision: 'APPROVED', needDecisions: [{ needId: needIds[0], decision: 'APPROVED' }] });
     if (reviewRes.status !== 201) throw new Error(`review failed: ${reviewRes.status} ${JSON.stringify(reviewRes.body)}`);
-    const listRes = await http().post(`/api/v1/beneficiaries/${beneficiaryId}/list-decision`).set('Cookie', adminCookie).send({ listType: 'MAIN', listRank: 1, reason: 'اختبار مسار الموقع', opId: newOpId('list') });
-    if (listRes.status !== 201) throw new Error(`list decision failed: ${listRes.status} ${JSON.stringify(listRes.body)}`);
 
     const delRes = await http().post('/api/v1/delegates').set('Cookie', assocACookie).send({ name: 'مندوب اختبار موقع', phone: '0500000099', opId: newOpId('del') });
     if (delRes.status !== 201) throw new Error(`createDelegate failed: ${delRes.status} ${JSON.stringify(delRes.body)}`);
@@ -101,8 +90,6 @@ describe('BEN-016/017 — تعديل موقع المستفيد (تكامل حق�
 
     const assignRes = await http().post('/api/v1/deliveries/assign').set('Cookie', adminCookie).send({ beneficiaryId, delegateId, opId: newOpId('assign') });
     if (assignRes.status !== 201) throw new Error(`assign failed: ${assignRes.status} ${JSON.stringify(assignRes.body)}`);
-    const handoverRes = await http().post(`/api/v1/deliveries/${assignRes.body.missionId}/confirm-handover`).set('Cookie', delegateCookie).send({ opId: newOpId('handover') });
-    if (handoverRes.status !== 201) throw new Error(`handover failed: ${handoverRes.status} ${JSON.stringify(handoverRes.body)}`);
 
     return { beneficiaryId, delegateCookie, missionId: assignRes.body.missionId };
   }
@@ -148,10 +135,8 @@ describe('BEN-016/017 — تعديل موقع المستفيد (تكامل حق�
       .post(`/api/v1/deliveries/${missionId}/confirm`)
       .set('Cookie', delegateCookie)
       .field('opId', newOpId('confirm'))
-      .attach('proofPhoto', Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]), { filename: 'proof.jpg', contentType: 'image/jpeg' })
-      .attach('recipientSignature', Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]), { filename: 'signature.jpg', contentType: 'image/jpeg' });
+      .attach('proofPhoto', Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]), { filename: 'proof.jpg', contentType: 'image/jpeg' });
     expect(confirmRes.status).toBe(201);
-    await approveCompletedDelivery(missionId);
 
     const res = await http().patch(`/api/v1/beneficiaries/${beneficiaryId}/location`).set('Cookie', adminCookie).send({ lat: 24.7, lng: 46.6, opId: newOpId('loc') });
     expect(res.status).toBe(409);

@@ -160,6 +160,9 @@ export default function LoginPage() {
             <a href="/apply" className="btn-ghost" style={ghostButtonStyle}>
               تقديم طلب انضمام جمعية جديدة
             </a>
+            <p style={{ margin: 0, fontSize: 14, textAlign: 'center' }}>
+              <a href="/login/forgot-password">نسيت كلمة المرور؟</a>
+            </p>
           </div>
         )}
       </section>
