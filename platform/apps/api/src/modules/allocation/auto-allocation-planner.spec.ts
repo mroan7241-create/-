@@ -18,6 +18,13 @@ function ready(needId: string, deviceType: DeviceType): { needId: string; device
 const ZERO_STOCK = { REFRIGERATOR: 0, OVEN: 0, WASHING_MACHINE: 0 };
 
 describe('NODE-5 — planAutoAllocation', () => {
+  it('uses approved MAIN listRank as the deterministic tie-break only', () => {
+    const candidates: CandidateBeneficiary[] = [
+      { beneficiaryId: 'earlier-id', listRank: 2, needs: [gap('n1', DeviceType.REFRIGERATOR)] },
+      { beneficiaryId: 'later-id', listRank: 1, needs: [gap('n2', DeviceType.REFRIGERATOR)] },
+    ];
+    expect(planAutoAllocation(candidates, { ...ZERO_STOCK, REFRIGERATOR: 1 }).completedBeneficiaryIds).toEqual(['later-id']);
+  });
   it('لا مرشَّحين ⇒ خطة فارغة بلا أي أثر', () => {
     const plan = planAutoAllocation([], ZERO_STOCK);
     expect(plan).toEqual({ completedBeneficiaryIds: [], fills: [], reclaims: [] });

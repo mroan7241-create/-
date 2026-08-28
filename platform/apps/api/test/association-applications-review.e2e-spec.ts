@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { INestApplication } from '@nestjs/common';
-import { prisma, AccountRole, AccountStatus, ApplicationStatus, AuthCredentialType } from '@alzad/db';
+import { prisma, AccountRole, ApplicationStatus, EligibilityStatus } from '@alzad/db';
 import { createTestApp } from './utils/bootstrap';
 import { cleanAuthState, seedTestFixtures } from './utils/fixtures';
 import {
@@ -284,103 +284,58 @@ describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
   // ————————————————————————————————————————
   // 47) 48) 49) 50) 51) القبول
   // ————————————————————————————————————————
-  it('القبول ينشئ جمعية واحدة وحسابًا واحدًا بدور ASSOCIATION وبيانات دخول Argon2id مع إلزام تغيير كلمة المرور', async () => {
+  it('اجتياز بوابة الأهلية لا ينشئ جمعية أو حسابًا قبل التقييم والاختيار النهائي', async () => {
     const { id, payload } = await createApplication();
     const res = await accept(id, randomUUID());
 
     expect(res.status).toBe(201);
     expect(res.body.ok).toBe(true);
-    expect(res.body.alreadyProcessed).toBe(false);
-    expect(res.body.associationPublicCode).toMatch(/^ASC-\d{6}$/);
-    expect(typeof res.body.temporaryPassword).toBe('string');
-    expect(res.body.temporaryPassword.length).toBeGreaterThanOrEqual(10);
-    expect(res.body.temporaryPasswordPreviouslyIssued).toBe(false);
+    expect(res.body.temporaryPassword).toBeUndefined();
+    expect(await prisma.association.count({ where: { email: payload.email.toLowerCase() } })).toBe(0);
+    expect(await prisma.account.count({ where: { email: payload.email.toLowerCase() } })).toBe(0);
+    expect(await prisma.authCredential.count({ where: { identifier: payload.email.toLowerCase() } })).toBe(0);
 
-    // 47) جمعية واحدة بالضبط
-    const associations = await prisma.association.findMany({ where: { email: payload.email.toLowerCase() } });
-    expect(associations).toHaveLength(1);
-    expect(associations[0].id).toBe(res.body.associationId);
-    expect(associations[0].name).toBe(payload.name);
-    expect(associations[0].phones).toEqual([payload.phone]);
-
-    // 48) حساب ASSOCIATION واحد بالضبط
-    const accounts = await prisma.account.findMany({ where: { associationId: associations[0].id, role: AccountRole.ASSOCIATION } });
-    expect(accounts).toHaveLength(1);
-    expect(accounts[0].publicCode).toMatch(/^USR-\d{6}$/);
-    expect(accounts[0].status).toBe(AccountStatus.ACTIVE);
-
-    // 49) Argon2id + 50) mustChangePassword
-    const credential = await prisma.authCredential.findUniqueOrThrow({
-      where: { type_identifier: { type: AuthCredentialType.EMAIL_PASSWORD, identifier: payload.email.toLowerCase() } },
-    });
-    expect(credential.secretHash.startsWith('$argon2id$')).toBe(true);
-    expect(credential.accountId).toBe(accounts[0].id);
-    expect(accounts[0].mustChangePassword).toBe(true);
-
-    // 51) ارتباط الطلب بالجمعية الناتجة
     const application = await prisma.associationApplication.findUniqueOrThrow({ where: { id } });
-    expect(application.status).toBe(ApplicationStatus.ACCEPTED);
-    expect(application.resultingAssociationId).toBe(associations[0].id);
-    expect(application.reviewedById).toBeTruthy();
-    expect(application.reviewedAt).toBeTruthy();
-
-    // كلمة المرور المؤقتة تعمل فعلًا لتسجيل الدخول مرة واحدة.
-    const login = await http()
-      .post('/api/v1/auth/login')
-      .send({ type: 'user', email: payload.email.toLowerCase(), password: res.body.temporaryPassword });
-    expect(login.status).toBe(200);
-    expect(login.body.user.mustChangePassword).toBe(true);
+    expect(application.status).toBe(ApplicationStatus.UNDER_REVIEW);
+    expect(application.eligibilityStatus).toBe(EligibilityStatus.PASSED);
+    expect(application.resultingAssociationId).toBeNull();
+    expect(application.eligibilityReviewedById).toBeTruthy();
+    expect(application.eligibilityReviewedAt).toBeTruthy();
   });
 
   // ————————————————————————————————————————
   // 52) 53) 54) التزامن والنهائية
   // ————————————————————————————————————————
-  it('قبولان متزامنان بمعرّفَي عملية مختلفين لا ينشئان جمعيتين — أحدهما فقط ينجح', async () => {
+  it('قرارا أهلية متزامنان متطابقان آمنان ولا ينشئان أي كيان تشغيلي', async () => {
     const { id, payload } = await createApplication();
 
     const results = await Promise.all([accept(id, randomUUID()), accept(id, randomUUID())]);
     const statuses = results.map((r) => r.status).sort();
-    expect(statuses).toEqual([201, 409]);
+    expect(statuses).toEqual([201, 201]);
 
-    const loser = results.find((r) => r.status === 409)!;
-    expect(loser.body.error.code).toBe('APPLICATION_ALREADY_REVIEWED');
-
-    expect(await prisma.association.count({ where: { email: payload.email.toLowerCase() } })).toBe(1);
-    expect(await prisma.account.count({ where: { email: payload.email.toLowerCase() } })).toBe(1);
-    expect(await prisma.authCredential.count({ where: { identifier: payload.email.toLowerCase() } })).toBe(1);
+    expect(await prisma.association.count({ where: { email: payload.email.toLowerCase() } })).toBe(0);
+    expect(await prisma.account.count({ where: { email: payload.email.toLowerCase() } })).toBe(0);
+    expect(await prisma.authCredential.count({ where: { identifier: payload.email.toLowerCase() } })).toBe(0);
+    expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id } })).eligibilityStatus).toBe(EligibilityStatus.PASSED);
   });
 
-  it('قبول ورفض متزامنان على نفس الطلب — واحد فقط يفوز والآخر APPLICATION_ALREADY_REVIEWED', async () => {
+  it('قرار أهلية ثم رفض نهائي متزامنان لا ينشئان جمعية، والرفض إن التزم يصبح نهائيًا', async () => {
     const { id, payload } = await createApplication();
 
     const [acceptRes, rejectRes] = await Promise.all([accept(id, randomUUID()), reject(id, randomUUID(), 'سبب الرفض المتزامن')]);
     const statuses = [acceptRes.status, rejectRes.status].sort();
-    expect(statuses).toEqual([201, 409]);
+    expect([[201, 201], [201, 409]]).toContainEqual(statuses);
 
     const application = await prisma.associationApplication.findUniqueOrThrow({ where: { id } });
-    expect([ApplicationStatus.ACCEPTED, ApplicationStatus.REJECTED]).toContain(application.status);
-
-    const associationCount = await prisma.association.count({ where: { email: payload.email.toLowerCase() } });
-    if (application.status === ApplicationStatus.ACCEPTED) {
-      expect(acceptRes.status).toBe(201);
-      expect(associationCount).toBe(1);
-    } else {
-      expect(rejectRes.status).toBe(201);
-      expect(associationCount).toBe(0);
-    }
+    expect(application.status).toBe(ApplicationStatus.REJECTED);
+    expect(rejectRes.status).toBe(201);
+    expect(await prisma.association.count({ where: { email: payload.email.toLowerCase() } })).toBe(0);
   });
 
-  it('مراجعة ثانية لطلب سبق البتّ فيه تُرفض (النهائية) — بعد القبول وبعد الرفض معًا', async () => {
-    const accepted = await createApplication();
-    expect((await accept(accepted.id, randomUUID())).status).toBe(201);
-
-    const again = await accept(accepted.id, randomUUID());
-    expect(again.status).toBe(409);
-    expect(again.body.error.code).toBe('APPLICATION_ALREADY_REVIEWED');
-
-    const flip = await reject(accepted.id, randomUUID(), 'محاولة عكس القرار');
-    expect(flip.status).toBe(409);
-    expect(flip.body.error.code).toBe('APPLICATION_ALREADY_REVIEWED');
+  it('قرار الأهلية قابل لإعادة التقييم قبل الاختيار، بينما الرفض النهائي يمنع إعادة الفتح', async () => {
+    const eligible = await createApplication();
+    expect((await accept(eligible.id, randomUUID())).status).toBe(201);
+    expect((await accept(eligible.id, randomUUID())).status).toBe(201);
 
     const rejected = await createApplication();
     expect((await reject(rejected.id, randomUUID(), 'سبب أول')).status).toBe(201);
@@ -424,59 +379,40 @@ describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
   // ————————————————————————————————————————
   // 57) 58) كلمة المرور المؤقتة
   // ————————————————————————————————————————
-  it('كلمة المرور المؤقتة لا تُخزَّن في idempotency_keys ولا سجل التدقيق ولا أي عمود آخر', async () => {
-    const { id } = await createApplication();
+  it('قرار الأهلية لا يولّد كلمة مرور أو بيانات دخول في أي موضع', async () => {
+    const { id, payload } = await createApplication();
     const opId = randomUUID();
     const res = await accept(id, opId);
     expect(res.status).toBe(201);
-
-    const temporaryPassword: string = res.body.temporaryPassword;
-    expect(temporaryPassword).toBeTruthy();
+    expect(res.body.temporaryPassword).toBeUndefined();
 
     const idempotencyRows = await prisma.idempotencyKey.findMany();
     expect(idempotencyRows).toHaveLength(1);
     const stored = JSON.stringify(idempotencyRows[0].responseJson);
-    expect(stored).not.toContain(temporaryPassword);
-    expect(stored).toContain('temporaryPasswordPreviouslyIssued');
-    expect(JSON.stringify(idempotencyRows[0])).not.toContain(temporaryPassword);
+    expect(stored).toBe('{"ok":true}');
 
-    const audits = await prisma.auditLog.findMany();
-    expect(JSON.stringify(audits)).not.toContain(temporaryPassword);
-
-    // مسح نصّي فعلي على كل الجداول ذات الصلة — لا أثر لأي نصّ صريح.
-    const rows = await prisma.$queryRawUnsafe<{ hit: number }[]>(
-      `SELECT (
-         (SELECT count(*) FROM idempotency_keys WHERE response_json::text LIKE $1) +
-         (SELECT count(*) FROM audit_logs WHERE coalesce(metadata::text,'') LIKE $1) +
-         (SELECT count(*) FROM auth_credentials WHERE secret_hash LIKE $1 OR identifier LIKE $1) +
-         (SELECT count(*) FROM accounts WHERE name LIKE $1 OR email LIKE $1) +
-         (SELECT count(*) FROM associations WHERE name LIKE $1 OR coalesce(email,'') LIKE $1) +
-         (SELECT count(*) FROM association_applications WHERE coalesce(reject_reason,'') LIKE $1)
-       )::int AS hit`,
-      `%${temporaryPassword}%`,
-    );
-    expect(rows[0].hit).toBe(0);
+    const audits = await prisma.auditLog.findMany({ where: { action: 'APPLICATION_ELIGIBILITY_DECIDED', entityId: id } });
+    expect(audits).toHaveLength(1);
+    expect(audits[0].action).toBe('APPLICATION_ELIGIBILITY_DECIDED');
+    expect(await prisma.authCredential.count({ where: { identifier: payload.email.toLowerCase() } })).toBe(0);
   });
 
-  it('إعادة تنفيذ القبول بنفس opId لا تُعيد كشف كلمة المرور ولا تُنشئ جمعية ثانية', async () => {
+  it('إعادة قرار الأهلية بنفس opId تعيد نفس الرد بلا كتابة مكررة', async () => {
     const { id, payload } = await createApplication();
     const opId = randomUUID();
 
     const first = await accept(id, opId);
     expect(first.status).toBe(201);
-    expect(first.body.temporaryPassword).toBeTruthy();
+    expect(first.body).toEqual({ ok: true });
 
     const replay = await accept(id, opId);
     expect(replay.status).toBe(201);
-    expect(replay.body.alreadyProcessed).toBe(true);
-    expect(replay.body.temporaryPassword).toBeNull();
-    expect(replay.body.temporaryPasswordPreviouslyIssued).toBe(true);
-    expect(replay.body.associationId).toBe(first.body.associationId);
-    expect(replay.body.associationPublicCode).toBe(first.body.associationPublicCode);
+    expect(replay.body).toEqual({ ok: true });
 
-    expect(await prisma.association.count({ where: { email: payload.email.toLowerCase() } })).toBe(1);
-    expect(await prisma.account.count({ where: { email: payload.email.toLowerCase() } })).toBe(1);
+    expect(await prisma.association.count({ where: { email: payload.email.toLowerCase() } })).toBe(0);
+    expect(await prisma.account.count({ where: { email: payload.email.toLowerCase() } })).toBe(0);
     expect(await prisma.idempotencyKey.count()).toBe(1);
+    expect(await prisma.auditLog.count({ where: { action: 'APPLICATION_ELIGIBILITY_DECIDED', entityId: id } })).toBe(1);
   });
 
   it('نفس opId بحمولة مختلفة (طلب آخر) يُرفض بـAPPLICATION_IDEMPOTENCY_CONFLICT', async () => {
@@ -497,23 +433,23 @@ describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
   // ————————————————————————————————————————
   // 59) سجل التدقيق بعد الالتزام فقط
   // ————————————————————————————————————————
-  it('سجل التدقيق يُكتَب بعد نجاح الالتزام فقط — لا سجل لمحاولة مراجعة فاشلة/متعارضة', async () => {
+  it('سجل التدقيق يميّز قرار الأهلية عن الرفض النهائي ولا يكتب للمحاولة الفاشلة', async () => {
     const { id } = await createApplication();
 
     // محاولة فاشلة أولًا (طلب غير موجود) — يجب ألّا تُنتج أي سجل تدقيق.
     const missing = await accept(randomUUID(), randomUUID());
     expect(missing.status).toBe(404);
-    expect(await prisma.auditLog.count({ where: { action: 'APPLICATION_ACCEPTED' } })).toBe(0);
+    expect(await prisma.auditLog.count({ where: { action: 'APPLICATION_ELIGIBILITY_DECIDED' } })).toBe(0);
 
     const accepted = await accept(id, randomUUID());
     expect(accepted.status).toBe(201);
-    const acceptAudits = await prisma.auditLog.findMany({ where: { action: 'APPLICATION_ACCEPTED', entityId: id } });
+    const acceptAudits = await prisma.auditLog.findMany({ where: { action: 'APPLICATION_ELIGIBILITY_DECIDED', entityId: id } });
     expect(acceptAudits).toHaveLength(1);
-    expect(acceptAudits[0].metadata).toMatchObject({ associationId: accepted.body.associationId });
+    expect(acceptAudits[0].metadata).toMatchObject({ decision: EligibilityStatus.PASSED });
 
-    // مراجعة ثانية متعارضة — لا سجل إضافي.
-    expect((await accept(id, randomUUID())).status).toBe(409);
-    expect(await prisma.auditLog.count({ where: { action: 'APPLICATION_ACCEPTED', entityId: id } })).toBe(1);
+    // إعادة القرار بمعرّف عملية جديد مراجعة جديدة موثقة، وليست قبولًا نهائيًا.
+    expect((await accept(id, randomUUID())).status).toBe(201);
+    expect(await prisma.auditLog.count({ where: { action: 'APPLICATION_ELIGIBILITY_DECIDED', entityId: id } })).toBe(2);
 
     // رفض ناجح على طلب آخر يُنتج سجلًا واحدًا فقط بنوعه.
     const other = await createApplication();

@@ -1,5 +1,6 @@
 import { IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 import { DeliveryFailureReason, DeliveryStatus } from '@alzad/db';
+import { DeliveryApprovalDecision, ReturnCondition } from '@alzad/db';
 import { PaginationQueryDto } from '../../../common/validation/pagination-query.dto';
 
 /** يوازي assignDelegate القديمة — يشترط اكتمال كل احتياجات المستفيد المعتمدة (NODE-5) أولًا. */
@@ -59,6 +60,20 @@ export class ReturnDeliveryDto {
 
   @IsString()
   opId!: string;
+}
+
+export class ApproveDeliveryDto {
+  @IsIn(Object.values(DeliveryApprovalDecision)) decision!: DeliveryApprovalDecision;
+  @IsOptional() @IsString() @MaxLength(1000) reason?: string;
+  @IsString() opId!: string;
+}
+export class RescheduleDeliveryDto {
+  @IsString() reason!: string; @IsString() scheduledFor!: string; @IsString() opId!: string;
+}
+export class ConfirmReturnDto {
+  @IsIn(Object.values(ReturnCondition)) condition!: ReturnCondition;
+  @IsString() @MaxLength(1000) notes!: string;
+  @IsString() opId!: string;
 }
 
 export class ListDeliveriesQueryDto extends PaginationQueryDto {

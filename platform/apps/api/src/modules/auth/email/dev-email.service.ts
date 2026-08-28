@@ -11,6 +11,9 @@ export class DevEmailService implements EmailService {
   private readonly logger = new Logger('DevEmailService');
 
   async sendPasswordResetCode(params: PasswordResetEmailParams): Promise<void> {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('Production email delivery is not configured');
+    }
     this.logger.log(`[dev] كان سيُرسَل بريد استعادة كلمة مرور إلى حساب (بلا طباعة الرمز أو البريد الكامل).`);
     void params;
   }

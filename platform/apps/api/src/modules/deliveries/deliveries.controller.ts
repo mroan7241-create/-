@@ -7,10 +7,11 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthContext } from '../auth/auth.types';
 import { RECEIPT_EVIDENCE_MAX_BYTES } from '../files/file-validation.util';
 import { DeliveriesService } from './deliveries.service';
-import { AssignDelegateDto, ConfirmDeliveryDto, ConfirmHandoverDto, FailDeliveryDto, ListDeliveriesQueryDto, RetryDeliveryDto, ReturnDeliveryDto } from './dto/delivery.dto';
+import { ApproveDeliveryDto, AssignDelegateDto, ConfirmDeliveryDto, ConfirmHandoverDto, ConfirmReturnDto, FailDeliveryDto, ListDeliveriesQueryDto, RescheduleDeliveryDto, RetryDeliveryDto, ReturnDeliveryDto } from './dto/delivery.dto';
 
 interface ConfirmFiles {
   proofPhoto?: Express.Multer.File[];
+  recipientSignature?: Express.Multer.File[];
 }
 
 /**
@@ -54,11 +55,12 @@ export class DeliveriesController {
 
   @Post(':id/confirm')
   @Roles(AccountRole.DELEGATE)
-  @UseInterceptors(FileFieldsInterceptor([{ name: 'proofPhoto', maxCount: 1 }], { limits: { fileSize: RECEIPT_EVIDENCE_MAX_BYTES + 1024 } }))
+  @UseInterceptors(FileFieldsInterceptor([{ name: 'proofPhoto', maxCount: 1 }, { name: 'recipientSignature', maxCount: 1 }], { limits: { fileSize: RECEIPT_EVIDENCE_MAX_BYTES + 1024 } }))
   @ApiOperation({ summary: 'تأكيد التسليم — DELEGATE فقط ولمهمته حصرًا، صورة إثبات إلزامية' })
   async confirm(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ConfirmDeliveryDto, @UploadedFiles() files?: ConfirmFiles) {
     const proof = files?.proofPhoto?.[0];
-    return this.deliveries.confirmDelivery(ctx, id, { buffer: proof?.buffer ?? Buffer.alloc(0), declaredMimeType: proof?.mimetype }, dto.opId);
+    const signature = files?.recipientSignature?.[0];
+    return this.deliveries.confirmDelivery(ctx, id, { buffer: proof?.buffer ?? Buffer.alloc(0), declaredMimeType: proof?.mimetype }, { buffer: signature?.buffer ?? Buffer.alloc(0), declaredMimeType: signature?.mimetype }, dto.opId);
   }
 
   @Post(':id/fail')
@@ -79,11 +81,29 @@ export class DeliveriesController {
   @Roles(AccountRole.ADMIN, AccountRole.ASSOCIATION, AccountRole.DELEGATE)
   @ApiOperation({
     summary:
-      'تخلٍّ نهائي عن التسليم — الجهاز يعود فعليًا للمستودع ويُعاد تقييم الاحتياج عبر AutoAllocation (يوازي "أعيد للجمعية/المستودع" القديمة)',
+      'طلب إرجاع فقط — تبقى العهدة كما هي حتى تأكيد الجمعية للاستلام الفعلي',
   })
   async returnToWarehouse(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ReturnDeliveryDto) {
-    return this.deliveries.returnToWarehouse(ctx, id, dto);
+    return this.deliveries.requestReturn(ctx, id, dto);
   }
+
+  @Post(':id/association-approval') @Roles(AccountRole.ASSOCIATION)
+  associationApproval(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ApproveDeliveryDto) { return this.deliveries.approveDelivery(ctx, id, 'ASSOCIATION', dto); }
+
+  @Post(':id/zaad-approval') @Roles(AccountRole.ADMIN)
+  zaadApproval(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ApproveDeliveryDto) { return this.deliveries.approveDelivery(ctx, id, 'ZAAD', dto); }
+
+  @Post(':id/reschedule') @Roles(AccountRole.ADMIN, AccountRole.ASSOCIATION, AccountRole.DELEGATE)
+  reschedule(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: RescheduleDeliveryDto) { return this.deliveries.reschedule(ctx, id, dto); }
+
+  @Post(':id/resume') @Roles(AccountRole.ADMIN, AccountRole.ASSOCIATION, AccountRole.DELEGATE)
+  resume(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: RetryDeliveryDto) { return this.deliveries.resumeDeferred(ctx, id, dto.opId); }
+
+  @Post(':id/confirm-return') @Roles(AccountRole.ASSOCIATION)
+  confirmReturn(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ConfirmReturnDto) { return this.deliveries.confirmPhysicalReturn(ctx, id, dto); }
+
+  @Post(':id/admin-return-override') @Roles(AccountRole.ADMIN)
+  overrideReturn(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ConfirmReturnDto) { return this.deliveries.confirmPhysicalReturn(ctx, id, dto, true); }
 
   @Get('attempts/:attemptId/proof')
   @Roles(AccountRole.ADMIN, AccountRole.ASSOCIATION, AccountRole.DELEGATE)
@@ -91,4 +111,7 @@ export class DeliveriesController {
   async proof(@CurrentUser() ctx: AuthContext, @Param('attemptId', ParseUUIDPipe) attemptId: string) {
     return this.deliveries.getDeliveryProofUrl(ctx, attemptId);
   }
+
+  @Get('attempts/:attemptId/signature') @Roles(AccountRole.ADMIN, AccountRole.ASSOCIATION, AccountRole.DELEGATE)
+  signature(@CurrentUser() ctx: AuthContext, @Param('attemptId', ParseUUIDPipe) attemptId: string) { return this.deliveries.getDeliverySignatureUrl(ctx, attemptId); }
 }

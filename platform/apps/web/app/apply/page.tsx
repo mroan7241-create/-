@@ -46,6 +46,15 @@ export default function ApplyPage() {
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [contactName, setContactName] = useState('');
+  const [address, setAddress] = useState('');
+  const [serviceScope, setServiceScope] = useState('');
+  const [coordinatorPhone, setCoordinatorPhone] = useState('');
+  const [coordinatorEmail, setCoordinatorEmail] = useState('');
+  const [coordinatorTitle, setCoordinatorTitle] = useState('');
+  const [beneficiaryDatabaseUpdatedAt, setBeneficiaryDatabaseUpdatedAt] = useState('');
+  const [approxBeneficiaryCount, setApproxBeneficiaryCount] = useState('');
+  const [approxNeedCount, setApproxNeedCount] = useState('');
+  const [initialBeneficiaryFile, setInitialBeneficiaryFile] = useState<File | null>(null);
   const [notes, setNotes] = useState('');
   const [licenseNumber, setLicenseNumber] = useState('');
   const [licenseExpiryDate, setLicenseExpiryDate] = useState('');
@@ -133,6 +142,15 @@ export default function ApplyPage() {
     form.append('phone', phone);
     form.append('email', email);
     form.append('contactName', contactName);
+    if (address) form.append('address', address);
+    if (serviceScope) form.append('serviceScope', serviceScope);
+    if (coordinatorPhone) form.append('coordinatorPhone', coordinatorPhone);
+    if (coordinatorEmail) form.append('coordinatorEmail', coordinatorEmail);
+    if (coordinatorTitle) form.append('coordinatorTitle', coordinatorTitle);
+    if (beneficiaryDatabaseUpdatedAt) form.append('beneficiaryDatabaseUpdatedAt', beneficiaryDatabaseUpdatedAt);
+    if (approxBeneficiaryCount) form.append('approxBeneficiaryCount', approxBeneficiaryCount);
+    if (approxNeedCount) form.append('approxNeedCount', approxNeedCount);
+    if (initialBeneficiaryFile) form.append('initialBeneficiaryFile', initialBeneficiaryFile);
     if (notes) form.append('notes', notes);
     form.append('licenseNumber', licenseNumber);
     form.append('licenseExpiryDate', licenseExpiryDate);
@@ -284,6 +302,15 @@ export default function ApplyPage() {
               اسم المسؤول
               <input required name="contactName" maxLength={100} value={contactName} onChange={(e) => setContactName(e.target.value)} style={inputStyle} />
             </label>
+            <label style={labelStyle}>العنوان<input value={address} onChange={(e) => setAddress(e.target.value)} style={inputStyle} /></label>
+            <label style={labelStyle}>نطاق الخدمة<input value={serviceScope} onChange={(e) => setServiceScope(e.target.value)} style={inputStyle} /></label>
+            <label style={labelStyle}>صفة المنسق<input value={coordinatorTitle} onChange={(e) => setCoordinatorTitle(e.target.value)} style={inputStyle} /></label>
+            <label style={labelStyle}>جوال المنسق<input value={coordinatorPhone} onChange={(e) => setCoordinatorPhone(e.target.value)} style={{ ...inputStyle, ...ltrStyle }} /></label>
+            <label style={labelStyle}>بريد المنسق<input type="email" value={coordinatorEmail} onChange={(e) => setCoordinatorEmail(e.target.value)} style={{ ...inputStyle, ...ltrStyle }} /></label>
+            <label style={labelStyle}>آخر تحديث لقاعدة المستفيدين<input type="date" value={beneficiaryDatabaseUpdatedAt} onChange={(e) => setBeneficiaryDatabaseUpdatedAt(e.target.value)} style={inputStyle} /></label>
+            <label style={labelStyle}>العدد التقريبي للمستفيدين<input type="number" min="0" value={approxBeneficiaryCount} onChange={(e) => setApproxBeneficiaryCount(e.target.value)} style={inputStyle} /></label>
+            <label style={labelStyle}>العدد التقريبي للاحتياجات<input type="number" min="0" value={approxNeedCount} onChange={(e) => setApproxNeedCount(e.target.value)} style={inputStyle} /></label>
+            <label style={labelStyle}>ملف المستفيدين الأولي للتقييم فقط (XLSX)<input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(e) => setInitialBeneficiaryFile(e.target.files?.[0] ?? null)} style={inputStyle} /></label>
           </div>
 
           <label style={labelStyle}>

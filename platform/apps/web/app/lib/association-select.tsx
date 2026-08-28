@@ -47,7 +47,6 @@ export function AssociationSelect({ value, onChange, placeholder }: AssociationS
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, open]);
 
   function pick(a: AssociationSummary) {
