@@ -45,6 +45,7 @@ export interface CreateReceiptItemInput {
 }
 
 export interface CreateReceiptBatchInput {
+  shipmentId?: string;
   associationId: string;
   supplierName: string;
   sentDate: string;
@@ -157,6 +158,7 @@ export class ReceiptsService {
 
     // بصمة idempotency: محتوى الطلب فقط (sha256 للملف)، بلا مفاتيح كائنات مولَّدة/timestamps.
     const payload = {
+      shipmentId: input.shipmentId,
       associationId: input.associationId,
       supplierName,
       sentDate: sentDate.toISOString(),
@@ -175,6 +177,12 @@ export class ReceiptsService {
         if (!claim.claimed) return { replayed: true as const, batchId: claim.existingResponse!.batchId };
 
         await assertActiveAssociation(tx, input.associationId);
+        if (input.shipmentId) {
+          const shipment = await tx.shipment.findUnique({ where: { id: input.shipmentId } });
+          if (!shipment || shipment.associationId !== input.associationId || shipment.status === 'CANCELLED') {
+            throw new ApiError('RECEIPT_SHIPMENT_INVALID', 'يجب ربط محضر الاستلام بشحنة صالحة للجمعية نفسها', 409);
+          }
+        }
 
         let adminProofFileId: string | undefined;
         if (hasProof) {
@@ -188,6 +196,7 @@ export class ReceiptsService {
         const batch = await tx.receiptBatch.create({
           data: {
             publicCode,
+            shipmentId: input.shipmentId ?? null,
             associationId: input.associationId,
             supplierName,
             sentAt: sentDate,
@@ -309,6 +318,7 @@ export class ReceiptsService {
       itemId: string;
       deviceType: DeviceType | null;
       spec: string | null;
+      sentQty: number;
       receivedQty: number;
       damagedQty: number;
       missingQty: number;
@@ -334,7 +344,7 @@ export class ReceiptsService {
       totalDamaged += damagedQty;
       const differenceReason = itemHasDifference ? await validateDifferenceReason(entry?.differenceReason) : '';
       const differenceNotes = entry?.differenceNotes ? cleanText(entry.differenceNotes, DIFFERENCE_NOTES_MAX) : '';
-      itemPlans.push({ itemId: row.id, deviceType: row.deviceType, spec: row.spec, receivedQty, damagedQty, missingQty, differenceReason, differenceNotes });
+      itemPlans.push({ itemId: row.id, deviceType: row.deviceType, spec: row.spec, sentQty, receivedQty, damagedQty, missingQty, differenceReason, differenceNotes });
     }
 
     const finalStatus = hasAnyDifference ? ReceiptBatchStatus.RECEIVED_WITH_DISCREPANCIES : ReceiptBatchStatus.RECEIVED_COMPLETE;
@@ -426,8 +436,8 @@ export class ReceiptsService {
         );
         if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse! };
 
-        const rows = await tx.$queryRaw<{ id: string; association_id: string; status: string }[]>`
-          SELECT id, association_id, status FROM receipt_batches WHERE id = ${id}::uuid FOR UPDATE
+        const rows = await tx.$queryRaw<{ id: string; association_id: string; shipment_id: string | null; status: string }[]>`
+          SELECT id, association_id, shipment_id, status FROM receipt_batches WHERE id = ${id}::uuid FOR UPDATE
         `;
         const lockedBatch = rows[0];
         if (!lockedBatch) throw new ApiError('RECEIPT_BATCH_NOT_FOUND', 'محضر الاستلام غير موجود', 404);
@@ -465,6 +475,8 @@ export class ReceiptsService {
             where: { id: plan.itemId },
             data: { goodQty: plan.receivedQty, damagedQty: plan.damagedQty, missingQty: plan.missingQty, differenceReason: plan.differenceReason || null, differenceNotes: plan.differenceNotes || null },
           });
+          if (plan.damagedQty > 0) await tx.damageCase.create({ data: { receiptItemId: plan.itemId, associationId: lockedBatch.association_id, quantity: plan.damagedQty, description: plan.differenceNotes || plan.differenceReason || 'تلف مثبت عند الاستلام' } });
+          if (plan.missingQty > 0 && lockedBatch.shipment_id) await tx.shipmentReconciliationIssue.create({ data: { shipmentId: lockedBatch.shipment_id, receiptItemId: plan.itemId, associationId: lockedBatch.association_id, type: 'MISSING', expectedQty: plan.sentQty, actualQty: plan.receivedQty + plan.damagedQty, reason: plan.differenceReason || null } });
         }
 
         // NODE-4.1: نطاق أكواد واحد + createMany بدل استعلام منفصل لكل رابط صورة↔بند.

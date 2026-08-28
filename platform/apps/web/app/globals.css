@@ -27,11 +27,50 @@
 
   --canvas: #fbf7f5;
   --paper: #ffffff;
+  --paper-raised: #fffdfb;
   --ink: #2a1420;
   --line: #ecdfe0;
+  --line-strong: #dcc7c9;
 
   --font-display: 'Tajawal', 'IBM Plex Sans Arabic', Tahoma, Arial, sans-serif;
   --font-body: 'Tajawal', 'IBM Plex Sans Arabic', Tahoma, Arial, sans-serif;
+
+  /* Typography scale — راجع platform/docs/design/01-ui-redesign-blueprint-2026-08-16.md
+     "TYPOGRAPHY". إضافة تراكمية فقط، لا تُغيّر أي حجم مستخدَم حاليًا. */
+  --text-3xl: 32px;
+  --text-2xl: 24px;
+  --text-xl: 18px;
+  --text-lg: 15.5px;
+  --text-md: 14.5px;
+  --text-sm: 13px;
+  --text-xs: 12px;
+
+  /* Elevation — بلا ظل على البطاقات المسطَّحة الحالية؛ يُستخدَم فقط
+     للبطاقات المرتفعة/الجديدة (KPI رئيسية، القوائم المنبثقة). */
+  --shadow-sm: 0 1px 2px rgba(58, 8, 27, 0.06);
+  --shadow-md: 0 6px 20px -6px rgba(58, 8, 27, 0.16);
+  --shadow-lg: 0 20px 48px -12px rgba(58, 8, 27, 0.28);
+
+  --r-pill: 999px;
+
+  /* حالات دلالية — نفس القيم المستخدَمة أصلًا في statusBadgeStyle
+     (app/lib/ui.ts)، مُركَزة هنا بدل تكرارها كقيم hex مبعثرة. */
+  --status-good: #1e6b4a;
+  --status-good-bg: #e7f4ee;
+  --status-good-border: #9dcfb8;
+  --status-bad: var(--zad-800);
+  --status-bad-bg: var(--zad-100);
+  --status-bad-border: var(--zad-300);
+  --status-warn: var(--gold-700);
+  --status-warn-bg: var(--gold-100);
+  --status-warn-border: var(--gold-400);
+  --status-neutral: var(--ink);
+  --status-neutral-bg: var(--canvas);
+  --status-neutral-border: var(--line);
+
+  --zad-gradient: linear-gradient(115deg, var(--zad-900) 0%, var(--zad-700) 42%, var(--zad-400) 100%);
+  --ink-soft: #6b4456;
+  --sh-2: 0 6px 18px rgba(42, 21, 32, 0.07);
 }
 
 * {
@@ -208,4 +247,340 @@ code {
 .login-panel .btn-ghost {
   background: rgba(255, 255, 255, 0.4);
   border-color: rgba(255, 255, 255, 0.75);
+}
+
+/* ---------- Shared interactive states — راجع 01-ui-redesign-blueprint
+   "ACCESSIBILITY" (تركيز مرئي واضح لكل عنصر تفاعلي). كائنات CSSProperties
+   المضمَّنة (inline styles) لا تقدر تعبّر عن :hover/:focus-visible، فهذه
+   الأصناف تُستخدَم إلى جانبها بدل تكرار media/pseudo منطق في كل ملف. ---------- */
+.zad-focusable:focus-visible {
+  outline: 2px solid var(--gold-500);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+.zad-nav-link:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+.zad-nav-link:focus-visible {
+  outline: 2px solid var(--gold-400);
+  outline-offset: -2px;
+}
+
+.zad-kpi-card:hover,
+.zad-kpi-card:focus-visible {
+  border-color: var(--zad-300);
+  box-shadow: var(--shadow-md);
+}
+.zad-kpi-card:focus-visible {
+  outline: 2px solid var(--gold-500);
+  outline-offset: 2px;
+}
+
+.zad-alert-row:hover,
+.zad-alert-row:focus-visible {
+  filter: brightness(0.99);
+  box-shadow: var(--shadow-sm);
+}
+.zad-alert-row:focus-visible {
+  outline: 2px solid var(--gold-500);
+  outline-offset: 2px;
+}
+
+/* GATE-B — طباعة/حفظ PDF للتقارير: إخفاء الهيكل التفاعلي (الشريط الجانبي/العلوي/عناصر التحكم)،
+   عرض محتوى التقرير فقط بترويسة نظيفة قابلة للطباعة A4. راجع admin/reports/page.tsx. */
+@page {
+  size: A4 portrait;
+  margin: 14mm 12mm;
+}
+
+@media print {
+  .zad-sidebar,
+  .zad-topbar,
+  .zad-print-hide {
+    display: none !important;
+  }
+  .zad-print-show {
+    display: block !important;
+  }
+  main {
+    padding: 0 !important;
+    max-width: none !important;
+  }
+  body {
+    background: #fff !important;
+  }
+  table {
+    page-break-inside: auto;
+  }
+  thead {
+    display: table-header-group; /* يكرِّر رأس الجدول تلقائيًا في كل صفحة عند تقسيم جدول طويل */
+  }
+  tr {
+    page-break-inside: avoid;
+  }
+  /* أقسام قصيرة (لقطة تنفيذية/تغطية شواهد/استثناءات...) تبقى وحدة واحدة غير مقطوعة.
+     الأقسام التي تحوي جدولًا طويلًا (الأنشطة/المناطق) تُستثنى عمدًا حتى يتدفّق الجدول
+     طبيعيًا عبر الصفحات بدل قفزه بالكامل لصفحة جديدة ويترك فراغًا فارغًا في سابقتها. */
+  .zad-report-section {
+    page-break-inside: avoid;
+  }
+  .zad-report-section:has(table) {
+    page-break-inside: auto;
+  }
+  .zad-print-hide-link {
+    color: inherit !important;
+    text-decoration: none !important;
+  }
+}
+
+/* ============================================================================
+   SHELL v2 — منقول حرفيًا (بنية/تسلسل) من platform/docs/design/admin-r2-2026-08-16.html
+   و association-r2-2026-08-16.html، وليس إعادة تصميم من الذاكرة. يستبدل
+   sidebarStyle/topBarStyle/statCardStyle القديمة في الشاشات المرئية الأربع
+   (admin/association/delegate/apply) + AppShell المشترك. راجع
+   platform/docs/design/02-distinctive-design-concepts-2026-08-16.md.
+   ============================================================================ */
+
+.zad-shell2 { display: flex; min-height: 100vh; }
+.zad-main2 { flex: 1; min-width: 0; padding: 0 0 60px; }
+
+/* ---------- sidebar v2 ---------- */
+.zad-sidebar2 {
+  width: 250px; flex-shrink: 0; background: var(--zad-950);
+  background-image: radial-gradient(520px 340px at 100% 0%, rgba(226, 166, 46, 0.1), transparent 60%);
+  color: #fff; display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh;
+}
+.zad-sidebar2-brand { display: flex; align-items: center; gap: 11px; padding: 22px 20px 18px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); }
+.zad-sidebar2-brand img { width: 34px; height: 34px; object-fit: contain; flex-shrink: 0; filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.25)); }
+.zad-sidebar2-brand .zad-sb2-name { font-family: var(--font-display); font-weight: 800; font-size: 15.5px; }
+.zad-sidebar2-brand .zad-sb2-role { font-size: 11px; color: rgba(255, 255, 255, 0.55); margin-top: 1px; }
+.zad-nav-scroll2 { flex: 1; padding: 14px 12px; overflow-y: auto; overflow-x: hidden; }
+.zad-nav-group2 { margin-bottom: 15px; }
+.zad-nav-group-label2 { position: relative; display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; color: rgba(255, 255, 255, 0.4); padding: 0 10px; margin-bottom: 9px; white-space: nowrap; }
+.zad-nav-group-label2::after { content: ''; position: absolute; inset-inline-start: 10px; bottom: -4px; width: 14px; height: 2px; border-radius: 1px; background: var(--gold-500); opacity: 0.55; }
+.zad-nav-list2 { list-style: none; margin: 0; padding: 0; }
+.zad-nav-item2 {
+  display: flex; align-items: center; gap: 11px; height: 36px; padding: 0 11px; margin-bottom: 2px;
+  border-radius: var(--r-sm); color: rgba(255, 255, 255, 0.78); font-size: 13.3px; text-decoration: none;
+  background: none; border-inline-start: 3px solid transparent; transition: color 140ms ease, background 140ms ease;
+}
+.zad-nav-item2:hover { color: #fff; background: rgba(255, 255, 255, 0.06); }
+.zad-nav-item2[data-active='true'] { color: #fff; font-weight: 700; background: rgba(255, 255, 255, 0.09); border-inline-start-color: var(--gold-500); }
+.zad-nav-item2[data-active='true'] svg { filter: drop-shadow(0 0 5px rgba(226, 166, 46, 0.5)); }
+.zad-nav-item2 .zad-badge-dot { margin-inline-start: auto; width: 7px; height: 7px; border-radius: 50%; background: var(--gold-500); box-shadow: 0 0 0 3px rgba(226, 166, 46, 0.18); flex-shrink: 0; }
+.zad-sidebar2-foot { padding: 12px 20px 18px; border-top: 1px solid rgba(255, 255, 255, 0.1); }
+.zad-partner-lockup2 { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; opacity: 0.9; }
+.zad-partner-label2 { font-size: 10px; color: rgba(255, 255, 255, 0.45); white-space: nowrap; }
+.zad-partner-logo2 { height: 15px; width: auto; object-fit: contain; filter: brightness(0) invert(1); opacity: 0.55; }
+.zad-foot-copy2 { font-size: 11px; color: rgba(255, 255, 255, 0.4); }
+.zad-sidebar2-toprow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--paper); position: sticky; top: 0; z-index: 10; }
+.zad-sidebar2-toprow .zad-logout-btn2 { padding: 7px 12px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--paper); cursor: pointer; font-size: 13px; font-family: inherit; }
+
+/* ---------- hero ---------- */
+.zad-hero2 { position: relative; background: var(--zad-gradient); color: #fff; padding: 24px 34px; display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; overflow: hidden; }
+.zad-hero2-decor { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.zad-hero2-ring-a { position: absolute; inset-inline-start: -100px; top: -130px; width: 300px; height: 300px; border-radius: 50%; border: 46px solid rgba(226, 166, 46, 0.14); }
+.zad-hero2-ring-b { position: absolute; inset-inline-end: 26%; bottom: -85%; width: 130px; height: 130px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.12); }
+.zad-hero2-text { position: relative; z-index: 1; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.28); }
+.zad-hero2-text h1 { font-size: 25px; font-weight: 800; font-family: var(--font-display); color: #fff; }
+.zad-hero2-fresh { font-size: 12px; color: rgba(255, 255, 255, 0.72); margin-top: 4px; }
+.zad-hero2-actions { position: relative; z-index: 1; display: flex; align-items: center; gap: 8px; }
+.zad-icon-btn2 { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: var(--r-sm); background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.18); color: #fff; cursor: pointer; text-decoration: none; transition: background 140ms ease; }
+.zad-icon-btn2:hover { background: rgba(255, 255, 255, 0.18); }
+
+/* ---------- section head / framed title ---------- */
+.zad-content2 { max-width: 1180px; margin: 0 auto; padding: 28px 34px 0; }
+.zad-section-head2 { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin: 32px 0 15px; }
+.zad-section-head2:first-child { margin-top: 0; }
+.zad-framed-title2 { position: relative; padding-inline-start: 16px; }
+.zad-framed-title2::before { content: ''; position: absolute; inset-inline-start: 0; top: 1px; bottom: 6px; width: 2px; background: var(--zad-gradient); }
+.zad-framed-title2::after { content: ''; position: absolute; inset-inline-start: 0; bottom: 0; width: 9px; height: 2px; background: var(--gold-500); }
+.zad-framed-title2 .zad-rule2 { width: 20px; height: 2px; border-radius: 1px; margin-bottom: 9px; background: linear-gradient(90deg, var(--gold-600), var(--gold-400)); }
+.zad-framed-title2 h2 { font-size: 18px; font-weight: 800; color: var(--zad-900); font-family: var(--font-display); }
+.zad-section-meta2 { font-size: 12px; color: var(--ink-soft); }
+
+/* ---------- module family ---------- */
+.zad-modules2 { display: grid; grid-template-columns: 1.3fr 1fr; gap: 18px; }
+.zad-module2 { position: relative; background: var(--paper-raised); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-sm); padding: 20px 22px; overflow: hidden; }
+.zad-module2::before { content: ''; position: absolute; inset-inline-start: 0; inset-block: 0; width: 4px; background: var(--zad-gradient); }
+.zad-module2.zad-critical2::before { background: linear-gradient(180deg, var(--zad-800), var(--status-bad)); }
+.zad-module2.zad-critical2 { background: linear-gradient(180deg, var(--paper-raised) 0%, var(--status-bad-bg) 165%); }
+.zad-module2-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 13px; }
+.zad-module2-icon { width: 36px; height: 36px; border-radius: var(--r-sm); flex-shrink: 0; background: var(--zad-100); color: var(--zad-800); display: flex; align-items: center; justify-content: center; }
+.zad-module2-title-link { display: inline-flex; align-items: center; gap: 5px; font-size: 15px; color: var(--zad-900); font-weight: 800; text-decoration: none; font-family: var(--font-display); }
+.zad-module2-title-link:hover { color: var(--zad-700); text-decoration: underline; text-underline-offset: 3px; }
+.zad-module2-sub { font-size: 11.5px; color: var(--ink-soft); margin-top: 1px; }
+.zad-primary-block2 { margin-bottom: 14px; }
+.zad-primary-figure2 { display: block; text-decoration: none; line-height: 0.92; }
+.zad-primary-figure2 .zad-fig2 { font-family: var(--font-display); font-weight: 800; color: var(--zad-900); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; font-size: 50px; }
+.zad-primary-figure2 .zad-fig2.zad-fig-compact2 { font-size: 40px; }
+.zad-module2.zad-critical2 .zad-fig2 { color: var(--status-bad); }
+.zad-primary-meaning2 { font-size: 13px; color: var(--ink-soft); font-weight: 600; margin-top: 6px; }
+.zad-secondary-row2 { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; }
+.zad-seg-col2 { text-align: center; padding: 0 6px; border-inline-start: 1px solid var(--line); text-decoration: none; color: inherit; display: block; border: none; background: none; font-family: inherit; cursor: default; }
+a.zad-seg-col2 { cursor: pointer; }
+.zad-seg-col2:first-child { border-inline-start: none; padding-inline-start: 0; }
+.zad-seg-col2:last-child { padding-inline-end: 0; }
+a.zad-seg-col2:hover .zad-sv2 { text-decoration: underline; text-underline-offset: 4px; }
+.zad-sv2 { display: block; font-family: var(--font-display); font-size: 30px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.zad-sl2 { display: block; font-size: 14.5px; color: var(--ink-soft); font-weight: 600; margin-top: 6px; }
+.zad-sv2.zad-c1 { color: var(--zad-700); } .zad-sv2.zad-c2 { color: var(--status-warn); } .zad-sv2.zad-c3 { color: var(--zad-600); }
+.zad-sv2.zad-c-good { color: var(--status-good); } .zad-sv2.zad-c-bad { color: var(--status-bad); }
+.zad-link-rail2 { display: flex; gap: 2px; height: 11px; border-radius: var(--r-pill); overflow: hidden; margin-top: 13px; background: var(--line); }
+.zad-rail-seg2 { height: 100%; }
+.zad-rail-seg2.zad-c1 { background: var(--zad-700); } .zad-rail-seg2.zad-c2 { background: var(--status-warn); } .zad-rail-seg2.zad-c3 { background: var(--zad-600); }
+.zad-rail-seg2.zad-c-good { background: var(--status-good); } .zad-rail-seg2.zad-c-bad { background: var(--status-bad); }
+.zad-activities-context2 { font-size: 11.5px; color: var(--ink-soft); margin-top: 9px; }
+.zad-activities-context2 b { color: var(--ink); font-weight: 700; }
+.zad-module2.zad-activities-wide2 { grid-column: 1 / -1; margin-top: 18px; }
+
+/* ---------- attention rail ---------- */
+.zad-split2 { display: grid; grid-template-columns: 1.25fr 1fr; gap: 18px; align-items: start; }
+.zad-attn-tiers2 { display: flex; flex-direction: column; gap: 14px; }
+.zad-attn-tier-head2 { display: flex; align-items: center; gap: 8px; padding: 0 2px; }
+.zad-tier-dot2 { width: 8px; height: 8px; border-radius: 50%; }
+.zad-tier-dot2.zad-tier-urgent2 { background: var(--status-bad); }
+.zad-tier-dot2.zad-tier-decision2 { background: var(--status-warn); }
+.zad-tier-dot2.zad-tier-monitor2 { background: var(--ink-soft); }
+.zad-attn-tier-head2 h4 { font-size: 12.5px; font-weight: 700; color: var(--ink); font-family: var(--font-display); }
+.zad-tier-count2 { font-size: 11px; font-weight: 700; color: var(--ink-soft); background: var(--canvas); border-radius: var(--r-pill); padding: 1px 8px; }
+.zad-attention2 { background: var(--paper-raised); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-sm); overflow: hidden; margin-top: 8px; }
+.zad-attn-item2 { display: grid; grid-template-columns: 44px 1fr auto; gap: 13px; align-items: flex-start; padding: 13px 18px; border-top: 1px solid var(--line); text-decoration: none; color: inherit; }
+.zad-attn-item2:first-child { border-top: none; }
+.zad-attn-item2:hover { background: var(--canvas); }
+.zad-attn-count2 { width: 44px; height: 44px; border-radius: var(--r-sm); display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-family: var(--font-display); font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.zad-attn-count2.zad-bad2 { background: var(--status-bad-bg); color: var(--status-bad); }
+.zad-attn-count2.zad-warn2 { background: var(--status-warn-bg); color: var(--status-warn); }
+.zad-attn-count2.zad-neutral2 { background: var(--canvas); color: var(--ink-soft); }
+.zad-attn-body2 .zad-what2 { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.zad-attn-body2 .zad-why2 { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+.zad-attn-meta2 { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; }
+.zad-attn-domain2 { font-size: 10.5px; font-weight: 700; letter-spacing: 0.03em; color: var(--zad-700); background: var(--zad-100); padding: 2px 8px; border-radius: var(--r-pill); }
+.zad-attn-age2 { font-size: 11px; color: var(--ink-soft); }
+
+/* ---------- activity log panel ---------- */
+.zad-activity-toolbar2 { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.zad-range-pills2 { display: flex; gap: 5px; }
+.zad-range-pill2 { font-size: 11px; font-weight: 700; padding: 4px 11px; border-radius: var(--r-pill); background: var(--paper); border: 1px solid var(--line-strong); color: var(--ink-soft); cursor: pointer; font-family: inherit; }
+.zad-range-pill2:hover { background: var(--zad-100); color: var(--zad-800); }
+.zad-range-pill2[data-active='true'] { background: var(--zad-800); color: #fff; border-color: var(--zad-800); }
+.zad-activity-panel2 { background: var(--paper-raised); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-sm); padding: 6px 0; }
+.zad-activity-row2 { display: flex; align-items: center; gap: 11px; padding: 11px 18px; border-top: 1px solid var(--line); font-size: 13px; }
+.zad-activity-row2:first-child { border-top: none; }
+.zad-activity-icon2 { width: 28px; height: 28px; border-radius: var(--r-sm); background: var(--canvas); color: var(--zad-700); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.zad-activity-main2 { flex: 1; min-width: 0; }
+.zad-activity-main2 .zad-op2 { font-weight: 700; }
+.zad-activity-actor2 { font-size: 12px; color: var(--ink-soft); }
+.zad-activity-time2 { font-size: 11.5px; color: var(--ink-soft); flex-shrink: 0; }
+
+/* ---------- association: action-hero + queue-grid + summary-strip ----------
+   منقول حرفيًا من platform/docs/design/association-r2-2026-08-16.html — هوية
+   بصرية مختلفة عمدًا عن وحدات admin (استعلام إجراء أولًا "ماذا يحتاج إجراء
+   مني الآن؟" بدل بطاقات KPI)، لا نسخة معاد تسميتها من admin. */
+.zad-hero2-chip { position: relative; z-index: 1; background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.18); padding: 9px 15px; border-radius: var(--r-md); font-size: 12px; white-space: nowrap; }
+.zad-action-hero2 { background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: var(--r-xl); box-shadow: var(--shadow-md); padding: 20px 22px; margin-bottom: 8px; position: relative; overflow: hidden; }
+.zad-action-hero2::before { content: ''; position: absolute; inset-inline-start: 0; inset-block: 0; width: 4px; background: var(--zad-gradient); }
+.zad-action-hero2 h2 { font-size: 17px; color: var(--zad-900); margin-bottom: 4px; font-family: var(--font-display); }
+.zad-action-hero2 .zad-ah-sub2 { font-size: 12.5px; color: var(--ink-soft); margin-bottom: 16px; }
+.zad-queue-grid2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+.zad-queue-card2 { display: flex; align-items: center; gap: 12px; padding: 13px 14px; border-radius: var(--r-md); border: 1px solid var(--line-strong); background: var(--paper); text-align: start; text-decoration: none; color: inherit; }
+.zad-queue-card2:hover { border-color: var(--gold-500); background: var(--gold-100); }
+.zad-queue-card2 .zad-qn2 { font-family: var(--font-display); font-weight: 800; font-size: 22px; color: var(--zad-800); flex-shrink: 0; min-width: 30px; text-align: center; }
+.zad-queue-card2.zad-is-empty2 .zad-qn2 { color: var(--status-good); }
+.zad-queue-card2 .zad-qt2 { font-size: 12.5px; font-weight: 700; color: var(--ink); }
+.zad-queue-card2 .zad-qd2 { font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+.zad-summary-strip2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; margin-bottom: 8px; }
+.zad-sum-card2 { position: relative; overflow: hidden; background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 18px 19px; box-shadow: var(--shadow-sm); min-height: 100px; display: flex; flex-direction: column; justify-content: space-between; text-align: start; text-decoration: none; color: inherit; }
+.zad-sum-card2:hover { box-shadow: var(--shadow-md); border-color: var(--gold-400); }
+.zad-sum-card2 .zad-sv2b { font-family: var(--font-display); font-weight: 800; font-size: 28px; color: var(--zad-900); line-height: 1; }
+.zad-sum-card2 .zad-sl2b { font-size: 12px; color: var(--ink-soft); margin-top: 8px; font-weight: 600; }
+.zad-rlist2 { display: flex; flex-direction: column; gap: 9px; }
+.zad-rcard2 { background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: var(--r-lg); padding: 13px 15px; }
+.zad-rcard2-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.zad-rcard2-name { font-size: 14px; font-weight: 700; }
+.zad-rcard2-line { font-size: 12px; color: var(--ink-soft); margin-top: 3px; }
+
+/* ---------- delegate mobile shell ---------- منقول حرفيًا من
+   platform/docs/design/delegate-r2-2026-08-16.html: هيدر مضغوط + شريط تبويب
+   لاصق (الإحالات/مسار اليوم/المؤجّلة) بدل صفحة ويب طويلة بعناوين متتابعة. */
+.zad-dg-header2 { position: relative; background: var(--zad-gradient); color: #fff; padding: 14px 18px 12px; overflow: hidden; }
+.zad-dg-header2-ring { position: absolute; inset-inline-end: -40px; top: -60px; width: 140px; height: 140px; border-radius: 50%; border: 26px solid rgba(226, 166, 46, 0.14); pointer-events: none; }
+.zad-dg-top-row2 { display: flex; align-items: center; justify-content: space-between; position: relative; z-index: 1; gap: 8px; }
+.zad-dg-brand2 { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.zad-dg-brand2 img { width: 26px; height: 26px; object-fit: contain; flex-shrink: 0; filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.25)); }
+.zad-dg-brand2 .zad-dg-who2 { font-family: var(--font-display); font-weight: 800; font-size: 14.5px; white-space: nowrap; }
+.zad-dg-brand2 .zad-dg-assoc2 { font-size: 11px; color: rgba(255, 255, 255, 0.65); }
+.zad-dg-top-actions2 { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.zad-dg-icon-btn2 { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 50%; background: rgba(255, 255, 255, 0.14); border: 1px solid rgba(255, 255, 255, 0.22); color: #fff; cursor: pointer; text-decoration: none; }
+.zad-dg-progress2 { margin-top: 12px; position: relative; z-index: 1; }
+.zad-dg-progress2 .zad-dg-prog-text2 { font-size: 12.5px; color: rgba(255, 255, 255, 0.9); }
+.zad-dg-progress-bar2 { height: 5px; border-radius: var(--r-pill); background: rgba(255, 255, 255, 0.18); overflow: hidden; display: flex; margin-top: 7px; }
+.zad-dg-progress-bar2 span { height: 100%; background: var(--gold-400); }
+.zad-dg-section-bar2 { position: sticky; top: 0; z-index: 10; display: flex; background: var(--paper); border-bottom: 1px solid var(--line); box-shadow: var(--shadow-sm); }
+.zad-dg-tab2 { position: relative; flex: 1; padding: 13px 4px 11px; background: none; border: none; font-size: 13px; font-weight: 700; color: var(--ink-soft); cursor: pointer; min-height: 46px; font-family: inherit; }
+.zad-dg-tab2[data-active='true'] { color: var(--zad-800); }
+.zad-dg-tab2[data-active='true']::after { content: ''; position: absolute; bottom: 0; inset-inline-start: 8px; inset-inline-end: 8px; height: 3px; background: var(--gold-500); border-radius: 3px 3px 0 0; }
+.zad-dg-body2 { max-width: 640px; margin: 0 auto; padding: 16px 16px 60px; }
+.zad-dg-wcard2 { position: relative; background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: var(--r-xl); box-shadow: var(--shadow-sm); padding: 13px 15px; margin-bottom: 11px; overflow: hidden; }
+.zad-dg-wcard2::before { content: ''; position: absolute; inset-inline-start: 0; inset-block: 0; width: 4px; background: var(--zad-gradient); }
+.zad-dg-wcard2.zad-dg-good2::before { background: var(--status-good); }
+.zad-dg-wcard2.zad-dg-bad2::before { background: linear-gradient(180deg, var(--zad-800), var(--status-bad)); }
+.zad-dg-wcard2-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.zad-dg-wcard2-name { font-size: 16px; font-weight: 800; color: var(--ink); line-height: 1.3; font-family: var(--font-display); }
+.zad-dg-wcard2-line { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-soft); margin-top: 4px; }
+.zad-dg-support-row2 { display: flex; gap: 6px; margin-top: 11px; flex-wrap: wrap; }
+.zad-dg-support-row2 a, .zad-dg-support-row2 button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px; font-size: 11.5px; font-weight: 700; padding: 9px 6px; border-radius: var(--r-sm); border: 1px solid var(--line-strong); background: var(--paper); color: var(--ink); min-height: 38px; text-decoration: none; cursor: pointer; font-family: inherit; white-space: nowrap; }
+.zad-dg-support-row2 a.zad-dg-wa2 { color: var(--status-good); }
+.zad-dg-task-row2 { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.zad-dg-task-primary2 { flex: 1; padding: 12px; border-radius: var(--r-md); background: var(--zad-800); color: #fff; border: none; font-size: 13.5px; font-weight: 700; cursor: pointer; min-height: 46px; font-family: inherit; }
+.zad-dg-task-secondary2 { padding: 12px 14px; border-radius: var(--r-md); background: var(--paper-raised); color: var(--zad-800); border: 1.5px solid var(--zad-300); font-size: 13px; font-weight: 700; cursor: pointer; min-height: 46px; font-family: inherit; }
+.zad-dg-status-chip2 { font-size: 10.5px; font-weight: 800; padding: 3px 9px; border-radius: var(--r-pill); white-space: nowrap; }
+.zad-dg-next-card2 { position: relative; background: var(--paper-raised); border: 1px solid var(--line-strong); border-radius: var(--r-xl); box-shadow: var(--shadow-md); padding: 15px 16px 14px; margin-bottom: 14px; overflow: hidden; }
+.zad-dg-next-card2::before { content: ''; position: absolute; inset-inline-start: 0; inset-block: 0; width: 4px; background: var(--zad-gradient); }
+.zad-dg-next-eyebrow2 { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; gap: 8px; }
+.zad-dg-next-eyebrow2 .zad-dg-tag2 { font-size: 10px; font-weight: 800; color: var(--gold-700); background: var(--gold-100); border: 1px solid var(--gold-400); border-radius: var(--r-pill); padding: 3px 9px; white-space: nowrap; }
+.zad-dg-field-label2 { display: flex; align-items: center; gap: 8px; margin: 18px 0 10px; }
+.zad-dg-field-label2 .zad-rule2 { width: 16px; height: 2px; margin-bottom: 0; }
+.zad-dg-field-label2 h2 { font-size: 14.5px; font-weight: 800; color: var(--zad-900); font-family: var(--font-display); }
+.zad-dg-empty2 { text-align: center; padding: 32px 20px; font-size: 12.5px; color: var(--ink-soft); }
+
+/* ---------- apply (public wizard): hero + overlapping progress-card ----------
+   منقول حرفيًا من platform/docs/design/public-application-r2-2026-08-16.html. */
+.zad-ap-hero2 { background: var(--zad-gradient); color: #fff; padding: 26px 20px 50px; text-align: center; position: relative; overflow: hidden; }
+.zad-ap-hero2::before { content: ''; position: absolute; inset-inline-start: -60px; top: -80px; width: 220px; height: 220px; border-radius: 50%; border: 34px solid rgba(226, 166, 46, 0.13); }
+.zad-ap-lockup2 { display: inline-flex; align-items: center; gap: 14px; position: relative; z-index: 1; margin-bottom: 16px; }
+.zad-ap-lockup2 img { display: block; object-fit: contain; height: 44px; width: auto; }
+.zad-ap-lockup2 .zad-ap-divider2 { width: 1px; align-self: stretch; min-height: 30px; background: rgba(255, 255, 255, 0.32); flex: none; }
+.zad-ap-hero2 h1 { font-size: 20px; font-weight: 800; position: relative; z-index: 1; max-width: 480px; margin: 0 auto; line-height: 1.4; color: #fff; font-family: var(--font-display); }
+.zad-ap-hero2 p { font-size: 12.5px; color: rgba(255, 255, 255, 0.85); margin-top: 10px; position: relative; z-index: 1; max-width: 480px; margin-inline: auto; line-height: 1.8; }
+.zad-ap-wizard-shell2 { max-width: 640px; margin: -38px auto 40px; padding: 0 16px; }
+.zad-ap-progress-card2 { background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-xl); box-shadow: var(--shadow-md); padding: 16px 18px; }
+.zad-ap-progress-steps2 { display: flex; align-items: center; }
+.zad-ap-p-step2 { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; position: relative; }
+.zad-ap-p-step2:not(:last-child)::after { content: ''; position: absolute; top: 14px; inset-inline-start: calc(50% + 22px); width: calc(100% - 44px); height: 2px; background: var(--line); z-index: 0; }
+.zad-ap-p-step2[data-done='true']:not(:last-child)::after { background: var(--zad-700); }
+.zad-ap-p-dot2 { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-weight: 800; font-size: 13px; background: var(--canvas); border: 2px solid var(--line-strong); color: var(--ink-soft); position: relative; z-index: 1; }
+.zad-ap-p-step2[data-active='true'] .zad-ap-p-dot2 { background: var(--zad-800); border-color: var(--zad-800); color: #fff; }
+.zad-ap-p-step2[data-done='true'] .zad-ap-p-dot2 { background: var(--zad-700); border-color: var(--zad-700); color: #fff; }
+.zad-ap-p-label2 { font-size: 11.5px; font-weight: 700; color: var(--ink-soft); text-align: center; }
+.zad-ap-p-step2[data-active='true'] .zad-ap-p-label2 { color: var(--zad-900); }
+.zad-ap-form-card2 { background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-xl); box-shadow: var(--shadow-md); padding: 24px 22px; margin-top: 16px; }
+@media (max-width: 520px) { .zad-ap-form-card2 { padding: 18px 15px; } .zad-ap-p-label2 { display: none; } }
+
+@media (max-width: 1100px) { .zad-modules2 { grid-template-columns: 1fr; } .zad-split2 { grid-template-columns: 1fr; } }
+@media (max-width: 820px) {
+  .zad-shell2 { flex-direction: column; }
+  .zad-sidebar2 { width: 100% !important; height: auto; position: static; flex-direction: row; overflow-x: auto; }
+  .zad-sidebar2-brand, .zad-sidebar2-foot { display: none; }
+  .zad-nav-scroll2 { display: flex; padding: 10px; }
+  .zad-nav-group2 { margin-bottom: 0; margin-inline-end: 8px; }
+  .zad-nav-group-label2 { display: none; }
+  .zad-nav-list2 { display: flex; gap: 4px; }
+  .zad-nav-item2 { white-space: nowrap; width: auto; padding: 0 11px; }
+  .zad-content2 { padding: 20px 18px 0; }
+  .zad-hero2 { padding: 20px 18px; }
+  .zad-primary-figure2 .zad-fig2 { font-size: 40px; }
+  .zad-primary-figure2 .zad-fig2.zad-fig-compact2 { font-size: 34px; }
 }

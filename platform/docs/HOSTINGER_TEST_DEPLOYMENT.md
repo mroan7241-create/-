@@ -41,7 +41,7 @@
   تُطلقها Hostinger مباشرةً — بلا أي `child_process.spawn` إطلاقًا
   لأي منهما:**
   - **API**: `process.chdir` إلى `/platform` ثم `require` للمسار
-    المطلق `apps/api/dist/main.js` (البناء الإنتاجي الحقيقي، لا
+    المطلق `apps/api/dist/src/main.js` (البناء الإنتاجي الحقيقي، لا
     `nest start`).
   - **Web**: `output: 'standalone'` (`apps/web/next.config.js`، مع
     `experimental.outputFileTracingRoot` مضبوط على `/platform` ليشمل

@@ -14,6 +14,10 @@ import { PaginationQueryDto } from '../../../common/validation/pagination-query.
  * الحقل عبر `whitelist: true` قبل وصوله لِ`parseCreateItems`.
  */
 export class CreateReceiptBatchDto {
+  @IsOptional()
+  @IsUUID()
+  shipmentId?: string;
+
   @IsUUID()
   associationId!: string;
 

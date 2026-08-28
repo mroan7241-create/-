@@ -116,7 +116,18 @@ function startApiInProcess() {
   // so Hostinger's own process lifecycle (start/stop/restart) controls it
   // correctly — no detached/background process.
   process.chdir(PLATFORM_DIR);
-  require(path.join(PLATFORM_DIR, 'apps', 'api', 'dist', 'main.js'));
+  const apiEntryCandidates = [
+    path.join(PLATFORM_DIR, 'apps', 'api', 'dist', 'src', 'main.js'),
+    path.join(PLATFORM_DIR, 'apps', 'api', 'dist', 'main.js'),
+  ];
+  const apiEntry = apiEntryCandidates.find((candidate) => fs.existsSync(candidate));
+  if (!apiEntry) {
+    console.error(
+      `[hostinger-app] API: ملف التشغيل المجمّع غير موجود. المسارات المفحوصة: ${apiEntryCandidates.join(', ')}`,
+    );
+    process.exit(1);
+  }
+  require(apiEntry);
 }
 
 function resolvePort() {

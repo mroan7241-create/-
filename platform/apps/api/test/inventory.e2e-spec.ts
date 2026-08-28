@@ -105,6 +105,9 @@ describe('DEV-005/006 — تصحيح جهاز ووَسمه تالفًا (تكا�
       .set('Cookie', adminCookie)
       .send({ opId: newOpId('rev'), beneficiaryDecision: 'APPROVED', needDecisions: [{ needId: needIds[0], decision: 'APPROVED' }] });
     if (reviewRes.status !== 201) throw new Error(`review failed: ${reviewRes.status} ${JSON.stringify(reviewRes.body)}`);
+    const listRes = await http().post(`/api/v1/beneficiaries/${beneficiaryId}/list-decision`).set('Cookie', adminCookie)
+      .send({ listType: 'MAIN', listRank: 1, reason: 'اختبار حماية الجهاز المخصص', opId: newOpId('list') });
+    if (listRes.status !== 201) throw new Error(`list decision failed: ${listRes.status} ${JSON.stringify(listRes.body)}`);
 
     const row = await prisma.deviceUnit.findUniqueOrThrow({ where: { id: deviceId } });
     expect(row.status).toBe(DeviceStatus.ALLOCATED);

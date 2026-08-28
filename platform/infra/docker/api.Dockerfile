@@ -18,4 +18,4 @@ RUN npm run build --workspace packages/shared \
   && npm run build --workspace apps/api
 
 EXPOSE 3001
-CMD ["node", "apps/api/dist/main.js"]
+CMD ["node", "apps/api/dist/src/main.js"]

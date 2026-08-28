@@ -4,8 +4,13 @@
   "testEnvironment": "node",
   "testRegex": ".*\\.e2e-spec\\.ts$",
   "setupFiles": ["<rootDir>/utils/setup-env.ts"],
+  "setupFilesAfterEnv": ["<rootDir>/utils/jest-esm-globals.ts"],
+  "extensionsToTreatAsEsm": [".ts"],
   "transform": {
-    "^.+\\.ts$": "ts-jest"
+    "^.+\\.ts$": ["ts-jest", { "useESM": true, "tsconfig": { "module": "ES2022" } }]
+  },
+  "moduleNameMapper": {
+    "^(\\.{1,2}/.*)\\.js$": "$1"
   },
   "testTimeout": 30000
 }

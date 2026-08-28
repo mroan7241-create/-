@@ -63,7 +63,7 @@ export class ReceiptsController {
     const adminProofFile = files?.adminProofFile?.[0];
     return this.receipts.createBatch(
       ctx,
-      { associationId: dto.associationId, supplierName: dto.supplierName, sentDate: dto.sentDate, notes: dto.notes, documentNumber: dto.documentNumber, items, opId: dto.opId },
+      { shipmentId: dto.shipmentId, associationId: dto.associationId, supplierName: dto.supplierName, sentDate: dto.sentDate, notes: dto.notes, documentNumber: dto.documentNumber, items, opId: dto.opId },
       adminProofFile ? { buffer: adminProofFile.buffer, declaredMimeType: adminProofFile.mimetype } : undefined,
     );
   }
