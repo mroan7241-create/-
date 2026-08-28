@@ -46,7 +46,6 @@ describe('DELIVERY-RETURN — إرجاع جهاز للمستودع نهائيً�
   }, 60000);
 
   beforeEach(async () => {
-    await prisma.deliveryApproval.deleteMany({ where: { mission: { associationId: { in: [fx.associationAId, fx.associationBId] } } } });
     await prisma.deliveryAttempt.deleteMany({ where: { mission: { associationId: { in: [fx.associationAId, fx.associationBId] } } } });
     await prisma.deliveryMission.deleteMany({ where: { associationId: { in: [fx.associationAId, fx.associationBId] } } });
     const delegateAccounts = await prisma.account.findMany({ where: { role: 'DELEGATE', associationId: { in: [fx.associationAId, fx.associationBId] } }, select: { id: true } });
@@ -65,7 +64,6 @@ describe('DELIVERY-RETURN — إرجاع جهاز للمستودع نهائيً�
   });
 
   afterAll(async () => {
-    await prisma.deliveryApproval.deleteMany({ where: { mission: { associationId: { in: [fx.associationAId, fx.associationBId] } } } });
     await prisma.deliveryAttempt.deleteMany({ where: { mission: { associationId: { in: [fx.associationAId, fx.associationBId] } } } });
     await prisma.deliveryMission.deleteMany({ where: { associationId: { in: [fx.associationAId, fx.associationBId] } } });
     await cleanNode4State(fx);
@@ -76,13 +74,6 @@ describe('DELIVERY-RETURN — إرجاع جهاز للمستودع نهائيً�
 
   const http = () => request(app.getHttpServer());
 
-  async function approveCompletedDelivery(missionId: string): Promise<void> {
-    await http().post(`/api/v1/deliveries/${missionId}/association-approval`).set('Cookie', assocACookie)
-      .send({ decision: 'APPROVED', opId: newOpId('assoc-approval') }).expect(201);
-    await http().post(`/api/v1/deliveries/${missionId}/zaad-approval`).set('Cookie', adminCookie)
-      .send({ decision: 'APPROVED', opId: newOpId('zaad-approval') }).expect(201);
-  }
-
   async function assignedBeneficiary(): Promise<{ beneficiaryId: string; delegateCookie: string; missionId: string; deviceId: string }> {
     const { batchId, itemIds } = await createAndSendBatch(app, adminCookie, fx.associationAId, { items: [{ deviceType: DeviceType.REFRIGERATOR, spec: '18 قدم', sentQty: 1 }] });
     const confirmRes = await confirmBatchRequest(app, assocACookie, batchId, { items: [{ itemId: itemIds[0], receivedQty: 1, damagedQty: 0, missingQty: 0 }] });
@@ -91,8 +82,6 @@ describe('DELIVERY-RETURN — إرجاع جهاز للمستودع نهائيً�
     const { id: beneficiaryId, needIds } = await createBeneficiary(app, assocACookie, { associationId: fx.associationAId, deviceTypes: [DeviceType.REFRIGERATOR] });
     const reviewRes = await http().post(`/api/v1/beneficiaries/${beneficiaryId}/review`).set('Cookie', adminCookie).send({ opId: newOpId('rev'), beneficiaryDecision: 'APPROVED', needDecisions: [{ needId: needIds[0], decision: 'APPROVED' }] });
     if (reviewRes.status !== 201) throw new Error(`review failed: ${reviewRes.status} ${JSON.stringify(reviewRes.body)}`);
-    const listRes = await http().post(`/api/v1/beneficiaries/${beneficiaryId}/list-decision`).set('Cookie', adminCookie).send({ listType: 'MAIN', listRank: 1, reason: 'اختبار مسار الإرجاع', opId: newOpId('list') });
-    if (listRes.status !== 201) throw new Error(`list decision failed: ${listRes.status} ${JSON.stringify(listRes.body)}`);
 
     const device = await prisma.deviceUnit.findFirstOrThrow({ where: { associationId: fx.associationAId } });
 
@@ -113,34 +102,27 @@ describe('DELIVERY-RETURN — إرجاع جهاز للمستودع نهائيً�
     return { beneficiaryId, delegateCookie, missionId: assignRes.body.missionId, deviceId: device.id };
   }
 
-  it('طلب الإرجاع يحفظ العهدة حتى تأكيد الجمعية، ثم يحرر التخصيص ويعيد التقييم + المهمة RETURNED', async () => {
+  it('DELEGATE يُرجع جهازًا للمستودع ← الجهاز WAREHOUSE فعليًا + الاحتياج يعود لطابور التخصيص + المهمة RETURNED', async () => {
     const { beneficiaryId, delegateCookie, missionId, deviceId } = await assignedBeneficiary();
 
     const res = await http().post(`/api/v1/deliveries/${missionId}/return`).set('Cookie', delegateCookie).send({ notes: 'المستفيد انتقل خارج المنطقة', opId: newOpId('ret') });
     expect(res.status).toBe(201);
 
-    const pendingDevice = await prisma.deviceUnit.findUniqueOrThrow({ where: { id: deviceId } });
-    expect(pendingDevice.status).toBe(DeviceStatus.WITH_DELEGATE);
-    await http().post(`/api/v1/deliveries/${missionId}/confirm-return`).set('Cookie', assocACookie)
-      .send({ condition: 'GOOD', notes: 'تم استلام الجهاز فعليًا بحالة جيدة', opId: newOpId('confirm-return') }).expect(201);
-
     const device = await prisma.deviceUnit.findUniqueOrThrow({ where: { id: deviceId } });
-    // بعد تأكيد الإرجاع يصبح الجهاز حرًا، ثم يعيد المشغّل تخصيصه فورًا لنفس
-    // المستفيد المؤهل الوحيد؛ لذلك الحالة النهائية ALLOCATED لا WAREHOUSE.
-    expect(device.status).toBe(DeviceStatus.ALLOCATED);
+    expect(device.status).toBe(DeviceStatus.WAREHOUSE);
+    expect(device.currentLocationRef).toBeNull();
 
     const need = await prisma.beneficiaryNeed.findFirstOrThrow({ where: { beneficiaryId } });
-    expect(need.fulfillmentStatus).toBe(NeedFulfillmentStatus.AWAITING_DELEGATE_ASSIGNMENT);
+    expect(need.fulfillmentStatus).toBe(NeedFulfillmentStatus.AWAITING_DEVICE);
 
     const mission = await prisma.deliveryMission.findUniqueOrThrow({ where: { id: missionId } });
     expect(mission.status).toBe('RETURNED');
 
-    const releasedAllocation = await prisma.deviceAllocation.findFirst({ where: { deviceId, status: 'RELEASED', releaseReason: 'physical-return-confirmed' } });
-    expect(releasedAllocation).not.toBeNull();
-    const activeAllocation = await prisma.deviceAllocation.findFirst({ where: { deviceId, status: 'ACTIVE' } });
-    expect(activeAllocation?.beneficiaryId).toBe(beneficiaryId);
+    const allocation = await prisma.deviceAllocation.findFirst({ where: { deviceId }, orderBy: { allocatedAt: 'desc' } });
+    expect(allocation?.status).toBe('RELEASED');
+    expect(allocation?.releaseReason).toBe('delegate-return');
 
-    const movement = await prisma.deviceMovement.findFirstOrThrow({ where: { deviceId, referenceId: missionId, reason: 'physical-return-confirmed' } });
+    const movement = await prisma.deviceMovement.findFirstOrThrow({ where: { deviceId, referenceId: missionId, reason: 'delegate-return' } });
     expect(movement.fromLocationType).toBe('DELEGATE');
     expect(movement.toLocationType).toBe('WAREHOUSE');
   });
@@ -152,20 +134,13 @@ describe('DELIVERY-RETURN — إرجاع جهاز للمستودع نهائيً�
     const { id: otherBeneficiaryId, needIds: otherNeedIds } = await createBeneficiary(app, assocACookie, { associationId: fx.associationAId, deviceTypes: [DeviceType.REFRIGERATOR] });
     const otherReview = await http().post(`/api/v1/beneficiaries/${otherBeneficiaryId}/review`).set('Cookie', adminCookie).send({ opId: newOpId('rev2'), beneficiaryDecision: 'APPROVED', needDecisions: [{ needId: otherNeedIds[0], decision: 'APPROVED' }] });
     expect(otherReview.status).toBe(201);
-    const otherList = await http().post(`/api/v1/beneficiaries/${otherBeneficiaryId}/list-decision`).set('Cookie', adminCookie).send({ listType: 'MAIN', listRank: 2, reason: 'اختبار إعادة التخصيص', opId: newOpId('list2') });
-    expect(otherList.status).toBe(201);
     // بلا مخزون كافٍ بعد — الاحتياج يبقى AWAITING_DEVICE إلى أن يُحرَّر الجهاز أدناه.
     const otherNeedBefore = await prisma.beneficiaryNeed.findUniqueOrThrow({ where: { id: otherNeedIds[0] } });
-    expect(otherNeedBefore.fulfillmentStatus).toBe(NeedFulfillmentStatus.APPROVED_ENTITLEMENT);
+    expect(otherNeedBefore.fulfillmentStatus).toBe(NeedFulfillmentStatus.AWAITING_DEVICE);
 
     // استخدام مسار الإرجاع عبر ADMIN لتبسيط الاختبار (الدور مسموح أيضًا).
     const res = await http().post(`/api/v1/deliveries/${missionId}/return`).set('Cookie', adminCookie).send({ opId: newOpId('ret2') });
     expect(res.status).toBe(201);
-    const originalMission = await prisma.deliveryMission.findUniqueOrThrow({ where: { id: missionId }, select: { beneficiaryId: true } });
-    await http().post(`/api/v1/beneficiaries/${originalMission.beneficiaryId}/list-decision`).set('Cookie', adminCookie)
-      .send({ listType: 'REJECTED', reason: 'استبعاد من إعادة التخصيص بعد الإرجاع', opId: newOpId('exclude-original') }).expect(201);
-    await http().post(`/api/v1/deliveries/${missionId}/admin-return-override`).set('Cookie', adminCookie)
-      .send({ condition: 'GOOD', notes: 'تحقق إداري من الاستلام الفعلي', opId: newOpId('override-return') }).expect(201);
 
     const otherNeedAfter = await prisma.beneficiaryNeed.findUniqueOrThrow({ where: { id: otherNeedIds[0] } });
     expect(otherNeedAfter.fulfillmentStatus).toBe(NeedFulfillmentStatus.AWAITING_DELEGATE_ASSIGNMENT);
@@ -179,10 +154,8 @@ describe('DELIVERY-RETURN — إرجاع جهاز للمستودع نهائيً�
       .post(`/api/v1/deliveries/${missionId}/confirm`)
       .set('Cookie', delegateCookie)
       .field('opId', newOpId('confirm'))
-      .attach('proofPhoto', Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]), { filename: 'proof.jpg', contentType: 'image/jpeg' })
-      .attach('recipientSignature', Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]), { filename: 'signature.jpg', contentType: 'image/jpeg' });
+      .attach('proofPhoto', Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]), { filename: 'proof.jpg', contentType: 'image/jpeg' });
     expect(confirmRes.status).toBe(201);
-    await approveCompletedDelivery(missionId);
 
     const res = await http().post(`/api/v1/deliveries/${missionId}/return`).set('Cookie', delegateCookie).send({ opId: newOpId('ret3') });
     expect(res.status).toBe(409);
@@ -207,7 +180,7 @@ describe('DELIVERY-RETURN — إرجاع جهاز للمستودع نهائيً�
     expect(second.status).toBe(201);
     expect(second.body.attemptId).toBe(first.body.attemptId);
 
-    const attempts = await prisma.deliveryAttempt.count({ where: { missionId, status: 'PENDING_RETURN_APPROVAL' } });
+    const attempts = await prisma.deliveryAttempt.count({ where: { missionId, status: 'RETURNED' } });
     expect(attempts).toBe(1);
   });
 });

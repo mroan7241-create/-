@@ -1,11 +1,17 @@
-/** Jest e2e setup — executes before any test-file import. */
-import { assertE2eNotTargetingProduction } from './production-target.guard';
-
+/**
+ * setupFiles لِJest e2e — يُنفَّذ قبل أي `import` في ملف الاختبار نفسه،
+ * وهو المكان الوحيد الصالح لضبط OBJECT_STORAGE_* لأن
+ * `src/config/storage.config.ts` يقرأ process.env مرة واحدة عند أول
+ * import (module-level const)، أي قبل أي beforeAll.
+ *
+ * السلوك:
+ *  - محليًا (بلا Docker): لا شيء مضبوط مسبقًا → نستخدم s3rver على
+ *    127.0.0.1:9401 (يُشغَّل داخل الاختبارات نفسها).
+ *  - في CI: OBJECT_STORAGE_EXTERNAL=true مع MinIO حقيقي كـservice
+ *    container → نترك كل OBJECT_STORAGE_* كما ضبطها الـworkflow بلا مساس.
+ */
 export const TEST_S3_PORT = 9401;
 export const TEST_S3_BUCKET = 'alzad-platform-test';
-
-// MUST execute before any local environment override below.
-assertE2eNotTargetingProduction();
 
 if (process.env.OBJECT_STORAGE_EXTERNAL !== 'true') {
   process.env.OBJECT_STORAGE_ENDPOINT = `http://127.0.0.1:${TEST_S3_PORT}`;

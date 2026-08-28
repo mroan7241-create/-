@@ -1,5 +1,4 @@
 import { INestApplication } from '@nestjs/common';
-import request from 'supertest';
 import { prisma, ApplicationStatus } from '@alzad/db';
 import { LEGACY_APPLICATION_QUESTIONS } from '@alzad/shared';
 import { createTestApp } from './utils/bootstrap';
@@ -312,7 +311,7 @@ describe('NODE-2 — تقديم طلب الانضمام (عام)', () => {
     expect(submitBody).not.toMatch(/association-licenses/);
     expect(Object.keys(res.body).sort()).toEqual(['id', 'message', 'ok']);
 
-    const statusRes = await request(app.getHttpServer()).get(
+    const statusRes = await require('supertest')(app.getHttpServer()).get(
       `/api/v1/association-applications/status/${payload.clientRequestId}`,
     );
     const statusBody = JSON.stringify(statusRes.body);

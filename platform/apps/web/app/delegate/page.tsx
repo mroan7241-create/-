@@ -91,14 +91,14 @@ export default function DelegatePortalPage() {
     }
   }
 
-  /** طلب إرجاع؛ تبقى العهدة قائمة حتى تؤكد الجمعية الاستلام الفعلي. */
+  /** تخلٍّ نهائي — لا تراجع بعده من هنا (يبقى ممكنًا لاحقًا عبر تخصيص تلقائي جديد). */
   async function doReturn(mission: DeliveryMissionSummary) {
-    if (!window.confirm(`طلب إرجاع جهاز «${mission.beneficiary.name}»؟ ستبقى العهدة قائمة حتى تؤكد الجمعية الاستلام الفعلي.`)) return;
+    if (!window.confirm(`إرجاع جهاز «${mission.beneficiary.name}» نهائيًا للمستودع؟ لن تعود هذه المهمة تظهر لديك، وسيُعاد تقييم الاحتياج تلقائيًا.`)) return;
     try {
       await returnDelivery(mission.id);
       await load();
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : 'تعذّر طلب إرجاع الجهاز.');
+      setError(err instanceof ApiClientError ? err.message : 'تعذّر إرجاع الجهاز.');
     }
   }
 
@@ -107,7 +107,7 @@ export default function DelegatePortalPage() {
     setProofError('');
     try {
       const detail = await getDelivery(mission.id);
-      const deliveredAttempt = detail.attempts.find((a) => (a.status === 'DELIVERED' || a.status === 'DELIVERY_CLOSED') && a.hasProof);
+      const deliveredAttempt = detail.attempts.find((a) => a.status === 'DELIVERED' && a.hasProof);
       if (!deliveredAttempt) {
         setProofError('لا توجد صورة إثبات لهذا التسليم.');
         return;
@@ -124,7 +124,7 @@ export default function DelegatePortalPage() {
   const pendingHandover = (missions ?? []).filter((m) => m.status === 'PENDING_DELEGATE_ACKNOWLEDGEMENT');
   const active = (missions ?? []).filter((m) => m.status === 'OUT_WITH_DELEGATE');
   const failedMissions = (missions ?? []).filter((m) => m.status === 'DELIVERY_FAILED');
-  const delivered = (missions ?? []).filter((m) => m.status === 'DELIVERED' || m.status === 'DELIVERY_CLOSED');
+  const delivered = (missions ?? []).filter((m) => m.status === 'DELIVERED');
 
   return (
     <main style={{ maxWidth: 640, margin: '0 auto', padding: '16px 16px 60px' }}>
@@ -290,7 +290,6 @@ function MissionCard({
 
 function ConfirmDeliveryModal({ mission, onClose, onDone }: { mission: DeliveryMissionSummary; onClose: () => void; onDone: () => void }) {
   const [file, setFile] = useState<File | null>(null);
-  const [signature, setSignature] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [pledged, setPledged] = useState(false);
   const [error, setError] = useState('');
@@ -315,14 +314,14 @@ function ConfirmDeliveryModal({ mission, onClose, onDone }: { mission: DeliveryM
     setPreviewUrl(URL.createObjectURL(f));
   }
 
-  const canSubmit = !!file && !!signature && pledged;
+  const canSubmit = !!file && pledged;
 
   async function submit() {
-    if (!file || !signature) return;
+    if (!file) return;
     setBusy(true);
     setError('');
     try {
-      await confirmDelivery(mission.id, file, signature);
+      await confirmDelivery(mission.id, file);
       onDone();
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : 'تعذّر تأكيد التسليم.');
@@ -348,12 +347,6 @@ function ConfirmDeliveryModal({ mission, onClose, onDone }: { mission: DeliveryM
           // eslint-disable-next-line @next/next/no-img-element
           <img src={previewUrl} alt="معاينة صورة الإثبات" style={{ maxWidth: '100%', borderRadius: 'var(--r-sm)', border: '1px solid var(--line)' }} />
         )}
-
-        <label style={labelStyle}>
-          صورة توقيع المستلم
-          <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(e) => setSignature(e.target.files?.[0] ?? null)} style={inputStyle} />
-          <span style={mutedStyle}>التوقيع إلزامي ويُحفظ كملف خاص.</span>
-        </label>
 
         <label style={{ ...labelStyle, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <input type="checkbox" checked={pledged} onChange={(e) => setPledged(e.target.checked)} />

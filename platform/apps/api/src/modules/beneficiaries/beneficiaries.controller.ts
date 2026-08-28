@@ -18,7 +18,6 @@ import {
   UpdateBeneficiaryDto,
   UpdateBeneficiaryLocationDto,
 } from './dto/beneficiary.dto';
-import { PromoteReserveDto, ReplaceBeneficiaryDto, SetBeneficiaryListDto } from './dto/beneficiary-list.dto';
 
 /**
  * المستفيدون واحتياجاتهم — NODE-3.
@@ -130,18 +129,6 @@ export class BeneficiariesController {
   async review(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ReviewBeneficiaryDto) {
     return this.beneficiaries.reviewBeneficiary(ctx, id, dto);
   }
-
-  @Post(':id/list-decision')
-  @Roles(AccountRole.ADMIN)
-  setList(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: SetBeneficiaryListDto) { return this.beneficiaries.setListDecision(ctx, id, dto.listType, dto.listRank, dto.reason, dto.opId); }
-
-  @Post(':id/promote-reserve')
-  @Roles(AccountRole.ADMIN)
-  promote(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: PromoteReserveDto) { return this.beneficiaries.promoteReserve(ctx, id, dto.listRank, dto.reason, dto.opId); }
-
-  @Post(':id/replace')
-  @Roles(AccountRole.ADMIN)
-  replace(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ReplaceBeneficiaryDto) { return this.beneficiaries.replaceBeneficiary(ctx, id, dto.newBeneficiaryId, dto.escalationCaseId, dto.reason, dto.opId); }
 
   @Delete('needs/:needId')
   @Roles(AccountRole.ADMIN, AccountRole.ASSOCIATION)

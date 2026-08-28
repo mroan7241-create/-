@@ -1,5 +1,5 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Query, UploadedFiles, UseInterceptors } from '@nestjs/common';
-import { FileFieldsInterceptor } from '@nestjs/platform-express';
+import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AccountRole } from '@alzad/db';
 import { Public } from '../../common/decorators/public.decorator';
@@ -11,7 +11,6 @@ import { LICENSE_FILE_MAX_BYTES } from '../files/file-validation.util';
 import { ApplicationsService } from './applications.service';
 import { ReviewApplicationDto, SubmitApplicationDto } from './dto/submit-application.dto';
 import { ListApplicationsQueryDto } from './dto/list-applications-query.dto';
-import { EligibilityDecisionDto, EvaluationDto, SelectionCommitDto } from './dto/application-workflow.dto';
 
 @ApiTags('applications')
 @Controller()
@@ -21,10 +20,9 @@ export class ApplicationsController {
   @Public()
   @Post('association-applications')
   @HttpCode(HttpStatus.OK)
-  @UseInterceptors(FileFieldsInterceptor([{ name: 'licenseFile', maxCount: 1 }, { name: 'initialBeneficiaryFile', maxCount: 1 }], { limits: { fileSize: LICENSE_FILE_MAX_BYTES + 1024 } }))
+  @UseInterceptors(FileInterceptor('licenseFile', { limits: { fileSize: LICENSE_FILE_MAX_BYTES + 1024 } }))
   @ApiOperation({ summary: 'تقديم طلب انضمام جمعية — عام، multipart/form-data' })
-  async submit(@Body() dto: SubmitApplicationDto, @UploadedFiles() files?: { licenseFile?: Express.Multer.File[]; initialBeneficiaryFile?: Express.Multer.File[] }) {
-    const file = files?.licenseFile?.[0];
+  async submit(@Body() dto: SubmitApplicationDto, @UploadedFile() file?: Express.Multer.File) {
     if (!file && !(dto.website && dto.website.trim())) {
       throw new ApiError('APPLICATION_LICENSE_INVALID', 'أرفق صورة الترخيص بصيغة JPG أو PNG أو WEBP', 400);
     }
@@ -47,14 +45,6 @@ export class ApplicationsController {
         phone: dto.phone,
         email: dto.email,
         contactName: dto.contactName,
-        address: dto.address,
-        serviceScope: dto.serviceScope,
-        coordinatorPhone: dto.coordinatorPhone,
-        coordinatorEmail: dto.coordinatorEmail,
-        coordinatorTitle: dto.coordinatorTitle,
-        beneficiaryDatabaseUpdatedAt: dto.beneficiaryDatabaseUpdatedAt,
-        approxBeneficiaryCount: dto.approxBeneficiaryCount,
-        approxNeedCount: dto.approxNeedCount,
         notes: dto.notes,
         licenseNumber: dto.licenseNumber,
         licenseExpiryDate: dto.licenseExpiryDate,
@@ -64,7 +54,6 @@ export class ApplicationsController {
       },
       file?.buffer ?? Buffer.alloc(0),
       file?.mimetype,
-      files?.initialBeneficiaryFile?.[0],
     );
   }
 
@@ -101,27 +90,5 @@ export class ApplicationsController {
   @ApiOperation({ summary: 'قبول/رفض طلب انضمام — ADMIN فقط، نهائي، idempotent عبر opId' })
   async review(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ReviewApplicationDto) {
     return this.applications.reviewApplication(ctx, id, dto.decision, dto.reason, dto.opId);
-  }
-
-  @Post('association-applications/:id/eligibility')
-  @Roles(AccountRole.ADMIN)
-  eligibility(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: EligibilityDecisionDto) {
-    return this.applications.decideEligibility(ctx, id, dto.decision, dto.notes, dto.opId);
-  }
-
-  @Post('association-applications/:id/evaluation')
-  @Roles(AccountRole.ADMIN)
-  evaluation(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: EvaluationDto) {
-    return this.applications.evaluate(ctx, id, dto, dto.opId);
-  }
-
-  @Post('association-applications/selection/preview')
-  @Roles(AccountRole.ADMIN)
-  selectionPreview() { return this.applications.previewSelection(); }
-
-  @Post('association-applications/selection/commit')
-  @Roles(AccountRole.ADMIN)
-  selectionCommit(@CurrentUser() ctx: AuthContext, @Body() dto: SelectionCommitDto) {
-    return this.applications.commitSelection(ctx, dto.mainTargetCount, dto.supporterApprovalReference, dto.opId);
   }
 }

@@ -1,4 +1,2 @@
--- GATE-B Phase A: dual custody acknowledgement — handover recorded by Association,
--- physical custody not transferred until the Delegate separately confirms receipt.
--- See ALZAD Gate A §27 (Decision A) and audit/final/14-PHASE-A-IMPLEMENTATION-BLUEPRINT.md §3
+-- Assignment records the intended handover; custody moves only after the delegate confirms receipt.
 ALTER TYPE "DeliveryStatus" ADD VALUE 'PENDING_DELEGATE_ACKNOWLEDGEMENT';
