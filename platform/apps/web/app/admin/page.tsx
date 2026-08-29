@@ -71,6 +71,24 @@ interface Counts {
   deliveriesFailed: number;
 }
 
+/**
+ * Hostinger/Supavisor production has a deliberately bounded database pool.
+ * Each paginated API request performs a rows query plus a count query, so
+ * firing every dashboard card at once can exhaust Prisma's pool and turn a
+ * healthy empty dashboard into intermittent HTTP 500 responses. Keep the
+ * browser-side fan-out below the pool boundary while preserving the same API
+ * contracts and exact totals.
+ */
+async function loadDashboardTotals(paths: string[], batchSize = 4): Promise<number[]> {
+  const totals: number[] = [];
+  for (let offset = 0; offset < paths.length; offset += batchSize) {
+    const batch = paths.slice(offset, offset + batchSize);
+    const results = await Promise.all(batch.map((path) => apiFetch<Paginated<unknown>>(path)));
+    totals.push(...results.map((result) => result.total));
+  }
+  return totals;
+}
+
 export default function AdminDashboardPage() {
   const [dashboardLoadedAt] = useState(() => Date.now());
   const { user, loading: guardLoading } = useRoleGuard(['ADMIN']);
@@ -117,45 +135,45 @@ export default function AdminDashboardPage() {
           preparingDeliveries,
           outDeliveries,
           failedDeliveries,
-        ] = await Promise.all([
-          apiFetch<Paginated<unknown>>('/association-applications?status=UNDER_REVIEW&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/associations?pageSize=1'),
-          apiFetch<Paginated<unknown>>('/associations?status=ACTIVE&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/associations?status=INACTIVE&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/beneficiaries?pageSize=1'),
-          apiFetch<Paginated<unknown>>('/beneficiaries?reviewStatus=APPROVED&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/beneficiaries?reviewStatus=UNDER_REVIEW&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/beneficiaries?reviewStatus=REJECTED&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/inventory/devices?status=WAREHOUSE&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/inventory/devices?status=ALLOCATED&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/inventory/devices?status=DAMAGED&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/receipts?status=AWAITING_ASSOCIATION_CONFIRMATION&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/delegates?pageSize=1'),
-          apiFetch<Paginated<unknown>>('/inventory/devices?status=WITH_DELEGATE&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/inventory/devices?status=DELIVERED&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/deliveries?status=PREPARING&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/deliveries?status=OUT_WITH_DELEGATE&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/deliveries?status=DELIVERY_FAILED&pageSize=1'),
+        ] = await loadDashboardTotals([
+          '/association-applications?status=UNDER_REVIEW&pageSize=1',
+          '/associations?pageSize=1',
+          '/associations?status=ACTIVE&pageSize=1',
+          '/associations?status=INACTIVE&pageSize=1',
+          '/beneficiaries?pageSize=1',
+          '/beneficiaries?reviewStatus=APPROVED&pageSize=1',
+          '/beneficiaries?reviewStatus=UNDER_REVIEW&pageSize=1',
+          '/beneficiaries?reviewStatus=REJECTED&pageSize=1',
+          '/inventory/devices?status=WAREHOUSE&pageSize=1',
+          '/inventory/devices?status=ALLOCATED&pageSize=1',
+          '/inventory/devices?status=DAMAGED&pageSize=1',
+          '/receipts?status=AWAITING_ASSOCIATION_CONFIRMATION&pageSize=1',
+          '/delegates?pageSize=1',
+          '/inventory/devices?status=WITH_DELEGATE&pageSize=1',
+          '/inventory/devices?status=DELIVERED&pageSize=1',
+          '/deliveries?status=PREPARING&pageSize=1',
+          '/deliveries?status=OUT_WITH_DELEGATE&pageSize=1',
+          '/deliveries?status=DELIVERY_FAILED&pageSize=1',
         ]);
         setCounts({
-          pendingApplications: pendingApps.total,
-          associations: allAssoc.total,
-          activeAssociations: activeAssoc.total,
-          inactiveAssociations: inactiveAssoc.total,
-          totalBeneficiaries: totalBen.total,
-          approvedBeneficiaries: approvedBen.total,
-          beneficiariesPendingReview: pendingBen.total,
-          rejectedBeneficiaries: rejectedBen.total,
-          warehouseDevices: whDevices.total,
-          allocatedDevices: allocatedDevices.total,
-          damagedDevices: damagedDevices.total,
-          receiptsAwaitingConfirmation: awaitingReceipts.total,
-          delegates: delegates.total,
-          devicesWithDelegate: withDelegate.total,
-          devicesDelivered: delivered.total,
-          deliveriesPreparing: preparingDeliveries.total,
-          deliveriesOutWithDelegate: outDeliveries.total,
-          deliveriesFailed: failedDeliveries.total,
+          pendingApplications: pendingApps,
+          associations: allAssoc,
+          activeAssociations: activeAssoc,
+          inactiveAssociations: inactiveAssoc,
+          totalBeneficiaries: totalBen,
+          approvedBeneficiaries: approvedBen,
+          beneficiariesPendingReview: pendingBen,
+          rejectedBeneficiaries: rejectedBen,
+          warehouseDevices: whDevices,
+          allocatedDevices,
+          damagedDevices,
+          receiptsAwaitingConfirmation: awaitingReceipts,
+          delegates,
+          devicesWithDelegate: withDelegate,
+          devicesDelivered: delivered,
+          deliveriesPreparing: preparingDeliveries,
+          deliveriesOutWithDelegate: outDeliveries,
+          deliveriesFailed: failedDeliveries,
         });
       } catch {
         setError('تعذّر تحميل بيانات لوحة التحكم.');
