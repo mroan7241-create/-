@@ -8,6 +8,16 @@ import { AppShell } from '../components/AppShell';
 import { LoadingState, ErrorState } from '../components/States';
 import { actionLabel } from '../lib/action-labels';
 
+async function loadDashboardTotals(paths: string[], batchSize = 4): Promise<number[]> {
+  const totals: number[] = [];
+  for (let offset = 0; offset < paths.length; offset += batchSize) {
+    const batch = paths.slice(offset, offset + batchSize);
+    const results = await Promise.all(batch.map((path) => apiFetch<Paginated<unknown>>(path)));
+    totals.push(...results.map((result) => result.total));
+  }
+  return totals;
+}
+
 /**
  * لوحة تحكم ASSOCIATION — منقولة حرفيًا (البنية/التسلسل البصري) من
  * platform/docs/design/association-r2-2026-08-16.html: هوية مختلفة عمدًا عن
@@ -57,29 +67,29 @@ export default function AssociationDashboardPage() {
           pendingApproval,
           pendingReturnApproval,
           deferred,
-        ] = await Promise.all([
-          apiFetch<Paginated<unknown>>('/beneficiaries?pageSize=1'),
-          apiFetch<Paginated<unknown>>('/beneficiaries?reviewStatus=UNDER_REVIEW&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/receipts?status=AWAITING_ASSOCIATION_CONFIRMATION&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/inventory/devices?status=ALLOCATED&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/delegates?pageSize=1'),
-          apiFetch<Paginated<unknown>>('/inventory/devices?status=WITH_DELEGATE&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/inventory/devices?status=DELIVERED&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/deliveries?status=PENDING_DELIVERY_APPROVAL&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/deliveries?status=PENDING_RETURN_APPROVAL&pageSize=1'),
-          apiFetch<Paginated<unknown>>('/deliveries?status=DEFERRED&pageSize=1'),
+        ] = await loadDashboardTotals([
+          '/beneficiaries?pageSize=1',
+          '/beneficiaries?reviewStatus=UNDER_REVIEW&pageSize=1',
+          '/receipts?status=AWAITING_ASSOCIATION_CONFIRMATION&pageSize=1',
+          '/inventory/devices?status=ALLOCATED&pageSize=1',
+          '/delegates?pageSize=1',
+          '/inventory/devices?status=WITH_DELEGATE&pageSize=1',
+          '/inventory/devices?status=DELIVERED&pageSize=1',
+          '/deliveries?status=PENDING_DELIVERY_APPROVAL&pageSize=1',
+          '/deliveries?status=PENDING_RETURN_APPROVAL&pageSize=1',
+          '/deliveries?status=DEFERRED&pageSize=1',
         ]);
         setCounts({
-          beneficiariesTotal: allBen.total,
-          beneficiariesPendingReview: pendingBen.total,
-          receiptsAwaitingConfirmation: awaitingReceipts.total,
-          devicesAllocated: allocatedDevices.total,
-          delegates: delegates.total,
-          devicesWithDelegate: withDelegate.total,
-          devicesDelivered: delivered.total,
-          deliveriesPendingApproval: pendingApproval.total,
-          deliveriesPendingReturnApproval: pendingReturnApproval.total,
-          deliveriesDeferred: deferred.total,
+          beneficiariesTotal: allBen,
+          beneficiariesPendingReview: pendingBen,
+          receiptsAwaitingConfirmation: awaitingReceipts,
+          devicesAllocated: allocatedDevices,
+          delegates,
+          devicesWithDelegate: withDelegate,
+          devicesDelivered: delivered,
+          deliveriesPendingApproval: pendingApproval,
+          deliveriesPendingReturnApproval: pendingReturnApproval,
+          deliveriesDeferred: deferred,
         });
       } catch {
         setError('تعذّر تحميل بيانات لوحة التحكم.');
