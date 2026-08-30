@@ -56,7 +56,7 @@ export class DeliveriesController {
   @Post(':id/confirm')
   @Roles(AccountRole.DELEGATE)
   @UseInterceptors(FileFieldsInterceptor([{ name: 'proofPhoto', maxCount: 1 }, { name: 'recipientSignature', maxCount: 1 }], { limits: { fileSize: RECEIPT_EVIDENCE_MAX_BYTES + 1024 } }))
-  @ApiOperation({ summary: 'تأكيد التسليم — DELEGATE فقط ولمهمته حصرًا، صورة إثبات إلزامية' })
+  @ApiOperation({ summary: 'تأكيد التسليم — DELEGATE فقط ولمهمته حصرًا، الصورة والتوقيع والإقرار إلزامية' })
   async confirm(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ConfirmDeliveryDto, @UploadedFiles() files?: ConfirmFiles) {
     const proof = files?.proofPhoto?.[0];
     const signature = files?.recipientSignature?.[0];

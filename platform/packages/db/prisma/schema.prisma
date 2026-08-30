@@ -267,10 +267,12 @@ enum OutboxEventType {
   RETURN_REQUESTED
   ESCALATION_OPENED
   SLA_ALERT_DUE
+  ALLOCATION_RETRY_DUE
 }
 
 enum OutboxEventStatus {
   PENDING
+  PROCESSING
   PROCESSED
   FAILED
 }
@@ -1230,8 +1232,11 @@ model OutboxEvent {
   processedAt  DateTime?         @map("processed_at")
   attempts     Int               @default(0)
   lastError    String?           @map("last_error")
+  nextAttemptAt DateTime         @default(now()) @map("next_attempt_at")
+  lockedAt     DateTime?         @map("locked_at")
+  failedAt     DateTime?         @map("failed_at")
 
-  @@index([status, createdAt])
+  @@index([status, nextAttemptAt, createdAt])
   @@map("outbox_events")
 }
 
@@ -1527,8 +1532,8 @@ model Notification {
   createdAt          DateTime             @default(now()) @map("created_at")
   readAt             DateTime?            @map("read_at")
 
-  account            Account? @relation(fields: [accountId], references: [id])
-  association        Association? @relation(fields: [associationId], references: [id])
+  account            Account? @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  association        Association? @relation(fields: [associationId], references: [id], onDelete: Cascade)
 
   @@index([accountId, readAt, createdAt])
   @@index([associationId, audienceRole, readAt])

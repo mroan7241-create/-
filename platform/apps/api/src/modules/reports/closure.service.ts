@@ -9,6 +9,8 @@ import { ClosureReadinessService } from './closure-readiness.service';
 export class ClosureService {
   constructor(private readonly readiness: ClosureReadinessService, private readonly idem: IdempotencyService) {}
 
+  getProjectReport() { return prisma.projectClosureReport.findUnique({ where: { projectKey: 'electrical-appliances' } }); }
+
   async snapshot(participationId: string) {
     const participation = await prisma.projectParticipation.findUnique({ where: { id: participationId } });
     if (!participation?.associationId) throw new ApiError('PARTICIPATION_NOT_OPERATIONAL', 'المشاركة غير تشغيلية', 409);

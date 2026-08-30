@@ -28,5 +28,6 @@ export class ReportsController {
   @Post('closure/organization/:id/transition') @Roles(AccountRole.ADMIN,AccountRole.ASSOCIATION) orgTransition(@CurrentUser()ctx:AuthContext,@Param('id',ParseUUIDPipe)id:string,@Body()dto:OrganizationTransitionDto){return this.closure.transitionOrganization(ctx,id,dto.status,dto.opId)}
   @Post('closure/organization/:id/reopen') @Roles(AccountRole.ADMIN) reopen(@CurrentUser()ctx:AuthContext,@Param('id',ParseUUIDPipe)id:string,@Body()dto:ReopenDto){return this.closure.reopen(ctx,id,dto.reason)}
   @Post('closure/project/generate') @Roles(AccountRole.ADMIN) project(@CurrentUser()ctx:AuthContext){return this.closure.generateProject(ctx)}
+  @Get('closure/project') @Roles(AccountRole.ADMIN) projectReport(){return this.closure.getProjectReport()}
   @Post('closure/project/transition') @Roles(AccountRole.ADMIN) projectTransition(@CurrentUser()ctx:AuthContext,@Body()dto:ProjectTransitionDto){return this.closure.transitionProject(ctx,dto.status,dto.donorFeedbackNotes)}
 }

@@ -21,6 +21,9 @@ export class ConfirmHandoverDto {
 }
 
 export class ConfirmDeliveryDto {
+  @IsIn(['true'])
+  acknowledgement!: string;
+
   @IsString()
   opId!: string;
 }

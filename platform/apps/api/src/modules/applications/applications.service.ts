@@ -382,8 +382,10 @@ export class ApplicationsService {
 
   async commitSelection(ctx: AuthContext, mainTargetCount: number, supporterApprovalReferenceRaw: string, opId: string) {
     const threshold = await this.settings.requireNumber('selection.passThreshold');
+    const configuredMainTargetCount = await this.settings.requireNumber('selection.mainTargetCount');
     const supporterApprovalReference = requiredText(supporterApprovalReferenceRaw, 'مرجع اعتماد الداعم', 200);
     if (!Number.isInteger(mainTargetCount) || mainTargetCount < 1) throw new ApiError('SELECTION_TARGET_INVALID', 'عدد القائمة الأساسية غير صالح', 400);
+    if (mainTargetCount !== configuredMainTargetCount) throw new ApiError('SELECTION_TARGET_MISMATCH', 'عدد القائمة الأساسية لا يطابق السعة المعتمدة في إعدادات الاختيار', 409);
     return prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
       const claim = await this.idempotency.claim<{ ok: true; main: number; reserve: number; rejected: number }>(tx, ctx.accountId, 'application-selection', opId, { mainTargetCount, supporterApprovalReference, threshold });
@@ -651,6 +653,11 @@ function mapApplicationSummary(row: {
   pledgeAcceptedAt: Date | null;
   answers?: { questionKey: string; answer: boolean }[];
   licenseFile?: { id: string } | null;
+  eligibilityStatus?: EligibilityStatus;
+  eligibilityNotes?: string | null;
+  evaluationScore?: Prisma.Decimal | number | null;
+  evaluationRank?: number | null;
+  selectionList?: AssociationSelectionList;
 }) {
   const answersList = LEGACY_APPLICATION_QUESTIONS.map((q) => {
     const found = row.answers?.find((a) => a.questionKey === q.key);
@@ -686,6 +693,11 @@ function mapApplicationSummary(row: {
     hasLicenseFile: !!row.licenseFile,
     pledgeAccepted: row.pledgeAccepted,
     pledgedAt: row.pledgeAcceptedAt,
+    eligibilityStatus: row.eligibilityStatus ?? EligibilityStatus.PENDING,
+    eligibilityNotes: row.eligibilityNotes ?? null,
+    evaluationScore: row.evaluationScore == null ? null : Number(row.evaluationScore),
+    evaluationRank: row.evaluationRank ?? null,
+    selectionList: row.selectionList ?? AssociationSelectionList.NONE,
   };
 }
 

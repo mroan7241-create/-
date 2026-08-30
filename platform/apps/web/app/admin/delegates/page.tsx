@@ -15,6 +15,7 @@ import {
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
 import { AppShell } from '../../components/AppShell';
+import { ConfirmDialog, type ConfirmDialogProps } from '../../components/ConfirmDialog';
 import { AssociationSelect } from '../../lib/association-select';
 import { initialQueryParam } from '../../lib/query';
 import { buildWhatsAppShareUrl, delegateWelcomeMessage } from '../../lib/credential-share';
@@ -53,6 +54,7 @@ export default function AdminDelegatesPage() {
 
   const [editing, setEditing] = useState<DelegateSummary | 'new' | null>(null);
   const [revealedCode, setRevealedCode] = useState<{ name: string; code: string; phone: string } | null>(null);
+  const [confirmation, setConfirmation] = useState<Omit<ConfirmDialogProps, 'onCancel'> | null>(null);
 
   const load = useCallback(async () => {
     setListError(null);
@@ -67,27 +69,37 @@ export default function AdminDelegatesPage() {
     if (user) void load();
   }, [user, load]);
 
-  async function toggleStatus(row: DelegateSummary) {
+  function toggleStatus(row: DelegateSummary) {
     const next = row.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
-    const confirmed = window.confirm(next === 'SUSPENDED' ? `تعطيل «${row.name}» سيُنهي جلسته فورًا. متابعة؟` : `إعادة تفعيل «${row.name}»؟`);
-    if (!confirmed) return;
-    try {
-      await setDelegateStatus(row.id, next);
-      setNotice(next === 'SUSPENDED' ? 'تم تعطيل المندوب وإنهاء جلسته.' : 'تم تفعيل المندوب.');
-      await load();
-    } catch (err) {
-      setListError(err instanceof ApiClientError ? err.message : 'تعذّر تغيير حالة المندوب.');
-    }
+    setConfirmation({
+      title: next === 'SUSPENDED' ? 'تأكيد تعطيل المندوب' : 'تأكيد تفعيل المندوب',
+      message: next === 'SUSPENDED' ? `تعطيل «${row.name}» سيُنهي جلسته فورًا. متابعة؟` : `إعادة تفعيل «${row.name}»؟`,
+      confirmLabel: next === 'SUSPENDED' ? 'تعطيل' : 'تفعيل',
+      tone: next === 'SUSPENDED' ? 'danger' : 'primary',
+      onConfirm: async () => {
+        try {
+          await setDelegateStatus(row.id, next);
+          setNotice(next === 'SUSPENDED' ? 'تم تعطيل المندوب وإنهاء جلسته.' : 'تم تفعيل المندوب.');
+          setConfirmation(null);
+          await load();
+        } catch (err) { setListError(err instanceof ApiClientError ? err.message : 'تعذّر تغيير حالة المندوب.'); }
+      },
+    });
   }
 
-  async function regenerateCode(row: DelegateSummary) {
-    if (!window.confirm(`إعادة توليد رمز دخول «${row.name}»؟ الرمز الحالي سيتوقف عن العمل فورًا، وستُنهى أي جلسة مفتوحة له.`)) return;
-    try {
-      const res = await regenerateDelegateCode(row.id);
-      setRevealedCode({ name: row.name, code: res.accessCode, phone: row.phone ?? '' });
-    } catch (err) {
-      setListError(err instanceof ApiClientError ? err.message : 'تعذّرت إعادة توليد الرمز.');
-    }
+  function regenerateCode(row: DelegateSummary) {
+    setConfirmation({
+      title: 'تأكيد إعادة توليد رمز الدخول',
+      message: `إعادة توليد رمز دخول «${row.name}»؟ الرمز الحالي سيتوقف عن العمل فورًا، وستُنهى أي جلسة مفتوحة له.`,
+      confirmLabel: 'إعادة توليد الرمز', tone: 'danger',
+      onConfirm: async () => {
+        try {
+          const res = await regenerateDelegateCode(row.id);
+          setConfirmation(null);
+          setRevealedCode({ name: row.name, code: res.accessCode, phone: row.phone ?? '' });
+        } catch (err) { setListError(err instanceof ApiClientError ? err.message : 'تعذّرت إعادة توليد الرمز.'); }
+      },
+    });
   }
 
   if (guardLoading || !user) return null;
@@ -227,6 +239,7 @@ export default function AdminDelegatesPage() {
           </section>
         </div>
       )}
+      {confirmation && <ConfirmDialog {...confirmation} onCancel={() => setConfirmation(null)} />}
     </AppShell>
   );
 }

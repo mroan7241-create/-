@@ -11,6 +11,7 @@ import {
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
 import { AppShell } from '../../components/AppShell';
+import { ConfirmDialog, type ConfirmDialogProps } from '../../components/ConfirmDialog';
 import { initialQueryParam } from '../../lib/query';
 import { associationAcceptMessage, buildWhatsAppShareUrl } from '../../lib/credential-share';
 import {
@@ -71,6 +72,7 @@ export default function AdminAssociationsPage() {
 
   const [editing, setEditing] = useState<AssociationSummary | 'new' | null>(null);
   const [resetResult, setResetResult] = useState<{ name: string; password: string; phone: string; email: string } | null>(null);
+  const [confirmation, setConfirmation] = useState<Omit<ConfirmDialogProps, 'onCancel'> | null>(null);
 
   const load = useCallback(async () => {
     setListError(null);
@@ -91,31 +93,31 @@ export default function AdminAssociationsPage() {
     }
   }, [user, load]);
 
-  async function toggleStatus(row: AssociationSummary) {
+  function toggleStatus(row: AssociationSummary) {
     const next = row.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
-    const confirmed = window.confirm(
-      next === 'INACTIVE'
+    setConfirmation({
+      title: next === 'INACTIVE' ? 'تأكيد تعطيل الجمعية' : 'تأكيد تفعيل الجمعية',
+      message: next === 'INACTIVE'
         ? `تعطيل «${row.name}» سيُنهي فورًا كل جلسات حسابها وحسابات مندوبيها. متابعة؟`
         : `إعادة تفعيل «${row.name}»؟ لن تُستعاد الجلسات القديمة — يلزم تسجيل دخول جديد.`,
-    );
-    if (!confirmed) return;
-    try {
-      await apiFetch(`/associations/${row.id}`, { method: 'PATCH', body: JSON.stringify({ status: next }) });
-      setNotice(next === 'INACTIVE' ? 'تم تعطيل الجمعية وإنهاء جلساتها.' : 'تم تفعيل الجمعية.');
-      await load();
-    } catch (err) {
-      setListError(err instanceof ApiClientError ? err.message : 'تعذّر تغيير حالة الجمعية.');
-    }
+      confirmLabel: next === 'INACTIVE' ? 'تعطيل' : 'تفعيل', tone: next === 'INACTIVE' ? 'danger' : 'primary',
+      onConfirm: async () => {
+        try { await apiFetch(`/associations/${row.id}`, { method: 'PATCH', body: JSON.stringify({ status: next }) }); setNotice(next === 'INACTIVE' ? 'تم تعطيل الجمعية وإنهاء جلساتها.' : 'تم تفعيل الجمعية.'); setConfirmation(null); await load(); }
+        catch (err) { setListError(err instanceof ApiClientError ? err.message : 'تعذّر تغيير حالة الجمعية.'); }
+      },
+    });
   }
 
-  async function resetPassword(row: AssociationSummary) {
-    if (!window.confirm(`إعادة تعيين كلمة مرور حساب «${row.name}»؟ ستظهر كلمة المرور الجديدة مرة واحدة فقط.`)) return;
-    try {
-      const res = await apiFetch<{ temporaryPassword: string }>(`/auth/associations/${row.id}/reset-password`, { method: 'POST' });
-      setResetResult({ name: row.name, password: res.temporaryPassword, phone: row.phone ?? '', email: row.email ?? '' });
-    } catch (err) {
-      setListError(err instanceof ApiClientError ? err.message : 'تعذّرت إعادة تعيين كلمة المرور.');
-    }
+  function resetPassword(row: AssociationSummary) {
+    setConfirmation({
+      title: 'تأكيد إعادة تعيين كلمة المرور',
+      message: `إعادة تعيين كلمة مرور حساب «${row.name}»؟ ستظهر كلمة المرور الجديدة مرة واحدة فقط.`,
+      confirmLabel: 'إعادة تعيين كلمة المرور', tone: 'danger',
+      onConfirm: async () => {
+        try { const res = await apiFetch<{ temporaryPassword: string }>(`/auth/associations/${row.id}/reset-password`, { method: 'POST' }); setConfirmation(null); setResetResult({ name: row.name, password: res.temporaryPassword, phone: row.phone ?? '', email: row.email ?? '' }); }
+        catch (err) { setListError(err instanceof ApiClientError ? err.message : 'تعذّرت إعادة تعيين كلمة المرور.'); }
+      },
+    });
   }
 
   if (guardLoading || !user) return null;
@@ -293,6 +295,7 @@ export default function AdminAssociationsPage() {
           </section>
         </div>
       )}
+      {confirmation && <ConfirmDialog {...confirmation} onCancel={() => setConfirmation(null)} />}
     </AppShell>
   );
 }

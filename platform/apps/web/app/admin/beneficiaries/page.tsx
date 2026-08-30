@@ -66,6 +66,8 @@ export default function AdminBeneficiariesPage() {
   const [detail, setDetail] = useState<BeneficiaryDetail | null>(null);
   const [bulkResult, setBulkResult] = useState<BulkReviewResponse | null>(null);
   const [busy, setBusy] = useState(false);
+  const [bulkDecision, setBulkDecision] = useState<'APPROVED' | 'REJECTED' | null>(null);
+  const [bulkReason, setBulkReason] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -119,14 +121,8 @@ export default function AdminBeneficiariesPage() {
   async function runBulk(decision: 'APPROVED' | 'REJECTED') {
     const ids = [...selected];
     if (ids.length === 0) return;
-
-    let reason = '';
-    if (decision === 'REJECTED') {
-      reason = window.prompt(`سبب رفض ${ids.length} مستفيد (إلزامي — يُسجَّل على المستفيد وكل احتياجاته):`) ?? '';
-      if (!reason.trim()) return;
-    } else if (!window.confirm(`اعتماد ${ids.length} مستفيد مع اعتماد كل احتياجاتهم المعلَّقة؟`)) {
-      return;
-    }
+    const reason = bulkReason;
+    if (decision === 'REJECTED' && !reason.trim()) return;
 
     setBusy(true);
     setListError(null);
@@ -157,6 +153,8 @@ export default function AdminBeneficiariesPage() {
       });
       setBulkResult(res);
       setSelected(new Set());
+      setBulkDecision(null);
+      setBulkReason('');
       await load();
     } catch (err) {
       setListError(err instanceof ApiClientError ? err.message : 'تعذّرت المراجعة بالجملة.');
@@ -261,10 +259,10 @@ export default function AdminBeneficiariesPage() {
           }}
         >
           <strong>{selected.size} مستفيد محدَّد</strong>
-          <button type="button" style={primaryButtonStyle} disabled={busy} onClick={() => void runBulk('APPROVED')}>
+          <button type="button" style={primaryButtonStyle} disabled={busy} onClick={() => setBulkDecision('APPROVED')}>
             اعتماد الكل
           </button>
-          <button type="button" style={secondaryButtonStyle} disabled={busy} onClick={() => void runBulk('REJECTED')}>
+          <button type="button" style={secondaryButtonStyle} disabled={busy} onClick={() => setBulkDecision('REJECTED')}>
             رفض الكل
           </button>
           <button type="button" style={secondaryButtonStyle} onClick={() => setSelected(new Set())}>
@@ -390,6 +388,12 @@ export default function AdminBeneficiariesPage() {
           }}
         />
       )}
+      {bulkDecision && <div style={modalOverlayStyle} role="dialog" aria-modal="true"><div style={{ ...modalStyle, maxWidth: 520 }}>
+        <h2>{bulkDecision === 'APPROVED' ? 'تأكيد الاعتماد الجماعي' : 'تأكيد الرفض الجماعي'}</h2>
+        <p>{bulkDecision === 'APPROVED' ? `سيُعتمد ${selected.size} مستفيد مع كل احتياجاتهم المعلّقة بعد إعادة تحقق الخادم.` : `سيُرفض ${selected.size} مستفيد وتُسجّل العلة على المستفيد واحتياجاته.`}</p>
+        {bulkDecision === 'REJECTED' && <label style={labelStyle}>سبب الرفض (إلزامي)<textarea style={{ ...inputStyle, minHeight: 100 }} value={bulkReason} onChange={(event) => setBulkReason(event.target.value)} maxLength={500} /></label>}
+        <div className="button-row"><button style={primaryButtonStyle} disabled={busy || (bulkDecision === 'REJECTED' && !bulkReason.trim())} onClick={() => void runBulk(bulkDecision)}>تأكيد التنفيذ</button><button style={secondaryButtonStyle} onClick={() => { setBulkDecision(null); setBulkReason(''); }}>إلغاء</button></div>
+      </div></div>}
     </AppShell>
   );
 }

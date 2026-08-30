@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRoleGuard } from '../../lib/use-role-guard';
 import { AppShell } from '../../components/AppShell';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { AssociationSelect } from '../../lib/association-select';
 import { initialQueryParam } from '../../lib/query';
 import {
@@ -36,6 +37,7 @@ export default function AdminInventoryPage() {
   const [editSpec, setEditSpec] = useState('');
   const [editBusy, setEditBusy] = useState(false);
   const [editNotice, setEditNotice] = useState('');
+  const [confirmDamage, setConfirmDamage] = useState(false);
 
   function reload() {
     listDeviceUnits({ page, pageSize: 25, associationId: associationId || undefined, deviceType: deviceType || undefined, status: status || undefined })
@@ -79,7 +81,6 @@ export default function AdminInventoryPage() {
 
   async function damage() {
     if (!detail) return;
-    if (!window.confirm('وَسم هذا الجهاز تالفًا؟ لا يمكن التراجع عن هذا من هنا.')) return;
     setEditBusy(true);
     setDetailError('');
     try {
@@ -187,7 +188,7 @@ export default function AdminInventoryPage() {
               {editNotice && <p style={mutedStyle}>{editNotice}</p>}
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <button type="button" disabled={editBusy} onClick={saveEdit} style={primaryButtonStyle}>حفظ التصحيح</button>
-                <button type="button" disabled={editBusy} onClick={damage} style={secondaryButtonStyle}>وَسم تالف</button>
+                <button type="button" disabled={editBusy} onClick={() => setConfirmDamage(true)} style={secondaryButtonStyle}>وَسم تالف</button>
               </div>
             </div>
           )}
@@ -195,6 +196,14 @@ export default function AdminInventoryPage() {
           <button onClick={() => setDetail(null)} style={{ marginTop: 12 }}>إغلاق</button>
         </div>
       )}
+      {confirmDamage && <ConfirmDialog
+        title="تأكيد وسم الجهاز تالفًا"
+        message="وَسم هذا الجهاز تالفًا؟ لا يمكن التراجع عن هذا من هنا."
+        confirmLabel="وَسم تالف"
+        tone="danger"
+        onCancel={() => setConfirmDamage(false)}
+        onConfirm={async () => { await damage(); setConfirmDamage(false); }}
+      />}
     </AppShell>
   );
 }

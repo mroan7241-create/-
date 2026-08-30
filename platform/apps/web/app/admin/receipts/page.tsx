@@ -221,6 +221,7 @@ export default function AdminReceiptsPage() {
         </section>
       )}
 
+      <div style={{ ...cardStyle, padding: 0, overflowX: 'auto' }}>
       <table style={tableStyle}>
         <thead>
           <tr>
@@ -268,6 +269,7 @@ export default function AdminReceiptsPage() {
           ))}
         </tbody>
       </table>
+      </div>
       {!data?.items.length && <p style={mutedStyle}>لا توجد محاضر بعد.</p>}
 
       {data && data.totalPages > 1 && (
@@ -330,6 +332,7 @@ function ReceiptDetailPanel({ detail, loading, error, batchId }: { detail: Recei
           </button>
         )}
       </div>
+      <div style={{ overflowX: 'auto' }}>
       <table style={tableStyle}>
         <thead>
           <tr>
@@ -366,6 +369,7 @@ function ReceiptDetailPanel({ detail, loading, error, batchId }: { detail: Recei
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
