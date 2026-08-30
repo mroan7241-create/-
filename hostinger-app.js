@@ -84,6 +84,10 @@ function build() {
     run('npm run build --workspace packages/db');
     run('npm run build --workspace apps/api');
   } else {
+    // Hostinger reuses the application workspace between deployments. Remove
+    // the previous Next output so runtime manifests and hashed assets can
+    // never come from different builds.
+    fs.rmSync(path.join(WEB_DIR, WEB_DIST_DIR), { recursive: true, force: true });
     run('npm run build --workspace apps/web');
     copyWebStandaloneAssets();
   }
@@ -95,6 +99,7 @@ function copyWebStandaloneAssets() {
   // المولَّد ذاتيًا بلا اعتماد على أي شيء خارج مجلد standalone.
   const staticSrc = path.join(WEB_DIR, WEB_DIST_DIR, 'static');
   const staticDest = path.join(WEB_STANDALONE_DIR, WEB_DIST_DIR, 'static');
+  fs.rmSync(staticDest, { recursive: true, force: true });
   fs.cpSync(staticSrc, staticDest, { recursive: true });
 
   const publicSrc = path.join(WEB_DIR, 'public');
