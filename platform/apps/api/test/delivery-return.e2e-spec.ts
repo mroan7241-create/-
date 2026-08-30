@@ -179,6 +179,7 @@ describe('DELIVERY-RETURN — إرجاع جهاز للمستودع نهائيً�
       .post(`/api/v1/deliveries/${missionId}/confirm`)
       .set('Cookie', delegateCookie)
       .field('opId', newOpId('confirm'))
+      .field('acknowledgement', 'true')
       .attach('proofPhoto', Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]), { filename: 'proof.jpg', contentType: 'image/jpeg' })
       .attach('recipientSignature', Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]), { filename: 'signature.jpg', contentType: 'image/jpeg' });
     expect(confirmRes.status).toBe(201);

@@ -474,7 +474,16 @@ export class DeliveriesService {
       await tx.beneficiaryNeed.updateMany({ where: { id: { in: needs.map((n) => n.id) } }, data: { fulfillmentStatus: NeedFulfillmentStatus.AWAITING_DEVICE } }); await tx.deliveryMission.update({ where: { id: missionId }, data: { status: DeliveryStatus.RETURNED, returnCondition: input.condition } });
       await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, associationId: mission.associationId, action: adminOverride ? 'DELIVERY_RETURN_ADMIN_OVERRIDE' : 'DELIVERY_PHYSICAL_RETURN_CONFIRMED', entityType: 'delivery_missions', entityId: missionId, metadata: { condition: input.condition, notes: input.notes } } }); const response = { ok: true as const, associationId: mission.associationId }; await this.idempotency.complete(tx, ctx.accountId, scope, input.opId, response); return { replayed: false as const, ...response };
     });
-    if (!outcome.replayed) try { await this.allocationTrigger.triggerForAssociation(outcome.associationId); } catch { /* committed return remains authoritative */ }
+    if (!outcome.replayed) {
+      try {
+        await this.allocationTrigger.triggerForAssociation(outcome.associationId);
+      } catch (error) {
+        await prisma.outboxEvent.create({ data: {
+          type: OutboxEventType.ALLOCATION_RETRY_DUE,
+          payload: { associationId: outcome.associationId, source: 'physical-return', missionId, error: String(error) },
+        } });
+      }
+    }
     return { ok: true as const };
   }
 
@@ -553,8 +562,11 @@ export class DeliveriesService {
       // إعادة تقييم فورية أفضل من انتظار الحدث التالي — فشلها لا يُسقط عملية الإرجاع نفسها (نفس مبدأ fireAllocationTrigger في beneficiaries.service.ts).
       try {
         await this.allocationTrigger.triggerForAssociation(outcome.associationId);
-      } catch {
-        /* best-effort — الاحتياج يبقى AWAITING_DEVICE وسيُعاد تقييمه في أي تشغيل لاحق */
+      } catch (error) {
+        await prisma.outboxEvent.create({ data: {
+          type: OutboxEventType.ALLOCATION_RETRY_DUE,
+          payload: { associationId: outcome.associationId, source: 'legacy-return', missionId, error: String(error) },
+        } });
       }
     }
     return { ok: true as const, attemptId: outcome.attemptId };
@@ -583,9 +595,12 @@ export class DeliveriesService {
       prisma.deliveryMission.findMany({
         where,
         select: {
-          id: true, publicCode: true, status: true, assignedAt: true, createdAt: true,
+          id: true, publicCode: true, status: true, assignedAt: true, scheduledFor: true, createdAt: true,
           beneficiaryId: true, associationId: true, delegateAccountId: true,
-          beneficiary: { select: { name: true, region: true, city: true, district: true, phone: true, latitude: true, longitude: true } },
+          beneficiary: { select: {
+            name: true, region: true, city: true, district: true, phone: true, latitude: true, longitude: true,
+            needs: { where: { decisionStatus: NeedDecisionStatus.APPROVED }, select: { deviceType: true }, orderBy: { createdAt: 'asc' } },
+          } },
           delegate: { select: { name: true, phone: true } },
         },
         orderBy: { createdAt: 'desc' },

@@ -11,6 +11,7 @@ import {
   DeviceAllocationStatus,
   DeliveryStatus,
   EscalationStatus,
+  OutboxEventType,
 } from '@alzad/db';
 import { ApiError, authForbidden } from '../../common/api-error';
 import { PublicCodeService } from '../../common/public-code.service';
@@ -1083,6 +1084,10 @@ export class BeneficiariesService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(`نجح قرار المراجعة فعليًا لكن فشلت إشارة التخصيص للجمعية ${associationId}: ${message}`);
+      await prisma.outboxEvent.create({ data: {
+        type: OutboxEventType.ALLOCATION_RETRY_DUE,
+        payload: { associationId, source: 'beneficiary-review', error: message },
+      } });
       return message;
     }
   }

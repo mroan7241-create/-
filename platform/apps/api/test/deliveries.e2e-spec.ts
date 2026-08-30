@@ -176,10 +176,20 @@ describe('NODE-6 — مناديب وتسليمات (تكامل حقيقي)', () 
     expect((await prisma.beneficiaryNeed.findUniqueOrThrow({ where: { id: need.id } })).fulfillmentStatus).toBe(NeedFulfillmentStatus.OUT_WITH_DELEGATE);
     expect(await prisma.deviceMovement.count({ where: { deviceId: device.id, referenceId: missionId } })).toBe(1);
 
+    const missingAcknowledgement = await http()
+      .post(`/api/v1/deliveries/${missionId}/confirm`)
+      .set('Cookie', delegateCookie)
+      .field('opId', newOpId('confirm-without-acknowledgement'))
+      .attach('proofPhoto', JPEG_PROOF, { filename: 'proof.jpg', contentType: 'image/jpeg' })
+      .attach('recipientSignature', JPEG_PROOF, { filename: 'signature.jpg', contentType: 'image/jpeg' });
+    expect(missingAcknowledgement.status).toBe(400);
+    expect((await prisma.deliveryMission.findUniqueOrThrow({ where: { id: missionId } })).status).toBe(DeliveryStatus.OUT_WITH_DELEGATE);
+
     const confirmRes = await http()
       .post(`/api/v1/deliveries/${missionId}/confirm`)
       .set('Cookie', delegateCookie)
       .field('opId', newOpId('confirm'))
+      .field('acknowledgement', 'true')
       .attach('proofPhoto', JPEG_PROOF, { filename: 'proof.jpg', contentType: 'image/jpeg' })
       .attach('recipientSignature', JPEG_PROOF, { filename: 'signature.jpg', contentType: 'image/jpeg' });
     expect(confirmRes.status).toBe(201);
@@ -239,6 +249,7 @@ describe('NODE-6 — مناديب وتسليمات (تكامل حقيقي)', () 
       .post(`/api/v1/deliveries/${missionId}/confirm`)
       .set('Cookie', delegateCookie)
       .field('opId', newOpId('confirm'))
+      .field('acknowledgement', 'true')
       .attach('proofPhoto', JPEG_PROOF, { filename: 'proof.jpg', contentType: 'image/jpeg' })
       .attach('recipientSignature', JPEG_PROOF, { filename: 'signature.jpg', contentType: 'image/jpeg' });
     expect(confirmRes.status).toBe(201);
@@ -288,6 +299,7 @@ describe('NODE-6 — مناديب وتسليمات (تكامل حقيقي)', () 
       .post(`/api/v1/deliveries/${missionId}/confirm`)
       .set('Cookie', otherDelegateCookie)
       .field('opId', newOpId('confirm'))
+      .field('acknowledgement', 'true')
       .attach('proofPhoto', JPEG_PROOF, { filename: 'proof.jpg', contentType: 'image/jpeg' })
       .attach('recipientSignature', JPEG_PROOF, { filename: 'signature.jpg', contentType: 'image/jpeg' });
     expect(confirmRes.status).toBe(404);

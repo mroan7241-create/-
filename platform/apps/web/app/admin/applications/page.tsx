@@ -8,15 +8,12 @@ import {
   type ApplicationStatus,
   type ApplicationSummary,
   type Paginated,
-  type ReviewResult,
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
 import { AppShell } from '../../components/AppShell';
 import { initialQueryParam } from '../../lib/query';
-import { associationAcceptMessage, buildWhatsAppShareUrl } from '../../lib/credential-share';
 import {
   cardStyle,
-  dangerButtonStyle,
   errorStyle,
   inputStyle,
   labelStyle,
@@ -27,7 +24,6 @@ import {
   primaryButtonStyle,
   secondaryButtonStyle,
   statusBadgeStyle,
-  successStyle,
   tableStyle,
   tdStyle,
   thStyle,
@@ -174,10 +170,6 @@ export default function AdminApplicationsPage() {
         <ApplicationDetail
           application={selected}
           onClose={() => setSelected(null)}
-          onReviewed={() => {
-            setSelected(null);
-            void load();
-          }}
         />
       )}
     </AppShell>
@@ -187,23 +179,12 @@ export default function AdminApplicationsPage() {
 function ApplicationDetail({
   application,
   onClose,
-  onReviewed,
 }: {
   application: ApplicationSummary;
   onClose: () => void;
-  onReviewed: () => void;
 }) {
   const [licenseUrl, setLicenseUrl] = useState<string | null>(null);
   const [licenseError, setLicenseError] = useState<string | null>(null);
-  const [rejectReason, setRejectReason] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [outcome, setOutcome] = useState<ReviewResult | null>(null);
-  const [copied, setCopied] = useState(false);
-
-  // opId جديد لكل محاولة مراجعة (نقرة)، ويُعاد استخدامه كما هو لو أعاد
-  // المستخدم المحاولة بعد فشل شبكة — فلا تتكرَّر العملية على الخادم.
-  const [opId, setOpId] = useState(() => crypto.randomUUID());
 
   const decided = application.status !== 'UNDER_REVIEW';
 
@@ -215,103 +196,6 @@ function ApplicationDetail({
     } catch (err) {
       setLicenseError(err instanceof ApiClientError ? err.message : 'تعذّر فتح ملف الترخيص.');
     }
-  }
-
-  async function review(decision: 'accept' | 'reject') {
-    setError(null);
-    if (decision === 'reject' && !rejectReason.trim()) {
-      setError('سبب الرفض مطلوب.');
-      return;
-    }
-    setBusy(true);
-    try {
-      const res = await apiFetch<ReviewResult>(`/association-applications/${application.id}/review`, {
-        method: 'POST',
-        body: JSON.stringify(decision === 'accept' ? { decision, opId } : { decision, opId, reason: rejectReason.trim() }),
-      });
-      setOutcome(res);
-      if (decision === 'reject') onReviewed();
-    } catch (err) {
-      // opId جديد فقط عند خطأ تحقق/تعارض نهائي — لا عند فشل شبكة (نُبقيه ليعمل كإعادة محاولة idempotent).
-      if (err instanceof ApiClientError && err.code === 'APPLICATION_IDEMPOTENCY_CONFLICT') setOpId(crypto.randomUUID());
-      setError(err instanceof ApiClientError ? err.message : 'تعذّر تنفيذ المراجعة. حاول مرة أخرى.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (outcome) {
-    const previouslyIssued = outcome.temporaryPasswordPreviouslyIssued && !outcome.temporaryPassword;
-    return (
-      <div style={modalOverlayStyle} role="dialog" aria-modal="true">
-        <section style={modalStyle}>
-          <h2 style={{ fontSize: 19, marginBottom: 12 }}>تم قبول الطلب</h2>
-          <p style={successStyle}>
-            رقم الجمعية الجديدة: <span style={ltrStyle}>{outcome.associationPublicCode}</span>
-          </p>
-
-          {previouslyIssued ? (
-            <p style={{ ...cardStyle, background: 'var(--gold-100)', borderColor: 'var(--gold-400)' }}>
-              سبق تنفيذ هذه العملية وتسليم كلمة المرور المؤقتة مرة واحدة، ولا يمكن عرضها مجددًا لأنها لا تُخزَّن في أي مكان.
-              لتسليم كلمة مرور جديدة استخدم زر «إعادة تعيين كلمة المرور» في شاشة إدارة الجمعيات.
-            </p>
-          ) : (
-            <>
-              <p style={{ ...cardStyle, background: 'var(--zad-100)', borderColor: 'var(--zad-300)', fontWeight: 700 }}>
-                هذه كلمة المرور المؤقتة وستظهر مرة واحدة فقط ولن تُعرض مرة أخرى إطلاقًا — انسخها وسلّمها للجمعية الآن.
-              </p>
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-                <code style={{ ...ltrStyle, fontSize: 18, padding: '10px 14px', background: 'var(--canvas)', borderRadius: 'var(--r-sm)' }}>
-                  {outcome.temporaryPassword}
-                </code>
-                <button
-                  type="button"
-                  style={secondaryButtonStyle}
-                  onClick={async () => {
-                    await navigator.clipboard.writeText(outcome.temporaryPassword ?? '');
-                    setCopied(true);
-                  }}
-                >
-                  {copied ? 'تم النسخ' : 'نسخ'}
-                </button>
-              </div>
-              <div style={{ marginTop: 14, display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-                <button
-                  type="button"
-                  style={secondaryButtonStyle}
-                  onClick={() =>
-                    navigator.clipboard.writeText(
-                      associationAcceptMessage(application.name, application.email ?? '', outcome.temporaryPassword ?? ''),
-                    )
-                  }
-                >
-                  ⧉ نسخ الرسالة كاملة
-                </button>
-                {(() => {
-                  const waUrl = buildWhatsAppShareUrl(
-                    application.phone,
-                    associationAcceptMessage(application.name, application.email ?? '', outcome.temporaryPassword ?? ''),
-                  );
-                  return waUrl ? (
-                    <a href={waUrl} target="_blank" rel="noopener noreferrer" style={{ ...primaryButtonStyle, textDecoration: 'none', display: 'inline-block' }}>
-                      إرسال عبر واتساب
-                    </a>
-                  ) : (
-                    <span style={mutedStyle}>رقم الجوال غير صالح لإرسال واتساب مباشر.</span>
-                  );
-                })()}
-              </div>
-            </>
-          )}
-
-          <div style={{ marginTop: 20 }}>
-            <button type="button" style={primaryButtonStyle} onClick={onReviewed}>
-              إغلاق
-            </button>
-          </div>
-        </section>
-      </div>
-    );
   }
 
   return (
@@ -333,6 +217,12 @@ function ApplicationDetail({
               {APPLICATION_STATUS_LABELS[application.status]}
             </span>
           </dd>
+          <dt>قرار الأهلية</dt>
+          <dd style={{ margin: 0 }}>{eligibilityLabel(application.eligibilityStatus)}</dd>
+          <dt>نتيجة التقييم</dt>
+          <dd style={{ margin: 0 }}>{application.evaluationScore == null ? 'لم يُقيّم بعد' : `${application.evaluationScore}/100`}</dd>
+          <dt>قائمة الاختيار</dt>
+          <dd style={{ margin: 0 }}>{selectionLabel(application.selectionList)}</dd>
           <dt>التصنيف / المجال</dt>
           <dd style={{ margin: 0 }}>
             {application.category ?? '—'} / {application.sector ?? '—'}
@@ -394,33 +284,22 @@ function ApplicationDetail({
 
         {!decided && (
           <div style={{ marginTop: 24, borderTop: '1px solid var(--line)', paddingTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <h3 style={{ fontSize: 16 }}>القرار</h3>
-            <label style={labelStyle}>
-              سبب الرفض (مطلوب عند الرفض فقط)
-              <textarea
-                rows={2}
-                maxLength={300}
-                value={rejectReason}
-                onChange={(e) => setRejectReason(e.target.value)}
-                style={{ ...inputStyle, resize: 'vertical' }}
-              />
-            </label>
-            {error && (
-              <p role="alert" style={errorStyle}>
-                {error}
-              </p>
-            )}
+            <h3 style={{ fontSize: 16 }}>الخطوة التالية</h3>
+            <p style={mutedStyle}>هذا الملف للجاهزية والتقييم فقط. اجتياز الأهلية لا ينشئ جمعية ولا يولّد بيانات دخول. التفعيل يتم لاحقًا بعد الاختيار والاتفاقية والتجهيز.</p>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              <button type="button" style={primaryButtonStyle} disabled={busy} onClick={() => review('accept')}>
-                قبول الطلب
-              </button>
-              <button type="button" style={dangerButtonStyle} disabled={busy} onClick={() => review('reject')}>
-                رفض الطلب
-              </button>
+              <a href="/admin/selection" style={{ ...primaryButtonStyle, textDecoration: 'none' }}>فتح الأهلية والتقييم والاختيار</a>
             </div>
           </div>
         )}
       </section>
     </div>
   );
+}
+
+function eligibilityLabel(value: ApplicationSummary['eligibilityStatus']) {
+  return ({ PENDING: 'بانتظار القرار', PASSED: 'مجتاز', FAILED: 'غير مجتاز', NEEDS_INFO: 'يحتاج معلومات' })[value];
+}
+
+function selectionLabel(value: ApplicationSummary['selectionList']) {
+  return ({ NONE: 'لم يدخل الاختيار', MAIN: 'القائمة الأساسية', RESERVE: 'قائمة الاحتياط' })[value];
 }

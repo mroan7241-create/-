@@ -11,6 +11,7 @@ import {
   DeviceType,
   FileCategory,
   ReceiptBatchStatus,
+  OutboxEventType,
 } from '@alzad/db';
 import { ApiError, authForbidden } from '../../common/api-error';
 import { PublicCodeService } from '../../common/public-code.service';
@@ -562,6 +563,10 @@ export class ReceiptsService {
             await this.allocationTrigger.triggerForAssociation(batch.associationId);
           } catch (allocationError) {
             this.logger.warn(`فشل إشارة التخصيص التلقائي بعد تأكيد المحضر ${id} — لا يؤثر في نجاح التأكيد: ${String(allocationError)}`);
+            await prisma.outboxEvent.create({ data: {
+              type: OutboxEventType.ALLOCATION_RETRY_DUE,
+              payload: { associationId: batch.associationId, source: 'receipt-confirmation', receiptBatchId: id, error: String(allocationError) },
+            } });
           }
         }
       }

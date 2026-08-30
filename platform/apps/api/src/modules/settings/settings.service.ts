@@ -5,8 +5,7 @@ import type { AuthContext } from '../auth/auth.types';
 
 export const SETTING_KEYS = [
   'selection.passThreshold', 'selection.mainTargetCount', 'selection.weightsVersion',
-  'calendar.workingDays', 'calendar.holidays', 'sla.approvalReminderHours',
-  'sla.zaadFirstAlertHours', 'sla.zaadSecondAlertHours', 'sla.criticalOverdueHours',
+  'calendar.workingDays', 'calendar.holidays',
   'evidence.requireRecipientSignature',
 ] as const;
 export type SettingKey = typeof SETTING_KEYS[number];
@@ -67,7 +66,6 @@ export function validateSetting(key: SettingKey, value: unknown): unknown {
     if (!Array.isArray(value) || value.some((v) => typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v) || !isRealDate(v)) || new Set(value).size !== value.length) throw invalid(key);
     return [...value].sort();
   }
-  if (key.startsWith('sla.')) return numberInRange(value, 0.25, 8760, key);
   if (key === 'evidence.requireRecipientSignature') {
     if (value !== true) throw new ApiError('SETTING_VALUE_INVALID', 'متطلب توقيع المستفيد يجب أن يبقى مفعّلًا في النطاق الحالي', 400);
     return true;

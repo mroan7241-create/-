@@ -143,6 +143,11 @@ export interface ApplicationSummary {
   hasLicenseFile: boolean;
   pledgeAccepted: boolean;
   pledgedAt: string | null;
+  eligibilityStatus: 'PENDING' | 'PASSED' | 'FAILED' | 'NEEDS_INFO';
+  eligibilityNotes: string | null;
+  evaluationScore: number | null;
+  evaluationRank: number | null;
+  selectionList: 'NONE' | 'MAIN' | 'RESERVE';
 }
 
 export interface ApplicationPublicStatus {
@@ -627,11 +632,12 @@ export interface DeliveryMissionSummary {
   publicCode: string;
   status: DeliveryStatus;
   assignedAt: string | null;
+  scheduledFor: string | null;
   createdAt: string;
   beneficiaryId: string;
   associationId: string;
   delegateAccountId: string | null;
-  beneficiary: { name: string; region: string; city: string; district: string | null; phone: string; latitude: number | null; longitude: number | null };
+  beneficiary: { name: string; region: string; city: string; district: string | null; phone: string; latitude: number | null; longitude: number | null; needs: Array<{ deviceType: DeviceType }> };
   delegate: { name: string; phone: string | null } | null;
 }
 
@@ -674,9 +680,10 @@ export function confirmHandover(missionId: string): Promise<{ ok: true }> {
   return apiFetch(`/deliveries/${missionId}/confirm-handover`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) });
 }
 
-export function confirmDelivery(missionId: string, proofPhoto: File, recipientSignature: File): Promise<{ ok: true; attemptId: string }> {
+export function confirmDelivery(missionId: string, proofPhoto: File, recipientSignature: File, acknowledged: true): Promise<{ ok: true; attemptId: string }> {
   const form = new FormData();
   form.set('opId', newOpId());
+  form.set('acknowledgement', String(acknowledged));
   form.set('proofPhoto', proofPhoto);
   form.set('recipientSignature', recipientSignature);
   return apiUpload(`/deliveries/${missionId}/confirm`, form);
@@ -692,8 +699,10 @@ export function completeParticipationSetup(id: string) { return apiFetch(`/parti
 export function activateParticipation(id: string) { return apiFetch(`/participations/${id}/activate`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) }); }
 export function listProcurement(): Promise<WorkflowRecord[]> { return apiFetch('/procurement/orders'); }
 export function listEscalations(): Promise<WorkflowRecord[]> { return apiFetch('/escalations'); }
-export function decideEscalation(id: string, decision: 'APPROVED' | 'REJECTED' | 'RESOLVED', resolution: string) { return apiFetch(`/escalations/${id}/decision`, { method: 'POST', body: JSON.stringify({ decision, resolution, opId: newOpId() }) }); }
+export function openEscalation(input: { associationId?: string; beneficiaryId?: string; deliveryMissionId?: string; receiptBatchId?: string; category: string; severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'; description: string; requestedAction: string }) { return apiFetch('/escalations', { method: 'POST', body: JSON.stringify({ ...input, opId: newOpId() }) }); }
+export function decideEscalation(id: string, decision: 'NEEDS_INFO' | 'APPROVED' | 'REJECTED' | 'RESOLVED', resolution: string) { return apiFetch(`/escalations/${id}/decision`, { method: 'POST', body: JSON.stringify({ decision, resolution, opId: newOpId() }) }); }
 export function listNotifications(): Promise<WorkflowRecord[]> { return apiFetch('/notifications'); }
+export function listOutboxFailures(): Promise<{ summary: { pending: number; processing: number; failed: number }; items: WorkflowRecord[] }> { return apiFetch('/notifications/outbox'); }
 export function markNotificationRead(id: string) { return apiFetch(`/notifications/${id}/read`, { method: 'POST' }); }
 export function listSystemSettings(): Promise<Record<string, unknown>> { return apiFetch('/settings'); }
 export function saveSystemSetting(key: string, value: unknown) { return apiFetch('/settings', { method: 'PUT', body: JSON.stringify({ key, value }) }); }
@@ -706,9 +715,17 @@ export function getOrganizationClosure(id: string) { return apiFetch(`/reports/c
 export function transitionOrganizationClosure(id: string, status: string) { return apiFetch(`/reports/closure/organization/${id}/transition`, { method: 'POST', body: JSON.stringify({ status, opId: newOpId() }) }); }
 export function updateOrganizationClosure(id: string, fields: { challenges?: string; lessonsLearned?: string; recommendations?: string; finalNotes?: string }) { return apiFetch(`/reports/closure/organization/${id}`, { method: 'PATCH', body: JSON.stringify(fields) }); }
 export function reopenOrganizationClosure(id: string, reason: string) { return apiFetch(`/reports/closure/organization/${id}/reopen`, { method: 'POST', body: JSON.stringify({ reason }) }); }
+export function getProjectClosure(): Promise<WorkflowRecord | null> { return apiFetch('/reports/closure/project'); }
+export function generateProjectClosure(): Promise<WorkflowRecord> { return apiFetch('/reports/closure/project/generate', { method: 'POST' }); }
+export function transitionProjectClosure(status: string, donorFeedbackNotes?: string) { return apiFetch('/reports/closure/project/transition', { method: 'POST', body: JSON.stringify({ status, donorFeedbackNotes }) }); }
 export function getRecipientSignatureUrl(attemptId: string): Promise<{ url: string }> { return apiFetch(`/deliveries/attempts/${attemptId}/signature`); }
 export function setBeneficiaryList(id: string, listType: 'MAIN' | 'RESERVE' | 'REJECTED', listRank: number | null, reason: string) { return apiFetch(`/beneficiaries/${id}/list-decision`, { method: 'POST', body: JSON.stringify({ listType, listRank, reason, opId: newOpId() }) }); }
 export function promoteReserve(id: string, reason: string) { return apiFetch(`/beneficiaries/${id}/promote-reserve`, { method: 'POST', body: JSON.stringify({ reason, opId: newOpId() }) }); }
+export function requestCoordinatorChange(participationId: string, input: { proposedName: string; proposedPhone: string; proposedEmail?: string; proposedTitle?: string; reason: string }) { return apiFetch(`/participations/${participationId}/coordinator-change`, { method: 'POST', body: JSON.stringify({ ...input, opId: newOpId() }) }); }
+export function createPurchaseOrder(input: { associationId: string; orderNumber: string; supplierName: string; orderedAt?: string; expectedDeliveryAt?: string; items: Array<{ deviceType: DeviceType; spec?: string; approvedQty: number }> }) { return apiFetch('/procurement/orders', { method: 'POST', body: JSON.stringify({ ...input, opId: newOpId() }) }); }
+export function transitionPurchaseOrder(id: string, status: 'APPROVED' | 'CANCELLED') { return apiFetch(`/procurement/orders/${id}/transition`, { method: 'POST', body: JSON.stringify({ status, opId: newOpId() }) }); }
+export function createShipment(input: { purchaseOrderId: string; route: 'SUPPLIER_TO_ASSOCIATION' | 'ZAAD_TO_ASSOCIATION'; scheduledAt?: string; location?: string; receiverInstructions?: string; items: Array<{ purchaseOrderItemId: string; shippedQty: number }> }) { return apiFetch('/procurement/shipments', { method: 'POST', body: JSON.stringify({ ...input, opId: newOpId() }) }); }
+export function transitionShipment(id: string, status: 'DISPATCHED' | 'PARTIALLY_RECEIVED' | 'RECEIVED' | 'RECONCILIATION_REQUIRED' | 'CLOSED' | 'CANCELLED') { return apiFetch(`/procurement/shipments/${id}/transition`, { method: 'POST', body: JSON.stringify({ status, opId: newOpId() }) }); }
 export function decideApplicationEligibility(id: string, decision: 'PASSED' | 'FAILED' | 'NEEDS_INFO', notes?: string) { return apiFetch(`/association-applications/${id}/eligibility`, { method: 'POST', body: JSON.stringify({ decision, notes, opId: newOpId() }) }); }
 export function evaluateApplication(id: string, scores: { operationalReadiness: number; technicalCapability: number; previousExperience: number; integrityTransparency: number; participationCommitment: number; sustainabilityImpact: number; geographicProjectNeed: number }) { return apiFetch(`/association-applications/${id}/evaluation`, { method: 'POST', body: JSON.stringify({ ...scores, opId: newOpId() }) }); }
 export function previewApplicationSelection(): Promise<{ threshold: number; items: WorkflowRecord[] }> { return apiFetch('/association-applications/selection/preview', { method: 'POST' }); }

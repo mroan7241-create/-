@@ -59,12 +59,17 @@ export class SessionAuthGuard implements CanActivate {
       throw authSessionExpired();
     }
 
-    // Sliding expiry: يُمدَّد لـ6 ساعات من الآن، بحد أقصى السقف المطلق — لا يتجاوزه أبدًا.
+    // Sliding expiry مع خفض تضخيم الكتابة: نلمس الصف مرة واحدة كل خمس دقائق
+    // فقط، مع بقاء انتهاء الخمول والسقف المطلق قابلين للتحقق في كل طلب.
+    const touchIntervalMs = 5 * 60 * 1000;
     const slidExpiresAt = new Date(Math.min(now.getTime() + authConfig.sessionIdleSeconds * 1000, session.absoluteExpiresAt.getTime()));
-    await prisma.authSession.update({
-      where: { id: session.id },
-      data: { lastSeenAt: now, expiresAt: slidExpiresAt },
-    });
+    const expiryNeedsRefresh = session.expiresAt.getTime() < slidExpiresAt.getTime() - 60_000;
+    if (now.getTime() - session.lastSeenAt.getTime() >= touchIntervalMs || expiryNeedsRefresh) {
+      await prisma.authSession.updateMany({
+        where: { id: session.id, lastSeenAt: session.lastSeenAt, revokedAt: null },
+        data: { lastSeenAt: now, expiresAt: slidExpiresAt },
+      });
+    }
 
     const allowMustChangePassword = this.reflector.getAllAndOverride<boolean>(ALLOW_MUST_CHANGE_PASSWORD_KEY, [
       context.getHandler(),
