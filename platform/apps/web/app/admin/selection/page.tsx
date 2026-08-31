@@ -15,18 +15,16 @@ type EligibilityDecision = 'PASSED' | 'FAILED' | 'NEEDS_INFO';
 type Scores = {
   operationalReadiness: number; technicalCapability: number; previousExperience: number;
   integrityTransparency: number; participationCommitment: number; sustainabilityImpact: number;
-  geographicProjectNeed: number;
 };
-const CRITERIA: Array<{ key: keyof Scores; label: string; weight: number; tieBreak?: boolean }> = [
+const CRITERIA: Array<{ key: keyof Scores; label: string; weight: number }> = [
   { key: 'operationalReadiness', label: 'الجاهزية التشغيلية', weight: 30 },
   { key: 'technicalCapability', label: 'القدرة التقنية', weight: 20 },
   { key: 'previousExperience', label: 'الخبرة السابقة', weight: 20 },
   { key: 'integrityTransparency', label: 'النزاهة والشفافية', weight: 15 },
   { key: 'participationCommitment', label: 'الالتزام بالمشاركة', weight: 10 },
   { key: 'sustainabilityImpact', label: 'الاستدامة والأثر', weight: 5 },
-  { key: 'geographicProjectNeed', label: 'الحاجة الجغرافية للمشروع (كسر تعادل)', weight: 0, tieBreak: true },
 ];
-const EMPTY_SCORES: Scores = { operationalReadiness: 0, technicalCapability: 0, previousExperience: 0, integrityTransparency: 0, participationCommitment: 0, sustainabilityImpact: 0, geographicProjectNeed: 0 };
+const EMPTY_SCORES: Scores = { operationalReadiness: 0, technicalCapability: 0, previousExperience: 0, integrityTransparency: 0, participationCommitment: 0, sustainabilityImpact: 0 };
 const ELIGIBILITY_LABELS: Record<ApplicationSummary['eligibilityStatus'], string> = { PENDING: 'بانتظار القرار', PASSED: 'مجتاز', FAILED: 'غير مجتاز', NEEDS_INFO: 'يحتاج معلومات' };
 
 export default function SelectionPage() {
@@ -35,7 +33,6 @@ export default function SelectionPage() {
   const [preview, setPreview] = useState<WorkflowRecord[]>([]);
   const [threshold, setThreshold] = useState('');
   const [mainTarget, setMainTarget] = useState('');
-  const [reference, setReference] = useState('');
   const [eligibilityTarget, setEligibilityTarget] = useState<ApplicationSummary | null>(null);
   const [evaluationTarget, setEvaluationTarget] = useState<ApplicationSummary | null>(null);
   const [message, setMessage] = useState('');
@@ -100,8 +97,7 @@ export default function SelectionPage() {
       {!configured && <p style={errorStyle}>BUSINESS CONFIG REQUIRED: اضبط حد الاجتياز وسعة MAIN أولًا.</p>}
       <button style={secondaryButtonStyle} disabled={!configured || busy} onClick={() => run(async () => { const result = await previewApplicationSelection(); setPreview(result.items); }, 'تم تحديث معاينة الترتيب.')}>معاينة الترتيب</button>
       {preview.map((row) => <p key={row.id}>{String(row.rank)}. {String(row.name)} — {String(row.score)}/100 — {row.passesThreshold ? 'مجتاز' : 'دون الحد'}</p>)}
-      <label style={labelStyle}>مرجع موافقة الداعم<input style={inputStyle} value={reference} onChange={(event) => setReference(event.target.value)} /></label>
-      <button style={primaryButtonStyle} disabled={!configured || !reference.trim() || busy} onClick={() => run(() => commitApplicationSelection(Number(mainTarget), reference), 'تم اعتماد قائمتي MAIN وRESERVE.')}>اعتماد القائمة النهائية</button>
+      <button style={primaryButtonStyle} disabled={!configured || busy} onClick={() => run(() => commitApplicationSelection(Number(mainTarget)), 'تم اعتماد قائمتي MAIN وRESERVE.')}>اعتماد القائمة النهائية</button>
     </section>
 
     {eligibilityTarget && <EligibilityDialog application={eligibilityTarget} busy={busy} onClose={() => setEligibilityTarget(null)} onSubmit={(decision, notes) => run(() => decideApplicationEligibility(eligibilityTarget.id, decision, notes), 'تم حفظ قرار الأهلية.').then(() => setEligibilityTarget(null))} />}
@@ -124,11 +120,11 @@ function EligibilityDialog({ application, busy, onClose, onSubmit }: { applicati
 function EvaluationDialog({ application, busy, onClose, onSubmit }: { application: ApplicationSummary; busy: boolean; onClose: () => void; onSubmit: (scores: Scores) => Promise<void> }) {
   const [scores, setScores] = useState<Scores>(EMPTY_SCORES);
   const [reviewed, setReviewed] = useState(false);
-  const total = useMemo(() => CRITERIA.reduce((sum, criterion) => sum + (criterion.tieBreak ? 0 : scores[criterion.key] * criterion.weight / 100), 0), [scores]);
+  const total = useMemo(() => CRITERIA.reduce((sum, criterion) => sum + scores[criterion.key] * criterion.weight / 100, 0), [scores]);
   return <div style={modalOverlayStyle} role="dialog" aria-modal="true"><div style={{ ...modalStyle, maxWidth: 720, maxHeight: '90vh', overflow: 'auto' }}>
     <h2>التقييم الموزون — {application.name}</h2>
-    <p>أدخل درجة كل معيار من 0 إلى 100. الحاجة الجغرافية لكسر التعادل فقط ولا تضاف للمجموع.</p>
-    {CRITERIA.map((criterion) => <label key={criterion.key} style={labelStyle}>{criterion.label} — الوزن {criterion.weight}%<input style={inputStyle} type="number" min="0" max="100" value={scores[criterion.key]} onChange={(event) => setScores((current) => ({ ...current, [criterion.key]: Math.max(0, Math.min(100, Number(event.target.value))) }))} /><span>النقاط: {criterion.tieBreak ? 'كسر تعادل' : (scores[criterion.key] * criterion.weight / 100).toFixed(2)}</span></label>)}
+    <p>أدخل درجة كل معيار من 0 إلى 100. يُحتسب المجموع من المعايير الستة والأوزان المعتمدة أدناه فقط.</p>
+    {CRITERIA.map((criterion) => <label key={criterion.key} style={labelStyle}>{criterion.label} — الوزن {criterion.weight}%<input style={inputStyle} type="number" min="0" max="100" value={scores[criterion.key]} onChange={(event) => setScores((current) => ({ ...current, [criterion.key]: Math.max(0, Math.min(100, Number(event.target.value))) }))} /><span>النقاط: {(scores[criterion.key] * criterion.weight / 100).toFixed(2)}</span></label>)}
     <div className="selection-total"><strong>المجموع المباشر</strong><span>{total.toFixed(2)} / 100</span></div>
     <label className="check-row"><input type="checkbox" checked={reviewed} onChange={(event) => setReviewed(event.target.checked)} />راجعت جميع الدرجات والمجموع قبل الإرسال.</label>
     <div className="button-row"><button style={primaryButtonStyle} disabled={busy || !reviewed} onClick={() => onSubmit(scores)}>حفظ التقييم</button><button style={secondaryButtonStyle} onClick={onClose}>إلغاء</button></div>

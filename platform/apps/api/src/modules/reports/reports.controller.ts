@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Res } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AccountRole, prisma } from '@alzad/db';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -8,11 +8,47 @@ import { AssociationReportQueryDto } from './dto/association-report-query.dto';
 import { ReportsService } from './reports.service';
 import { ApiError } from '../../common/api-error';
 import { ReconciliationService } from './reconciliation.service'; import { ClosureReadinessService } from './closure-readiness.service'; import { ClosureService } from './closure.service'; import { OrganizationTransitionDto, ParticipationOperationDto, ProjectTransitionDto, QualitativeReportDto, ReopenDto } from './dto/closure.dto';
+import { AbanmiReportQueryDto } from './dto/abanmi-report-query.dto';
+import type { Response } from 'express';
+import ExcelJS from 'exceljs';
 
 @ApiTags('reports')
 @Controller('reports')
 export class ReportsController {
   constructor(private readonly reports: ReportsService, private readonly reconciliation: ReconciliationService, private readonly readiness: ClosureReadinessService, private readonly closure: ClosureService) {}
+
+  @Get('abanmi/export.xlsx')
+  @Roles(AccountRole.ABANMI)
+  @ApiOperation({ summary: 'تصدير تقرير أبانمي التجميعي إلى XLSX' })
+  async abanmiExport(@CurrentUser() ctx: AuthContext, @Query() query: AbanmiReportQueryDto, @Res() res: Response) {
+    const report = await this.reports.abanmiReport(ctx, query);
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'منصة الزاد';
+    const summary = workbook.addWorksheet('ملخص المشروع', { views: [{ rightToLeft: true }] });
+    summary.addRows([
+      ['المؤشر', 'القيمة'], ['الجمعيات', report.overall.associations],
+      ['المستفيدون', report.overall.beneficiaries], ['الاحتياجات المعتمدة', report.overall.approvedNeeds],
+      ['الأجهزة', report.overall.devices], ['عمليات التسليم', report.overall.deliveries],
+    ]);
+    summary.getRow(1).font = { bold: true };
+    summary.columns = [{ width: 28 }, { width: 18 }];
+    const associations = workbook.addWorksheet('حسب الجمعية', { views: [{ rightToLeft: true }] });
+    associations.addRow(['الرمز', 'الجمعية', 'المنطقة', 'المدينة', 'الحالة']);
+    for (const row of report.associations) associations.addRow([row.publicCode, row.name, row.region, row.city, row.status]);
+    associations.getRow(1).font = { bold: true };
+    associations.columns = [{ width: 16 }, { width: 34 }, { width: 20 }, { width: 20 }, { width: 16 }];
+    const buffer = await workbook.xlsx.writeBuffer();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="abanmi-project-report.xlsx"');
+    res.send(Buffer.from(buffer));
+  }
+
+  @Get('abanmi')
+  @Roles(AccountRole.ABANMI)
+  @ApiOperation({ summary: 'تقرير أبانمي التجميعي للقراءة فقط، بلا بيانات شخصية للمستفيدين' })
+  abanmi(@CurrentUser() ctx: AuthContext, @Query() query: AbanmiReportQueryDto) {
+    return this.reports.abanmiReport(ctx, query);
+  }
 
   @Get('association')
   @Roles(AccountRole.ASSOCIATION)

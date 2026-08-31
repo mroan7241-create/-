@@ -13,11 +13,9 @@ export class EvaluationDto {
   @IsNumber() @Min(0) @Max(100) integrityTransparency!: number;
   @IsNumber() @Min(0) @Max(100) participationCommitment!: number;
   @IsNumber() @Min(0) @Max(100) sustainabilityImpact!: number;
-  @IsNumber() @Min(0) @Max(100) geographicProjectNeed!: number;
   @IsString() opId!: string;
 }
 export class SelectionCommitDto {
   @IsInt() @Min(1) mainTargetCount!: number;
-  @IsString() supporterApprovalReference!: string;
   @IsString() opId!: string;
 }

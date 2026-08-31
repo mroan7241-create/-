@@ -14,7 +14,7 @@ export class ActivitiesController {
   constructor(private readonly activities: ActivitiesService) {}
 
   @Get()
-  @Roles(AccountRole.ADMIN, AccountRole.ASSOCIATION)
+  @Roles(AccountRole.ADMIN, AccountRole.ASSOCIATION, AccountRole.ABANMI)
   @ApiOperation({ summary: 'قائمة أنشطة المشروع مع حالة أدلتها' })
   async list() {
     return this.activities.listActivities();

@@ -16,10 +16,8 @@ import {
 import {
   apiFetch,
   computeProjectActivitySchedule,
-  listActivities,
-  listAuditLog,
+  type Activity,
   type AuditLogEntry,
-  type Paginated,
   type ProjectActivityScheduleSummary,
 } from '../lib/api';
 import { useRoleGuard } from '../lib/use-role-guard';
@@ -79,16 +77,6 @@ interface Counts {
  * browser-side fan-out below the pool boundary while preserving the same API
  * contracts and exact totals.
  */
-async function loadDashboardTotals(paths: string[], batchSize = 4): Promise<number[]> {
-  const totals: number[] = [];
-  for (let offset = 0; offset < paths.length; offset += batchSize) {
-    const batch = paths.slice(offset, offset + batchSize);
-    const results = await Promise.all(batch.map((path) => apiFetch<Paginated<unknown>>(path)));
-    totals.push(...results.map((result) => result.total));
-  }
-  return totals;
-}
-
 export default function AdminDashboardPage() {
   const [dashboardLoadedAt] = useState(() => Date.now());
   const { user, loading: guardLoading } = useRoleGuard(['ADMIN']);
@@ -100,81 +88,12 @@ export default function AdminDashboardPage() {
 
   useEffect(() => {
     if (!user) return;
-    listActivities()
-      .then((rows) => setProjectSchedule(computeProjectActivitySchedule(rows)))
-      .catch(() => setProjectSchedule(null));
-  }, [user]);
-
-  useEffect(() => {
-    if (!user) return;
-    listAuditLog({ pageSize: 8 })
-      .then((res) => setLatestOps(res.items))
-      .catch(() => setLatestOps([]));
-  }, [user]);
-
-  useEffect(() => {
-    if (!user) return;
     (async () => {
       try {
-        const [
-          pendingApps,
-          allAssoc,
-          activeAssoc,
-          inactiveAssoc,
-          totalBen,
-          approvedBen,
-          pendingBen,
-          rejectedBen,
-          whDevices,
-          allocatedDevices,
-          damagedDevices,
-          awaitingReceipts,
-          delegates,
-          withDelegate,
-          delivered,
-          preparingDeliveries,
-          outDeliveries,
-          failedDeliveries,
-        ] = await loadDashboardTotals([
-          '/association-applications?status=UNDER_REVIEW&pageSize=1',
-          '/associations?pageSize=1',
-          '/associations?status=ACTIVE&pageSize=1',
-          '/associations?status=INACTIVE&pageSize=1',
-          '/beneficiaries?pageSize=1',
-          '/beneficiaries?reviewStatus=APPROVED&pageSize=1',
-          '/beneficiaries?reviewStatus=UNDER_REVIEW&pageSize=1',
-          '/beneficiaries?reviewStatus=REJECTED&pageSize=1',
-          '/inventory/devices?status=WAREHOUSE&pageSize=1',
-          '/inventory/devices?status=ALLOCATED&pageSize=1',
-          '/inventory/devices?status=DAMAGED&pageSize=1',
-          '/receipts?status=AWAITING_ASSOCIATION_CONFIRMATION&pageSize=1',
-          '/delegates?pageSize=1',
-          '/inventory/devices?status=WITH_DELEGATE&pageSize=1',
-          '/inventory/devices?status=DELIVERED&pageSize=1',
-          '/deliveries?status=PREPARING&pageSize=1',
-          '/deliveries?status=OUT_WITH_DELEGATE&pageSize=1',
-          '/deliveries?status=DELIVERY_FAILED&pageSize=1',
-        ]);
-        setCounts({
-          pendingApplications: pendingApps,
-          associations: allAssoc,
-          activeAssociations: activeAssoc,
-          inactiveAssociations: inactiveAssoc,
-          totalBeneficiaries: totalBen,
-          approvedBeneficiaries: approvedBen,
-          beneficiariesPendingReview: pendingBen,
-          rejectedBeneficiaries: rejectedBen,
-          warehouseDevices: whDevices,
-          allocatedDevices,
-          damagedDevices,
-          receiptsAwaitingConfirmation: awaitingReceipts,
-          delegates,
-          devicesWithDelegate: withDelegate,
-          devicesDelivered: delivered,
-          deliveriesPreparing: preparingDeliveries,
-          deliveriesOutWithDelegate: outDeliveries,
-          deliveriesFailed: failedDeliveries,
-        });
+        const result = await apiFetch<{ counts: Counts; activities: Activity[]; recentOperations: AuditLogEntry[] }>('/dashboard/admin');
+        setCounts(result.counts);
+        setProjectSchedule(computeProjectActivitySchedule(result.activities));
+        setLatestOps(result.recentOperations);
       } catch {
         setError('تعذّر تحميل بيانات لوحة التحكم.');
       }
@@ -200,9 +119,9 @@ export default function AdminDashboardPage() {
       attn.push({ key: 'delayed', tier: 'monitor', count: projectSchedule.delayedCount, tone: 'neutral', what: 'أنشطة مشروع تجاوزت موعدها المخطَّط', why: 'دون تسجيل إنجاز فعلي حتى الآن', domain: 'المتابعة', href: '/admin/activities' });
   }
   const tiers: { tier: Attn['tier']; label: string }[] = [
-    { tier: 'urgent', label: 'عاجل' },
-    { tier: 'decision', label: 'يتطلب قرارًا' },
-    { tier: 'monitor', label: 'للمتابعة' },
+    { tier: 'urgent', label: 'حرج' },
+    { tier: 'decision', label: 'متوسط' },
+    { tier: 'monitor', label: 'منخفض' },
   ];
 
   const visibleOps = latestOps?.filter((op) => {

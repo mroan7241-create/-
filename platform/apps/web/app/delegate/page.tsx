@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ApiClientError, DELIVERY_FAILURE_REASON_LABELS, DELIVERY_STATUS_LABELS, DEVICE_TYPE_LABELS,
-  confirmDelivery, confirmHandover, failDelivery, getDelivery, getDeliveryProofUrl, listDeliveries,
+  apiFetch, confirmDelivery, confirmHandover, failDelivery, getDelivery, getDeliveryProofUrl,
   logout, rescheduleDelivery, returnDelivery, updateBeneficiaryLocation,
   type DeliveryFailureReason, type DeliveryMissionSummary, type DeliveryStatus,
 } from '../lib/api';
@@ -13,9 +13,6 @@ import { cardStyle, errorStyle, inputStyle, labelStyle, modalOverlayStyle, modal
 import { buildGoogleMapsSegments, orderStopsNearestNeighbour, type RoutePoint } from './delegate-route';
 
 type Tab = 'tasks' | 'route' | 'history';
-const ACTIVE_STATUSES: DeliveryStatus[] = ['PENDING_DELEGATE_ACKNOWLEDGEMENT', 'OUT_WITH_DELEGATE', 'DELIVERY_FAILED', 'DEFERRED', 'PENDING_RETURN_APPROVAL', 'PENDING_DELIVERY_APPROVAL'];
-const HISTORY_STATUSES: DeliveryStatus[] = ['DELIVERY_CLOSED', 'DELIVERED', 'RETURNED'];
-
 export default function DelegatePortalPage() {
   const { user, loading } = useRoleGuard(['DELEGATE']);
   const router = useRouter();
@@ -30,12 +27,9 @@ export default function DelegatePortalPage() {
   const load = useCallback(async () => {
     setError('');
     try {
-      const [activeGroups, historyGroups] = await Promise.all([
-        Promise.all(ACTIVE_STATUSES.map(loadEveryPageForStatus)),
-        Promise.all(HISTORY_STATUSES.map(loadEveryPageForStatus)),
-      ]);
-      setMissions(activeGroups.flat());
-      setHistory(historyGroups.flat().sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)));
+      const result = await apiFetch<{ active: DeliveryMissionSummary[]; history: DeliveryMissionSummary[] }>('/deliveries/delegate-portal');
+      setMissions(result.active);
+      setHistory(result.history);
     } catch (caught) { setError(caught instanceof ApiClientError ? caught.message : 'تعذّر تحميل مهام المندوب.'); }
   }, []);
   useEffect(() => { if (user) void load(); }, [user, load]);
@@ -135,7 +129,6 @@ function Empty({ text }: { text: string }) { return <div style={cardStyle}><p st
 type ModalProps = { mission: DeliveryMissionSummary; close: () => void; done: () => Promise<void> };
 function hasCoordinates(mission: DeliveryMissionSummary) { return mission.beneficiary.latitude != null && mission.beneficiary.longitude != null; }
 function isTodayOrReady(value: string | null) { if (!value) return true; return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Riyadh' }).format(new Date(value)) === new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Riyadh' }).format(new Date()); }
-async function loadEveryPageForStatus(status: DeliveryStatus) { const first = await listDeliveries({ status, page: 1, pageSize: 100 }); const rows = [...first.items]; for (let page = 2; page <= first.totalPages; page += 1) rows.push(...(await listDeliveries({ status, page, pageSize: 100 })).items); return rows; }
 async function viewProof(mission: DeliveryMissionSummary, setError: (message: string) => void) { try { const detail = await getDelivery(mission.id); const attempt = detail.attempts.find((item) => item.hasProof); if (!attempt) throw new Error('لا توجد صورة إثبات لهذه المهمة.'); const { url } = await getDeliveryProofUrl(attempt.id); window.open(url, '_blank', 'noopener,noreferrer'); } catch (error) { setError(readError(error)); } }
 function readError(error: unknown) { return error instanceof Error ? error.message : 'تعذر تنفيذ العملية.'; }
 function validateImage(file: File | undefined, setError: (message: string) => void) { if (!file) return null; if (file.size > 6 * 1024 * 1024) { setError('حجم الصورة يتجاوز 6 ميجابايت.'); return null; } if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { setError('صيغة الصورة غير مدعومة.'); return null; } setError(''); return file; }

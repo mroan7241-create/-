@@ -407,6 +407,8 @@ code {
 .zad-sidebar2-brand .zad-sb2-name { font-family: var(--font-display); font-weight: 800; font-size: 15.5px; }
 .zad-sidebar2-brand .zad-sb2-role { font-size: 11px; color: rgba(255, 255, 255, 0.55); margin-top: 1px; }
 .zad-nav-scroll2 { flex: 1; padding: 14px 12px; overflow-y: auto; overflow-x: hidden; }
+.zad-nav-scroll2 { scrollbar-width: none; }
+.zad-nav-scroll2::-webkit-scrollbar { width: 0; height: 0; }
 .zad-nav-group2 { margin-bottom: 15px; }
 .zad-nav-group-label2 { position: relative; display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; color: rgba(255, 255, 255, 0.4); padding: 0 10px; margin-bottom: 9px; white-space: nowrap; }
 .zad-nav-group-label2::after { content: ''; position: absolute; inset-inline-start: 10px; bottom: -4px; width: 14px; height: 2px; border-radius: 1px; background: var(--gold-500); opacity: 0.55; }
@@ -419,6 +421,16 @@ code {
 .zad-nav-item2:hover { color: #fff; background: rgba(255, 255, 255, 0.06); }
 .zad-nav-item2[data-active='true'] { color: #fff; font-weight: 700; background: rgba(255, 255, 255, 0.09); border-inline-start-color: var(--gold-500); }
 .zad-nav-item2[data-active='true'] svg { filter: drop-shadow(0 0 5px rgba(226, 166, 46, 0.5)); }
+.abanmi-report-print table { width: 100%; border-collapse: collapse; }
+.abanmi-report-print th, .abanmi-report-print td { padding: 10px 12px; text-align: right; border-bottom: 1px solid var(--line); }
+.table-scroll { width: 100%; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-scroll table { min-width: 560px; }
+@media print {
+  .zad-sidebar2, .zad-topbar, .abanmi-print-controls { display: none !important; }
+  .zad-content2 { padding: 0 !important; }
+  .zad-main2 { padding: 0 !important; }
+  .card { break-inside: avoid; box-shadow: none !important; }
+}
 .zad-nav-item2 .zad-badge-dot { margin-inline-start: auto; width: 7px; height: 7px; border-radius: 50%; background: var(--gold-500); box-shadow: 0 0 0 3px rgba(226, 166, 46, 0.18); flex-shrink: 0; }
 .zad-sidebar2-foot { padding: 12px 20px 18px; border-top: 1px solid rgba(255, 255, 255, 0.1); }
 .zad-partner-lockup2 { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; opacity: 0.9; }

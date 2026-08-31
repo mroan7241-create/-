@@ -364,7 +364,7 @@ export class ApplicationsService {
       const application = await tx.associationApplication.findUnique({ where: { id } });
       if (!application) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب الانضمام غير موجود', 404);
       if (application.eligibilityStatus !== EligibilityStatus.PASSED) throw new ApiError('APPLICATION_NOT_ELIGIBLE', 'لا يمكن تقييم طلب قبل اجتياز بوابة الأهلية', 409);
-      await tx.associationApplication.update({ where: { id }, data: { evaluationBreakdown: scored.breakdown, evaluationScore: scored.total, geographicNeedScore: input.geographicProjectNeed, evaluatedAt: new Date(), evaluatedById: ctx.accountId } });
+      await tx.associationApplication.update({ where: { id }, data: { evaluationBreakdown: scored.breakdown, evaluationScore: scored.total, geographicNeedScore: null, evaluatedAt: new Date(), evaluatedById: ctx.accountId } });
       await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_EVALUATED', entityType: 'association_applications', entityId: id, metadata: { score: scored.total, breakdown: scored.breakdown } } });
       const response = { ok: true as const, score: scored.total }; await this.idempotency.complete(tx, ctx.accountId, 'application-evaluation', opId, response); return response;
     });
@@ -372,33 +372,29 @@ export class ApplicationsService {
 
   async previewSelection() {
     const threshold = await this.settings.requireNumber('selection.passThreshold');
-    const rows = await prisma.associationApplication.findMany({ where: { eligibilityStatus: EligibilityStatus.PASSED, evaluationScore: { not: null }, selectionList: AssociationSelectionList.NONE }, select: { id: true, publicCode: true, name: true, evaluationScore: true, evaluationBreakdown: true, geographicNeedScore: true } });
-    const ranked = rankApplications(rows.map((row) => {
-      const raw = ((row.evaluationBreakdown as { raw?: Partial<EvaluationInput> } | null)?.raw ?? {});
-      return { ...row, score: Number(row.evaluationScore), operationalReadiness: Number(raw.operationalReadiness ?? 0), technicalCapability: Number(raw.technicalCapability ?? 0), geographicProjectNeed: Number(row.geographicNeedScore ?? 0) };
-    }));
+    const rows = await prisma.associationApplication.findMany({ where: { eligibilityStatus: EligibilityStatus.PASSED, evaluationScore: { not: null }, selectionList: AssociationSelectionList.NONE }, select: { id: true, publicCode: true, name: true, evaluationScore: true, evaluationBreakdown: true } });
+    const ranked = rankApplications(rows.map((row) => ({ ...row, score: Number(row.evaluationScore) })));
     return { threshold, items: ranked.map((item, index) => ({ ...item, rank: index + 1, passesThreshold: item.score >= threshold })) };
   }
 
-  async commitSelection(ctx: AuthContext, mainTargetCount: number, supporterApprovalReferenceRaw: string, opId: string) {
+  async commitSelection(ctx: AuthContext, mainTargetCount: number, opId: string) {
     const threshold = await this.settings.requireNumber('selection.passThreshold');
     const configuredMainTargetCount = await this.settings.requireNumber('selection.mainTargetCount');
-    const supporterApprovalReference = requiredText(supporterApprovalReferenceRaw, 'مرجع اعتماد الداعم', 200);
     if (!Number.isInteger(mainTargetCount) || mainTargetCount < 1) throw new ApiError('SELECTION_TARGET_INVALID', 'عدد القائمة الأساسية غير صالح', 400);
     if (mainTargetCount !== configuredMainTargetCount) throw new ApiError('SELECTION_TARGET_MISMATCH', 'عدد القائمة الأساسية لا يطابق السعة المعتمدة في إعدادات الاختيار', 409);
     return prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
-      const claim = await this.idempotency.claim<{ ok: true; main: number; reserve: number; rejected: number }>(tx, ctx.accountId, 'application-selection', opId, { mainTargetCount, supporterApprovalReference, threshold });
+      const claim = await this.idempotency.claim<{ ok: true; main: number; reserve: number; rejected: number }>(tx, ctx.accountId, 'application-selection', opId, { mainTargetCount, threshold });
       if (!claim.claimed) return claim.existingResponse!;
-      const rows = await tx.associationApplication.findMany({ where: { status: ApplicationStatus.UNDER_REVIEW, eligibilityStatus: EligibilityStatus.PASSED, evaluationScore: { not: null }, selectionList: AssociationSelectionList.NONE }, select: { id: true, evaluationScore: true, evaluationBreakdown: true, geographicNeedScore: true, contactName: true, coordinatorPhone: true, coordinatorEmail: true, coordinatorTitle: true } });
-      const ranked = rankApplications(rows.map((row) => { const raw = ((row.evaluationBreakdown as { raw?: Partial<EvaluationInput> } | null)?.raw ?? {}); return { ...row, score: Number(row.evaluationScore), operationalReadiness: Number(raw.operationalReadiness ?? 0), technicalCapability: Number(raw.technicalCapability ?? 0), geographicProjectNeed: Number(row.geographicNeedScore ?? 0) }; }));
+      const rows = await tx.associationApplication.findMany({ where: { status: ApplicationStatus.UNDER_REVIEW, eligibilityStatus: EligibilityStatus.PASSED, evaluationScore: { not: null }, selectionList: AssociationSelectionList.NONE }, select: { id: true, evaluationScore: true, contactName: true, coordinatorPhone: true, coordinatorEmail: true, coordinatorTitle: true } });
+      const ranked = rankApplications(rows.map((row) => ({ ...row, score: Number(row.evaluationScore) })));
       const passing = ranked.filter((row) => row.score >= threshold); const main = passing.slice(0, mainTargetCount); const reserve = passing.slice(mainTargetCount); const rejected = ranked.filter((row) => row.score < threshold); const now = new Date();
       for (let i = 0; i < ranked.length; i += 1) await tx.associationApplication.update({ where: { id: ranked[i].id }, data: { evaluationRank: i + 1 } });
-      if (main.length) await tx.associationApplication.updateMany({ where: { id: { in: main.map((r) => r.id) } }, data: { selectionList: AssociationSelectionList.MAIN, status: ApplicationStatus.ACCEPTED, selectionApprovedAt: now, selectionApprovedById: ctx.accountId, supporterApprovedAt: now, supporterApprovalReference } });
-      if (reserve.length) await tx.associationApplication.updateMany({ where: { id: { in: reserve.map((r) => r.id) } }, data: { selectionList: AssociationSelectionList.RESERVE, status: ApplicationStatus.ACCEPTED, selectionApprovedAt: now, selectionApprovedById: ctx.accountId, supporterApprovedAt: now, supporterApprovalReference } });
+      if (main.length) await tx.associationApplication.updateMany({ where: { id: { in: main.map((r) => r.id) } }, data: { selectionList: AssociationSelectionList.MAIN, status: ApplicationStatus.ACCEPTED, selectionApprovedAt: now, selectionApprovedById: ctx.accountId } });
+      if (reserve.length) await tx.associationApplication.updateMany({ where: { id: { in: reserve.map((r) => r.id) } }, data: { selectionList: AssociationSelectionList.RESERVE, status: ApplicationStatus.ACCEPTED, selectionApprovedAt: now, selectionApprovedById: ctx.accountId } });
       if (rejected.length) await tx.associationApplication.updateMany({ where: { id: { in: rejected.map((r) => r.id) } }, data: { status: ApplicationStatus.REJECTED, rejectReason: 'لم يحقق حد الاجتياز المعتمد', reviewedAt: now, reviewedById: ctx.accountId } });
       for (const row of main) await tx.projectParticipation.create({ data: { applicationId: row.id, status: ParticipationStatus.APPROVED_AWAITING_SETUP, activationBasis: ActivationBasis.AGREEMENT_COMPLETED, coordinatorName: row.contactName, coordinatorPhone: row.coordinatorPhone, coordinatorEmail: row.coordinatorEmail, coordinatorTitle: row.coordinatorTitle } });
-      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_SELECTION_COMMITTED', entityType: 'association_applications', metadata: { mainIds: main.map((r) => r.id), reserveIds: reserve.map((r) => r.id), rejectedIds: rejected.map((r) => r.id), threshold, supporterApprovalReference } } });
+      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_SELECTION_COMMITTED', entityType: 'association_applications', metadata: { mainIds: main.map((r) => r.id), reserveIds: reserve.map((r) => r.id), rejectedIds: rejected.map((r) => r.id), threshold } } });
       const response = { ok: true as const, main: main.length, reserve: reserve.length, rejected: rejected.length }; await this.idempotency.complete(tx, ctx.accountId, 'application-selection', opId, response); return response;
     });
   }

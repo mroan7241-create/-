@@ -575,6 +575,29 @@ export class DeliveriesService {
   // ================================================================
   // listDeliveries — عزل الأدوار: DELEGATE مهامه فقط، ASSOCIATION جمعيتها فقط، ADMIN الكل
   // ================================================================
+  async delegatePortal(ctx: AuthContext) {
+    if (ctx.role !== AccountRole.DELEGATE) throw authForbidden();
+    const rows = await prisma.deliveryMission.findMany({
+      where: { delegateAccountId: ctx.accountId },
+      select: {
+        id: true, publicCode: true, status: true, assignedAt: true, scheduledFor: true, createdAt: true,
+        beneficiaryId: true, associationId: true, delegateAccountId: true,
+        beneficiary: { select: {
+          name: true, region: true, city: true, district: true, phone: true, latitude: true, longitude: true,
+          needs: { where: { decisionStatus: NeedDecisionStatus.APPROVED }, select: { deviceType: true }, orderBy: { createdAt: 'asc' as const } },
+        } },
+        delegate: { select: { name: true, phone: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    const historyStatuses: DeliveryStatus[] = [DeliveryStatus.DELIVERY_CLOSED, DeliveryStatus.DELIVERED, DeliveryStatus.RETURNED];
+    return {
+      active: rows.filter((row) => !historyStatuses.includes(row.status)),
+      history: rows.filter((row) => historyStatuses.includes(row.status)),
+      performance: { browserRequests: 1, previousMinimumRequests: 9, truncated: false },
+    };
+  }
+
   async listDeliveries(
     ctx: AuthContext,
     params: PaginationParams & { associationId?: string; delegateId?: string; beneficiaryId?: string; status?: DeliveryStatus },

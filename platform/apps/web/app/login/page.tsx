@@ -76,7 +76,7 @@ export default function LoginPage() {
             onClick={() => setTab('user')}
             style={tabStyle(tab === 'user')}
           >
-            دخول الإدارة والجمعيات
+            دخول الإدارة والجمعيات وأبانمي
           </button>
           <button
             type="button"

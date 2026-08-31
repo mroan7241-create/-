@@ -25,6 +25,13 @@ interface ConfirmFiles {
 export class DeliveriesController {
   constructor(private readonly deliveries: DeliveriesService) {}
 
+  @Get('delegate-portal')
+  @Roles(AccountRole.DELEGATE)
+  @ApiOperation({ summary: 'مهام المندوب النشطة والسجل في استعلام خادمي واحد بلا حد أول 100' })
+  delegatePortal(@CurrentUser() ctx: AuthContext) {
+    return this.deliveries.delegatePortal(ctx);
+  }
+
   @Get()
   @Roles(AccountRole.ADMIN, AccountRole.ASSOCIATION, AccountRole.DELEGATE)
   @ApiOperation({ summary: 'قائمة مهام التسليم — DELEGATE مهامه فقط، ASSOCIATION جمعيتها فقط، ADMIN الكل' })

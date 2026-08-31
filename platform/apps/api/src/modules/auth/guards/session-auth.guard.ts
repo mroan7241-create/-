@@ -59,6 +59,18 @@ export class SessionAuthGuard implements CanActivate {
       throw authSessionExpired();
     }
 
+    // ABANMI is deny-by-default at the central boundary. This remains effective
+    // even if a future controller forgets @Roles: only the approved read-only
+    // portal resources plus session/password lifecycle endpoints are reachable.
+    if (account.role === 'ABANMI') {
+      const path = request.originalUrl.split('?')[0];
+      const approvedRead = request.method === 'GET' && /\/(auth\/me|activities|reports\/abanmi(?:\/export\.xlsx)?)$/.test(path);
+      const approvedSessionWrite =
+        (request.method === 'POST' && /\/auth\/logout$/.test(path)) ||
+        (request.method === 'PATCH' && /\/auth\/password$/.test(path));
+      if (!approvedRead && !approvedSessionWrite) throw authForbidden();
+    }
+
     // Sliding expiry مع خفض تضخيم الكتابة: نلمس الصف مرة واحدة كل خمس دقائق
     // فقط، مع بقاء انتهاء الخمول والسقف المطلق قابلين للتحقق في كل طلب.
     const touchIntervalMs = 5 * 60 * 1000;
@@ -75,8 +87,8 @@ export class SessionAuthGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
-    // نفس شرط legacy requireSession_ حرفيًا: القفل يخص دور ASSOCIATION فقط.
-    if (account.mustChangePassword && account.role === 'ASSOCIATION' && !allowMustChangePassword) {
+    // الحسابات المنشأة بكلمة مرور مؤقتة لا تدخل أي بوابة أعمال قبل تغييرها.
+    if (account.mustChangePassword && (account.role === 'ASSOCIATION' || account.role === 'ABANMI') && !allowMustChangePassword) {
       throw authPasswordChangeRequired();
     }
 

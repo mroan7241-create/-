@@ -188,7 +188,7 @@ export interface CurrentUser {
   id: string;
   publicCode: string;
   name: string;
-  role: 'ADMIN' | 'ASSOCIATION' | 'DELEGATE';
+  role: 'ADMIN' | 'ASSOCIATION' | 'DELEGATE' | 'ABANMI';
   associationId: string | null;
   mustChangePassword: boolean;
 }
@@ -199,6 +199,37 @@ export function getMe(): Promise<CurrentUser> {
 
 export function logout(): Promise<{ ok: true }> {
   return apiFetch('/auth/logout', { method: 'POST' });
+}
+
+export interface AbanmiReport {
+  generatedAt: string;
+  overall: { associations: number; beneficiaries: number; approvedNeeds: number; devices: number; deliveries: number };
+  associations: Array<{ id: string; publicCode: string; name: string; region: string; city: string; status: string }>;
+  byRegion: Array<{ region: string; associations: number }>;
+  beneficiariesAndNeeds: { beneficiaries: Array<{ associationId: string; reviewStatus: string; _count: { _all: number } }>; needs: Array<{ associationId: string; deviceType: string; decisionStatus: string; fulfillmentStatus: string | null; _count: { _all: number } }> };
+  devicesAndInventory: Array<{ associationId: string; deviceType: string; status: string; _count: { _all: number } }>;
+  deliveryAndExecution: Array<{ associationId: string; status: string; _count: { _all: number } }>;
+  participation: Array<{ associationId: string | null; status: string; _count: { _all: number } }>;
+  associationClosure: Array<{ status: string; generatedAt: string | null; closedAt: string | null; participation: { associationId: string | null } }>;
+  projectClosure: { status: string; updatedAt: string } | null;
+  activities: Activity[];
+  privacy: { beneficiaryPiiIncluded: false };
+}
+
+export function getAbanmiReport(params: { from?: string; to?: string; associationId?: string; region?: string } = {}): Promise<AbanmiReport> {
+  const query = new URLSearchParams(Object.entries(params).filter((entry): entry is [string, string] => Boolean(entry[1])));
+  return apiFetch(`/reports/abanmi${query.size ? `?${query}` : ''}`);
+}
+
+export async function downloadAbanmiReport(params: { from?: string; to?: string; associationId?: string; region?: string } = {}) {
+  const query = new URLSearchParams(Object.entries(params).filter((entry): entry is [string, string] => Boolean(entry[1])));
+  const response = await fetch(`${API_BASE}/reports/abanmi/export.xlsx${query.size ? `?${query}` : ''}`, { credentials: 'include' });
+  if (!response.ok) throw new ApiClientError('EXPORT_FAILED', 'تعذّر تصدير التقرير');
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url; anchor.download = 'abanmi-project-report.xlsx'; anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 // ================================================================
@@ -727,9 +758,9 @@ export function transitionPurchaseOrder(id: string, status: 'APPROVED' | 'CANCEL
 export function createShipment(input: { purchaseOrderId: string; route: 'SUPPLIER_TO_ASSOCIATION' | 'ZAAD_TO_ASSOCIATION'; scheduledAt?: string; location?: string; receiverInstructions?: string; items: Array<{ purchaseOrderItemId: string; shippedQty: number }> }) { return apiFetch('/procurement/shipments', { method: 'POST', body: JSON.stringify({ ...input, opId: newOpId() }) }); }
 export function transitionShipment(id: string, status: 'DISPATCHED' | 'PARTIALLY_RECEIVED' | 'RECEIVED' | 'RECONCILIATION_REQUIRED' | 'CLOSED' | 'CANCELLED') { return apiFetch(`/procurement/shipments/${id}/transition`, { method: 'POST', body: JSON.stringify({ status, opId: newOpId() }) }); }
 export function decideApplicationEligibility(id: string, decision: 'PASSED' | 'FAILED' | 'NEEDS_INFO', notes?: string) { return apiFetch(`/association-applications/${id}/eligibility`, { method: 'POST', body: JSON.stringify({ decision, notes, opId: newOpId() }) }); }
-export function evaluateApplication(id: string, scores: { operationalReadiness: number; technicalCapability: number; previousExperience: number; integrityTransparency: number; participationCommitment: number; sustainabilityImpact: number; geographicProjectNeed: number }) { return apiFetch(`/association-applications/${id}/evaluation`, { method: 'POST', body: JSON.stringify({ ...scores, opId: newOpId() }) }); }
+export function evaluateApplication(id: string, scores: { operationalReadiness: number; technicalCapability: number; previousExperience: number; integrityTransparency: number; participationCommitment: number; sustainabilityImpact: number }) { return apiFetch(`/association-applications/${id}/evaluation`, { method: 'POST', body: JSON.stringify({ ...scores, opId: newOpId() }) }); }
 export function previewApplicationSelection(): Promise<{ threshold: number; items: WorkflowRecord[] }> { return apiFetch('/association-applications/selection/preview', { method: 'POST' }); }
-export function commitApplicationSelection(mainTargetCount: number, supporterApprovalReference: string) { return apiFetch('/association-applications/selection/commit', { method: 'POST', body: JSON.stringify({ mainTargetCount, supporterApprovalReference, opId: newOpId() }) }); }
+export function commitApplicationSelection(mainTargetCount: number) { return apiFetch('/association-applications/selection/commit', { method: 'POST', body: JSON.stringify({ mainTargetCount, opId: newOpId() }) }); }
 
 export function failDelivery(missionId: string, failureReason: DeliveryFailureReason, notes?: string): Promise<{ ok: true; attemptId: string }> {
   return apiFetch(`/deliveries/${missionId}/fail`, { method: 'POST', body: JSON.stringify({ failureReason, notes, opId: newOpId() }) });

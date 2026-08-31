@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import {
   APPLICATION_STATUS_LABELS,
   ApiClientError,
@@ -62,7 +63,7 @@ export default function AdminApplicationsPage() {
 
   return (
     <AppShell user={user}>
-      <h1 style={{ fontSize: 22, marginBottom: 16 }}>طلبات انضمام الجمعيات</h1>
+      <div className="workflow-row" style={{ marginBottom: 16 }}><div><h1 style={{ fontSize: 22, marginBottom: 6 }}>طلبات انضمام الجمعيات</h1><p style={mutedStyle}>الطلب ← الأهلية ← التقييم ← الاختيار MAIN/RESERVE ← الاتفاقية والتجهيز ← التفعيل</p></div><Link href="/admin/selection" style={{ ...primaryButtonStyle, textDecoration: 'none' }}>الأهلية والتقييم والاختيار</Link></div>
 
       <form
         onSubmit={(e) => {
@@ -112,6 +113,9 @@ export default function AdminApplicationsPage() {
               <th style={thStyle}>اسم الجمعية</th>
               <th style={thStyle}>رقم الطلب</th>
               <th style={thStyle}>الحالة</th>
+              <th style={thStyle}>الأهلية</th>
+              <th style={thStyle}>الاختيار</th>
+              <th style={thStyle}>التفعيل</th>
               <th style={thStyle}>مؤشّر الإجابات</th>
               <th style={thStyle}>تاريخ التقديم</th>
               <th style={thStyle} />
@@ -120,7 +124,7 @@ export default function AdminApplicationsPage() {
           <tbody>
             {data?.items.length === 0 && (
               <tr>
-                <td style={{ ...tdStyle, textAlign: 'center' }} colSpan={6}>
+                <td style={{ ...tdStyle, textAlign: 'center' }} colSpan={9}>
                   لا توجد طلبات مطابقة.
                 </td>
               </tr>
@@ -134,6 +138,9 @@ export default function AdminApplicationsPage() {
                     {APPLICATION_STATUS_LABELS[row.status]}
                   </span>
                 </td>
+                <td style={tdStyle}>{eligibilityLabel(row.eligibilityStatus)}</td>
+                <td style={tdStyle}>{selectionLabel(row.selectionList)}</td>
+                <td style={tdStyle}>{row.resultingAssociationId ? 'مفعّلة' : 'غير مفعّلة'}</td>
                 <td style={{ ...tdStyle, ...ltrStyle }}>{row.scoreLabel}</td>
                 <td style={tdStyle}>{new Date(row.submittedAt).toLocaleDateString('ar-SA')}</td>
                 <td style={tdStyle}>

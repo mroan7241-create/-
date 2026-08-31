@@ -24,6 +24,7 @@ import { ParticipationsModule } from './modules/participations/participations.mo
 import { EscalationsModule } from './modules/escalations/escalations.module';
 import { ProcurementModule } from './modules/procurement/procurement.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     EscalationsModule,
     ProcurementModule,
     NotificationsModule,
+    DashboardModule,
   ],
 })
 export class AppModule implements NestModule {

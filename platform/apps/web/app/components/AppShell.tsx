@@ -23,7 +23,7 @@ export function AppShell({ user, children }: { user: CurrentUser; children: Reac
   const pathname = usePathname();
   const router = useRouter();
   const groups = navGroupsForRole(user.role);
-  const homeHref = user.role === 'ADMIN' ? '/admin' : '/association';
+  const homeHref = user.role === 'ADMIN' ? '/admin' : user.role === 'ASSOCIATION' ? '/association' : '/abanmi';
 
   async function handleLogout() {
     await logout().catch(() => undefined);

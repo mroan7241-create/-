@@ -14,18 +14,20 @@ import {
 import { cardStyle, errorStyle, inputStyle, labelStyle, primaryButtonStyle, secondaryButtonStyle, successStyle } from '../lib/ui';
 
 type Section = { key: string; title: string; rows: WorkflowRecord[]; error?: string };
+export type WorkflowSectionKey = 'participations' | 'deliveries' | 'procurement' | 'escalations' | 'notifications' | 'beneficiaries' | 'outbox' | 'project-closure';
 type FormKind = 'agreement' | 'sign-org' | 'sign-zaad' | 'coordinator' | 'closure' | 'reopen' | 'return-good' | 'return-damaged' | 'escalation' | 'escalation-decision' | 'list-main' | 'list-reserve' | 'promote' | 'purchase-order' | 'shipment' | 'donor-feedback';
 type OpenForm = { kind: FormKind; row?: WorkflowRecord };
 
-export function WorkflowHub({ user }: { user: CurrentUser }) {
+export function WorkflowHub({ user, sectionKeys }: { user: CurrentUser; sectionKeys?: WorkflowSectionKey[] }) {
   const [sections, setSections] = useState<Section[]>([]);
   const [form, setForm] = useState<OpenForm | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [credential, setCredential] = useState<{ email: string; password: string } | null>(null);
+  const sectionKeySignature = sectionKeys?.join('|') ?? '';
 
   const load = useCallback(async () => {
-    const jobs: Array<[string, string, Promise<unknown>]> = [
+    let jobs: Array<[WorkflowSectionKey, string, Promise<unknown>]> = [
       ['participations', 'المشاركات والاتفاقيات', listParticipations()],
       ['deliveries', 'اعتمادات التسليم والإرجاع', listDeliveries({ pageSize: 100 })],
       ['procurement', 'أوامر الشراء والشحنات', listProcurement()],
@@ -35,6 +37,10 @@ export function WorkflowHub({ user }: { user: CurrentUser }) {
     ];
     if (user.role === 'ADMIN') jobs.push(['outbox', 'مراقبة أحداث الأتمتة المتعثرة', listOutboxFailures()]);
     if (user.role === 'ADMIN') jobs.push(['project-closure', 'التقرير الختامي للمشروع', getProjectClosure().then((report) => report ? [report] : [])]);
+    if (sectionKeySignature) {
+      const requestedKeys = sectionKeySignature.split('|') as WorkflowSectionKey[];
+      jobs = jobs.filter(([key]) => requestedKeys.includes(key));
+    }
     const settled = await Promise.allSettled(jobs.map((job) => job[2]));
     setSections(settled.map((result, index) => {
       const [key, title] = jobs[index];
@@ -42,7 +48,7 @@ export function WorkflowHub({ user }: { user: CurrentUser }) {
       const body = result.value as { items?: WorkflowRecord[] };
       return { key, title, rows: Array.isArray(body) ? body : body.items ?? [] };
     }));
-  }, [user.role]);
+  }, [user.role, sectionKeySignature]);
   useEffect(() => { void load(); }, [load]);
 
   async function act(action: () => Promise<unknown>, success = 'تم تنفيذ العملية وتحديث البيانات.', credentialEmail = '') {
@@ -66,11 +72,11 @@ export function WorkflowHub({ user }: { user: CurrentUser }) {
     {message && <p role="status" style={message.startsWith('تم') ? successStyle : errorStyle}>{message}</p>}
     {credential && <section style={{ ...cardStyle, border: '2px solid #d46a2e' }}><h2>بيانات الدخول المؤقتة — تُعرض مرة واحدة</h2><p>البريد: <b dir="ltr">{credential.email}</b></p><p>كلمة المرور المؤقتة: <b dir="ltr">{credential.password}</b></p><button style={secondaryButtonStyle} onClick={() => setCredential(null)}>فهمت وحفظت البيانات بأمان</button></section>}
     <div className="workflow-toolbar">
-      {user.role === 'ADMIN' && <button style={primaryButtonStyle} onClick={() => setForm({ kind: 'purchase-order' })}>إنشاء أمر شراء</button>}
-      {user.role === 'ADMIN' && <button style={secondaryButtonStyle} onClick={() => void act(() => generateProjectClosure(), 'تم توليد التقرير الختامي من البيانات المغلقة.')}>توليد تقرير المشروع</button>}
-      <button style={secondaryButtonStyle} onClick={() => setForm({ kind: 'escalation' })}>فتح تصعيد تشغيلي</button>
+      {user.role === 'ADMIN' && sectionKeys?.includes('procurement') && <button style={primaryButtonStyle} onClick={() => setForm({ kind: 'purchase-order' })}>إنشاء أمر شراء</button>}
+      {user.role === 'ADMIN' && sectionKeys?.includes('project-closure') && <button style={secondaryButtonStyle} onClick={() => void act(() => generateProjectClosure(), 'تم توليد التقرير الختامي من البيانات المغلقة.')}>توليد تقرير المشروع</button>}
+      {sectionKeys?.includes('escalations') && <button style={secondaryButtonStyle} onClick={() => setForm({ kind: 'escalation' })}>فتح تصعيد تشغيلي</button>}
     </div>
-    {user.role === 'ADMIN' && <BusinessCalendarSettings busy={busy} act={act} />}
+    {user.role === 'ADMIN' && sectionKeys?.includes('escalations') && <BusinessCalendarSettings busy={busy} act={act} />}
     {form && <OperationalForm form={form} user={user} associations={associationOptions} busy={busy} close={() => setForm(null)} act={act} />}
     {sections.map((section) => <section key={section.key} style={cardStyle}><h2>{section.title}</h2>{section.error ? <p style={errorStyle}>{section.error}</p> : section.rows.length === 0 ? <p>لا توجد عناصر تحتاج إجراء.</p> : section.rows.map((row) => <OperationalRow key={row.id} user={user} section={section.key} row={row} busy={busy} setForm={setForm} act={act} />)}</section>)}
   </div>;

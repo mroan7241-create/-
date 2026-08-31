@@ -47,7 +47,7 @@ export class AuthController {
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'تسجيل دخول ADMIN/ASSOCIATION (بريد+كلمة مرور) أو DELEGATE (رمز دخول)' })
+  @ApiOperation({ summary: 'تسجيل دخول ADMIN/ASSOCIATION/ABANMI (بريد+كلمة مرور) أو DELEGATE (رمز دخول)' })
   async login(@Body() dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const meta = requestMeta(req);
     const result =
@@ -77,7 +77,7 @@ export class AuthController {
   }
 
   @Patch('password')
-  @Roles(AccountRole.ADMIN, AccountRole.ASSOCIATION)
+  @Roles(AccountRole.ADMIN, AccountRole.ASSOCIATION, AccountRole.ABANMI)
   @AllowMustChangePassword()
   @ApiOperation({ summary: 'تغيير كلمة المرور — يعمل حتى إذا mustChangePassword=true؛ يُبطل كل الجلسات بعد النجاح' })
   async changePassword(@CurrentUser() ctx: AuthContext, @Body() dto: ChangePasswordDto, @Res({ passthrough: true }) res: Response) {

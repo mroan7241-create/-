@@ -122,6 +122,6 @@ export class ApplicationsController {
   @Post('association-applications/selection/commit')
   @Roles(AccountRole.ADMIN)
   selectionCommit(@CurrentUser() ctx: AuthContext, @Body() dto: SelectionCommitDto) {
-    return this.applications.commitSelection(ctx, dto.mainTargetCount, dto.supporterApprovalReference, dto.opId);
+    return this.applications.commitSelection(ctx, dto.mainTargetCount, dto.opId);
   }
 }

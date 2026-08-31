@@ -3,5 +3,5 @@ import { AccountRole } from '@alzad/db';
 
 export const ROLES_KEY = 'roles';
 
-/** الأدوار الثلاثة الحالية فقط — ADMIN/ASSOCIATION/DELEGATE. ممنوع إضافة دور رابع. */
+/** الأدوار المعتمدة تُطبَّق مركزيًا عبر الحارس العام. */
 export const Roles = (...roles: AccountRole[]) => SetMetadata(ROLES_KEY, roles);

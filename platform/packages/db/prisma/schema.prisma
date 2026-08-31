@@ -45,6 +45,7 @@ enum AccountRole {
   ADMIN
   ASSOCIATION
   DELEGATE
+  ABANMI
 }
 
 enum AccountStatus {

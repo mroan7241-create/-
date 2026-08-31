@@ -60,7 +60,11 @@ export class AuthService {
     });
 
     const account = credential?.account;
-    const roleOk = account && (account.role === AccountRole.ADMIN || account.role === AccountRole.ASSOCIATION);
+    const roleOk = account && (
+      account.role === AccountRole.ADMIN ||
+      account.role === AccountRole.ASSOCIATION ||
+      account.role === AccountRole.ABANMI
+    );
     const passwordOk = credential && (await verifySecret(credential.secretHash, password));
 
     if (!credential || !account || account.status !== AccountStatus.ACTIVE || !roleOk || !passwordOk) {
@@ -232,7 +236,7 @@ export class AuthService {
     let eligible =
       !!account &&
       account.status === AccountStatus.ACTIVE &&
-      (account.role === AccountRole.ADMIN || account.role === AccountRole.ASSOCIATION);
+      (account.role === AccountRole.ADMIN || account.role === AccountRole.ASSOCIATION || account.role === AccountRole.ABANMI);
     if (eligible && account!.role === AccountRole.ASSOCIATION) {
       eligible = !!account!.association && account!.association.status === AssociationStatus.ACTIVE;
     }

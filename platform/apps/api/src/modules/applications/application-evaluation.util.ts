@@ -8,7 +8,7 @@ export const APPLICATION_EVALUATION_WEIGHTS = {
 } as const;
 
 export type EvaluationCriterion = keyof typeof APPLICATION_EVALUATION_WEIGHTS;
-export type EvaluationInput = Record<EvaluationCriterion, number> & { geographicProjectNeed: number };
+export type EvaluationInput = Record<EvaluationCriterion, number>;
 
 export function scoreApplication(input: EvaluationInput) {
   const weighted: Record<string, number> = {};
@@ -19,13 +19,10 @@ export function scoreApplication(input: EvaluationInput) {
     const points = Math.round((raw * weight)) / 100;
     weighted[key] = points; total += points;
   }
-  if (!Number.isFinite(input.geographicProjectNeed) || input.geographicProjectNeed < 0 || input.geographicProjectNeed > 100) {
-    throw new Error('Invalid evaluation criterion: geographicProjectNeed');
-  }
   return { total: Math.round(total * 100) / 100, breakdown: { raw: input, weighted, weights: APPLICATION_EVALUATION_WEIGHTS } };
 }
 
-export interface RankedApplication { id: string; score: number; operationalReadiness: number; technicalCapability: number; geographicProjectNeed: number; }
+export interface RankedApplication { id: string; score: number; }
 export function rankApplications<T extends RankedApplication>(items: T[]): T[] {
-  return [...items].sort((a, b) => b.score - a.score || b.operationalReadiness - a.operationalReadiness || b.technicalCapability - a.technicalCapability || b.geographicProjectNeed - a.geographicProjectNeed || a.id.localeCompare(b.id));
+  return [...items].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
 }
