@@ -575,26 +575,43 @@ export class DeliveriesService {
   // ================================================================
   // listDeliveries — عزل الأدوار: DELEGATE مهامه فقط، ASSOCIATION جمعيتها فقط، ADMIN الكل
   // ================================================================
-  async delegatePortal(ctx: AuthContext) {
+  async delegatePortal(ctx: AuthContext, params: { activePage?: number; historyPage?: number; pageSize?: number }) {
     if (ctx.role !== AccountRole.DELEGATE) throw authForbidden();
-    const rows = await prisma.deliveryMission.findMany({
-      where: { delegateAccountId: ctx.accountId },
-      select: {
-        id: true, publicCode: true, status: true, assignedAt: true, scheduledFor: true, createdAt: true,
-        beneficiaryId: true, associationId: true, delegateAccountId: true,
-        beneficiary: { select: {
-          name: true, region: true, city: true, district: true, phone: true, latitude: true, longitude: true,
-          needs: { where: { decisionStatus: NeedDecisionStatus.APPROVED }, select: { deviceType: true }, orderBy: { createdAt: 'asc' as const } },
-        } },
-        delegate: { select: { name: true, phone: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activePagination = normalizePagination({ page: params.activePage, pageSize: params.pageSize });
+    const historyPagination = normalizePagination({ page: params.historyPage, pageSize: params.pageSize });
     const historyStatuses: DeliveryStatus[] = [DeliveryStatus.DELIVERY_CLOSED, DeliveryStatus.DELIVERED, DeliveryStatus.RETURNED];
+    const select = {
+      id: true, publicCode: true, status: true, assignedAt: true, scheduledFor: true, createdAt: true,
+      beneficiaryId: true, associationId: true, delegateAccountId: true,
+      beneficiary: { select: {
+        name: true, region: true, city: true, district: true, phone: true, latitude: true, longitude: true,
+        needs: { where: { decisionStatus: NeedDecisionStatus.APPROVED }, select: { deviceType: true }, orderBy: { createdAt: 'asc' as const } },
+      } },
+      delegate: { select: { name: true, phone: true } },
+    } satisfies Prisma.DeliveryMissionSelect;
+    const activeWhere: Prisma.DeliveryMissionWhereInput = { delegateAccountId: ctx.accountId, status: { notIn: historyStatuses } };
+    const historyWhere: Prisma.DeliveryMissionWhereInput = { delegateAccountId: ctx.accountId, status: { in: historyStatuses } };
+    const [activeItems, activeTotal, historyItems, historyTotal] = await prisma.$transaction([
+      prisma.deliveryMission.findMany({
+        where: activeWhere,
+        select,
+        orderBy: { createdAt: 'desc' },
+        skip: activePagination.skip,
+        take: activePagination.take,
+      }),
+      prisma.deliveryMission.count({ where: activeWhere }),
+      prisma.deliveryMission.findMany({
+        where: historyWhere,
+        select,
+        orderBy: { createdAt: 'desc' },
+        skip: historyPagination.skip,
+        take: historyPagination.take,
+      }),
+      prisma.deliveryMission.count({ where: historyWhere }),
+    ]);
     return {
-      active: rows.filter((row) => !historyStatuses.includes(row.status)),
-      history: rows.filter((row) => historyStatuses.includes(row.status)),
-      performance: { browserRequests: 1, previousMinimumRequests: 9, truncated: false },
+      active: toPaginatedResult(activeItems, activeTotal, activePagination.page, activePagination.pageSize),
+      history: toPaginatedResult(historyItems, historyTotal, historyPagination.page, historyPagination.pageSize),
     };
   }
 

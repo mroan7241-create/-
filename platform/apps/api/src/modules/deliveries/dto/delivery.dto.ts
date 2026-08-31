@@ -1,7 +1,32 @@
-import { IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
 import { DeliveryFailureReason, DeliveryStatus } from '@alzad/db';
 import { DeliveryApprovalDecision, ReturnCondition } from '@alzad/db';
 import { PaginationQueryDto } from '../../../common/validation/pagination-query.dto';
+import { MAX_PAGE, MAX_PAGE_SIZE } from '../../../common/pagination.util';
+
+export class DelegatePortalQueryDto {
+  @IsOptional()
+  @Transform(({ value }) => (value === undefined || value === '' ? undefined : Number(value)))
+  @IsInt()
+  @Min(1)
+  @Max(MAX_PAGE)
+  activePage?: number;
+
+  @IsOptional()
+  @Transform(({ value }) => (value === undefined || value === '' ? undefined : Number(value)))
+  @IsInt()
+  @Min(1)
+  @Max(MAX_PAGE)
+  historyPage?: number;
+
+  @IsOptional()
+  @Transform(({ value }) => (value === undefined || value === '' ? undefined : Number(value)))
+  @IsInt()
+  @Min(1)
+  @Max(MAX_PAGE_SIZE)
+  pageSize?: number;
+}
 
 /** يوازي assignDelegate القديمة — يشترط اكتمال كل احتياجات المستفيد المعتمدة (NODE-5) أولًا. */
 export class AssignDelegateDto {

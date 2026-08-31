@@ -53,7 +53,7 @@ describe('final operational workflows', () => {
       const evaluation = await http().post(`/api/v1/association-applications/${application.id}/evaluation`).set('Cookie', adminCookie).send({
         operationalReadiness: 100, technicalCapability: 100, previousExperience: 100,
         integrityTransparency: 100, participationCommitment: 100, sustainabilityImpact: 100,
-        geographicProjectNeed: 100, opId: opId('evaluation'),
+        opId: opId('evaluation'),
       });
       expect(evaluation.status).toBe(201);
       expect(evaluation.body.temporaryPassword).toBeUndefined();
@@ -65,7 +65,7 @@ describe('final operational workflows', () => {
       expect(preview.body.items.some((item: { id: string; passesThreshold: boolean }) => item.id === application.id && item.passesThreshold)).toBe(true);
 
       const commit = await http().post('/api/v1/association-applications/selection/commit').set('Cookie', adminCookie)
-        .send({ mainTargetCount: 1, supporterApprovalReference: 'E2E-DERIVED-SELECTION', opId: opId('selection') });
+        .send({ mainTargetCount: 1, opId: opId('selection') });
       expect(commit.status).toBe(201);
       expect(commit.body).toMatchObject({ ok: true, main: 1 });
       expect(commit.body.temporaryPassword).toBeUndefined();

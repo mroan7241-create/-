@@ -1,6 +1,6 @@
 import request from 'supertest';
 import { INestApplication } from '@nestjs/common';
-import { AccountRole, AccountStatus, AuthCredentialType, prisma } from '@alzad/db';
+import { AccountRole, AccountStatus, AuthCredentialType, DeliveryStatus, prisma } from '@alzad/db';
 import { createTestApp } from './utils/bootstrap';
 import { cleanAuthState, hashSecret, seedTestFixtures } from './utils/fixtures';
 
@@ -76,19 +76,30 @@ describe('ABANMI — read-only portal and privacy boundary', () => {
     const adminCookie = adminLogin.headers['set-cookie'][0].split(';')[0];
     const admin = await request(app.getHttpServer()).get('/api/v1/dashboard/admin').set('Cookie', adminCookie);
     expect(admin.status).toBe(200);
-    expect(admin.body.performance).toEqual({ browserRequests: 1, replacesBrowserRequests: 20 });
+    expect(admin.body).not.toHaveProperty('performance');
+    expect(admin.body.counts.associations).toBe(await prisma.association.count({ where: { archivedAt: null } }));
+    expect(admin.body.counts.totalBeneficiaries).toBe(await prisma.beneficiary.count({ where: { archivedAt: null } }));
 
     const associationLogin = await request(app.getHttpServer()).post('/api/v1/auth/login').send({ type: 'user', email: fixtures.assocEmail, password: fixtures.assocPassword });
     const associationCookie = associationLogin.headers['set-cookie'][0].split(';')[0];
     const association = await request(app.getHttpServer()).get('/api/v1/dashboard/association').set('Cookie', associationCookie);
     expect(association.status).toBe(200);
-    expect(association.body.performance).toEqual({ browserRequests: 1, replacesBrowserRequests: 11 });
+    expect(association.body).not.toHaveProperty('performance');
+    expect(association.body.counts.beneficiariesTotal).toBe(await prisma.beneficiary.count({ where: { associationId: fixtures.activeAssociationId, archivedAt: null } }));
 
     const delegateLogin = await request(app.getHttpServer()).post('/api/v1/auth/login').send({ type: 'delegate', code: fixtures.delegateCode });
     const delegateCookie = delegateLogin.headers['set-cookie'][0].split(';')[0];
     const delegate = await request(app.getHttpServer()).get('/api/v1/deliveries/delegate-portal').set('Cookie', delegateCookie);
     expect(delegate.status).toBe(200);
-    expect(delegate.body.performance).toEqual({ browserRequests: 1, previousMinimumRequests: 9, truncated: false });
+    expect(delegate.body).not.toHaveProperty('performance');
+    expect(delegate.body.active).toMatchObject({ page: 1, pageSize: 25 });
+    expect(delegate.body.history).toMatchObject({ page: 1, pageSize: 25 });
+    expect(Array.isArray(delegate.body.active.items)).toBe(true);
+    expect(Array.isArray(delegate.body.history.items)).toBe(true);
+    const delegateAccount = await prisma.account.findUniqueOrThrow({ where: { publicCode: 'E2E-MND-0001' } });
+    const historyStatuses = [DeliveryStatus.DELIVERY_CLOSED, DeliveryStatus.DELIVERED, DeliveryStatus.RETURNED];
+    expect(delegate.body.active.total).toBe(await prisma.deliveryMission.count({ where: { delegateAccountId: delegateAccount.id, status: { notIn: historyStatuses } } }));
+    expect(delegate.body.history.total).toBe(await prisma.deliveryMission.count({ where: { delegateAccountId: delegateAccount.id, status: { in: historyStatuses } } }));
   });
 
   it('creates an ABANMI account only through ADMIN and returns its temporary password once', async () => {

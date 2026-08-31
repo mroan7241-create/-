@@ -106,7 +106,7 @@ describe('Auth — session lifecycle / mustChangePassword / roles / tenant conte
   // 12) mustChangePassword gating
   it('mustChangePassword=true يمنع أي endpoint محمي عادي (بلا @AllowMustChangePassword) بخطأ 403 موحَّد', async () => {
     const cookie = await loginAs(fixtures.mustChangeAssocEmail, fixtures.mustChangeAssocPassword);
-    const res = await http().get('/api/v1/accounts/_module-status').set('Cookie', cookie);
+    const res = await http().get('/api/v1/associations/me/settings').set('Cookie', cookie);
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('AUTH_PASSWORD_CHANGE_REQUIRED');
   });
@@ -135,7 +135,7 @@ describe('Auth — session lifecycle / mustChangePassword / roles / tenant conte
 
     // Sessions are all revoked after password change — must log in again to prove mustChangePassword flipped to false.
     const relogin = await loginAs(fixtures.mustChangeAssocEmail2, 'AnotherNewPass789');
-    const status = await http().get('/api/v1/accounts/_module-status').set('Cookie', relogin);
+    const status = await http().get('/api/v1/associations/me/settings').set('Cookie', relogin);
     expect(status.status).toBe(200);
     const me = await http().get('/api/v1/auth/me').set('Cookie', relogin);
     expect(me.body.mustChangePassword).toBe(false);

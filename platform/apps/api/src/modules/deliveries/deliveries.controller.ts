@@ -7,7 +7,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthContext } from '../auth/auth.types';
 import { RECEIPT_EVIDENCE_MAX_BYTES } from '../files/file-validation.util';
 import { DeliveriesService } from './deliveries.service';
-import { ApproveDeliveryDto, AssignDelegateDto, ConfirmDeliveryDto, ConfirmHandoverDto, ConfirmReturnDto, FailDeliveryDto, ListDeliveriesQueryDto, RescheduleDeliveryDto, RetryDeliveryDto, ReturnDeliveryDto } from './dto/delivery.dto';
+import { ApproveDeliveryDto, AssignDelegateDto, ConfirmDeliveryDto, ConfirmHandoverDto, ConfirmReturnDto, DelegatePortalQueryDto, FailDeliveryDto, ListDeliveriesQueryDto, RescheduleDeliveryDto, RetryDeliveryDto, ReturnDeliveryDto } from './dto/delivery.dto';
 
 interface ConfirmFiles {
   proofPhoto?: Express.Multer.File[];
@@ -27,9 +27,9 @@ export class DeliveriesController {
 
   @Get('delegate-portal')
   @Roles(AccountRole.DELEGATE)
-  @ApiOperation({ summary: 'مهام المندوب النشطة والسجل في استعلام خادمي واحد بلا حد أول 100' })
-  delegatePortal(@CurrentUser() ctx: AuthContext) {
-    return this.deliveries.delegatePortal(ctx);
+  @ApiOperation({ summary: 'مهام المندوب النشطة والسجل في طلب موحد مع ترقيم خادمي مستقل' })
+  delegatePortal(@CurrentUser() ctx: AuthContext, @Query() query: DelegatePortalQueryDto) {
+    return this.deliveries.delegatePortal(ctx, query);
   }
 
   @Get()

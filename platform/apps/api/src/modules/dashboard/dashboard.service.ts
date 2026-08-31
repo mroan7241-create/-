@@ -38,7 +38,6 @@ export class DashboardService {
       counts: { pendingApplications, associations, activeAssociations, inactiveAssociations, totalBeneficiaries, approvedBeneficiaries, beneficiariesPendingReview, rejectedBeneficiaries, warehouseDevices, allocatedDevices, damagedDevices, receiptsAwaitingConfirmation, delegates, devicesWithDelegate, devicesDelivered, deliveriesPreparing, deliveriesOutWithDelegate, deliveriesFailed },
       activities,
       recentOperations,
-      performance: { browserRequests: 1, replacesBrowserRequests: 20 },
     };
   }
 
@@ -61,7 +60,6 @@ export class DashboardService {
     return {
       counts: { beneficiariesTotal, beneficiariesPendingReview, receiptsAwaitingConfirmation, devicesAllocated, delegates, devicesWithDelegate, devicesDelivered, deliveriesPendingApproval, deliveriesPendingReturnApproval, deliveriesDeferred },
       recentOperations,
-      performance: { browserRequests: 1, replacesBrowserRequests: 11 },
     };
   }
 }

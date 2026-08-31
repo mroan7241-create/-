@@ -13,12 +13,18 @@ import { cardStyle, errorStyle, inputStyle, labelStyle, modalOverlayStyle, modal
 import { buildGoogleMapsSegments, orderStopsNearestNeighbour, type RoutePoint } from './delegate-route';
 
 type Tab = 'tasks' | 'route' | 'history';
+type MissionPage = { items: DeliveryMissionSummary[]; total: number; page: number; pageSize: number; totalPages: number };
 export default function DelegatePortalPage() {
   const { user, loading } = useRoleGuard(['DELEGATE']);
   const router = useRouter();
   const [tab, setTab] = useState<Tab>('tasks');
   const [missions, setMissions] = useState<DeliveryMissionSummary[] | null>(null);
   const [history, setHistory] = useState<DeliveryMissionSummary[]>([]);
+  const [activePage, setActivePage] = useState(1);
+  const [activeTotal, setActiveTotal] = useState(0);
+  const [activeTotalPages, setActiveTotalPages] = useState(1);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyTotalPages, setHistoryTotalPages] = useState(1);
   const [error, setError] = useState('');
   const [modal, setModal] = useState<{ type: 'deliver' | 'fail' | 'reschedule' | 'return' | 'location'; mission: DeliveryMissionSummary } | null>(null);
   const [routeStart, setRouteStart] = useState<RoutePoint | undefined>();
@@ -27,11 +33,14 @@ export default function DelegatePortalPage() {
   const load = useCallback(async () => {
     setError('');
     try {
-      const result = await apiFetch<{ active: DeliveryMissionSummary[]; history: DeliveryMissionSummary[] }>('/deliveries/delegate-portal');
-      setMissions(result.active);
-      setHistory(result.history);
+      const result = await apiFetch<{ active: MissionPage; history: MissionPage }>(`/deliveries/delegate-portal?activePage=${activePage}&historyPage=${historyPage}`);
+      setMissions(result.active.items);
+      setActiveTotal(result.active.total);
+      setActiveTotalPages(result.active.totalPages);
+      setHistory(result.history.items);
+      setHistoryTotalPages(result.history.totalPages);
     } catch (caught) { setError(caught instanceof ApiClientError ? caught.message : 'تعذّر تحميل مهام المندوب.'); }
-  }, []);
+  }, [activePage, historyPage]);
   useEffect(() => { if (user) void load(); }, [user, load]);
 
   const routeMissions = useMemo(() => {
@@ -53,7 +62,7 @@ export default function DelegatePortalPage() {
 
   if (loading || !user) return null;
   return <main className="delegate-shell" dir="rtl">
-    <header className="delegate-header"><div><span className="delegate-eyebrow">منصة الزاد الميدانية</span><h1>مرحبًا، {user.name}</h1><p>{missions?.length ?? 0} مهمة تشغيلية</p></div><button style={secondaryButtonStyle} onClick={async () => { await logout().catch(() => undefined); router.push('/login'); }}>خروج</button></header>
+    <header className="delegate-header"><div><span className="delegate-eyebrow">منصة الزاد الميدانية</span><h1>مرحبًا، {user.name}</h1><p>{activeTotal} مهمة تشغيلية</p></div><button style={secondaryButtonStyle} onClick={async () => { await logout().catch(() => undefined); router.push('/login'); }}>خروج</button></header>
     <nav className="delegate-tabs" aria-label="أقسام بوابة المندوب">
       <TabButton active={tab === 'tasks'} onClick={() => setTab('tasks')}>مهامي</TabButton>
       <TabButton active={tab === 'route'} onClick={() => setTab('route')}>مسار اليوم</TabButton>
@@ -61,15 +70,16 @@ export default function DelegatePortalPage() {
     </nav>
     {error && <p role="alert" style={errorStyle}>{error}</p>}
 
-    {tab === 'tasks' && <TasksView missions={missions ?? []} onAction={(type, mission) => setModal({ type, mission })} onReload={load} setError={setError} />}
+    {tab === 'tasks' && <><TasksView missions={missions ?? []} onAction={(type, mission) => setModal({ type, mission })} onReload={load} setError={setError} /><Pager page={activePage} totalPages={activeTotalPages} onChange={setActivePage} /></>}
     {tab === 'route' && <section>
       <div className="delegate-section-heading"><div><h2>مسار اليوم</h2><p>ترتيب حتمي بالأقرب فالأقرب للمهمات الجاهزة ذات الإحداثيات.</p></div><button style={secondaryButtonStyle} disabled={locating} onClick={useCurrentLocation}>{locating ? 'جارٍ تحديد الموقع…' : 'ابدأ من موقعي'}</button></div>
       <div className="route-actions">{routeLinks.map((url, index) => <a key={url} className="route-link" href={url} target="_blank" rel="noreferrer">فتح المسار في خرائط Google{routeLinks.length > 1 ? ` — الجزء ${index + 1}` : ''}</a>)}</div>
       {!routeMissions.length && <Empty text="لا توجد مهام جاهزة لمسار اليوم بإحداثيات مكتملة." />}
       {routeMissions.map((mission, index) => <MissionCard key={mission.id} mission={mission} order={index + 1} />)}
       {!!missingCoordinates.length && <div style={cardStyle}><h3>تحتاج تحديث الموقع</h3>{missingCoordinates.map((mission) => <button key={mission.id} style={secondaryButtonStyle} onClick={() => setModal({ type: 'location', mission })}>{mission.beneficiary.name} — تحديث الإحداثيات</button>)}</div>}
+      <Pager page={activePage} totalPages={activeTotalPages} onChange={setActivePage} />
     </section>}
-    {tab === 'history' && <section><div className="delegate-section-heading"><div><h2>السجل</h2><p>التسليمات المغلقة والمرتجعات المكتملة.</p></div></div>{!history.length && <Empty text="لا يوجد سجل مكتمل بعد." />}{history.map((mission) => <MissionCard key={mission.id} mission={mission} onViewProof={() => void viewProof(mission, setError)} />)}</section>}
+    {tab === 'history' && <section><div className="delegate-section-heading"><div><h2>السجل</h2><p>التسليمات المغلقة والمرتجعات المكتملة.</p></div></div>{!history.length && <Empty text="لا يوجد سجل مكتمل بعد." />}{history.map((mission) => <MissionCard key={mission.id} mission={mission} onViewProof={() => void viewProof(mission, setError)} />)}<Pager page={historyPage} totalPages={historyTotalPages} onChange={setHistoryPage} /></section>}
 
     {modal?.type === 'deliver' && <DeliveryModal mission={modal.mission} close={() => setModal(null)} done={async () => { setModal(null); await load(); }} />}
     {modal?.type === 'fail' && <FailureModal mission={modal.mission} close={() => setModal(null)} done={async () => { setModal(null); await load(); }} />}
@@ -126,6 +136,7 @@ function Dialog({ title, close, children }: { title: string; close: () => void; 
 function Action({ label, run, primary }: { label: string; run: () => void | Promise<void>; primary?: boolean }) { return <button style={primary ? primaryButtonStyle : secondaryButtonStyle} onClick={() => void run()}>{label}</button>; }
 function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) { return <button className={active ? 'active' : ''} aria-current={active ? 'page' : undefined} onClick={onClick}>{children}</button>; }
 function Empty({ text }: { text: string }) { return <div style={cardStyle}><p style={mutedStyle}>{text}</p></div>; }
+function Pager({ page, totalPages, onChange }: { page: number; totalPages: number; onChange: (page: number) => void }) { if (totalPages <= 1) return null; return <nav className="button-row" aria-label="صفحات المهام"><button style={secondaryButtonStyle} disabled={page <= 1} onClick={() => onChange(page - 1)}>السابق</button><span style={mutedStyle}>صفحة {page} من {totalPages}</span><button style={secondaryButtonStyle} disabled={page >= totalPages} onClick={() => onChange(page + 1)}>التالي</button></nav>; }
 type ModalProps = { mission: DeliveryMissionSummary; close: () => void; done: () => Promise<void> };
 function hasCoordinates(mission: DeliveryMissionSummary) { return mission.beneficiary.latitude != null && mission.beneficiary.longitude != null; }
 function isTodayOrReady(value: string | null) { if (!value) return true; return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Riyadh' }).format(new Date(value)) === new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Riyadh' }).format(new Date()); }

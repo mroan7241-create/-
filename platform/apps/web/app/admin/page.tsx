@@ -269,35 +269,6 @@ export default function AdminDashboardPage() {
             </div>
           </div>
 
-          <div className="zad-module2 zad-activities-wide2">
-            <div className="zad-module2-head">
-              <span className="zad-module2-icon"><ScrollText size={18} strokeWidth={1.9} aria-hidden="true" /></span>
-              <div>
-                <Link className="zad-module2-title-link" href="/admin/activities">أنشطة المشروع</Link>
-                <div className="zad-module2-sub">نظرة عامة على مراحل المشروع</div>
-              </div>
-            </div>
-            {projectSchedule ? (
-              <>
-                <div className="zad-secondary-row2">
-                  <Link className="zad-seg-col2" href="/admin/activities"><span className="zad-sv2 zad-c1">{projectSchedule.total}</span><span className="zad-sl2">إجمالي الأنشطة</span></Link>
-                  <Link className="zad-seg-col2" href="/admin/activities"><span className="zad-sv2 zad-c-good">{projectSchedule.actualCompleted}</span><span className="zad-sl2">المكتمل</span></Link>
-                  <Link className="zad-seg-col2" href="/admin/activities"><span className="zad-sv2 zad-c2">{projectSchedule.delayedCount}</span><span className="zad-sl2">متأخر</span></Link>
-                </div>
-                <div className="zad-link-rail2" role="img" aria-label="تقدّم أنشطة المشروع">
-                  <RailSeg tone="c-good" value={projectSchedule.actualCompleted} total={projectSchedule.total} />
-                  <RailSeg tone="c2" value={projectSchedule.delayedCount} total={projectSchedule.total} />
-                </div>
-                <div className="zad-activities-context2">
-                  الحالي: <b>{projectSchedule.current ? `${projectSchedule.current.order}. ${projectSchedule.current.name}` : '—'}</b>
-                  {' · '}القادم: <b>{projectSchedule.upcoming ? `${projectSchedule.upcoming.order}. ${projectSchedule.upcoming.name}` : '—'}</b>
-                </div>
-              </>
-            ) : (
-              <div className="zad-activities-context2">لا يوجد جدول أنشطة بعد.</div>
-            )}
-          </div>
-
           <div className="zad-section-head2">
             <div className="zad-framed-title2"><div className="zad-rule2" /><h2>يحتاج انتباهك الآن</h2></div>
             <span className="zad-section-meta2">{attn.length} بنود</span>
@@ -355,6 +326,35 @@ export default function AdminDashboardPage() {
                 </div>
               )}
             </div>
+          </div>
+
+          <div className="zad-module2 zad-activities-wide2">
+            <div className="zad-module2-head">
+              <span className="zad-module2-icon"><ScrollText size={18} strokeWidth={1.9} aria-hidden="true" /></span>
+              <div>
+                <Link className="zad-module2-title-link" href="/admin/activities">أنشطة المشروع</Link>
+                <div className="zad-module2-sub">نظرة عامة على مراحل المشروع</div>
+              </div>
+            </div>
+            {projectSchedule ? (
+              <>
+                <div className="zad-secondary-row2">
+                  <Link className="zad-seg-col2" href="/admin/activities"><span className="zad-sv2 zad-c1">{projectSchedule.total}</span><span className="zad-sl2">إجمالي الأنشطة</span></Link>
+                  <Link className="zad-seg-col2" href="/admin/activities"><span className="zad-sv2 zad-c-good">{projectSchedule.actualCompleted}</span><span className="zad-sl2">المكتمل</span></Link>
+                  <Link className="zad-seg-col2" href="/admin/activities"><span className="zad-sv2 zad-c2">{projectSchedule.delayedCount}</span><span className="zad-sl2">متأخر</span></Link>
+                </div>
+                <div className="zad-link-rail2" role="img" aria-label="تقدّم أنشطة المشروع">
+                  <RailSeg tone="c-good" value={projectSchedule.actualCompleted} total={projectSchedule.total} />
+                  <RailSeg tone="c2" value={projectSchedule.delayedCount} total={projectSchedule.total} />
+                </div>
+                <div className="zad-activities-context2">
+                  الحالي: <b>{projectSchedule.current ? `${projectSchedule.current.order}. ${projectSchedule.current.name}` : '—'}</b>
+                  {' · '}القادم: <b>{projectSchedule.upcoming ? `${projectSchedule.upcoming.order}. ${projectSchedule.upcoming.name}` : '—'}</b>
+                </div>
+              </>
+            ) : (
+              <div className="zad-activities-context2">لا يوجد جدول أنشطة بعد.</div>
+            )}
           </div>
         </>
       )}
