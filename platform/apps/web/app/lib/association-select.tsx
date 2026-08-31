@@ -73,7 +73,7 @@ export function AssociationSelect({ value, onChange, placeholder }: AssociationS
   }
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div style={{ position: 'relative', zIndex: open ? 20 : 'auto' }}>
       <input
         style={inputStyle}
         placeholder={placeholder ?? 'ابحث باسم الجمعية...'}
@@ -85,14 +85,14 @@ export function AssociationSelect({ value, onChange, placeholder }: AssociationS
         onChange={(e) => setQuery(e.target.value)}
       />
       {open && (
-        <div style={{ position: 'absolute', zIndex: 10, background: 'var(--paper)', border: '1px solid var(--line)', borderRadius: 8, width: '100%', maxHeight: 240, overflowY: 'auto' }}>
+        <div style={{ position: 'absolute', insetBlockStart: 'calc(100% + 4px)', zIndex: 20, background: 'var(--paper)', border: '1px solid var(--line)', borderRadius: 8, width: '100%', maxHeight: 240, overflowY: 'auto' }}>
           {loading && <div style={{ ...mutedStyle, padding: 8 }}>...جارٍ البحث</div>}
           {error && <div style={{ ...errorStyle, padding: 8 }}>{error}</div>}
           {!loading && !error && options.length === 0 && <div style={{ ...mutedStyle, padding: 8 }}>لا نتائج</div>}
           {options.map((a) => (
-            <div key={a.id} style={{ padding: 8, cursor: 'pointer', borderBottom: '1px solid var(--line)' }} onClick={() => pick(a)}>
+            <button key={a.id} type="button" style={{ display: 'block', width: '100%', padding: 8, cursor: 'pointer', border: 0, borderBottom: '1px solid var(--line)', background: 'transparent', color: 'inherit', textAlign: 'start' }} onClick={() => pick(a)}>
               {a.name}
-            </div>
+            </button>
           ))}
         </div>
       )}
