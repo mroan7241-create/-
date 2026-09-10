@@ -27,7 +27,7 @@ async function reportQuery<T>(section: string, query: Promise<T>): Promise<T> {
 @Injectable()
 export class ReportsService {
   async abanmiReport(ctx: AuthContext, query: AbanmiReportQueryDto) {
-    if (ctx.role !== AccountRole.ABANMI) throw authForbidden();
+    if (ctx.role !== AccountRole.ABANMI && ctx.role !== AccountRole.ADMIN) throw authForbidden();
     const from = query.from ? new Date(`${query.from}T00:00:00.000Z`) : undefined;
     const to = query.to ? new Date(`${query.to}T23:59:59.999Z`) : undefined;
     if ((from && !Number.isFinite(from.getTime())) || (to && !Number.isFinite(to.getTime())) || (from && to && from > to)) {
@@ -44,7 +44,7 @@ export class ReportsService {
     const associationIds = associations.map((association) => association.id);
     const createdAt = from || to ? { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } : undefined;
     const scope = { associationId: { in: associationIds } };
-    const [beneficiaries, needs, inventory, deliveries, participations, closures, activities, projectClosure] = await prisma.$transaction([
+    const [beneficiaries, needs, inventory, deliveries, participations, closures, activities, projectClosure, purchaseOrders, shipments, receipts, allocations] = await prisma.$transaction([
       prisma.beneficiary.groupBy({ by: ['associationId', 'reviewStatus'], where: { ...scope, archivedAt: null, ...(createdAt ? { createdAt } : {}) }, orderBy: { associationId: 'asc' }, _count: { _all: true } }),
       prisma.beneficiaryNeed.groupBy({ by: ['associationId', 'deviceType', 'decisionStatus', 'fulfillmentStatus'], where: { ...scope, ...(createdAt ? { createdAt } : {}) }, orderBy: { associationId: 'asc' }, _count: { _all: true } }),
       prisma.deviceUnit.groupBy({ by: ['associationId', 'deviceType', 'status'], where: scope, orderBy: { associationId: 'asc' }, _count: { _all: true } }),
@@ -53,6 +53,10 @@ export class ReportsService {
       prisma.organizationClosureReport.findMany({ where: { participation: { associationId: { in: associationIds } } }, select: { status: true, generatedAt: true, closedAt: true, participation: { select: { associationId: true } } } }),
       prisma.activity.findMany({ orderBy: [{ phaseOrder: 'asc' }, { mainActivityOrder: 'asc' }], select: { id: true, phaseOrder: true, phaseName: true, mainActivityOrder: true, mainActivityName: true, subActivityName: true, completionPercent: true, status: true, startDate: true, endDate: true, evidenceUrl: true } }),
       prisma.projectClosureReport.findUnique({ where: { projectKey: 'electrical-appliances' }, select: { status: true, updatedAt: true } }),
+      prisma.purchaseOrder.groupBy({ by: ['associationId', 'status'], where: { ...scope, ...(createdAt ? { createdAt } : {}) }, orderBy: { associationId: 'asc' }, _count: { _all: true } }),
+      prisma.shipment.groupBy({ by: ['associationId', 'status'], where: { ...scope, ...(createdAt ? { createdAt } : {}) }, orderBy: { associationId: 'asc' }, _count: { _all: true } }),
+      prisma.receiptBatch.groupBy({ by: ['associationId', 'status'], where: { ...scope, ...(createdAt ? { createdAt } : {}) }, orderBy: { associationId: 'asc' }, _count: { _all: true } }),
+      prisma.deviceAllocation.groupBy({ by: ['associationId', 'status'], where: { ...scope, ...(createdAt ? { allocatedAt: createdAt } : {}) }, orderBy: { associationId: 'asc' }, _count: { _all: true } }),
     ]);
     const byRegion = Object.values(associations.reduce<Record<string, { region: string; associations: number }>>((acc, association) => {
       acc[association.region] ??= { region: association.region, associations: 0 };
@@ -76,6 +80,8 @@ export class ReportsService {
       participation: participations,
       associationClosure: closures,
       projectClosure, activities,
+      procurement: { purchaseOrders, shipments, receipts },
+      allocations,
       privacy: { beneficiaryPiiIncluded: false },
     };
   }

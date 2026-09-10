@@ -1,4 +1,4 @@
-import { IsIn, IsInt, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import { IsBooleanString, IsIn, IsInt, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 import { AgreementStatus, CoordinatorChangeStatus } from '@alzad/db';
 export class CreateAgreementDto {
   @IsInt() @Min(1) version!: number;
@@ -7,11 +7,20 @@ export class CreateAgreementDto {
   @IsOptional() @IsString() reference?: string;
 }
 export class AgreementTransitionDto {
-  @IsIn([AgreementStatus.SENT, AgreementStatus.SIGNED_BY_ORG, AgreementStatus.SIGNED, AgreementStatus.CANCELLED, AgreementStatus.SUPERSEDED]) status!: AgreementStatus;
+  @IsIn([AgreementStatus.SENT, AgreementStatus.CANCELLED, AgreementStatus.SUPERSEDED]) status!: AgreementStatus;
   @IsOptional() @IsString() signerName?: string;
   @IsString() opId!: string;
 }
 export class OperationDto { @IsString() opId!: string; }
+export class AssociationCovenantSignDto {
+  @IsString() representativeName!: string;
+  @IsString() representativeTitle!: string;
+  @IsBooleanString() authorizedAcknowledgement!: string;
+  @IsBooleanString() acceptanceAcknowledgement!: string;
+  @IsString() currentPassword!: string;
+  @IsString() opId!: string;
+}
+export class PartyOneCovenantSignDto { @IsString() opId!: string; }
 export class CoordinatorChangeDto {
   @IsString() proposedName!: string; @IsString() proposedPhone!: string;
   @IsOptional() @IsString() proposedEmail?: string; @IsOptional() @IsString() proposedTitle?: string;

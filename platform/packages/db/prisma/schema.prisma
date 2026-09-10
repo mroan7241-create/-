@@ -434,6 +434,8 @@ model Account {
   evaluatedApplications AssociationApplication[] @relation("ApplicationEvaluator")
   participationSetupCompletions ProjectParticipation[] @relation("ParticipationSetupCompletedBy")
   agreementsCreated ParticipationAgreement[] @relation("AgreementCreatedBy")
+  agreementsAssociationSigned ParticipationAgreement[] @relation("AgreementAssociationSigner")
+  agreementSigningSessionsIssued ParticipationAgreement[] @relation("AgreementSigningSessionIssuedBy")
   coordinatorChangesRequested CoordinatorChangeRequest[] @relation("CoordinatorChangeRequestedBy")
   coordinatorChangesDecided CoordinatorChangeRequest[] @relation("CoordinatorChangeDecidedBy")
   beneficiaryListApprovals Beneficiary[] @relation("BeneficiaryListApprovedBy")
@@ -817,7 +819,10 @@ model FileObject {
   deliveryAttemptProof DeliveryAttempt[] @relation("AttemptProofFile")
   deliveryAttemptSignature DeliveryAttempt[] @relation("AttemptSignatureFile")
   activityEvidence  ActivityEvidence[]
-  participationAgreements ParticipationAgreement[]
+  participationAgreements ParticipationAgreement[] @relation("AgreementTemplateFile")
+  participationAgreementOrgSignatures ParticipationAgreement[] @relation("AgreementOrgSignature")
+  participationAgreementPartyOneSignatures ParticipationAgreement[] @relation("AgreementPartyOneSignature")
+  participationAgreementFinalDocuments ParticipationAgreement[] @relation("AgreementFinalDocument")
   escalationEvidence EscalationCase[]
   purchaseOrderDocuments PurchaseOrder[]
 
@@ -1276,6 +1281,7 @@ model ParticipationAgreement {
   participationId    String          @map("participation_id") @db.Uuid
   version            Int
   templateVersion    String          @map("template_version")
+  templateSha256     String?         @map("template_sha256")
   status             AgreementStatus @default(DRAFT)
   fileId             String?         @map("file_id") @db.Uuid
   reference          String?
@@ -1283,17 +1289,34 @@ model ParticipationAgreement {
   signedByOrgAt      DateTime?       @map("signed_by_org_at")
   signedByZaadAt     DateTime?       @map("signed_by_zaad_at")
   orgSignerName      String?         @map("org_signer_name")
+  orgSignerTitle     String?         @map("org_signer_title")
+  associationAccountId String?       @map("association_account_id") @db.Uuid
+  orgSignatureFileId String?         @map("org_signature_file_id") @db.Uuid
   zaadSignerName     String?         @map("zaad_signer_name")
+  partyOneSignatureFileId String?    @map("party_one_signature_file_id") @db.Uuid
+  partyOneSigningTokenHash String?   @unique @map("party_one_signing_token_hash")
+  partyOneSigningExpiresAt DateTime? @map("party_one_signing_expires_at")
+  partyOneSigningConsumedAt DateTime? @map("party_one_signing_consumed_at")
+  partyOneSigningIssuedById String?  @map("party_one_signing_issued_by") @db.Uuid
+  fullyExecutedAt    DateTime?       @map("fully_executed_at")
+  finalFileId        String?         @map("final_file_id") @db.Uuid
+  finalSha256        String?         @map("final_sha256")
   createdById        String          @map("created_by") @db.Uuid
   createdAt          DateTime        @default(now()) @map("created_at")
   updatedAt          DateTime        @updatedAt @map("updated_at")
 
   participation      ProjectParticipation @relation(fields: [participationId], references: [id])
-  file               FileObject?     @relation(fields: [fileId], references: [id])
+  file               FileObject?     @relation("AgreementTemplateFile", fields: [fileId], references: [id])
+  associationAccount Account?        @relation("AgreementAssociationSigner", fields: [associationAccountId], references: [id], onDelete: Restrict)
+  orgSignatureFile   FileObject?     @relation("AgreementOrgSignature", fields: [orgSignatureFileId], references: [id], onDelete: Restrict)
+  partyOneSignatureFile FileObject?  @relation("AgreementPartyOneSignature", fields: [partyOneSignatureFileId], references: [id], onDelete: Restrict)
+  partyOneSigningIssuedBy Account?   @relation("AgreementSigningSessionIssuedBy", fields: [partyOneSigningIssuedById], references: [id], onDelete: Restrict)
+  finalFile          FileObject?     @relation("AgreementFinalDocument", fields: [finalFileId], references: [id], onDelete: Restrict)
   createdBy          Account         @relation("AgreementCreatedBy", fields: [createdById], references: [id])
 
   @@unique([participationId, version])
   @@index([participationId, status])
+  @@index([associationAccountId])
   @@map("participation_agreements")
 }
 

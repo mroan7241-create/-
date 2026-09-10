@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch, ApiClientError } from '../lib/api';
 
@@ -29,6 +29,11 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [showForgotCode, setShowForgotCode] = useState(false);
+  const [showRecovery, setShowRecovery] = useState(false);
+  const [passwordChanged, setPasswordChanged] = useState(false);
+  useEffect(() => {
+    setPasswordChanged(new URLSearchParams(window.location.search).get('passwordChanged') === '1');
+  }, []);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -37,11 +42,11 @@ export default function LoginPage() {
     try {
       const body =
         tab === 'user' ? { type: 'user', email, password } : { type: 'delegate', code };
-      const res = await apiFetch<{ ok: true; user: { mustChangePassword: boolean } }>('/auth/login', {
+      const res = await apiFetch<{ ok: true; user: { role: string; mustChangePassword: boolean; covenantRequired: boolean } }>('/auth/login', {
         method: 'POST',
         body: JSON.stringify(body),
       });
-      router.push(res.user.mustChangePassword ? '/change-password' : '/dashboard');
+      router.push(res.user.mustChangePassword ? '/change-password' : res.user.role === 'ASSOCIATION' && res.user.covenantRequired ? '/association/covenant' : '/dashboard');
     } catch (err) {
       if (err instanceof ApiClientError) {
         setError(ERROR_MESSAGES[err.code] ?? err.message);
@@ -76,7 +81,7 @@ export default function LoginPage() {
             onClick={() => setTab('user')}
             style={tabStyle(tab === 'user')}
           >
-            دخول الإدارة والجمعيات وأبانمي
+            دخول عام
           </button>
           <button
             type="button"
@@ -85,7 +90,7 @@ export default function LoginPage() {
             onClick={() => setTab('delegate')}
             style={tabStyle(tab === 'delegate')}
           >
-            دخول المندوب
+            دخول المناديب
           </button>
         </div>
 
@@ -96,18 +101,20 @@ export default function LoginPage() {
                 البريد الإلكتروني
                 <input
                   type="email"
+                  name="username"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="control"
                   style={inputStyle}
-                  autoComplete="email"
+                  autoComplete="username"
                 />
               </label>
               <label style={labelStyle}>
                 كلمة المرور
                 <input
                   type="password"
+                  name="password"
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -132,6 +139,9 @@ export default function LoginPage() {
             </label>
           )}
 
+          {passwordChanged && <p role="status" style={{ margin: 0, fontSize: 14 }}>تم تغيير كلمة المرور. سجّل الدخول بكلمة المرور الجديدة.</p>}
+          {tab === 'user' && <button type="button" onClick={() => setShowRecovery(!showRecovery)} aria-expanded={showRecovery} style={{ background: 'none', border: 0, padding: 0, textAlign: 'right', color: 'var(--zad-800)', textDecoration: 'underline', cursor: 'pointer' }}>نسيت كلمة المرور؟</button>}
+          {tab === 'user' && showRecovery && <p role="status" style={{ margin: 0, fontSize: 14, lineHeight: 1.7 }}>استعادة كلمة المرور بالبريد غير متاحة حاليًا. للجمعيات وأبانمي: تواصل مع إدارة المشروع لإعادة التعيين. للإدارة: تواصل مع المسؤول التقني للمشروع.</p>}
           {tab === 'delegate' && (
             <p style={{ margin: 0, fontSize: 14 }}>
               <button
@@ -158,8 +168,9 @@ export default function LoginPage() {
         {tab === 'user' && (
           <div className="login-secondary-act" style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
             <a href="/apply" className="btn-ghost" style={ghostButtonStyle}>
-              تقديم طلب انضمام جمعية جديدة
+              التقديم على فرصة المشاركة في مشروع الأجهزة الكهربائية
             </a>
+            <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, textAlign: 'center' }}>يخضع الطلب للمراجعة والتقييم، والتقديم لا يعني القبول.</p>
           </div>
         )}
       </section>
@@ -251,7 +262,9 @@ const submitStyle: React.CSSProperties = {
   cursor: 'pointer',
 };
 const ghostButtonStyle: React.CSSProperties = {
-  padding: '11px 16px',
+  padding: '18px 16px',
+  minHeight: 64,
+  lineHeight: 1.7,
   borderRadius: 'var(--r-sm)',
   border: '1px solid rgba(58,8,27,.2)',
   background: 'rgba(255,255,255,0.4)',

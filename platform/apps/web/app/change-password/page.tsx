@@ -26,7 +26,7 @@ export default function ChangePasswordPage() {
         body: JSON.stringify({ currentPassword, newPassword }),
       });
       // كل الجلسات (بما فيها الحالية) أُبطلت بعد النجاح — لا بد من تسجيل الدخول من جديد.
-      router.push('/login');
+      router.push('/login?passwordChanged=1');
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : 'تعذّر الاتصال بالخادم. حاول مرة أخرى.');
     } finally {
@@ -38,13 +38,15 @@ export default function ChangePasswordPage() {
     <main style={{ maxWidth: 420, margin: '64px auto', padding: '0 20px' }}>
       <h1 style={{ fontSize: 22, marginBottom: 8 }}>يجب تغيير كلمة المرور</h1>
       <p style={{ fontSize: 14, opacity: 0.8, marginBottom: 20 }}>
-        كلمة المرور الحالية مؤقتة — لا يمكن متابعة استخدام النظام قبل تعيين كلمة مرور جديدة.
+        استخدم آخر كلمة مرور مؤقتة صادرة للحساب؛ أي كلمة مرور مؤقتة سابقة تُلغى عند إعادة التعيين.
       </p>
       <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <label style={labelStyle}>
           كلمة المرور الحالية
           <input
             type="password"
+            name="current-password"
+            autoComplete="current-password"
             required
             value={currentPassword}
             onChange={(e) => setCurrentPassword(e.target.value)}
@@ -55,6 +57,8 @@ export default function ChangePasswordPage() {
           كلمة المرور الجديدة
           <input
             type="password"
+            name="new-password"
+            autoComplete="new-password"
             required
             minLength={10}
             value={newPassword}

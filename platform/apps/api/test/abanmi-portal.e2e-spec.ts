@@ -1,8 +1,17 @@
 import request from 'supertest';
 import { INestApplication } from '@nestjs/common';
+import type { Response } from 'superagent';
+import ExcelJS from 'exceljs';
 import { AccountRole, AccountStatus, AuthCredentialType, DeliveryStatus, prisma } from '@alzad/db';
 import { createTestApp } from './utils/bootstrap';
 import { cleanAuthState, hashSecret, seedTestFixtures } from './utils/fixtures';
+
+function parseBinary(response: Response, callback: (error: Error | null, body?: Buffer) => void) {
+  const chunks: Buffer[] = [];
+  response.on('data', (chunk: Buffer) => chunks.push(chunk));
+  response.on('end', () => callback(null, Buffer.concat(chunks)));
+  response.on('error', (error) => callback(error));
+}
 
 describe('ABANMI — read-only portal and privacy boundary', () => {
   let app: INestApplication;
@@ -100,6 +109,30 @@ describe('ABANMI — read-only portal and privacy boundary', () => {
     const historyStatuses = [DeliveryStatus.DELIVERY_CLOSED, DeliveryStatus.DELIVERED, DeliveryStatus.RETURNED];
     expect(delegate.body.active.total).toBe(await prisma.deliveryMission.count({ where: { delegateAccountId: delegateAccount.id, status: { notIn: historyStatuses } } }));
     expect(delegate.body.history.total).toBe(await prisma.deliveryMission.count({ where: { delegateAccountId: delegateAccount.id, status: { in: historyStatuses } } }));
+  });
+
+  it('serves the same PII-safe project report and XLSX to ADMIN', async () => {
+    const adminLogin = await request(app.getHttpServer()).post('/api/v1/auth/login').send({ type: 'user', email: fixtures.adminEmail, password: fixtures.adminPassword });
+    const adminCookie = adminLogin.headers['set-cookie'][0].split(';')[0];
+    const report = await request(app.getHttpServer()).get('/api/v1/reports/admin?from=2026-01-01&to=2026-12-31').set('Cookie', adminCookie);
+    expect(report.status).toBe(200);
+    expect(report.body.privacy).toEqual({ beneficiaryPiiIncluded: false });
+    expect(report.body).toHaveProperty('procurement.purchaseOrders');
+    expect(report.body).toHaveProperty('allocations');
+    expect(JSON.stringify(report.body)).not.toMatch(/secondaryPhone|nationalId|secretHash|tokenHash/);
+
+    const exportResult = await request(app.getHttpServer()).get('/api/v1/reports/admin/export.xlsx?from=2026-01-01&to=2026-12-31').set('Cookie', adminCookie).buffer(true).parse(parseBinary);
+    expect(exportResult.status).toBe(200);
+    expect(exportResult.headers['content-type']).toContain('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    expect(Buffer.isBuffer(exportResult.body)).toBe(true);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(exportResult.body as unknown as ExcelJS.Buffer);
+    const associationSheet = workbook.getWorksheet('حسب الجمعية');
+    expect(associationSheet).toBeDefined();
+    const exportedStatuses: string[] = [];
+    associationSheet?.eachRow((row, rowNumber) => { if (rowNumber > 1) exportedStatuses.push(String(row.getCell(5).value)); });
+    expect(exportedStatuses).toContain('نشط');
+    expect(exportedStatuses).not.toContain('ACTIVE');
   });
 
   it('creates an ABANMI account only through ADMIN and returns its temporary password once', async () => {

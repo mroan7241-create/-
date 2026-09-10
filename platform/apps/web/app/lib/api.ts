@@ -182,6 +182,7 @@ export interface AssociationSummary {
   beneficiariesCount: number;
   devicesCount: number;
   delegatesCount: number;
+  covenant: null | { id: string; status: string; templateVersion: string; reference: string | null; orgSignerName: string | null; signedByOrgAt: string | null; signedByZaadAt: string | null; fullyExecutedAt: string | null; finalFileId: string | null };
 }
 
 export interface CurrentUser {
@@ -191,6 +192,8 @@ export interface CurrentUser {
   role: 'ADMIN' | 'ASSOCIATION' | 'DELEGATE' | 'ABANMI';
   associationId: string | null;
   mustChangePassword: boolean;
+  covenantRequired: boolean;
+  covenantStatus: 'DRAFT' | 'SENT' | 'SIGNED_BY_ORG' | 'SIGNED' | 'CANCELLED' | 'SUPERSEDED' | null;
 }
 
 export function getMe(): Promise<CurrentUser> {
@@ -213,6 +216,12 @@ export interface AbanmiReport {
   associationClosure: Array<{ status: string; generatedAt: string | null; closedAt: string | null; participation: { associationId: string | null } }>;
   projectClosure: { status: string; updatedAt: string } | null;
   activities: Activity[];
+  procurement: {
+    purchaseOrders: Array<{ associationId: string; status: string; _count: { _all: number } }>;
+    shipments: Array<{ associationId: string; status: string; _count: { _all: number } }>;
+    receipts: Array<{ associationId: string; status: string; _count: { _all: number } }>;
+  };
+  allocations: Array<{ associationId: string; status: string; _count: { _all: number } }>;
   privacy: { beneficiaryPiiIncluded: false };
 }
 
@@ -229,6 +238,22 @@ export async function downloadAbanmiReport(params: { from?: string; to?: string;
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url; anchor.download = 'abanmi-project-report.xlsx'; anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+export function getAdminReport(params: { from?: string; to?: string; associationId?: string; region?: string } = {}): Promise<AbanmiReport> {
+  const query = new URLSearchParams(Object.entries(params).filter((entry): entry is [string, string] => Boolean(entry[1])));
+  return apiFetch(`/reports/admin${query.size ? `?${query}` : ''}`);
+}
+
+export async function downloadAdminReport(params: { from?: string; to?: string; associationId?: string; region?: string } = {}) {
+  const query = new URLSearchParams(Object.entries(params).filter((entry): entry is [string, string] => Boolean(entry[1])));
+  const response = await fetch(`${API_BASE}/reports/admin/export.xlsx${query.size ? `?${query}` : ''}`, { credentials: 'include' });
+  if (!response.ok) throw new ApiClientError('EXPORT_FAILED', 'تعذّر تصدير التقرير');
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url; anchor.download = 'alzad-project-report.xlsx'; anchor.click();
   URL.revokeObjectURL(url);
 }
 
@@ -724,10 +749,26 @@ export function confirmDelivery(missionId: string, proofPhoto: File, recipientSi
 // bulk defaults in the UI are advisory and the API remains authoritative.
 export type WorkflowRecord = Record<string, unknown> & { id: string };
 export function listParticipations(): Promise<WorkflowRecord[]> { return apiFetch('/participations'); }
-export function createAgreement(participationId: string, version: number, templateVersion: string) { return apiFetch(`/participations/${participationId}/agreements`, { method: 'POST', body: JSON.stringify({ version, templateVersion, opId: newOpId() }) }); }
+export function createAgreement(participationId: string, version: number, templateVersion: string, reference?: string) { return apiFetch(`/participations/${participationId}/agreements`, { method: 'POST', body: JSON.stringify({ version, templateVersion, reference: reference?.trim() || undefined, opId: newOpId() }) }); }
 export function transitionAgreement(id: string, status: string, signerName?: string) { return apiFetch(`/participations/agreements/${id}/transition`, { method: 'POST', body: JSON.stringify({ status, signerName, opId: newOpId() }) }); }
 export function completeParticipationSetup(id: string) { return apiFetch(`/participations/${id}/setup-complete`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) }); }
 export function activateParticipation(id: string) { return apiFetch(`/participations/${id}/activate`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) }); }
+export function prepareCovenantSigningAccount(id: string) { return apiFetch<{ ok: true; accountId: string; associationId: string; temporaryPassword: string | null }>(`/participations/${id}/signing-account`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) }); }
+export interface CovenantView {
+  id: string; participationId: string; participationStatus: string; associationName: string; status: string; reference: string;
+  version: string; sourceSha256: string; representativeName: string | null; representativeTitle: string | null;
+  associationSignedAt: string | null; partyOneSignedAt: string | null; fullyExecutedAt: string | null;
+  finalSha256: string | null; finalDocumentAvailable: boolean; partyOneRepresentative: string; partyOneTitle: string;
+}
+export function getOwnCovenant(): Promise<CovenantView> { return apiFetch('/participations/covenant'); }
+export function signAssociationCovenant(input: { representativeName: string; representativeTitle: string; currentPassword: string; signature: File }) {
+  const form = new FormData(); form.set('representativeName', input.representativeName); form.set('representativeTitle', input.representativeTitle); form.set('authorizedAcknowledgement', 'true'); form.set('acceptanceAcknowledgement', 'true'); form.set('currentPassword', input.currentPassword); form.set('opId', newOpId()); form.set('signature', input.signature); return apiUpload<{ ok: true; status: string }>('/participations/covenant/sign', form);
+}
+export function issuePartyOneSigningSession(agreementId: string): Promise<{ token: string; path: string; expiresAt: string }> { return apiFetch(`/participations/agreements/${agreementId}/party-one-session`, { method: 'POST' }); }
+export function getPartyOneCovenant(token: string): Promise<Record<string, string | null>> { return apiFetch(`/participations/covenant/party-one/${encodeURIComponent(token)}`); }
+export function signPartyOneCovenant(token: string, signature: File) { const form = new FormData(); form.set('opId', newOpId()); form.set('signature', signature); return apiUpload<{ ok: true; status: string; finalSha256: string }>(`/participations/covenant/party-one/${encodeURIComponent(token)}/sign`, form); }
+export function getFinalCovenantUrl(agreementId?: string): Promise<{ url: string; sha256: string }> { return apiFetch(agreementId ? `/participations/agreements/${agreementId}/final` : '/participations/covenant/final'); }
+export function covenantTemplateUrl(token?: string) { return `${API_BASE}/participations/covenant${token ? `/party-one/${encodeURIComponent(token)}` : ''}/template`; }
 export function listProcurement(): Promise<WorkflowRecord[]> { return apiFetch('/procurement/orders'); }
 export function listEscalations(): Promise<WorkflowRecord[]> { return apiFetch('/escalations'); }
 export function openEscalation(input: { associationId?: string; beneficiaryId?: string; deliveryMissionId?: string; receiptBatchId?: string; category: string; severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'; description: string; requestedAction: string }) { return apiFetch('/escalations', { method: 'POST', body: JSON.stringify({ ...input, opId: newOpId() }) }); }

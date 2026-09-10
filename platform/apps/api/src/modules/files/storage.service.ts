@@ -49,4 +49,10 @@ export class StorageService {
     const command = new GetObjectCommand({ Bucket: storageConfig.bucket, Key: objectKey });
     return getSignedUrl(this.client, command, { expiresIn: expiresSeconds });
   }
+
+  async getPrivateObject(objectKey: string): Promise<Buffer> {
+    const response = await this.client.send(new GetObjectCommand({ Bucket: storageConfig.bucket, Key: objectKey }));
+    if (!response.Body) throw new Error('Private object body is missing');
+    return Buffer.from(await response.Body.transformToByteArray());
+  }
 }

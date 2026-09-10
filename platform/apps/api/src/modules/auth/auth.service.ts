@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { setTimeout as delay } from 'node:timers/promises';
 import { timingSafeEqual } from 'node:crypto';
-import { prisma, AccountRole, AccountStatus, AssociationStatus, AuthCredentialType } from '@alzad/db';
+import { prisma, AccountRole, AccountStatus, AgreementStatus, AssociationStatus, AuthCredentialType, ParticipationStatus } from '@alzad/db';
 import { authConfig } from '../../config/auth.config';
 import {
   delegateCredentialLookupHash,
@@ -29,7 +29,7 @@ export interface LoginResult {
   expiresAt: Date;
   /** سقف مطلق ثابت للجلسة (12h) — الـcontroller يستخدمه لعمر الكوكي، لا expiresAt المنزلق. */
   absoluteExpiresAt: Date;
-  account: { id: string; publicCode: string; name: string; role: AccountRole; associationId: string | null; mustChangePassword: boolean };
+  account: { id: string; publicCode: string; name: string; role: AccountRole; associationId: string | null; mustChangePassword: boolean; covenantRequired: boolean; covenantStatus: AgreementStatus | null };
 }
 
 export interface RequestMeta {
@@ -79,6 +79,7 @@ export class AuthService {
     }
 
     const session = await this.createSession(account.id, meta);
+    const covenant = await this.covenantState(account.role, account.associationId);
     await prisma.account.update({ where: { id: account.id }, data: { lastLoginAt: new Date() } });
     await this.audit.log({ id: account.id, role: account.role, associationId: account.associationId }, 'LOGIN_SUCCESS', 'accounts', account.id);
 
@@ -93,6 +94,7 @@ export class AuthService {
         role: account.role,
         associationId: account.associationId,
         mustChangePassword: account.mustChangePassword,
+        ...covenant,
       },
     };
   }
@@ -146,6 +148,8 @@ export class AuthService {
         role: account.role,
         associationId: account.associationId,
         mustChangePassword: account.mustChangePassword,
+        covenantRequired: false,
+        covenantStatus: null,
       },
     };
   }
@@ -182,6 +186,7 @@ export class AuthService {
   // ================================================================
   async getMe(ctx: AuthContext) {
     const account = await prisma.account.findUniqueOrThrow({ where: { id: ctx.accountId } });
+    const covenant = await this.covenantState(account.role, account.associationId);
     return {
       id: account.id,
       publicCode: account.publicCode,
@@ -189,7 +194,16 @@ export class AuthService {
       role: account.role,
       associationId: account.associationId,
       mustChangePassword: account.mustChangePassword,
+      ...covenant,
     };
+  }
+
+  private async covenantState(role: AccountRole, associationId: string | null) {
+    if (role !== AccountRole.ASSOCIATION || !associationId) return { covenantRequired: false, covenantStatus: null };
+    const participation = await prisma.projectParticipation.findUnique({ where: { associationId }, select: { status: true, agreements: { orderBy: { version: 'desc' }, take: 1, select: { status: true } } } });
+    if (!participation) return { covenantRequired: false, covenantStatus: null };
+    const covenantStatus = participation.agreements[0]?.status ?? null;
+    return { covenantRequired: participation.status !== ParticipationStatus.ACTIVE || covenantStatus !== AgreementStatus.SIGNED, covenantStatus };
   }
 
   // ================================================================

@@ -90,10 +90,14 @@ export class AssociationsService {
     ]);
 
     const ids = rows.map((r) => r.id);
-    const counts = await this.countsByAssociation(ids);
+    const [counts, covenantRows] = await Promise.all([
+      this.countsByAssociation(ids),
+      prisma.projectParticipation.findMany({ where: { associationId: { in: ids } }, select: { associationId: true, agreements: { orderBy: { version: 'desc' }, take: 1, select: { id: true, status: true, templateVersion: true, reference: true, orgSignerName: true, signedByOrgAt: true, signedByZaadAt: true, fullyExecutedAt: true, finalFileId: true } } } }),
+    ]);
+    const covenants = new Map(covenantRows.filter((row) => row.associationId).map((row) => [row.associationId!, row.agreements[0] ?? null]));
 
     return toPaginatedResult(
-      rows.map((row) => ({ ...mapAssociation(row), ...counts[row.id] })),
+      rows.map((row) => ({ ...mapAssociation(row), ...counts[row.id], covenant: covenants.get(row.id) ?? null })),
       total,
       page,
       pageSize,

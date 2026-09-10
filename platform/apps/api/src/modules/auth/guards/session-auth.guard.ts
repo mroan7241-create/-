@@ -1,10 +1,10 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
-import { prisma } from '@alzad/db';
+import { AccountRole, AgreementStatus, ParticipationStatus, prisma } from '@alzad/db';
 import { authConfig } from '../../../config/auth.config';
 import { sha256Hex } from '../../../common/crypto.util';
-import { authForbidden, authPasswordChangeRequired, authSessionExpired } from '../../../common/api-error';
+import { ApiError, authForbidden, authPasswordChangeRequired, authSessionExpired } from '../../../common/api-error';
 import { IS_PUBLIC_KEY } from '../../../common/decorators/public.decorator';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 import { ALLOW_MUST_CHANGE_PASSWORD_KEY } from '../decorators/allow-must-change-password.decorator';
@@ -90,6 +90,22 @@ export class SessionAuthGuard implements CanActivate {
     // الحسابات المنشأة بكلمة مرور مؤقتة لا تدخل أي بوابة أعمال قبل تغييرها.
     if (account.mustChangePassword && (account.role === 'ASSOCIATION' || account.role === 'ABANMI') && !allowMustChangePassword) {
       throw authPasswordChangeRequired();
+    }
+
+    if (account.role === AccountRole.ASSOCIATION && account.associationId && !account.mustChangePassword) {
+      const participation = await prisma.projectParticipation.findUnique({
+        where: { associationId: account.associationId },
+        select: { status: true, agreements: { orderBy: { version: 'desc' }, take: 1, select: { status: true } } },
+      });
+      const covenantRequired = Boolean(participation) && (participation!.status !== ParticipationStatus.ACTIVE || participation!.agreements[0]?.status !== AgreementStatus.SIGNED);
+      if (covenantRequired) {
+        const path = request.originalUrl.split('?')[0];
+        const allowed =
+          (request.method === 'GET' && /\/(auth\/me|participations\/covenant(?:\/template)?)$/.test(path)) ||
+          (request.method === 'POST' && /\/(auth\/logout|participations\/covenant\/sign)$/.test(path)) ||
+          (request.method === 'PATCH' && /\/auth\/password$/.test(path));
+        if (!allowed) throw new ApiError('COVENANT_EXECUTION_REQUIRED', 'يجب استكمال اعتماد ميثاق المشاركة قبل استخدام العمليات', 403);
+      }
     }
 
     const roles = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [context.getHandler(), context.getClass()]);

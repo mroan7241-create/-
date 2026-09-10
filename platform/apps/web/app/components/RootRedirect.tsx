@@ -15,6 +15,10 @@ export function RootRedirect() {
           router.replace('/change-password');
           return;
         }
+        if (user.role === 'ASSOCIATION' && user.covenantRequired) {
+          router.replace('/association/covenant');
+          return;
+        }
         router.replace(homeForRole(user.role));
       })
       .catch(() => router.replace('/login'));

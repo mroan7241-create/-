@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { getMe, type CurrentUser } from './api';
 
 /**
@@ -11,6 +12,7 @@ import { getMe, type CurrentUser } from './api';
  */
 export function useRoleGuard(allowed: CurrentUser['role'][]): { user: CurrentUser | null; loading: boolean } {
   const router = useRouter();
+  const pathname = usePathname();
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -21,6 +23,10 @@ export function useRoleGuard(allowed: CurrentUser['role'][]): { user: CurrentUse
         if (cancelled) return;
         if (me.mustChangePassword) {
           router.replace('/change-password');
+          return;
+        }
+        if (me.role === 'ASSOCIATION' && me.covenantRequired && pathname !== '/association/covenant') {
+          router.replace('/association/covenant');
           return;
         }
         if (!allowed.includes(me.role)) {
@@ -39,7 +45,7 @@ export function useRoleGuard(allowed: CurrentUser['role'][]): { user: CurrentUse
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [router]);
+  }, [router, pathname]);
 
   return { user, loading };
 }

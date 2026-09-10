@@ -4,18 +4,19 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CurrentUser, DeliveryStatus, DeviceType, WorkflowRecord } from '../lib/api';
 import {
   DELIVERY_STATUS_LABELS,
-  activateParticipation, apiFetch, completeParticipationSetup, confirmPhysicalReturn, createAgreement,
+  apiFetch, completeParticipationSetup, confirmPhysicalReturn, createAgreement,
   createPurchaseOrder, createShipment, decideDelivery, decideEscalation, generateOrganizationClosure,
   listDeliveries, listEscalations, listNotifications, listOutboxFailures, listParticipations, listProcurement, listSystemSettings, markNotificationRead,
   generateProjectClosure, getProjectClosure, openEscalation, promoteReserve, reopenOrganizationClosure, requestCoordinatorChange, setBeneficiaryList,
   transitionAgreement, transitionOrganizationClosure, transitionPurchaseOrder, transitionShipment,
+  getFinalCovenantUrl, issuePartyOneSigningSession, prepareCovenantSigningAccount,
   saveSystemSetting, transitionProjectClosure, updateOrganizationClosure,
 } from '../lib/api';
 import { cardStyle, errorStyle, inputStyle, labelStyle, primaryButtonStyle, secondaryButtonStyle, successStyle } from '../lib/ui';
 
 type Section = { key: string; title: string; rows: WorkflowRecord[]; error?: string };
 export type WorkflowSectionKey = 'participations' | 'deliveries' | 'procurement' | 'escalations' | 'notifications' | 'beneficiaries' | 'outbox' | 'project-closure';
-type FormKind = 'agreement' | 'sign-org' | 'sign-zaad' | 'coordinator' | 'closure' | 'reopen' | 'return-good' | 'return-damaged' | 'escalation' | 'escalation-decision' | 'list-main' | 'list-reserve' | 'promote' | 'purchase-order' | 'shipment' | 'donor-feedback';
+type FormKind = 'agreement' | 'coordinator' | 'closure' | 'reopen' | 'return-good' | 'return-damaged' | 'escalation' | 'escalation-decision' | 'list-main' | 'list-reserve' | 'promote' | 'purchase-order' | 'shipment' | 'donor-feedback';
 type OpenForm = { kind: FormKind; row?: WorkflowRecord };
 
 export function WorkflowHub({ user, sectionKeys }: { user: CurrentUser; sectionKeys?: WorkflowSectionKey[] }) {
@@ -24,6 +25,7 @@ export function WorkflowHub({ user, sectionKeys }: { user: CurrentUser; sectionK
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [credential, setCredential] = useState<{ email: string; password: string } | null>(null);
+  const [signingLink, setSigningLink] = useState<string | null>(null);
   const sectionKeySignature = sectionKeys?.join('|') ?? '';
 
   const load = useCallback(async () => {
@@ -54,10 +56,11 @@ export function WorkflowHub({ user, sectionKeys }: { user: CurrentUser; sectionK
   async function act(action: () => Promise<unknown>, success = 'تم تنفيذ العملية وتحديث البيانات.', credentialEmail = '') {
     setBusy(true); setMessage('');
     try {
-      const result = await action() as { temporaryPassword?: string | null; accountId?: string } | undefined;
+      const result = await action() as { temporaryPassword?: string | null; accountId?: string; path?: string } | undefined;
       if (result?.temporaryPassword) {
         setCredential({ email: credentialEmail, password: result.temporaryPassword });
       }
+      if (result?.path) setSigningLink(`${window.location.origin}${result.path}`);
       setMessage(success); setForm(null); await load();
     } catch (error) { setMessage(readError(error)); }
     finally { setBusy(false); }
@@ -71,6 +74,7 @@ export function WorkflowHub({ user, sectionKeys }: { user: CurrentUser; sectionK
   return <div className="workflow-hub">
     {message && <p role="status" style={message.startsWith('تم') ? successStyle : errorStyle}>{message}</p>}
     {credential && <section style={{ ...cardStyle, border: '2px solid #d46a2e' }}><h2>بيانات الدخول المؤقتة — تُعرض مرة واحدة</h2><p>البريد: <b dir="ltr">{credential.email}</b></p><p>كلمة المرور المؤقتة: <b dir="ltr">{credential.password}</b></p><button style={secondaryButtonStyle} onClick={() => setCredential(null)}>فهمت وحفظت البيانات بأمان</button></section>}
+    {signingLink && <section style={{ ...cardStyle, border: '2px solid #d46a2e' }}><h2>رابط توقيع الطرف الأول — أحادي الاستخدام</h2><p>لا يفتح صلاحيات الإدارة وينتهي تلقائيًا. سلّمه للممثل المخول فقط.</p><code dir="ltr" style={{ overflowWrap: 'anywhere' }}>{signingLink}</code><div className="button-row"><button style={secondaryButtonStyle} onClick={() => navigator.clipboard.writeText(signingLink)}>نسخ الرابط</button><a style={{ ...primaryButtonStyle, textDecoration: 'none' }} href={signingLink} target="_blank" rel="noopener noreferrer">فتح جلسة التوقيع</a><button style={secondaryButtonStyle} onClick={() => setSigningLink(null)}>إخفاء</button></div></section>}
     <div className="workflow-toolbar">
       {user.role === 'ADMIN' && sectionKeys?.includes('procurement') && <button style={primaryButtonStyle} onClick={() => setForm({ kind: 'purchase-order' })}>إنشاء أمر شراء</button>}
       {user.role === 'ADMIN' && sectionKeys?.includes('project-closure') && <button style={secondaryButtonStyle} onClick={() => void act(() => generateProjectClosure(), 'تم توليد التقرير الختامي من البيانات المغلقة.')}>توليد تقرير المشروع</button>}
@@ -112,16 +116,16 @@ function OperationalRow({ user, section, row, busy, setForm, act }: { user: Curr
     if (user.role === 'ADMIN') {
       if (!agreement) formButton('إنشاء اتفاقية', 'agreement');
       if (agreement?.status === 'DRAFT') button('إرسال الاتفاقية', () => transitionAgreement(agreement.id, 'SENT'));
-      if (agreement?.status === 'SENT') formButton('تسجيل توقيع الجمعية', 'sign-org');
-      if (agreement?.status === 'SIGNED_BY_ORG') formButton('تسجيل توقيع زاد', 'sign-zaad');
-      button('إكمال التجهيز', () => completeParticipationSetup(row.id));
-      const application = row.application as WorkflowRecord | undefined;
-      buttons.push(<button key="activate" style={primaryButtonStyle} disabled={busy} onClick={() => void act(() => activateParticipation(row.id), 'تم تفعيل الجمعية وعرض بيانات الدخول المؤقتة مرة واحدة.', String(application?.email ?? ''))}>تفعيل الجمعية</button>);
+      if (agreement?.status === 'SENT' && !row.associationId) buttons.push(<button key="signing-account" style={secondaryButtonStyle} disabled={busy} onClick={() => void act(() => prepareCovenantSigningAccount(row.id), 'تم إنشاء حساب توقيع مقيّد؛ لن تفتح العمليات قبل اكتمال الميثاق.', String((row.application as WorkflowRecord | undefined)?.email ?? ''))}>إنشاء حساب توقيع مقيّد</button>);
+      if (agreement?.status === 'SIGNED_BY_ORG') button('إنشاء رابط توقيع الطرف الأول', () => issuePartyOneSigningSession(agreement.id));
+      if (agreement?.status === 'SIGNED') button('تنزيل النسخة النهائية', () => getFinalCovenantUrl(agreement.id).then(({ url }) => { window.open(url, '_blank', 'noopener,noreferrer'); }));
+      if (!row.setupCompletedAt) button('إكمال التجهيز', () => completeParticipationSetup(row.id));
       if (closure?.status === 'SUBMITTED') button('بدء مراجعة الإغلاق', () => transitionOrganizationClosure(closure.id, 'UNDER_REVIEW'));
       if (closure?.status === 'UNDER_REVIEW') button('اعتماد تقرير الجمعية', () => transitionOrganizationClosure(closure.id, 'APPROVED'));
       if (closure?.status === 'APPROVED') button('إغلاق المشاركة', () => transitionOrganizationClosure(closure.id, 'CLOSED'));
       if (closure?.status === 'CLOSED') formButton('إعادة فتح موثقة', 'reopen');
     } else {
+      if (agreement?.status === 'SIGNED') button('تنزيل الميثاق المعتمد', () => getFinalCovenantUrl().then(({ url }) => { window.open(url, '_blank', 'noopener,noreferrer'); }));
       formButton('طلب تغيير المنسق', 'coordinator');
       button('فحص جاهزية الإغلاق', () => apiFetch(`/reports/closure/readiness/${row.id}`));
       if (!closure) button('إنشاء تقرير الإغلاق', () => generateOrganizationClosure(row.id));
@@ -155,11 +159,10 @@ function OperationalRow({ user, section, row, busy, setForm, act }: { user: Curr
 
 function OperationalForm({ form, user, associations, busy, close, act }: { form: OpenForm; user: CurrentUser; associations: Array<{ id: string; label: string }>; busy: boolean; close: () => void; act: (action: () => Promise<unknown>, success?: string, credentialEmail?: string) => Promise<void> }) {
   const [fields, setFields] = useState<Record<string, string>>({ version: '1', deviceType: 'REFRIGERATOR', quantity: '1', severity: 'MEDIUM', decision: 'APPROVED', associationId: associations[0]?.id ?? '' });
-  const row = form.row; const agreement = (row?.agreements as WorkflowRecord[] | undefined)?.[0]; const closure = row?.closureReport as WorkflowRecord | undefined;
+  const row = form.row; const closure = row?.closureReport as WorkflowRecord | undefined;
   const field = (name: string, label: string, options?: string[]) => <label style={labelStyle}>{label}{options ? <select style={inputStyle} value={fields[name] ?? ''} onChange={(event) => setFields({ ...fields, [name]: event.target.value })}>{options.map((option) => <option key={option} value={option}>{humanStatus(option)}</option>)}</select> : <input style={inputStyle} value={fields[name] ?? ''} onChange={(event) => setFields({ ...fields, [name]: event.target.value })} />}</label>;
   let title = 'إجراء تشغيلي'; let content: React.ReactNode = null; let submit: (() => Promise<unknown>) | null = null;
-  if (form.kind === 'agreement') { title = 'إنشاء مسودة اتفاقية'; content = <>{field('version', 'رقم النسخة')}{field('templateVersion', 'نسخة القالب')}{field('reference', 'مرجع الاتفاقية')}</>; submit = () => createAgreement(row!.id, Number(fields.version), fields.templateVersion); }
-  if (form.kind === 'sign-org' || form.kind === 'sign-zaad') { title = 'توثيق التوقيع'; content = field('signer', 'اسم الموقّع'); submit = () => transitionAgreement(agreement!.id, form.kind === 'sign-org' ? 'SIGNED_BY_ORG' : 'SIGNED', fields.signer); }
+  if (form.kind === 'agreement') { title = 'إنشاء ميثاق المشاركة المعتمد'; content = <><p>سيُستخدم ميثاق الالتزام بالمشاركة والتنفيذ — الإصدار 1.0 فقط.</p>{field('reference', 'مرجع اختياري — يترك فارغًا للتوليد التلقائي')}</>; submit = () => createAgreement(row!.id, 1, '1.0', fields.reference); }
   if (form.kind === 'coordinator') { title = 'طلب تغيير المنسق الرسمي'; content = <>{field('name', 'اسم المنسق')}{field('phone', 'الجوال')}{field('email', 'البريد')}{field('title', 'الصفة')}{field('reason', 'سبب التغيير')}</>; submit = () => requestCoordinatorChange(row!.id, { proposedName: fields.name, proposedPhone: fields.phone, proposedEmail: fields.email, proposedTitle: fields.title, reason: fields.reason }); }
   if (form.kind === 'closure') { title = 'المحتوى النوعي للتقرير'; content = <>{field('challenges', 'أبرز التحديات')}{field('lessonsLearned', 'الدروس المستفادة')}{field('recommendations', 'التوصيات')}{field('finalNotes', 'ملاحظات ختامية')}</>; submit = () => updateOrganizationClosure(closure!.id, fields); }
   if (form.kind === 'reopen') { title = 'إعادة فتح مشاركة مغلقة'; content = field('reason', 'السبب الإلزامي'); submit = () => reopenOrganizationClosure(closure!.id, fields.reason); }

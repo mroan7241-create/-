@@ -18,11 +18,11 @@ import { mobileMenuButtonStyle, mobileOverlayStyle } from './shell-styles';
  * DELEGATE له تجربة منفصلة تمامًا (لا شريط جانبي — راجع legacy UI-008)
  * وليست جزءًا من هذا المكوّن؛ لا يُستخدَم AppShell لأي شاشة مندوب.
  */
-export function AppShell({ user, children }: { user: CurrentUser; children: React.ReactNode }) {
+export function AppShell({ user, children, restricted = false }: { user: CurrentUser; children: React.ReactNode; restricted?: boolean }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
-  const groups = navGroupsForRole(user.role);
+  const groups = restricted ? [] : navGroupsForRole(user.role);
   const homeHref = user.role === 'ADMIN' ? '/admin' : user.role === 'ASSOCIATION' ? '/association' : '/abanmi';
 
   async function handleLogout() {
@@ -32,7 +32,7 @@ export function AppShell({ user, children }: { user: CurrentUser; children: Reac
 
   return (
     <div className="zad-shell2">
-      <aside className="zad-sidebar2 zad-sidebar" data-open={mobileOpen}>
+      {!restricted && <aside className="zad-sidebar2 zad-sidebar" data-open={mobileOpen}>
         <div className="zad-sidebar2-brand">
           <Image src="/brand/zadLogo.png" alt="جمعية الزاد" width={44} height={44} priority />
           <div>
@@ -73,16 +73,16 @@ export function AppShell({ user, children }: { user: CurrentUser; children: Reac
           </div>
           <div className="zad-foot-copy2">جمعية الزاد © ٢٠٢٦</div>
         </div>
-      </aside>
+      </aside>}
 
-      {mobileOpen && <div style={mobileOverlayStyle} onClick={() => setMobileOpen(false)} />}
+      {!restricted && mobileOpen && <div style={mobileOverlayStyle} onClick={() => setMobileOpen(false)} />}
 
       <div className="zad-main2">
         <div className="zad-sidebar2-toprow zad-topbar">
           <button
             type="button"
             className="zad-mobile-toggle zad-focusable"
-            style={mobileMenuButtonStyle}
+            style={{ ...mobileMenuButtonStyle, display: restricted ? 'none' : undefined }}
             onClick={() => setMobileOpen((v) => !v)}
             aria-label={mobileOpen ? 'إغلاق القائمة' : 'فتح القائمة'}
             aria-expanded={mobileOpen}
@@ -102,6 +102,7 @@ export function AppShell({ user, children }: { user: CurrentUser; children: Reac
       </div>
 
       <style>{`
+        ${restricted ? '.zad-main2 { margin-inline-end: 0 !important; width: 100%; }' : ''}
         @media (max-width: 860px) {
           .zad-sidebar { display: none; }
           .zad-sidebar[data-open="true"] { display: flex; position: fixed; inset: 0 0 0 auto; width: 78vw; max-width: 300px; z-index: 50; height: 100vh; }

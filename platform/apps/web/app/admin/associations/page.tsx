@@ -5,6 +5,8 @@ import {
   ApiClientError,
   apiFetch,
   getReferenceData,
+  getFinalCovenantUrl,
+  issuePartyOneSigningSession,
   type AssociationSummary,
   type Paginated,
   type ReferenceData,
@@ -73,6 +75,7 @@ export default function AdminAssociationsPage() {
   const [editing, setEditing] = useState<AssociationSummary | 'new' | null>(null);
   const [resetResult, setResetResult] = useState<{ name: string; password: string; phone: string; email: string } | null>(null);
   const [confirmation, setConfirmation] = useState<Omit<ConfirmDialogProps, 'onCancel'> | null>(null);
+  const [partyOneLink, setPartyOneLink] = useState<{ name: string; url: string } | null>(null);
 
   const load = useCallback(async () => {
     setListError(null);
@@ -169,6 +172,7 @@ export default function AdminAssociationsPage() {
         </p>
       )}
       {notice && <p style={successStyle}>{notice}</p>}
+      {partyOneLink && <section style={{ ...cardStyle, border: '2px solid #d46a2e' }}><h2>رابط توقيع الطرف الأول — {partyOneLink.name}</h2><p>الرابط أحادي الاستخدام ويُسلّم للممثل المخول فقط.</p><code dir="ltr" style={{ overflowWrap: 'anywhere' }}>{partyOneLink.url}</code><div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}><button type="button" style={secondaryButtonStyle} onClick={() => navigator.clipboard.writeText(partyOneLink.url)}>نسخ الرابط</button><a href={partyOneLink.url} target="_blank" rel="noopener noreferrer" style={{ ...primaryButtonStyle, textDecoration: 'none' }}>فتح جلسة التوقيع</a><button type="button" style={secondaryButtonStyle} onClick={() => setPartyOneLink(null)}>إخفاء</button></div></section>}
 
       <div style={{ ...cardStyle, padding: 0, overflowX: 'auto' }}>
         <table style={tableStyle}>
@@ -181,13 +185,14 @@ export default function AdminAssociationsPage() {
               <th style={thStyle}>مستفيدون</th>
               <th style={thStyle}>أجهزة</th>
               <th style={thStyle}>مندوبون</th>
+              <th style={thStyle}>ميثاق المشاركة</th>
               <th style={thStyle} />
             </tr>
           </thead>
           <tbody>
             {data?.items.length === 0 && (
               <tr>
-                <td style={{ ...tdStyle, textAlign: 'center' }} colSpan={8}>
+                <td style={{ ...tdStyle, textAlign: 'center' }} colSpan={9}>
                   لا توجد جمعيات مطابقة.
                 </td>
               </tr>
@@ -205,6 +210,7 @@ export default function AdminAssociationsPage() {
                 <td style={{ ...tdStyle, ...ltrStyle }}>{row.beneficiariesCount}</td>
                 <td style={{ ...tdStyle, ...ltrStyle }}>{row.devicesCount}</td>
                 <td style={{ ...tdStyle, ...ltrStyle }}>{row.delegatesCount}</td>
+                <td style={tdStyle}>{row.covenant ? <div style={{ display: 'grid', gap: 5 }}><strong>{covenantStatus(row.covenant.status)}</strong><span>الإصدار {row.covenant.templateVersion}</span><span dir="ltr">{row.covenant.reference}</span>{row.covenant.orgSignerName && <span>الممثل: {row.covenant.orgSignerName}</span>}{row.covenant.signedByOrgAt && <span>توقيع الجمعية: {formatDate(row.covenant.signedByOrgAt)}</span>}{row.covenant.fullyExecutedAt && <span>الاكتمال: {formatDate(row.covenant.fullyExecutedAt)}</span>}{row.covenant.status === 'SIGNED_BY_ORG' && <button type="button" style={secondaryButtonStyle} onClick={() => void issuePartyOneSigningSession(row.covenant!.id).then((result) => setPartyOneLink({ name: row.name, url: `${window.location.origin}${result.path}` })).catch((err) => setListError(err instanceof ApiClientError ? err.message : 'تعذّر إنشاء رابط التوقيع.'))}>رابط توقيع الطرف الأول</button>}{row.covenant.status === 'SIGNED' && <button type="button" style={secondaryButtonStyle} onClick={() => void getFinalCovenantUrl(row.covenant!.id).then(({ url }) => window.open(url, '_blank', 'noopener,noreferrer'))}>تنزيل النسخة النهائية</button>}</div> : 'لا يوجد'}</td>
                 <td style={tdStyle}>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     <button type="button" style={secondaryButtonStyle} onClick={() => setEditing(row)}>
@@ -256,7 +262,7 @@ export default function AdminAssociationsPage() {
           <section style={{ ...modalStyle, maxWidth: 520 }}>
             <h2 style={{ fontSize: 19, marginBottom: 12 }}>كلمة مرور مؤقتة جديدة — {resetResult.name}</h2>
             <p style={{ ...cardStyle, background: 'var(--zad-100)', borderColor: 'var(--zad-300)', fontWeight: 700 }}>
-              تظهر مرة واحدة فقط ولن تُعرض مجددًا — انسخها وسلّمها للجمعية الآن.
+              أُلغيت كلمة المرور المؤقتة السابقة. تظهر الجديدة مرة واحدة فقط — انسخها وسلّمها للجمعية.
             </p>
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
               <code style={{ ...ltrStyle, fontSize: 18, padding: '10px 14px', background: 'var(--canvas)', borderRadius: 'var(--r-sm)' }}>
@@ -299,6 +305,16 @@ export default function AdminAssociationsPage() {
     </AppShell>
   );
 }
+
+function covenantStatus(status: string) {
+  if (status === 'SENT') return 'بانتظار توقيع الجمعية';
+  if (status === 'SIGNED_BY_ORG') return 'بانتظار توقيع الطرف الأول';
+  if (status === 'SIGNED') return 'مكتمل ومعتمد';
+  if (status === 'DRAFT') return 'مسودة';
+  return status === 'CANCELLED' ? 'ملغى' : 'غير نشط';
+}
+
+function formatDate(value: string) { return new Intl.DateTimeFormat('ar-SA', { dateStyle: 'medium' }).format(new Date(value)); }
 
 function AssociationForm({
   reference,

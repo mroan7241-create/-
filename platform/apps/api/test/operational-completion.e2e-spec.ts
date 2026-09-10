@@ -29,7 +29,7 @@ describe('final operational workflows', () => {
   const http = () => request(app.getHttpServer());
   const opId = (prefix: string) => `${prefix}-${randomUUID()}`;
 
-  it('keeps eligibility, selection, setup, and activation distinct and returns credentials only from activation', async () => {
+  it('keeps eligibility, selection, setup, restricted signing credentials, and operational activation distinct', async () => {
     const suffix = randomUUID().slice(0, 8);
     const email = `operational-${suffix}@example.org`;
     const application = await prisma.associationApplication.create({ data: {
@@ -76,31 +76,26 @@ describe('final operational workflows', () => {
       expect(prematureActivation.body.temporaryPassword).toBeUndefined();
 
       const agreementResponse = await http().post(`/api/v1/participations/${participation.id}/agreements`).set('Cookie', adminCookie)
-        .send({ version: 1, templateVersion: 'E2E-APPROVED-TEMPLATE', reference: 'E2E-AGREEMENT' });
+        .send({ version: 1, templateVersion: '1.0', reference: 'E2E-AGREEMENT' });
       expect(agreementResponse.status).toBe(201);
       const agreementId = agreementResponse.body.id as string;
-      for (const [status, signerName] of [[AgreementStatus.SENT, undefined], [AgreementStatus.SIGNED_BY_ORG, 'ممثل الجمعية'], [AgreementStatus.SIGNED, 'ممثل زاد']] as const) {
-        const transition = await http().post(`/api/v1/participations/agreements/${agreementId}/transition`).set('Cookie', adminCookie)
-          .send({ status, signerName, opId: opId(`agreement-${status}`) });
-        expect(transition.status).toBe(201);
-      }
+      await http().post(`/api/v1/participations/agreements/${agreementId}/transition`).set('Cookie', adminCookie)
+        .send({ status: AgreementStatus.SENT, opId: opId('agreement-sent') }).expect(201);
       await http().post(`/api/v1/participations/${participation.id}/setup-complete`).set('Cookie', adminCookie).send({ opId: opId('setup') }).expect(201);
 
-      const activationOpId = opId('activation');
-      const activation = await http().post(`/api/v1/participations/${participation.id}/activate`).set('Cookie', adminCookie).send({ opId: activationOpId });
-      expect(activation.status).toBe(201);
-      expect(typeof activation.body.temporaryPassword).toBe('string');
-      expect(activation.body.temporaryPassword.length).toBeGreaterThanOrEqual(10);
-      resultingAssociationId = activation.body.associationId;
-      resultingAccountId = activation.body.accountId;
+      const accountOpId = opId('signing-account');
+      const activation = await http().post(`/api/v1/participations/${participation.id}/signing-account`).set('Cookie', adminCookie).send({ opId: accountOpId });
+      expect(activation.status).toBe(201); expect(typeof activation.body.temporaryPassword).toBe('string'); expect(activation.body.temporaryPassword.length).toBeGreaterThanOrEqual(10);
+      resultingAssociationId = activation.body.associationId; resultingAccountId = activation.body.accountId;
 
-      const replay = await http().post(`/api/v1/participations/${participation.id}/activate`).set('Cookie', adminCookie).send({ opId: activationOpId });
+      const replay = await http().post(`/api/v1/participations/${participation.id}/signing-account`).set('Cookie', adminCookie).send({ opId: accountOpId });
       expect(replay.status).toBe(201);
       expect(replay.body.temporaryPassword).toBeNull();
       expect(replay.body.temporaryPasswordPreviouslyIssued).toBe(true);
       const login = await http().post('/api/v1/auth/login').send({ type: 'user', email, password: activation.body.temporaryPassword });
       expect(login.status).toBe(200);
       expect(login.body.user.mustChangePassword).toBe(true);
+      expect(login.body.user.covenantRequired).toBe(true);
     } finally {
       if (resultingAccountId) {
         await prisma.authSession.deleteMany({ where: { accountId: resultingAccountId } });

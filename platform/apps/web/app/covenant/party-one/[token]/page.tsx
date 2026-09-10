@@ -1,0 +1,19 @@
+'use client';
+/* eslint-disable @next/next/no-img-element */
+
+import { useEffect, useState } from 'react';
+import { useParams } from 'next/navigation';
+import { ConfirmDialog } from '../../../components/ConfirmDialog';
+import { SignaturePad } from '../../../components/SignaturePad';
+import { ApiClientError, apiFetch, covenantTemplateUrl, getPartyOneCovenant, signPartyOneCovenant } from '../../../lib/api';
+import { cardStyle, errorStyle, primaryButtonStyle, successStyle } from '../../../lib/ui';
+
+export default function PartyOneCovenantPage() {
+  const params = useParams<{ token: string }>(); const token = params.token;
+  const [data, setData] = useState<Record<string, string | null> | null>(null); const [signatureUrl, setSignatureUrl] = useState('');
+  const [signature, setSignature] = useState<File | null>(null); const [confirming, setConfirming] = useState(false); const [busy, setBusy] = useState(false); const [done, setDone] = useState(false); const [error, setError] = useState('');
+  useEffect(() => { void Promise.all([getPartyOneCovenant(token), apiFetch<{ url: string }>(`/participations/covenant/party-one/${encodeURIComponent(token)}/association-signature`)]).then(([view, image]) => { setData(view); setSignatureUrl(image.url); }).catch((reason) => setError(readError(reason))); }, [token]);
+  async function submit() { if (!signature) { setError('التوقيع اليدوي للطرف الأول مطلوب.'); setConfirming(false); return; } setBusy(true); setError(''); try { await signPartyOneCovenant(token, signature); setDone(true); setConfirming(false); } catch (reason) { setError(readError(reason)); setConfirming(false); } finally { setBusy(false); } }
+  return <main dir="rtl" style={{ minHeight: '100vh', background: 'var(--canvas)', padding: '24px 14px' }}><div style={{ maxWidth: 1040, margin: '0 auto', display: 'grid', gap: 18 }}><header><p>جمعية الزاد للخدمات الاجتماعية</p><h1>اعتماد الطرف الأول — ميثاق المشاركة</h1></header>{error && <p role="alert" style={errorStyle}>{error}</p>}{done ? <section style={{ ...cardStyle, ...successStyle }}><h2>تم اعتماد الميثاق بالكامل</h2><p>أُغلِق رابط التوقيع الأحادي الاستخدام وحُفظت النسخة النهائية.</p></section> : !data ? (!error && <section style={cardStyle}>جارٍ التحقق من رابط التوقيع…</section>) : <><section style={cardStyle}><h2>{data.associationName}</h2><p>ممثل الجمعية: {data.associationRepresentative} — {data.associationRepresentativeTitle}</p><p>رقم الميثاق: <b dir="ltr">{data.reference}</b> | الإصدار: {data.version}</p>{signatureUrl && <><h3>توقيع الجمعية</h3><img src={signatureUrl} alt="توقيع ممثل الجمعية" style={{ maxWidth: 360, width: '100%', maxHeight: 150, objectFit: 'contain', background: '#fff', border: '1px solid #ddd' }} /></>}</section><section style={cardStyle}><h2>وثيقة الميثاق المعتمدة</h2><iframe title="ميثاق الالتزام — النسخة 1.0" src={covenantTemplateUrl(token)} style={{ width: '100%', minHeight: '72vh', border: '1px solid #d7c8cf', borderRadius: 10, background: '#fff' }} /></section><section style={cardStyle}><h2>توقيع الطرف الأول</h2><p>{data.partyOneRepresentative} — {data.partyOneTitle}</p><SignaturePad onReady={setSignature} label="التوقيع اليدوي للطرف الأول" /><button type="button" style={{ ...primaryButtonStyle, marginTop: 14 }} disabled={busy} onClick={() => setConfirming(true)}>اعتماد الطرف الأول</button></section></>}{confirming && <ConfirmDialog title="اعتماد الطرف الأول" message="يجب أن ينفذ هذا الإجراء الممثل المخول فعليًا. سيُغلق الرابط بعد الاعتماد وتُنشأ نسخة نهائية ثابتة." confirmLabel={busy ? 'جارٍ الاعتماد…' : 'توقيع واعتماد'} tone="primary" onConfirm={() => void submit()} onCancel={() => setConfirming(false)} />}</div></main>;
+}
+function readError(reason: unknown) { return reason instanceof ApiClientError ? reason.message : 'رابط التوقيع غير صالح أو انتهت صلاحيته.'; }

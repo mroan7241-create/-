@@ -136,7 +136,9 @@ describe('Auth — login (NODE-1)', () => {
 
     const me = await http().get('/api/v1/auth/me').set('Cookie', cookie);
     expect(me.status).toBe(200);
-    expect(Object.keys(me.body).sort()).toEqual(['associationId', 'id', 'mustChangePassword', 'name', 'publicCode', 'role'].sort());
+    expect(Object.keys(me.body).sort()).toEqual(
+      ['associationId', 'covenantRequired', 'covenantStatus', 'id', 'mustChangePassword', 'name', 'publicCode', 'role'].sort(),
+    );
     expect(JSON.stringify(me.body)).not.toMatch(/secretHash|passwordHash|tokenHash/i);
   });
 });
