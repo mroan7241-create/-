@@ -562,7 +562,7 @@ export function getReceiptEvidenceUrl(batchId: string, evidenceType: 'quantity' 
   return apiFetch(`/receipts/${batchId}/evidence/${evidenceType}${q}`);
 }
 
-export type DeviceStatus = 'WAREHOUSE' | 'ALLOCATED' | 'WITH_DELEGATE' | 'DELIVERED' | 'DAMAGED';
+export type DeviceStatus = 'WAREHOUSE' | 'ALLOCATED' | 'WITH_DELEGATE' | 'DELIVERED' | 'DAMAGED' | 'WITH_BENEFICIARY_PENDING_APPROVAL';
 
 export const DEVICE_STATUS_LABELS: Record<DeviceStatus, string> = {
   WAREHOUSE: 'بالمستودع',
@@ -570,6 +570,7 @@ export const DEVICE_STATUS_LABELS: Record<DeviceStatus, string> = {
   WITH_DELEGATE: 'مع المندوب',
   DELIVERED: 'تم التسليم',
   DAMAGED: 'تالف',
+  WITH_BENEFICIARY_PENDING_APPROVAL: 'مع المستفيد بانتظار الاعتماد',
 };
 
 export interface DeviceUnitSummary {

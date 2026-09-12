@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { AppShell } from '../../components/AppShell';
 import { ErrorState, LoadingState } from '../../components/States';
 import { downloadAbanmiReport, getAbanmiReport, type AbanmiReport } from '../../lib/api';
+import { reportValueLabel } from '../../lib/report-labels';
 import { useRoleGuard } from '../../lib/use-role-guard';
 import { cardStyle, inputStyle, labelStyle, primaryButtonStyle, secondaryButtonStyle } from '../../lib/ui';
 
@@ -26,10 +27,10 @@ export default function AbanmiReportsPage() {
     {error && <ErrorState message={error} />}{!report && !error && <LoadingState />}
     {report && <div className="abanmi-report-print">
       <h2>الملخص العام</h2><div className="zad-summary-strip2"><Metric label="الجمعيات" value={report.overall.associations} /><Metric label="المستفيدون" value={report.overall.beneficiaries} /><Metric label="الاحتياجات المعتمدة" value={report.overall.approvedNeeds} /><Metric label="الأجهزة" value={report.overall.devices} /><Metric label="التسليمات" value={report.overall.deliveries} /></div>
-      <ReportTable title="حسب الجمعية" headers={['الرمز', 'الجمعية', 'المنطقة', 'المدينة', 'الحالة']} rows={report.associations.map((row) => [row.publicCode, row.name, row.region, row.city, row.status])} />
-      <ReportTable title="المخزون والأجهزة" headers={['الجمعية', 'نوع الجهاز', 'الحالة', 'العدد']} rows={report.devicesAndInventory.map((row) => [associationName(report, row.associationId), row.deviceType, row.status, row._count._all])} />
-      <ReportTable title="التسليم والتنفيذ" headers={['الجمعية', 'الحالة', 'العدد']} rows={report.deliveryAndExecution.map((row) => [associationName(report, row.associationId), row.status, row._count._all])} />
-      <ReportTable title="إغلاق الجمعيات" headers={['الجمعية', 'حالة التقرير', 'تاريخ الإغلاق']} rows={report.associationClosure.map((row) => [associationName(report, row.participation.associationId ?? ''), row.status, row.closedAt ? new Date(row.closedAt).toLocaleDateString('ar-SA') : '—'])} />
+      <ReportTable title="حسب الجمعية" headers={['الرمز', 'الجمعية', 'المنطقة', 'المدينة', 'الحالة']} rows={report.associations.map((row) => [row.publicCode, row.name, row.region, row.city, reportValueLabel(row.status)])} />
+      <ReportTable title="المخزون والأجهزة" headers={['الجمعية', 'نوع الجهاز', 'الحالة', 'العدد']} rows={report.devicesAndInventory.map((row) => [associationName(report, row.associationId), reportValueLabel(row.deviceType), reportValueLabel(row.status), row._count._all])} />
+      <ReportTable title="التسليم والتنفيذ" headers={['الجمعية', 'الحالة', 'العدد']} rows={report.deliveryAndExecution.map((row) => [associationName(report, row.associationId), reportValueLabel(row.status), row._count._all])} />
+      <ReportTable title="إغلاق الجمعيات" headers={['الجمعية', 'حالة التقرير', 'تاريخ الإغلاق']} rows={report.associationClosure.map((row) => [associationName(report, row.participation.associationId ?? ''), reportValueLabel(row.status), row.closedAt ? new Date(row.closedAt).toLocaleDateString('ar-SA') : '—'])} />
       <p className="zad-section-meta2">أُنشئ التقرير: {new Date(report.generatedAt).toLocaleString('ar-SA')} — بيانات المستفيدين الشخصية غير مضمنة.</p>
     </div>}
   </AppShell>;

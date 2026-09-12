@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { AppShell } from '../../components/AppShell';
 import { ErrorState, LoadingState } from '../../components/States';
 import { ApiClientError, getAssociationReport, type AssociationReport } from '../../lib/api';
+import { actionLabel } from '../../lib/action-labels';
+import { reportValueLabel } from '../../lib/report-labels';
 import { useRoleGuard } from '../../lib/use-role-guard';
 import { cardStyle, inputStyle, mutedStyle, primaryButtonStyle, tableStyle, tdStyle, thStyle } from '../../lib/ui';
 
@@ -19,7 +21,7 @@ function CounterTable({ title, values }: { title: string; values: Record<string,
       {rows.length === 0 ? <p style={{ ...mutedStyle, padding: '0 16px 16px' }}>لا توجد بيانات ضمن هذا التصنيف.</p> : (
         <table style={tableStyle}>
           <thead><tr><th style={thStyle}>الحالة / النوع</th><th style={thStyle}>العدد</th></tr></thead>
-          <tbody>{rows.map(([label, count]) => <tr key={label}><td style={tdStyle}>{label}</td><td style={tdStyle}>{count}</td></tr>)}</tbody>
+          <tbody>{rows.map(([label, count]) => <tr key={label}><td style={tdStyle}>{reportValueLabel(label)}</td><td style={tdStyle}>{count}</td></tr>)}</tbody>
         </table>
       )}
     </section>
@@ -100,7 +102,7 @@ export default function AssociationReportsPage() {
             {report.recentOperations.length === 0 ? <p style={{ ...mutedStyle, padding: '0 16px 16px' }}>لا توجد عمليات مسجلة خلال الفترة.</p> : (
               <table style={tableStyle}>
                 <thead><tr><th style={thStyle}>العملية</th><th style={thStyle}>الكيان</th><th style={thStyle}>الوقت</th></tr></thead>
-                <tbody>{report.recentOperations.map((row, index) => <tr key={`${row.createdAt}-${index}`}><td style={tdStyle}>{row.action}</td><td style={tdStyle}>{row.entityType}</td><td style={tdStyle}>{new Date(row.createdAt).toLocaleString('ar-SA')}</td></tr>)}</tbody>
+                <tbody>{report.recentOperations.map((row, index) => <tr key={`${row.createdAt}-${index}`}><td style={tdStyle}>{actionLabel(row.action)}</td><td style={tdStyle}>{row.entityType}</td><td style={tdStyle}>{new Date(row.createdAt).toLocaleString('ar-SA')}</td></tr>)}</tbody>
               </table>
             )}
           </section>
