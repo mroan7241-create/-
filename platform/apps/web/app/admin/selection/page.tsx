@@ -64,7 +64,7 @@ export default function SelectionPage() {
   if (loading || !user) return null;
   const configured = threshold !== '' && mainTarget !== '';
   return <AppShell user={user}>
-    <PageHeader title="الأهلية والتقييم والاختيار" subtitle="مسار منفصل وواضح من قرار الأهلية حتى اعتماد قائمتي MAIN وRESERVE." />
+    <PageHeader title="الأهلية والتقييم والاختيار" subtitle="مسار منفصل وواضح من قرار الأهلية حتى اعتماد القائمتين الأساسية والاحتياطية." />
     {message && <p role="status" style={message.startsWith('تم') ? successStyle : errorStyle}>{message}</p>}
 
     <section style={cardStyle}>
@@ -72,7 +72,7 @@ export default function SelectionPage() {
       <p>لا توجد قيم افتراضية مخفية. يجب اعتماد القيم هنا قبل اعتماد القائمة النهائية.</p>
       <div className="form-grid">
         <label style={labelStyle}>حد الاجتياز من 100<input style={inputStyle} type="number" min="0" max="100" value={threshold} onChange={(event) => setThreshold(event.target.value)} /></label>
-        <label style={labelStyle}>السعة المعتمدة لقائمة MAIN<input style={inputStyle} type="number" min="1" value={mainTarget} onChange={(event) => setMainTarget(event.target.value)} /></label>
+      <label style={labelStyle}>عدد الجمعيات في القائمة الأساسية<input style={inputStyle} type="number" min="1" value={mainTarget} onChange={(event) => setMainTarget(event.target.value)} /></label>
       </div>
       <button style={primaryButtonStyle} disabled={busy || threshold === '' || mainTarget === ''} onClick={() => run(async () => {
         await saveSystemSetting('selection.passThreshold', Number(threshold));
@@ -93,11 +93,11 @@ export default function SelectionPage() {
     </section>
 
     <section style={cardStyle}>
-      <h2>القائمة النهائية</h2>
-      {!configured && <p style={errorStyle}>BUSINESS CONFIG REQUIRED: اضبط حد الاجتياز وسعة MAIN أولًا.</p>}
-      <button style={secondaryButtonStyle} disabled={!configured || busy} onClick={() => run(async () => { const result = await previewApplicationSelection(); setPreview(result.items); }, 'تم تحديث معاينة الترتيب.')}>معاينة الترتيب</button>
-      {preview.map((row) => <p key={row.id}>{String(row.rank)}. {String(row.name)} — {String(row.score)}/100 — {row.passesThreshold ? 'مجتاز' : 'دون الحد'}</p>)}
-      <button style={primaryButtonStyle} disabled={!configured || busy} onClick={() => run(() => commitApplicationSelection(Number(mainTarget)), 'تم اعتماد قائمتي MAIN وRESERVE.')}>اعتماد القائمة النهائية</button>
+      <h2>الترتيب والاختيار النهائي</h2>
+      {!configured && <p>لم يُعتمد حد الاجتياز وعدد القائمة الأساسية بعد؛ يمكن معاينة الترتيب الأولي، ولا يمكن اعتماد القائمة النهائية قبل اعتماد الإعدادات.</p>}
+      <button style={secondaryButtonStyle} disabled={busy} onClick={() => run(async () => { const result = await previewApplicationSelection(); setPreview(result.items); }, 'تم تحديث معاينة الترتيب الأولية.')}>معاينة أولية للترتيب</button>
+      {preview.map((row) => <p key={row.id}>{String(row.rank)}. {String(row.name)} — {String(row.score)}/100{typeof row.passesThreshold === 'boolean' ? ` — ${row.passesThreshold ? 'مجتاز الحد المعتمد' : 'دون الحد المعتمد'}` : ''}</p>)}
+      <button style={primaryButtonStyle} disabled={!configured || busy} onClick={() => run(() => commitApplicationSelection(Number(mainTarget)), 'تم اعتماد القائمتين الأساسية والاحتياطية.')}>اعتماد القائمة النهائية</button>
     </section>
 
     {eligibilityTarget && <EligibilityDialog application={eligibilityTarget} busy={busy} onClose={() => setEligibilityTarget(null)} onSubmit={(decision, notes) => run(() => decideApplicationEligibility(eligibilityTarget.id, decision, notes), 'تم حفظ قرار الأهلية.').then(() => setEligibilityTarget(null))} />}

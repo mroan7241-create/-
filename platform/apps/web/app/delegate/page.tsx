@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ApiClientError, DELIVERY_FAILURE_REASON_LABELS, DELIVERY_STATUS_LABELS, DEVICE_TYPE_LABELS,
-  apiFetch, confirmDelivery, confirmHandover, failDelivery, getDelivery, getDeliveryProofUrl,
+  apiFetch, confirmDelivery, confirmHandover, declineHandover, failDelivery, getDelivery, getDeliveryProofUrl,
   logout, rescheduleDelivery, returnDelivery, updateBeneficiaryLocation,
   type DeliveryFailureReason, type DeliveryMissionSummary, type DeliveryStatus,
 } from '../lib/api';
@@ -26,7 +26,7 @@ export default function DelegatePortalPage() {
   const [historyPage, setHistoryPage] = useState(1);
   const [historyTotalPages, setHistoryTotalPages] = useState(1);
   const [error, setError] = useState('');
-  const [modal, setModal] = useState<{ type: 'deliver' | 'fail' | 'reschedule' | 'return' | 'location'; mission: DeliveryMissionSummary } | null>(null);
+  const [modal, setModal] = useState<{ type: 'deliver' | 'decline' | 'fail' | 'reschedule' | 'return' | 'location'; mission: DeliveryMissionSummary } | null>(null);
   const [routeStart, setRouteStart] = useState<RoutePoint | undefined>();
   const [locating, setLocating] = useState(false);
 
@@ -82,6 +82,7 @@ export default function DelegatePortalPage() {
     {tab === 'history' && <section><div className="delegate-section-heading"><div><h2>السجل</h2><p>التسليمات المغلقة والمرتجعات المكتملة.</p></div></div>{!history.length && <Empty text="لا يوجد سجل مكتمل بعد." />}{history.map((mission) => <MissionCard key={mission.id} mission={mission} onViewProof={() => void viewProof(mission, setError)} />)}<Pager page={historyPage} totalPages={historyTotalPages} onChange={setHistoryPage} /></section>}
 
     {modal?.type === 'deliver' && <DeliveryModal mission={modal.mission} close={() => setModal(null)} done={async () => { setModal(null); await load(); }} />}
+    {modal?.type === 'decline' && <DeclineModal mission={modal.mission} close={() => setModal(null)} done={async () => { setModal(null); await load(); }} />}
     {modal?.type === 'fail' && <FailureModal mission={modal.mission} close={() => setModal(null)} done={async () => { setModal(null); await load(); }} />}
     {modal?.type === 'reschedule' && <RescheduleModal mission={modal.mission} close={() => setModal(null)} done={async () => { setModal(null); await load(); }} />}
     {modal?.type === 'return' && <ReturnModal mission={modal.mission} close={() => setModal(null)} done={async () => { setModal(null); await load(); }} />}
@@ -89,7 +90,7 @@ export default function DelegatePortalPage() {
   </main>;
 }
 
-function TasksView({ missions, onAction, onReload, setError }: { missions: DeliveryMissionSummary[]; onAction: (type: 'deliver' | 'fail' | 'reschedule' | 'return' | 'location', mission: DeliveryMissionSummary) => void; onReload: () => Promise<void>; setError: (message: string) => void }) {
+function TasksView({ missions, onAction, onReload, setError }: { missions: DeliveryMissionSummary[]; onAction: (type: 'deliver' | 'decline' | 'fail' | 'reschedule' | 'return' | 'location', mission: DeliveryMissionSummary) => void; onReload: () => Promise<void>; setError: (message: string) => void }) {
   const groups: Array<{ title: string; statuses: DeliveryStatus[] }> = [
     { title: 'بانتظار استلام العهدة', statuses: ['PENDING_DELEGATE_ACKNOWLEDGEMENT'] },
     { title: 'مهام اليوم / جاهزة للتنفيذ', statuses: ['OUT_WITH_DELEGATE'] },
@@ -102,7 +103,7 @@ function TasksView({ missions, onAction, onReload, setError }: { missions: Deliv
     const rows = missions.filter((mission) => group.statuses.includes(mission.status));
     if (!rows.length) return null;
     return <div key={group.title}><h2 className="delegate-group-title">{group.title}<span>{rows.length}</span></h2>{rows.map((mission) => <MissionCard key={mission.id} mission={mission} actions={<>
-      {mission.status === 'PENDING_DELEGATE_ACKNOWLEDGEMENT' && <Action primary label="تأكيد استلام العهدة" run={async () => { try { await confirmHandover(mission.id); await onReload(); } catch (error) { setError(readError(error)); } }} />}
+      {mission.status === 'PENDING_DELEGATE_ACKNOWLEDGEMENT' && <><Action primary label="قبول المهمة واستلام العهدة" run={async () => { try { await confirmHandover(mission.id); await onReload(); } catch (error) { setError(readError(error)); } }} /><Action label="رفض المهمة" run={() => onAction('decline', mission)} /></>}
       {mission.status === 'OUT_WITH_DELEGATE' && <><Action primary label="بدء / تأكيد التسليم" run={() => onAction('deliver', mission)} /><Action label="تعذّر التسليم" run={() => onAction('fail', mission)} /><Action label="تحديث الموقع" run={() => onAction('location', mission)} /></>}
       {mission.status === 'DELIVERY_FAILED' && <><Action primary label="إعادة الجدولة" run={() => onAction('reschedule', mission)} /><Action label="إرجاع السلة" run={() => onAction('return', mission)} /></>}
       {mission.status === 'DEFERRED' && <><span style={mutedStyle}>ستعود للمسار التشغيلي في موعدها المحدد.</span><Action label="إرجاع السلة" run={() => onAction('return', mission)} /></>}
@@ -124,6 +125,18 @@ function DeliveryModal({ mission, close, done }: ModalProps) {
   const [proof, setProof] = useState<File | null>(null); const [signature, setSignature] = useState<File | null>(null); const [pledged, setPledged] = useState(false); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
   const missing = [!proof && 'صورة الإثبات', !signature && 'توقيع المستلم', !pledged && 'الإقرار'].filter(Boolean).join('، ');
   return <Dialog title={`تأكيد التسليم — ${mission.beneficiary.name}`} close={close}><p style={mutedStyle}>يلزم إرفاق صورة واضحة للتسليم، وتوقيع المستلم، ثم تأكيد الإقرار. يتحقق الخادم من العناصر الثلاثة قبل قبول العملية.</p><label style={labelStyle}>صورة إثبات التسليم (إلزامية)<input style={inputStyle} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => setProof(validateImage(event.target.files?.[0], setError))} /></label><SignatureInput onChange={setSignature} setError={setError} /><label className="check-row"><input type="checkbox" checked={pledged} onChange={(event) => setPledged(event.target.checked)} />أؤكد تسليم كامل السلة للمستفيد وصحة الإثبات والتوقيع.</label>{missing && <p role="status">يلزم استكمال: {missing}.</p>}{error && <p style={errorStyle}>{error}</p>}<button style={primaryButtonStyle} disabled={!!missing || busy} onClick={async () => { if (!proof || !signature || !pledged) return; setBusy(true); try { await confirmDelivery(mission.id, proof, signature, true); await done(); } catch (caught) { setError(readError(caught)); } finally { setBusy(false); } }}>إرسال للمراجعة والاعتماد</button></Dialog>;
+}
+
+function DeclineModal({ mission, close, done }: ModalProps) {
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  return <Dialog title={`رفض المهمة — ${mission.beneficiary.name}`} close={close}>
+    <p style={mutedStyle}>لن تنتقل العهدة إليك. ستعود المهمة للجمعية لإسنادها إلى مندوب آخر، وتبقى الأجهزة في المستودع.</p>
+    <label style={labelStyle}>سبب الرفض<textarea style={{ ...inputStyle, minHeight: 90 }} maxLength={500} value={reason} onChange={(event) => setReason(event.target.value)} /></label>
+    {error && <p style={errorStyle}>{error}</p>}
+    <button style={primaryButtonStyle} disabled={!reason.trim() || busy} onClick={async () => { setBusy(true); try { await declineHandover(mission.id, reason); await done(); } catch (caught) { setError(readError(caught)); setBusy(false); } }}>{busy ? 'جارٍ الإرسال…' : 'تأكيد رفض المهمة'}</button>
+  </Dialog>;
 }
 
 function FailureModal({ mission, close, done }: ModalProps) { const [reason, setReason] = useState<DeliveryFailureReason | ''>(''); const [notes, setNotes] = useState(''); const [error, setError] = useState(''); return <Dialog title={`تعذّر التسليم — ${mission.beneficiary.name}`} close={close}><label style={labelStyle}>السبب<select style={inputStyle} value={reason} onChange={(event) => setReason(event.target.value as DeliveryFailureReason)}><option value="">اختر السبب</option>{Object.entries(DELIVERY_FAILURE_REASON_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label style={labelStyle}>ملاحظات<textarea style={{ ...inputStyle, minHeight: 90 }} value={notes} onChange={(event) => setNotes(event.target.value)} /></label>{error && <p style={errorStyle}>{error}</p>}<button style={primaryButtonStyle} disabled={!reason || (reason === 'RECEIPT_REFUSED' && !notes.trim())} onClick={async () => { try { await failDelivery(mission.id, reason as DeliveryFailureReason, notes || undefined); await done(); } catch (caught) { setError(readError(caught)); } }}>تسجيل التعذّر</button></Dialog>; }

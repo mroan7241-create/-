@@ -4,3 +4,4 @@ export * from './legacy-reference-config';
 export * from './auth-error-codes';
 export * from './auth-secrets';
 export * from './credential-lookup';
+export * from './beneficiary-import-headers';

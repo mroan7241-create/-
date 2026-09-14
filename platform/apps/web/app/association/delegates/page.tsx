@@ -5,12 +5,14 @@ import {
   ApiClientError,
   ACCOUNT_STATUS_LABELS,
   createDelegate,
+  getDelegate,
   listDelegates,
   regenerateDelegateCode,
   setDelegateStatus,
   updateDelegate,
   type AccountStatus,
   type DelegateSummary,
+  type DelegateDetail,
   type Paginated,
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
@@ -43,6 +45,8 @@ export default function AssociationDelegatesPage() {
   const [listError, setListError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [editing, setEditing] = useState<DelegateSummary | 'new' | null>(null);
+  const [profile, setProfile] = useState<DelegateDetail | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
   const [revealedCode, setRevealedCode] = useState<{ name: string; code: string; phone: string } | null>(null);
   const [confirmation, setConfirmation] = useState<Omit<ConfirmDialogProps, 'onCancel'> | null>(null);
 
@@ -84,6 +88,18 @@ export default function AssociationDelegatesPage() {
     });
   }
 
+  async function openProfile(row: DelegateSummary) {
+    setProfileLoading(true);
+    setListError(null);
+    try {
+      setProfile(await getDelegate(row.id));
+    } catch (err) {
+      setListError(err instanceof ApiClientError ? err.message : 'تعذّر تحميل ملف أداء المندوب.');
+    } finally {
+      setProfileLoading(false);
+    }
+  }
+
   if (guardLoading || !user) return null;
 
   return (
@@ -102,13 +118,14 @@ export default function AssociationDelegatesPage() {
         {data?.items.map((row) => (
           <div key={row.id} style={cardStyle}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 8 }}>
-              <strong>{row.name}</strong>
+              <button type="button" className="text-link" onClick={() => void openProfile(row)}>{row.name}</button>
               <span style={statusBadgeStyle(row.status === 'ACTIVE' ? 'good' : 'bad')}>{ACCOUNT_STATUS_LABELS[row.status]}</span>
             </div>
             <p style={{ ...mutedStyle, ...ltrStyle, textAlign: 'right', margin: '2px 0' }}>{row.publicCode}</p>
             <p style={{ ...mutedStyle, ...ltrStyle, textAlign: 'right', margin: '2px 0' }}>{row.phone ?? '—'}</p>
             <p style={mutedStyle}>{row.lastLoginAt ? `آخر دخول: ${new Date(row.lastLoginAt).toLocaleString('ar-SA')}` : 'لم يسجّل دخول بعد'}</p>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+              <button type="button" style={secondaryButtonStyle} disabled={profileLoading} onClick={() => void openProfile(row)}>عرض الأداء</button>
               <button type="button" style={secondaryButtonStyle} onClick={() => setEditing(row)}>تعديل</button>
               <button type="button" style={secondaryButtonStyle} onClick={() => toggleStatus(row)}>{row.status === 'ACTIVE' ? 'تعطيل' : 'تفعيل'}</button>
               <button type="button" style={secondaryButtonStyle} onClick={() => regenerateCode(row)}>إعادة توليد الرمز</button>
@@ -174,9 +191,40 @@ export default function AssociationDelegatesPage() {
           </section>
         </div>
       )}
+
+      {profile && (
+        <div style={modalOverlayStyle} role="dialog" aria-modal="true" aria-labelledby="delegate-profile-title">
+          <section style={{ ...modalStyle, maxWidth: 760 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+              <div>
+                <h2 id="delegate-profile-title" style={{ fontSize: 20 }}>{profile.name}</h2>
+                <p style={{ ...mutedStyle, margin: '4px 0 0' }}>{profile.publicCode} · {ACCOUNT_STATUS_LABELS[profile.status]}</p>
+              </div>
+              <button type="button" style={secondaryButtonStyle} onClick={() => setProfile(null)}>إغلاق</button>
+            </div>
+            <div className="delegate-performance-grid">
+              <Metric label="المهام النشطة" value={profile.performance.activeAssignments} />
+              <Metric label="المهام المكتملة" value={profile.performance.completedAssignments} />
+              <Metric label="المستفيدون الذين تم التسليم لهم" value={profile.performance.beneficiariesDelivered} />
+              <Metric label="وحدات الأجهزة المسلّمة" value={profile.performance.deviceUnitsDelivered} />
+              <Metric label="الوحدات المعادة" value={profile.performance.returnedDeviceUnits} />
+              <Metric label="حالات التلف المسجلة" value={profile.performance.damageEvents} />
+              <Metric label="تعذّر/أعيدت جدولة التسليم" value={profile.performance.failedOrRescheduled} />
+              <Metric label="الوحدات في العهدة حاليًا" value={profile.performance.currentCustodyUnits} />
+              <Metric label="أيام العمل الفعلية" value={profile.performance.distinctActiveDays} />
+              <Metric label="متوسط إكمال المهمة" value={profile.performance.averageCompletionHours === null ? 'لا توجد بيانات كافية' : `${profile.performance.averageCompletionHours} ساعة`} />
+            </div>
+            <p style={{ ...mutedStyle, marginTop: 14 }}>أيام العمل الفعلية هي الأيام المميزة التي سُجّل فيها نشاط تشغيلي للمندوب، وليست الأيام منذ إنشاء الحساب.</p>
+          </section>
+        </div>
+      )}
       {confirmation && <ConfirmDialog {...confirmation} onCancel={() => setConfirmation(null)} />}
     </AppShell>
   );
+}
+
+function Metric({ label, value }: { label: string; value: number | string }) {
+  return <div style={cardStyle}><span style={mutedStyle}>{label}</span><strong style={{ display: 'block', fontSize: 21, marginTop: 6 }}>{value}</strong></div>;
 }
 
 function DelegateForm({ delegate, onClose, onSaved }: { delegate: DelegateSummary | null; onClose: () => void; onSaved: (message: string, code?: string, phone?: string, name?: string) => void }) {

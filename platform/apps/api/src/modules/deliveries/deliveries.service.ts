@@ -247,6 +247,46 @@ export class DeliveriesService {
     return { ok: true as const };
   }
 
+  async declineHandover(ctx: AuthContext, missionId: string, reason: string, opId: string) {
+    if (ctx.role !== AccountRole.DELEGATE) throw authForbidden();
+    const cleanReason = reason.trim();
+    if (!cleanReason) throw new ApiError('DELIVERY_DECLINE_REASON_REQUIRED', 'سبب رفض المهمة مطلوب', 400);
+
+    const outcome = await prisma.$transaction(async (tx) => {
+      const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'delivery-decline-handover', opId, { missionId, reason: cleanReason });
+      if (!claim.claimed) return { replayed: true as const };
+
+      const mission = await tx.deliveryMission.findUnique({ where: { id: missionId } });
+      if (!mission || mission.delegateAccountId !== ctx.accountId) throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
+      if (mission.status !== DeliveryStatus.PENDING_DELEGATE_ACKNOWLEDGEMENT) {
+        throw new ApiError('DELIVERY_INVALID_TRANSITION', 'لا يمكن رفض المهمة بعد استلام العهدة', 409);
+      }
+
+      const needs = await tx.beneficiaryNeed.findMany({
+        where: { beneficiaryId: mission.beneficiaryId, decisionStatus: NeedDecisionStatus.APPROVED },
+      });
+      if (!needs.length || needs.some((need) => need.fulfillmentStatus !== NeedFulfillmentStatus.ASSIGNED_TO_DELEGATE_PENDING)) {
+        throw new ApiError('DELIVERY_CUSTODY_MISMATCH', 'حالة الاحتياجات لا تسمح برفض الإسناد', 409);
+      }
+
+      await tx.deliveryMission.update({
+        where: { id: mission.id },
+        data: { delegateAccountId: null, status: DeliveryStatus.PREPARING },
+      });
+      await tx.beneficiaryNeed.updateMany({
+        where: { id: { in: needs.map((need) => need.id) } },
+        data: { fulfillmentStatus: NeedFulfillmentStatus.AWAITING_DELEGATE_ASSIGNMENT },
+      });
+      await this.idempotency.complete(tx, ctx.accountId, 'delivery-decline-handover', opId, { ok: true });
+      return { replayed: false as const, associationId: mission.associationId };
+    });
+
+    if (!outcome.replayed) {
+      await this.audit.log(this.actor(ctx), 'DELIVERY_HANDOVER_DECLINED', 'delivery_missions', missionId, { reason: cleanReason });
+    }
+    return { ok: true as const };
+  }
+
   // ================================================================
   // confirmDelivery — DEL-008 (تأكيد التسليم بإثبات صورة)
   // ================================================================

@@ -7,7 +7,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthContext } from '../auth/auth.types';
 import { RECEIPT_EVIDENCE_MAX_BYTES } from '../files/file-validation.util';
 import { DeliveriesService } from './deliveries.service';
-import { ApproveDeliveryDto, AssignDelegateDto, ConfirmDeliveryDto, ConfirmHandoverDto, ConfirmReturnDto, DelegatePortalQueryDto, FailDeliveryDto, ListDeliveriesQueryDto, RescheduleDeliveryDto, RetryDeliveryDto, ReturnDeliveryDto } from './dto/delivery.dto';
+import { ApproveDeliveryDto, AssignDelegateDto, ConfirmDeliveryDto, ConfirmHandoverDto, ConfirmReturnDto, DeclineHandoverDto, DelegatePortalQueryDto, FailDeliveryDto, ListDeliveriesQueryDto, RescheduleDeliveryDto, RetryDeliveryDto, ReturnDeliveryDto } from './dto/delivery.dto';
 
 interface ConfirmFiles {
   proofPhoto?: Express.Multer.File[];
@@ -58,6 +58,13 @@ export class DeliveriesController {
   @ApiOperation({ summary: 'تأكيد المندوب استلام عهدة المهمة فعليًا بعد الإسناد' })
   async confirmHandover(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: ConfirmHandoverDto) {
     return this.deliveries.confirmHandover(ctx, id, dto.opId);
+  }
+
+  @Post(':id/decline-handover')
+  @Roles(AccountRole.DELEGATE)
+  @ApiOperation({ summary: 'رفض مهمة قبل استلام العهدة — يعيدها لطابور الإسناد ولا ينقل أي جهاز' })
+  async declineHandover(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: DeclineHandoverDto) {
+    return this.deliveries.declineHandover(ctx, id, dto.reason, dto.opId);
   }
 
   @Post(':id/confirm')

@@ -3,15 +3,17 @@
 import { useEffect, useState } from 'react';
 import { AppShell } from '../../components/AppShell';
 import { ErrorState, LoadingState } from '../../components/States';
+import { OfficialReportHeader } from '../../components/OfficialReportHeader';
 import { downloadAdminReport, getAdminReport, type AbanmiReport } from '../../lib/api';
 import { reportValueLabel } from '../../lib/report-labels';
+import { initialQueryParam } from '../../lib/query';
 import { useRoleGuard } from '../../lib/use-role-guard';
 import { cardStyle, inputStyle, labelStyle, primaryButtonStyle, secondaryButtonStyle } from '../../lib/ui';
 
 export default function AdminReportsPage() {
   const { user, loading } = useRoleGuard(['ADMIN']);
   const [report, setReport] = useState<AbanmiReport | null>(null);
-  const [filters, setFilters] = useState({ from: '', to: '', associationId: '', region: '' });
+  const [filters, setFilters] = useState({ from: '', to: '', associationId: initialQueryParam('associationId'), region: '' });
   const [error, setError] = useState('');
   const load = () => { setError(''); getAdminReport(filters).then(setReport).catch(() => setError('تعذّر تحميل التقرير.')); };
   useEffect(() => { if (user) void load(); }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -25,7 +27,7 @@ export default function AdminReportsPage() {
       <label style={labelStyle}>المنطقة<select style={inputStyle} value={filters.region} onChange={e => setFilters({ ...filters, region: e.target.value })}><option value="">كل المناطق</option>{[...new Set(report?.associations.map(row => row.region) ?? [])].map(region => <option key={region}>{region}</option>)}</select></label>
     </div><div className="button-row"><button type="button" style={primaryButtonStyle} onClick={load}>تطبيق المرشحات</button><button type="button" style={secondaryButtonStyle} onClick={() => void downloadAdminReport(filters).catch(() => setError('تعذّر تصدير التقرير.'))}>تصدير XLSX</button><button type="button" style={secondaryButtonStyle} onClick={() => window.print()}>طباعة التقرير</button></div></section>
     {error && <ErrorState message={error} />}{!report && !error && <LoadingState />}
-    {report && <div className="abanmi-report-print"><h2>ملخص المشروع</h2><div className="zad-summary-strip2"><Metric label="الجمعيات" value={report.overall.associations} /><Metric label="المستفيدون" value={report.overall.beneficiaries} /><Metric label="الاحتياجات المعتمدة" value={report.overall.approvedNeeds} /><Metric label="الأجهزة والمخزون" value={report.overall.devices} /><Metric label="التسليم والتنفيذ" value={report.overall.deliveries} /></div>
+    {report && <div className="abanmi-report-print"><OfficialReportHeader title="التقرير التشغيلي والتنفيذي" audience="نسخة إدارة جمعية الزاد" generatedAt={report.generatedAt} period={filters.from || filters.to ? `${filters.from || 'البداية'} — ${filters.to || 'الآن'}` : 'جميع البيانات'} /><h2>ملخص المشروع</h2><div className="zad-summary-strip2"><Metric label="الجمعيات" value={report.overall.associations} /><Metric label="المستفيدون" value={report.overall.beneficiaries} /><Metric label="الاحتياجات المعتمدة" value={report.overall.approvedNeeds} /><Metric label="الأجهزة والمخزون" value={report.overall.devices} /><Metric label="التسليم والتنفيذ" value={report.overall.deliveries} /></div>
       <ReportTable title="الجمعيات والمناطق" headers={['الرمز', 'الجمعية', 'المنطقة', 'المدينة', 'الحالة']} rows={report.associations.map(row => [row.publicCode, row.name, row.region, row.city, reportValueLabel(row.status)])} />
       <ReportTable title="المستفيدون والاحتياجات" headers={['الجمعية', 'الجهاز', 'قرار الاحتياج', 'التنفيذ', 'العدد']} rows={report.beneficiariesAndNeeds.needs.map(row => [associationName(report, row.associationId), reportValueLabel(row.deviceType), reportValueLabel(row.decisionStatus), reportValueLabel(row.fulfillmentStatus), row._count._all])} />
       <ReportTable title="الأجهزة والمخزون" headers={['الجمعية', 'نوع الجهاز', 'الحالة', 'العدد']} rows={report.devicesAndInventory.map(row => [associationName(report, row.associationId), reportValueLabel(row.deviceType), reportValueLabel(row.status), row._count._all])} />

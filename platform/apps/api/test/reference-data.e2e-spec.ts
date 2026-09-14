@@ -11,7 +11,7 @@ import {
   LEGACY_DIFFERENCE_REASONS,
   LEGACY_RECEIVER_TITLES,
 } from '@alzad/shared';
-import { cleanAuthState, seedTestFixtures } from './utils/fixtures';
+import { cleanAuthState, resetAccountPassword, seedTestFixtures } from './utils/fixtures';
 import { loginAs } from './utils/node2-fixtures';
 import { newOpId } from './utils/node3-fixtures';
 
@@ -126,6 +126,8 @@ describe('REF-008 — إضافة قيمة مرجعية (تكامل حقيقي)',
   beforeEach(async () => {
     await prisma.referenceValue.deleteMany({ where: { value: { startsWith: 'REF-E2E-' } } });
     await cleanAuthState();
+    await resetAccountPassword(base.adminEmail, base.adminPassword);
+    await resetAccountPassword(base.assocEmail, base.assocPassword);
     adminCookie = await loginAs(app, base.adminEmail, base.adminPassword);
     assocCookie = await loginAs(app, base.assocEmail, base.assocPassword);
   });

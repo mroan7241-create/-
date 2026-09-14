@@ -106,7 +106,58 @@ export class DelegatesService {
     });
     if (!delegate) throw new ApiError('DELEGATE_NOT_FOUND', 'المندوب غير موجود', 404);
     await this.assertOwnership(ctx, delegate.associationId);
-    return delegate;
+
+    const [missions, activity] = await Promise.all([
+      prisma.deliveryMission.findMany({
+        where: { delegateAccountId: id },
+        select: {
+          id: true, beneficiaryId: true, status: true, assignedAt: true, updatedAt: true,
+          beneficiary: {
+            select: {
+              needs: {
+                where: { decisionStatus: 'APPROVED' },
+                select: { allocations: { where: { status: 'ACTIVE' }, select: { id: true } } },
+              },
+            },
+          },
+        },
+      }),
+      prisma.auditLog.findMany({ where: { actorAccountId: id }, select: { createdAt: true } }),
+    ]);
+    const movements = missions.length
+      ? await prisma.deviceMovement.findMany({
+          where: { referenceType: 'delivery_mission', referenceId: { in: missions.map((mission) => mission.id) } },
+          select: { referenceId: true, toLocationType: true },
+        })
+      : [];
+    const completed = missions.filter((mission) => mission.status === 'DELIVERED' || mission.status === 'DELIVERY_CLOSED');
+    const completedIds = new Set(completed.map((mission) => mission.id));
+    const unitCount = (rows: typeof missions) => rows.reduce(
+      (sum, mission) => sum + mission.beneficiary.needs.reduce((needSum, need) => needSum + need.allocations.length, 0),
+      0,
+    );
+    const completionHours = completed
+      .filter((mission) => mission.assignedAt)
+      .map((mission) => (mission.updatedAt.getTime() - mission.assignedAt!.getTime()) / 3_600_000)
+      .filter((hours) => hours >= 0);
+
+    return {
+      ...delegate,
+      performance: {
+        activeAssignments: missions.filter((mission) => ['PENDING_DELEGATE_ACKNOWLEDGEMENT', 'OUT_WITH_DELEGATE', 'DELIVERY_FAILED', 'DEFERRED', 'PENDING_RETURN_APPROVAL'].includes(mission.status)).length,
+        completedAssignments: completed.length,
+        beneficiariesDelivered: new Set(completed.map((mission) => mission.beneficiaryId)).size,
+        deviceUnitsDelivered: movements.filter((movement) => movement.referenceId && completedIds.has(movement.referenceId) && movement.toLocationType === 'BENEFICIARY').length,
+        returnedDeviceUnits: movements.filter((movement) => movement.toLocationType === 'WAREHOUSE' || movement.toLocationType === 'DAMAGED_HOLDING').length,
+        damageEvents: movements.filter((movement) => movement.toLocationType === 'DAMAGED_HOLDING').length,
+        failedOrRescheduled: missions.filter((mission) => mission.status === 'DELIVERY_FAILED' || mission.status === 'DEFERRED').length,
+        currentCustodyUnits: unitCount(missions.filter((mission) => ['OUT_WITH_DELEGATE', 'DELIVERY_FAILED', 'DEFERRED', 'PENDING_RETURN_APPROVAL'].includes(mission.status))),
+        distinctActiveDays: new Set(activity.map((event) => event.createdAt.toISOString().slice(0, 10))).size,
+        averageCompletionHours: completionHours.length
+          ? Math.round((completionHours.reduce((sum, hours) => sum + hours, 0) / completionHours.length) * 10) / 10
+          : null,
+      },
+    };
   }
 
   // ================================================================

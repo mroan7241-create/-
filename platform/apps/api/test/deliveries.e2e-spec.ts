@@ -214,6 +214,32 @@ describe('NODE-6 — مناديب وتسليمات (تكامل حقيقي)', () 
     expect(proofRes.body.url).toContain('http');
   });
 
+  it('رفض المهمة قبل استلام العهدة يعيدها للإسناد ولا ينقل الجهاز إلى المندوب', async () => {
+    const beneficiaryId = await readyBeneficiary();
+    const { id: delegateId, code } = await createDelegate();
+    const loginRes = await http().post('/api/v1/auth/login').send({ type: 'delegate', code });
+    const delegateCookie = loginRes.headers['set-cookie'][0].split(';')[0];
+    const assignRes = await http().post('/api/v1/deliveries/assign').set('Cookie', adminCookie).send({ beneficiaryId, delegateId, opId: newOpId('assign-decline') });
+    expect(assignRes.status).toBe(201);
+    const missionId = assignRes.body.missionId as string;
+
+    await http().post(`/api/v1/deliveries/${missionId}/decline-handover`).set('Cookie', delegateCookie)
+      .send({ reason: 'تعارض موعد المهمة', opId: newOpId('decline') }).expect(201);
+
+    const mission = await prisma.deliveryMission.findUniqueOrThrow({ where: { id: missionId } });
+    expect(mission.status).toBe(DeliveryStatus.PREPARING);
+    expect(mission.delegateAccountId).toBeNull();
+    const device = await prisma.deviceUnit.findFirstOrThrow({ where: { associationId: fx.associationAId } });
+    expect(device.status).toBe(DeviceStatus.ALLOCATED);
+    const need = await prisma.beneficiaryNeed.findFirstOrThrow({ where: { beneficiaryId } });
+    expect(need.fulfillmentStatus).toBe(NeedFulfillmentStatus.AWAITING_DELEGATE_ASSIGNMENT);
+    expect(await prisma.deviceMovement.count({ where: { deviceId: device.id, referenceId: missionId } })).toBe(0);
+    expect(await prisma.auditLog.count({ where: { action: 'DELIVERY_HANDOVER_DECLINED', entityId: missionId } })).toBe(1);
+
+    await http().post(`/api/v1/deliveries/${missionId}/confirm-handover`).set('Cookie', delegateCookie)
+      .send({ opId: newOpId('late-handover') }).expect(404);
+  });
+
   it('فشل التسليم ← إعادة محاولة ← تأكيد ناجح — الأجهزة تبقى مع المندوب طوال ذلك', async () => {
     const beneficiaryId = await readyBeneficiary();
     const { id: delegateId, code } = await createDelegate();
@@ -326,5 +352,25 @@ describe('NODE-6 — مناديب وتسليمات (تكامل حقيقي)', () 
 
     await http().post('/api/v1/auth/login').send({ type: 'delegate', code }).expect(401); // الرمز القديم لم يعد صالحًا
     await http().post('/api/v1/auth/login').send({ type: 'delegate', code: newCode }).expect(200);
+  });
+
+  it('ملف أداء المندوب يعرض مقاييس فعلية ويحافظ على عزل الجمعية', async () => {
+    const { id: delegateId } = await createDelegate();
+    const own = await http().get(`/api/v1/delegates/${delegateId}`).set('Cookie', assocACookie).expect(200);
+    expect(own.body.performance).toEqual({
+      activeAssignments: 0,
+      completedAssignments: 0,
+      beneficiariesDelivered: 0,
+      deviceUnitsDelivered: 0,
+      returnedDeviceUnits: 0,
+      damageEvents: 0,
+      failedOrRescheduled: 0,
+      currentCustodyUnits: 0,
+      distinctActiveDays: 0,
+      averageCompletionHours: null,
+    });
+
+    const assocBCookie = await loginAs(app, fx.assocBEmail, fx.assocBPassword);
+    await http().get(`/api/v1/delegates/${delegateId}`).set('Cookie', assocBCookie).expect(403);
   });
 });

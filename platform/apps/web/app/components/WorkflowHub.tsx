@@ -13,6 +13,8 @@ import {
   saveSystemSetting, transitionProjectClosure, updateOrganizationClosure,
 } from '../lib/api';
 import { cardStyle, errorStyle, inputStyle, labelStyle, primaryButtonStyle, secondaryButtonStyle, successStyle } from '../lib/ui';
+import { reportValueLabel } from '../lib/report-labels';
+import Link from 'next/link';
 
 type Section = { key: string; title: string; rows: WorkflowRecord[]; error?: string };
 export type WorkflowSectionKey = 'participations' | 'deliveries' | 'procurement' | 'escalations' | 'notifications' | 'beneficiaries' | 'outbox' | 'project-closure';
@@ -98,7 +100,7 @@ function BusinessCalendarSettings({ busy, act }: { busy: boolean; act: (action: 
   }).catch(() => undefined); }, []);
   return <section style={cardStyle}><h2>تقويم أيام العمل وSLA</h2><p>القاعدة المعتمدة ثابتة: تنبيه الجمعية بعد يوم عمل، ثم تصعيد زاد بعد يوم عمل إضافي. لا توجد قائمة عطل مفترضة.</p>
     <div className="form-grid"><label style={labelStyle}>أيام العمل (0=الأحد … 6=السبت)<input style={inputStyle} placeholder="مثال: 0,1,2,3,4" value={workingDays} onChange={(event) => setWorkingDays(event.target.value)} /></label><label style={labelStyle}>العطل المعتمدة — تاريخ في كل سطر<textarea style={{ ...inputStyle, minHeight: 90 }} placeholder="YYYY-MM-DD" value={holidays} onChange={(event) => setHolidays(event.target.value)} /></label></div>
-    {(!workingDays.trim()) && <p style={errorStyle}>BUSINESS CONFIG REQUIRED: أيام العمل لم تُعتمد بعد.</p>}
+    {(!workingDays.trim()) && <p style={errorStyle}>يلزم اعتماد أيام العمل قبل تشغيل التصعيدات الزمنية.</p>}
     <button style={primaryButtonStyle} disabled={busy || !workingDays.trim()} onClick={() => void act(async () => { const days = [...new Set(workingDays.split(',').map((value) => Number(value.trim())).filter((value) => Number.isInteger(value)))]; const dates = holidays.split(/\r?\n|,/).map((value) => value.trim()).filter(Boolean); await saveSystemSetting('calendar.workingDays', days); await saveSystemSetting('calendar.holidays', dates); }, 'تم حفظ تقويم أيام العمل دون اختراع عطل.')}>حفظ التقويم</button>
   </section>;
 }
@@ -138,8 +140,12 @@ function OperationalRow({ user, section, row, busy, setForm, act }: { user: Curr
   }
   if (section === 'deliveries' && status === 'PENDING_RETURN_APPROVAL' && user.role === 'ASSOCIATION') { formButton('تأكيد عودة سليمة', 'return-good'); formButton('تأكيد عودة تالفة', 'return-damaged'); }
   if (section === 'escalations' && user.role === 'ADMIN' && ['OPEN', 'NEEDS_INFO'].includes(status)) formButton('قرار زاد', 'escalation-decision');
-  if (section === 'notifications' && !row.readAt) button('تعليم كمقروء', () => markNotificationRead(row.id));
-  if (section === 'beneficiaries' && user.role === 'ADMIN') { formButton('إدراج MAIN', 'list-main'); formButton('إدراج RESERVE', 'list-reserve'); if (row.listType === 'RESERVE') formButton('ترقية احتياطي', 'promote'); }
+  if (section === 'notifications') {
+    const href = notificationHref(row, user.role);
+    if (href) buttons.push(<Link key="open-notification" href={href} style={{ ...secondaryButtonStyle, textDecoration: 'none' }}>فتح العنصر المرتبط</Link>);
+    if (!row.readAt) button('تحديد كمقروء', () => markNotificationRead(row.id));
+  }
+  if (section === 'beneficiaries' && user.role === 'ADMIN') { formButton('إدراج في القائمة الأساسية', 'list-main'); formButton('إدراج في قائمة الاحتياط', 'list-reserve'); if (row.listType === 'RESERVE') formButton('ترقية احتياطي', 'promote'); }
   if (section === 'procurement' && user.role === 'ADMIN') {
     if (status === 'DRAFT') { button('اعتماد أمر الشراء', () => transitionPurchaseOrder(row.id, 'APPROVED')); button('إلغاء', () => transitionPurchaseOrder(row.id, 'CANCELLED')); }
     if (['APPROVED', 'PARTIALLY_DELIVERED'].includes(status)) formButton('إنشاء شحنة', 'shipment');
@@ -154,7 +160,21 @@ function OperationalRow({ user, section, row, busy, setForm, act }: { user: Curr
     if (status === 'DONOR_FEEDBACK') button('إعادة الإرسال', () => transitionProjectClosure('RESUBMITTED'));
     if (status === 'DONOR_APPROVED') button('إغلاق المشروع', () => transitionProjectClosure('PROJECT_CLOSED'));
   }
-  return <article className="workflow-row"><div><strong>{publicLabel}</strong><p>{humanStatus(status)}</p></div><div className="button-row">{buttons}</div></article>;
+  return <article className="workflow-row"><div><strong>{publicLabel}</strong><p>{humanStatus(status)}</p>{section === 'procurement' && <ProcurementSummary row={row} />}</div><div className="button-row">{buttons}</div></article>;
+}
+
+function ProcurementSummary({ row }: { row: WorkflowRecord }) {
+  const items = (row.items as WorkflowRecord[] | undefined) ?? [];
+  const shipments = (row.shipments as WorkflowRecord[] | undefined) ?? [];
+  if (!items.length && !shipments.length) return null;
+  return <details><summary>تفاصيل أمر الشراء والشحنات</summary>
+    <div style={{ display: 'grid', gap: 7, marginTop: 8 }}>
+      {Boolean(row.supplierName) && <span>المورد: {String(row.supplierName)}</span>}
+      {Boolean(row.createdAt) && <span>تاريخ الإنشاء: {new Date(String(row.createdAt)).toLocaleString('ar-SA')}</span>}
+      {items.map((item) => <span key={item.id}>{humanStatus(String(item.deviceType))} — الكمية المعتمدة {String(item.approvedQty ?? 0)}{item.spec ? ` — ${String(item.spec)}` : ''}</span>)}
+      {shipments.map((shipment) => <span key={shipment.id}>الشحنة {String(shipment.publicCode ?? '')} — {humanStatus(String(shipment.status ?? ''))}</span>)}
+    </div>
+  </details>;
 }
 
 function OperationalForm({ form, user, associations, busy, close, act }: { form: OpenForm; user: CurrentUser; associations: Array<{ id: string; label: string }>; busy: boolean; close: () => void; act: (action: () => Promise<unknown>, success?: string, credentialEmail?: string) => Promise<void> }) {
@@ -188,6 +208,14 @@ function humanStatus(value: string) {
     SUBMITTED_TO_DONOR: 'أُرسل للداعم', DONOR_FEEDBACK: 'وردت ملاحظات الداعم', RESUBMITTED: 'أُعيد إرساله للداعم',
     DONOR_APPROVED: 'معتمد من الداعم', PROJECT_CLOSED: 'المشروع مغلق',
   };
-  return labels[value] ?? value.replaceAll('_', ' ');
+  return labels[value] ?? reportValueLabel(value);
+}
+function notificationHref(row: WorkflowRecord, role: CurrentUser['role']): string | null {
+  const entityType = String(row.entityType ?? '');
+  const entityId = String(row.entityId ?? '');
+  if (!entityId) return null;
+  if (entityType === 'delivery_missions') return role === 'ADMIN' ? `/admin/deliveries/${entityId}` : role === 'ASSOCIATION' ? `/association/deliveries/${entityId}` : null;
+  if (entityType === 'escalation_cases') return role === 'ADMIN' ? '/admin/escalations' : role === 'ASSOCIATION' ? '/association/escalations' : null;
+  return null;
 }
 function readError(error: unknown) { return error instanceof Error ? error.message : 'تعذر تنفيذ العملية.'; }

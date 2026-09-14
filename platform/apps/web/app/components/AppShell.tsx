@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
@@ -25,6 +25,20 @@ export function AppShell({ user, children, restricted = false }: { user: Current
   const groups = restricted ? [] : navGroupsForRole(user.role);
   const homeHref = user.role === 'ADMIN' ? '/admin' : user.role === 'ASSOCIATION' ? '/association' : '/abanmi';
 
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [mobileOpen]);
+
   async function handleLogout() {
     await logout().catch(() => undefined);
     router.push('/login');
@@ -32,13 +46,16 @@ export function AppShell({ user, children, restricted = false }: { user: Current
 
   return (
     <div className="zad-shell2">
-      {!restricted && <aside className="zad-sidebar2 zad-sidebar" data-open={mobileOpen}>
+      {!restricted && <aside className="zad-sidebar2 zad-sidebar" data-open={mobileOpen} aria-hidden={!mobileOpen ? undefined : false}>
         <div className="zad-sidebar2-brand">
           <Image src="/brand/zadLogo.png" alt="جمعية الزاد" width={44} height={44} priority />
           <div>
             <div className="zad-sb2-name">جمعية الزاد</div>
             <div className="zad-sb2-role">لوحة العمليات، {ROLE_LABELS[user.role]}</div>
           </div>
+          <button type="button" className="zad-sidebar-close zad-focusable" onClick={() => setMobileOpen(false)} aria-label="إغلاق القائمة">
+            <X size={20} strokeWidth={1.8} aria-hidden="true" />
+          </button>
         </div>
         <nav className="zad-nav-scroll2" aria-label="التنقّل الرئيسي">
           {groups.map(({ group, items }) => (
@@ -75,20 +92,22 @@ export function AppShell({ user, children, restricted = false }: { user: Current
         </div>
       </aside>}
 
-      {!restricted && mobileOpen && <div style={mobileOverlayStyle} onClick={() => setMobileOpen(false)} />}
+      {!restricted && mobileOpen && <button type="button" aria-label="إغلاق القائمة" style={{ ...mobileOverlayStyle, border: 0, padding: 0 }} onClick={() => setMobileOpen(false)} />}
 
       <div className="zad-main2">
         <div className="zad-sidebar2-toprow zad-topbar">
-          <button
-            type="button"
-            className="zad-mobile-toggle zad-focusable"
-            style={{ ...mobileMenuButtonStyle, display: restricted ? 'none' : undefined }}
-            onClick={() => setMobileOpen((v) => !v)}
-            aria-label={mobileOpen ? 'إغلاق القائمة' : 'فتح القائمة'}
-            aria-expanded={mobileOpen}
-          >
-            {mobileOpen ? <X size={18} strokeWidth={1.75} aria-hidden="true" /> : <Menu size={18} strokeWidth={1.75} aria-hidden="true" />}
-          </button>
+          {!restricted && (
+            <button
+              type="button"
+              className="zad-mobile-toggle zad-focusable"
+              style={mobileMenuButtonStyle}
+              onClick={() => setMobileOpen((v) => !v)}
+              aria-label={mobileOpen ? 'إغلاق القائمة' : 'فتح القائمة'}
+              aria-expanded={mobileOpen}
+            >
+              {mobileOpen ? <X size={18} strokeWidth={1.75} aria-hidden="true" /> : <Menu size={18} strokeWidth={1.75} aria-hidden="true" />}
+            </button>
+          )}
           <span />
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 14 }}>
             <span style={{ fontWeight: 700 }}>{user.name}</span>
@@ -105,9 +124,11 @@ export function AppShell({ user, children, restricted = false }: { user: Current
         ${restricted ? '.zad-main2 { margin-inline-end: 0 !important; width: 100%; }' : ''}
         @media (max-width: 860px) {
           .zad-sidebar { display: none; }
-          .zad-sidebar[data-open="true"] { display: flex; position: fixed; inset: 0 0 0 auto; width: 78vw; max-width: 300px; z-index: 50; height: 100vh; }
+          .zad-sidebar[data-open="true"] { display: flex; position: fixed; inset: 0 0 0 auto; width: min(82vw, 320px) !important; max-width: calc(100vw - 44px); z-index: 50; height: 100dvh; overflow: hidden; }
           .zad-mobile-toggle { display: inline-flex !important; }
+          .zad-sidebar-close { display: inline-flex; margin-inline-start: auto; align-items: center; justify-content: center; width: 36px; height: 36px; flex: 0 0 36px; border: 1px solid rgba(255,255,255,.28); border-radius: 10px; color: #fff; background: rgba(255,255,255,.08); cursor: pointer; }
         }
+        @media (min-width: 861px) { .zad-sidebar-close { display: none; } }
       `}</style>
     </div>
   );

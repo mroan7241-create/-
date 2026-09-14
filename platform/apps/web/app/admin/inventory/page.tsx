@@ -20,7 +20,7 @@ import {
   type DeviceUnitSummary,
   type Paginated,
 } from '../../lib/api';
-import { cardStyle, errorStyle, inputStyle, labelStyle, mutedStyle, pageStyle, primaryButtonStyle, secondaryButtonStyle, statusBadgeStyle, tableStyle, tdStyle, thStyle } from '../../lib/ui';
+import { cardStyle, errorStyle, inputStyle, labelStyle, modalOverlayStyle, modalStyle, mutedStyle, pageStyle, primaryButtonStyle, secondaryButtonStyle, statusBadgeStyle, tableStyle, tdStyle, thStyle } from '../../lib/ui';
 
 /** ADMIN — مخزون الأجهزة: قائمة مُرقَّمة خادميًا (تكافؤ getDeviceDetail/جزء القراءة من saveDevice القديمتين). الإنشاء حصرًا عبر تأكيد محضر استلام. */
 export default function AdminInventoryPage() {
@@ -163,12 +163,21 @@ export default function AdminInventoryPage() {
         </div>
       )}
 
-      {detailError && <p style={errorStyle}>{detailError}</p>}
-      {detail && (
-        <div style={{ ...cardStyle, marginTop: 20, maxWidth: 420 }}>
-          <strong>{detail.publicCode}</strong>
-          <p style={mutedStyle}>محضر الاستلام: {detail.receiptBatchPublicCode ?? '—'}</p>
-          <p style={mutedStyle}>الحالة: {DEVICE_STATUS_LABELS[detail.status]}</p>
+      {(detailError || detail) && (
+        <div style={modalOverlayStyle} role="dialog" aria-modal="true" aria-labelledby="admin-device-detail-title">
+        <section style={{ ...modalStyle, maxWidth: 620 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}><h2 id="admin-device-detail-title" style={{ margin: 0 }}>تفاصيل الجهاز</h2><button type="button" style={secondaryButtonStyle} onClick={() => { setDetail(null); setDetailError(''); }}>إغلاق</button></div>
+          {detailError && <p style={errorStyle}>{detailError}</p>}
+          {detail && <><strong dir="ltr" style={{ display: 'block', marginTop: 14 }}>{detail.publicCode}</strong>
+          <div className="detail-grid" style={{ marginTop: 12 }}>
+            <span>النوع: {detail.deviceType ? DEVICE_TYPE_LABELS[detail.deviceType as DeviceType] ?? detail.deviceType : '—'}</span>
+            <span>المواصفة: {detail.spec ?? '—'}</span>
+            <span>الحالة: {DEVICE_STATUS_LABELS[detail.status]}</span>
+            <span>موقع العهدة: {detail.currentLocationType}</span>
+            <span>محضر الاستلام: {detail.receiptBatchPublicCode ?? '—'}</span>
+            <span>تاريخ الإدخال: {new Date(detail.createdAt).toLocaleString('ar-SA')}</span>
+            <span>آخر تحديث: {new Date(detail.updatedAt).toLocaleString('ar-SA')}</span>
+          </div>
 
           {detail.status === 'WAREHOUSE' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
@@ -193,7 +202,8 @@ export default function AdminInventoryPage() {
             </div>
           )}
 
-          <button onClick={() => setDetail(null)} style={{ marginTop: 12 }}>إغلاق</button>
+          </>}
+        </section>
         </div>
       )}
       {confirmDamage && <ConfirmDialog

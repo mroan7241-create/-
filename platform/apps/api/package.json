@@ -10,7 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint \"src/**/*.ts\"",
     "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js",
-    "test:e2e": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config test/jest-e2e.json --runInBand"
+    "test:e2e": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config test/jest-e2e.json"
   },
   "dependencies": {
     "@alzad/db": "*",

@@ -63,7 +63,7 @@ export default function AdminApplicationsPage() {
 
   return (
     <AppShell user={user}>
-      <div className="workflow-row" style={{ marginBottom: 16 }}><div><h1 style={{ fontSize: 22, marginBottom: 6 }}>طلبات انضمام الجمعيات</h1><p style={mutedStyle}>الطلب ← الأهلية ← التقييم ← الاختيار MAIN/RESERVE ← الاتفاقية والتجهيز ← التفعيل</p></div><Link href="/admin/selection" style={{ ...primaryButtonStyle, textDecoration: 'none' }}>الأهلية والتقييم والاختيار</Link></div>
+      <div className="workflow-row" style={{ marginBottom: 16 }}><div><h1 style={{ fontSize: 22, marginBottom: 6 }}>طلبات انضمام الجمعيات</h1><p style={mutedStyle}>الطلب ← الأهلية ← التقييم ← اختيار القائمة الأساسية أو الاحتياطية ← الاتفاقية والتجهيز ← التفعيل</p></div><Link href="/admin/selection" style={{ ...primaryButtonStyle, textDecoration: 'none' }}>الأهلية والتقييم والاختيار</Link></div>
 
       <form
         onSubmit={(e) => {

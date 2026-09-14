@@ -97,7 +97,8 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
     return prisma.$transaction(async (tx) => {
       const rows = await tx.$queryRaw<Array<{ id: string }>>`
         SELECT "id" FROM "outbox_events"
-        WHERE "status" = 'PENDING'::"OutboxEventStatus" AND "next_attempt_at" <= NOW()
+        WHERE "status" = 'PENDING'::"OutboxEventStatus"
+          AND "next_attempt_at" <= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
         ORDER BY "created_at" ASC FOR UPDATE SKIP LOCKED LIMIT 1
       `;
       const id = rows[0]?.id;
@@ -115,9 +116,14 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     const target = describe(event.type);
+    const linkedEntity = event.type === OutboxEventType.ESCALATION_OPENED && typeof payload.escalationId === 'string'
+      ? { entityType: 'escalation_cases', entityId: payload.escalationId }
+      : typeof payload.missionId === 'string'
+        ? { entityType: 'delivery_missions', entityId: payload.missionId }
+        : { entityType: 'outbox_events', entityId: event.id };
     await prisma.notification.upsert({ where: { dedupeKey: `outbox:${event.id}` }, create: {
       associationId, audienceRole: target.role, type: String(event.type), title: target.title, body: target.body,
-      severity: target.severity, entityType: 'outbox_events', entityId: event.id, dedupeKey: `outbox:${event.id}`,
+      severity: target.severity, ...linkedEntity, dedupeKey: `outbox:${event.id}`,
     }, update: {} });
   }
 

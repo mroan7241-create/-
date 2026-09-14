@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { AppShell } from '../../components/AppShell';
 import { ErrorState, LoadingState } from '../../components/States';
+import { OfficialReportHeader } from '../../components/OfficialReportHeader';
 import { downloadAbanmiReport, getAbanmiReport, type AbanmiReport } from '../../lib/api';
 import { reportValueLabel } from '../../lib/report-labels';
 import { useRoleGuard } from '../../lib/use-role-guard';
@@ -26,6 +27,7 @@ export default function AbanmiReportsPage() {
     </div><div className="button-row"><button style={primaryButtonStyle} onClick={load}>تطبيق المرشحات</button><button style={secondaryButtonStyle} onClick={() => void downloadAbanmiReport(filters).catch(() => setError('تعذّر تصدير التقرير.'))}>تصدير XLSX</button><button style={secondaryButtonStyle} onClick={() => window.print()}>طباعة التقرير</button></div></section>
     {error && <ErrorState message={error} />}{!report && !error && <LoadingState />}
     {report && <div className="abanmi-report-print">
+      <OfficialReportHeader title="تقرير تقدم المشروع" audience="نسخة الشريك الداعم — أبانمي" generatedAt={report.generatedAt} period={filters.from || filters.to ? `${filters.from || 'البداية'} — ${filters.to || 'الآن'}` : 'جميع البيانات'} />
       <h2>الملخص العام</h2><div className="zad-summary-strip2"><Metric label="الجمعيات" value={report.overall.associations} /><Metric label="المستفيدون" value={report.overall.beneficiaries} /><Metric label="الاحتياجات المعتمدة" value={report.overall.approvedNeeds} /><Metric label="الأجهزة" value={report.overall.devices} /><Metric label="التسليمات" value={report.overall.deliveries} /></div>
       <ReportTable title="حسب الجمعية" headers={['الرمز', 'الجمعية', 'المنطقة', 'المدينة', 'الحالة']} rows={report.associations.map((row) => [row.publicCode, row.name, row.region, row.city, reportValueLabel(row.status)])} />
       <ReportTable title="المخزون والأجهزة" headers={['الجمعية', 'نوع الجهاز', 'الحالة', 'العدد']} rows={report.devicesAndInventory.map((row) => [associationName(report, row.associationId), reportValueLabel(row.deviceType), reportValueLabel(row.status), row._count._all])} />

@@ -371,10 +371,11 @@ export class ApplicationsService {
   }
 
   async previewSelection() {
-    const threshold = await this.settings.requireNumber('selection.passThreshold');
+    const configuredThreshold = await this.settings.getValue<unknown>('selection.passThreshold');
+    const threshold = typeof configuredThreshold === 'number' && Number.isFinite(configuredThreshold) ? configuredThreshold : null;
     const rows = await prisma.associationApplication.findMany({ where: { eligibilityStatus: EligibilityStatus.PASSED, evaluationScore: { not: null }, selectionList: AssociationSelectionList.NONE }, select: { id: true, publicCode: true, name: true, evaluationScore: true, evaluationBreakdown: true } });
     const ranked = rankApplications(rows.map((row) => ({ ...row, score: Number(row.evaluationScore) })));
-    return { threshold, items: ranked.map((item, index) => ({ ...item, rank: index + 1, passesThreshold: item.score >= threshold })) };
+    return { threshold, items: ranked.map((item, index) => ({ ...item, rank: index + 1, passesThreshold: threshold === null ? null : item.score >= threshold })) };
   }
 
   async commitSelection(ctx: AuthContext, mainTargetCount: number, opId: string) {

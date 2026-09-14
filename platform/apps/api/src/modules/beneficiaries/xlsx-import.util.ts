@@ -2,6 +2,12 @@ import ExcelJS from 'exceljs';
 import { DeviceType } from '@alzad/db';
 import { ApiError } from '../../common/api-error';
 import type { BeneficiaryWriteInput } from './beneficiaries.service';
+import {
+  ALL_BENEFICIARY_IMPORT_FIELDS,
+  BENEFICIARY_IMPORT_HEADER_LABELS,
+  REQUIRED_BENEFICIARY_IMPORT_FIELDS,
+  beneficiaryImportFieldForHeader,
+} from '@alzad/shared';
 // ملاحظة: استيراد نوع فقط (import type) — يُحذَف بالكامل عند الترجمة، لا دورة استيراد فعلية زمن التشغيل رغم أن beneficiaries.service.ts يستورد من هذا الملف أيضًا.
 
 /** يطابق DEVICE_TYPE_LABELS في الواجهة حرفيًا — نفس تسميات عمود deviceTypes في قالب CSV/XLSX. */
@@ -23,8 +29,7 @@ const DEVICE_LABEL_TO_TYPE: Record<string, DeviceType> = {
 export const XLSX_MAX_BYTES = 8 * 1024 * 1024; // 8MB — نفس حد Legacy لملف الاستيراد.
 export const XLSX_MAX_ROWS = 1000; // نفس سقف BEN-013 (JSON/CSV) — قرار عمل موحَّد، لا فرق حسب صيغة الملف.
 
-export const REQUIRED_XLSX_HEADERS = ['name', 'region', 'city', 'district', 'phone', 'familyCount', 'socialStatus', 'deviceTypes'] as const;
-const ALL_XLSX_HEADERS = [...REQUIRED_XLSX_HEADERS, 'phone2', 'socialSecurity', 'income', 'notes', 'lat', 'lng'] as const;
+export const REQUIRED_XLSX_HEADERS = REQUIRED_BENEFICIARY_IMPORT_FIELDS;
 
 export interface RawXlsxRow {
   index: number; // رقم الصف الظاهر للمستخدم (يبدأ من 2 — الصف 1 عناوين).
@@ -51,14 +56,16 @@ export async function parseXlsxBeneficiaryRows(buffer: Buffer): Promise<{ header
   }
 
   const headerRow = sheet.getRow(1);
-  const headers: string[] = [];
+  const originalHeaders: string[] = [];
   headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
-    headers[colNumber - 1] = String(cell.value ?? '').trim();
+    originalHeaders[colNumber - 1] = String(cell.value ?? '').trim();
   });
+
+  const headers = originalHeaders.map((header) => beneficiaryImportFieldForHeader(header) ?? header);
 
   const missing = REQUIRED_XLSX_HEADERS.filter((h) => !headers.includes(h));
   if (missing.length > 0) {
-    throw new ApiError('BENEFICIARY_IMPORT_XLSX_MISSING_HEADERS', `أعمدة إلزامية ناقصة: ${missing.join('، ')}`, 400);
+    throw new ApiError('BENEFICIARY_IMPORT_XLSX_MISSING_HEADERS', `أعمدة إلزامية ناقصة: ${missing.map((field) => BENEFICIARY_IMPORT_HEADER_LABELS[field]).join('، ')}`, 400);
   }
 
   const rows: RawXlsxRow[] = [];
@@ -90,10 +97,21 @@ export async function parseXlsxBeneficiaryRows(buffer: Buffer): Promise<{ header
 export async function generateXlsxTemplate(): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet('مستفيدون');
-  sheet.addRow([...ALL_XLSX_HEADERS]);
-  sheet.addRow(['اسم تجريبي', 'الرياض', 'الرياض', 'حي النرجس', '0500000001', '', 5, 'أرملة', '2000', '', '', '', 'ثلاجة،فرن']);
-  sheet.getRow(1).font = { bold: true };
+  sheet.views = [{ rightToLeft: true }];
+  sheet.addRow(ALL_BENEFICIARY_IMPORT_FIELDS.map((field) => BENEFICIARY_IMPORT_HEADER_LABELS[field]));
+  sheet.addRow(['اسم تجريبي', 'الرياض', 'الرياض', 'حي النرجس', '0500000001', 5, 'أرملة', 'ثلاجة،فرن', '', 'نعم', 2000, 'صف مثال — احذفه قبل الاستيراد', '', '']);
+  sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF70142D' } };
+  sheet.autoFilter = { from: 'A1', to: 'N1' };
   sheet.columns.forEach((col) => { col.width = 18; });
+  const instructions = workbook.addWorksheet('تعليمات');
+  instructions.views = [{ rightToLeft: true }];
+  instructions.addRow(['طريقة الاستخدام']);
+  instructions.addRow(['١. لا تعدّل أسماء الأعمدة في الصف الأول.']);
+  instructions.addRow(['٢. احذف صف المثال قبل رفع بياناتك.']);
+  instructions.addRow(['٣. أسماء الأجهزة المقبولة: ثلاجة، فرن، غسالة. افصل بين أكثر من جهاز بفاصلة عربية «،».']);
+  instructions.getColumn(1).width = 90;
+  instructions.getColumn(1).alignment = { horizontal: 'right', wrapText: true };
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);
 }

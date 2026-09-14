@@ -484,7 +484,7 @@ function ReviewModal({
             <tr>
               <th style={thStyle}>النوع</th>
               <th style={thStyle}>الحالة</th>
-              <th style={thStyle}>القرار</th>
+              <th style={thStyle}>إجراء المراجعة</th>
             </tr>
           </thead>
           <tbody>
@@ -503,7 +503,7 @@ function ReviewModal({
                 </td>
                 <td style={tdStyle}>
                   {need.decisionStatus !== 'PENDING' || decided ? (
-                    <span style={mutedStyle}>—</span>
+                    <span style={mutedStyle}>مكتمل</span>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                       <select

@@ -11,6 +11,12 @@ import {
   type DeviceType,
 } from './api';
 import { AssociationSelect } from './association-select';
+import {
+  ALL_BENEFICIARY_IMPORT_FIELDS,
+  BENEFICIARY_IMPORT_HEADER_LABELS,
+  REQUIRED_BENEFICIARY_IMPORT_FIELDS,
+  beneficiaryImportFieldForHeader,
+} from '@alzad/shared';
 import { cardStyle, errorStyle, inputStyle, modalOverlayStyle, modalStyle, mutedStyle, primaryButtonStyle, secondaryButtonStyle, successStyle, tableStyle, tdStyle, thStyle } from './ui';
 
 /**
@@ -26,16 +32,13 @@ import { cardStyle, errorStyle, inputStyle, modalOverlayStyle, modalStyle, muted
  * جدول العرض وزر الالتزام نفسه.
  */
 
-const REQUIRED_HEADERS = ['name', 'region', 'city', 'district', 'phone', 'familyCount', 'socialStatus', 'deviceTypes'] as const;
-const ALL_HEADERS = [...REQUIRED_HEADERS, 'phone2', 'socialSecurity', 'income', 'notes', 'lat', 'lng'] as const;
-
 const DEVICE_LABEL_TO_TYPE: Record<string, DeviceType> = Object.fromEntries(
   Object.entries(DEVICE_TYPE_LABELS).map(([type, label]) => [label, type as DeviceType]),
 );
 
 function downloadCsvTemplate() {
-  const headerRow = ALL_HEADERS.join(',');
-  const exampleRow = ['اسم تجريبي', 'الرياض', 'الرياض', 'حي النرجس', '0500000001', '', '5', 'أرملة', 'لا', '2000', '', '', '', 'ثلاجة،فرن'].join(',');
+  const headerRow = ALL_BENEFICIARY_IMPORT_FIELDS.map((field) => BENEFICIARY_IMPORT_HEADER_LABELS[field]).join(',');
+  const exampleRow = ['اسم تجريبي', 'الرياض', 'الرياض', 'حي النرجس', '0500000001', '5', 'أرملة', 'ثلاجة،فرن', '', 'نعم', '2000', 'صف مثال — احذفه قبل الاستيراد', '', ''].join(',');
   const csv = `${headerRow}\n${exampleRow}\n`;
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
@@ -82,10 +85,10 @@ interface PreviewRow {
 
 function buildPreviewRows(csvRows: string[][]): { headers: string[]; preview: PreviewRow[]; headerError?: string } {
   if (csvRows.length === 0) return { headers: [], preview: [], headerError: 'الملف فارغ.' };
-  const headers = csvRows[0].map((h) => h.trim());
-  const missing = REQUIRED_HEADERS.filter((h) => !headers.includes(h));
+  const headers = csvRows[0].map((header) => beneficiaryImportFieldForHeader(header) ?? header.trim());
+  const missing = REQUIRED_BENEFICIARY_IMPORT_FIELDS.filter((h) => !headers.includes(h));
   if (missing.length > 0) {
-    return { headers, preview: [], headerError: `أعمدة إلزامية ناقصة: ${missing.join('، ')}` };
+    return { headers, preview: [], headerError: `أعمدة إلزامية ناقصة: ${missing.map((field) => BENEFICIARY_IMPORT_HEADER_LABELS[field]).join('، ')}` };
   }
 
   const preview: PreviewRow[] = [];
@@ -103,10 +106,10 @@ function buildPreviewRows(csvRows: string[][]): { headers: string[]; preview: Pr
           if (!type) throw new Error(`نوع جهاز غير معروف: "${label}"`);
           return type;
         });
-      if (deviceTypes.length === 0) throw new Error('عمود deviceTypes فارغ — اكتب نوعًا واحدًا على الأقل (ثلاجة/فرن/غسالة)');
+      if (deviceTypes.length === 0) throw new Error('عمود «الأجهزة المطلوبة» فارغ — اكتب نوعًا واحدًا على الأقل (ثلاجة/فرن/غسالة)');
 
       const familyCount = Number(raw.familyCount);
-      if (!Number.isFinite(familyCount)) throw new Error('familyCount ليس رقمًا صالحًا');
+      if (!Number.isFinite(familyCount)) throw new Error('قيمة «عدد أفراد الأسرة» ليست رقمًا صالحًا');
 
       const row: BeneficiaryImportRow = {
         name: raw.name,
@@ -231,7 +234,7 @@ function BulkImportModal({ isAdmin, onClose, onImported }: { isAdmin: boolean; o
         </div>
 
         <p style={mutedStyle}>
-          ارفع ملف CSV أو Excel (.xlsx) بنفس ترتيب أعمدة القالب. عمود <code>deviceTypes</code> يقبل أكثر من نوع مفصولة بفاصلة عربية «،» (مثال: ثلاجة،فرن).
+          ارفع ملف CSV أو Excel (.xlsx) بحسب القالب العربي. عمود «الأجهزة المطلوبة» يقبل أكثر من نوع مفصولًا بفاصلة عربية «،» (مثال: ثلاجة،فرن). ما زالت القوالب الإنجليزية القديمة مدعومة.
         </p>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button type="button" style={secondaryButtonStyle} onClick={downloadCsvTemplate}>⬇ تنزيل قالب CSV</button>

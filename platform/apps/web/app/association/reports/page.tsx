@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { AppShell } from '../../components/AppShell';
 import { ErrorState, LoadingState } from '../../components/States';
+import { OfficialReportHeader } from '../../components/OfficialReportHeader';
 import { ApiClientError, getAssociationReport, type AssociationReport } from '../../lib/api';
 import { actionLabel } from '../../lib/action-labels';
 import { reportValueLabel } from '../../lib/report-labels';
@@ -74,6 +75,7 @@ export default function AssociationReportsPage() {
 
       {!loading && report && (
         <>
+          <OfficialReportHeader title="تقرير تنفيذ الجمعية" audience={report.association.name} generatedAt={report.period.generatedAt} period={`${report.period.from} — ${report.period.to}`} />
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 16 }}>
             {[
               ['المستفيدون', report.beneficiaries.total],

@@ -1,13 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import {
   ApiClientError,
   apiFetch,
+  getAdminReport,
   getReferenceData,
   getFinalCovenantUrl,
   issuePartyOneSigningSession,
   type AssociationSummary,
+  type AbanmiReport,
   type Paginated,
   type ReferenceData,
 } from '../../lib/api';
@@ -76,6 +79,8 @@ export default function AdminAssociationsPage() {
   const [resetResult, setResetResult] = useState<{ name: string; password: string; phone: string; email: string } | null>(null);
   const [confirmation, setConfirmation] = useState<Omit<ConfirmDialogProps, 'onCancel'> | null>(null);
   const [partyOneLink, setPartyOneLink] = useState<{ name: string; url: string } | null>(null);
+  const [profile, setProfile] = useState<{ association: AssociationSummary & { account?: { status: string; mustChangePassword: boolean; lastLoginAt: string | null } | null }; report: AbanmiReport } | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
 
   const load = useCallback(async () => {
     setListError(null);
@@ -121,6 +126,20 @@ export default function AdminAssociationsPage() {
         catch (err) { setListError(err instanceof ApiClientError ? err.message : 'تعذّرت إعادة تعيين كلمة المرور.'); }
       },
     });
+  }
+
+  async function openProfile(row: AssociationSummary) {
+    setProfileLoading(true);
+    setListError(null);
+    try {
+      const [association, report] = await Promise.all([
+        apiFetch<AssociationSummary & { account?: { status: string; mustChangePassword: boolean; lastLoginAt: string | null } | null }>(`/associations/${row.id}`),
+        getAdminReport({ associationId: row.id }),
+      ]);
+      setProfile({ association, report });
+    } catch (err) {
+      setListError(err instanceof ApiClientError ? err.message : 'تعذّر تحميل ملف الجمعية.');
+    } finally { setProfileLoading(false); }
   }
 
   if (guardLoading || !user) return null;
@@ -199,7 +218,7 @@ export default function AdminAssociationsPage() {
             )}
             {data?.items.map((row) => (
               <tr key={row.id}>
-                <td style={tdStyle}>{row.name}</td>
+                <td style={tdStyle}><button type="button" className="text-link" onClick={() => void openProfile(row)}>{row.name}</button></td>
                 <td style={{ ...tdStyle, ...ltrStyle }}>{row.publicCode}</td>
                 <td style={tdStyle}>
                   {row.region} / {row.city}
@@ -302,6 +321,21 @@ export default function AdminAssociationsPage() {
         </div>
       )}
       {confirmation && <ConfirmDialog {...confirmation} onCancel={() => setConfirmation(null)} />}
+      {(profileLoading || profile) && <div style={modalOverlayStyle} role="dialog" aria-modal="true" aria-labelledby="association-profile-title"><section style={{ ...modalStyle, maxWidth: 820 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}><h2 id="association-profile-title" style={{ margin: 0 }}>ملف الجمعية</h2><button type="button" style={secondaryButtonStyle} onClick={() => setProfile(null)}>إغلاق</button></div>
+        {profileLoading && <p>جارٍ تحميل ملف الجمعية…</p>}
+        {profile && <><h3>{profile.association.name}</h3><p>{profile.association.publicCode} · {profile.association.region} / {profile.association.city} · {STATUS_LABELS[profile.association.status]}</p>
+          <div className="zad-summary-strip2">
+            <span className="zad-sum-card2"><b className="zad-sv2b">{profile.association.beneficiariesCount}</b><span className="zad-sl2b">مستفيدون</span></span>
+            <span className="zad-sum-card2"><b className="zad-sv2b">{profile.association.devicesCount}</b><span className="zad-sl2b">أجهزة</span></span>
+            <span className="zad-sum-card2"><b className="zad-sv2b">{profile.association.delegatesCount}</b><span className="zad-sl2b">مندوبون</span></span>
+            <span className="zad-sum-card2"><b className="zad-sv2b">{profile.report.overall.deliveries}</b><span className="zad-sl2b">مهام تسليم</span></span>
+          </div>
+          <p>حالة الحساب: {profile.association.account?.status === 'ACTIVE' ? 'نشط' : 'غير نشط'} · آخر دخول: {profile.association.account?.lastLoginAt ? new Date(profile.association.account.lastLoginAt).toLocaleString('ar-SA') : 'لم يسجّل دخولًا'}</p>
+          <p>الميثاق: {profile.association.covenant ? covenantStatus(profile.association.covenant.status) : 'لا يوجد ميثاق'}</p>
+          <Link href={`/admin/reports?associationId=${profile.association.id}`} style={{ ...primaryButtonStyle, textDecoration: 'none', display: 'inline-block' }}>عرض التقرير الكامل</Link>
+        </>}
+      </section></div>}
     </AppShell>
   );
 }

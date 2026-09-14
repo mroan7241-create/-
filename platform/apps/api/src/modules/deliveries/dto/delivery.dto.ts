@@ -45,6 +45,15 @@ export class ConfirmHandoverDto {
   opId!: string;
 }
 
+export class DeclineHandoverDto {
+  @IsString()
+  @MaxLength(500)
+  reason!: string;
+
+  @IsString()
+  opId!: string;
+}
+
 export class ConfirmDeliveryDto {
   @IsIn(['true'])
   acknowledgement!: string;

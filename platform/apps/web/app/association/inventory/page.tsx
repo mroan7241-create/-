@@ -20,6 +20,8 @@ import { useRoleGuard } from '../../lib/use-role-guard';
 import {
   cardStyle,
   inputStyle,
+  modalOverlayStyle,
+  modalStyle,
   mutedStyle,
   secondaryButtonStyle,
   statusBadgeStyle,
@@ -193,8 +195,9 @@ export default function AssociationInventoryPage() {
       )}
 
       {(detailLoading || detailError || detail) && (
-        <section style={{ ...cardStyle, marginTop: 20, maxWidth: 560 }} aria-labelledby="association-device-detail">
-          <h2 id="association-device-detail" style={{ fontSize: 18, marginTop: 0 }}>تفاصيل الجهاز</h2>
+        <div style={modalOverlayStyle} role="dialog" aria-modal="true" aria-labelledby="association-device-detail">
+        <section style={{ ...modalStyle, maxWidth: 620 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}><h2 id="association-device-detail" style={{ fontSize: 18, margin: 0 }}>تفاصيل الجهاز</h2><button type="button" style={secondaryButtonStyle} onClick={() => { setDetail(null); setDetailError(''); setDetailLoading(false); }}>إغلاق</button></div>
           {detailLoading && <LoadingState />}
           {detailError && <ErrorState message={detailError} />}
           {detail && (
@@ -208,10 +211,10 @@ export default function AssociationInventoryPage() {
               <span>تاريخ الإدخال: {formatDate(detail.createdAt)}</span>
               <span>آخر تحديث: {formatDate(detail.updatedAt)}</span>
               <span>تاريخ التسليم: {formatDate(detail.deliveredAt)}</span>
-              <button type="button" style={{ ...secondaryButtonStyle, marginTop: 6, justifySelf: 'start' }} onClick={() => setDetail(null)}>إغلاق</button>
             </div>
           )}
         </section>
+        </div>
       )}
     </AppShell>
   );

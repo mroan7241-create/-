@@ -627,6 +627,21 @@ export interface DelegateSummary {
   createdAt: string;
 }
 
+export interface DelegateDetail extends DelegateSummary {
+  performance: {
+    activeAssignments: number;
+    completedAssignments: number;
+    beneficiariesDelivered: number;
+    deviceUnitsDelivered: number;
+    returnedDeviceUnits: number;
+    damageEvents: number;
+    failedOrRescheduled: number;
+    currentCustodyUnits: number;
+    distinctActiveDays: number;
+    averageCompletionHours: number | null;
+  };
+}
+
 export function listDelegates(params: { page?: number; pageSize?: number; search?: string; associationId?: string; status?: AccountStatus } = {}): Promise<Paginated<DelegateSummary>> {
   const q = new URLSearchParams();
   if (params.page) q.set('page', String(params.page));
@@ -637,7 +652,7 @@ export function listDelegates(params: { page?: number; pageSize?: number; search
   return apiFetch(`/delegates?${q.toString()}`);
 }
 
-export function getDelegate(id: string): Promise<DelegateSummary> {
+export function getDelegate(id: string): Promise<DelegateDetail> {
   return apiFetch(`/delegates/${id}`);
 }
 
@@ -737,6 +752,10 @@ export function confirmHandover(missionId: string): Promise<{ ok: true }> {
   return apiFetch(`/deliveries/${missionId}/confirm-handover`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) });
 }
 
+export function declineHandover(missionId: string, reason: string): Promise<{ ok: true }> {
+  return apiFetch(`/deliveries/${missionId}/decline-handover`, { method: 'POST', body: JSON.stringify({ reason, opId: newOpId() }) });
+}
+
 export function confirmDelivery(missionId: string, proofPhoto: File, recipientSignature: File, acknowledged: true): Promise<{ ok: true; attemptId: string }> {
   const form = new FormData();
   form.set('opId', newOpId());
@@ -801,7 +820,7 @@ export function createShipment(input: { purchaseOrderId: string; route: 'SUPPLIE
 export function transitionShipment(id: string, status: 'DISPATCHED' | 'PARTIALLY_RECEIVED' | 'RECEIVED' | 'RECONCILIATION_REQUIRED' | 'CLOSED' | 'CANCELLED') { return apiFetch(`/procurement/shipments/${id}/transition`, { method: 'POST', body: JSON.stringify({ status, opId: newOpId() }) }); }
 export function decideApplicationEligibility(id: string, decision: 'PASSED' | 'FAILED' | 'NEEDS_INFO', notes?: string) { return apiFetch(`/association-applications/${id}/eligibility`, { method: 'POST', body: JSON.stringify({ decision, notes, opId: newOpId() }) }); }
 export function evaluateApplication(id: string, scores: { operationalReadiness: number; technicalCapability: number; previousExperience: number; integrityTransparency: number; participationCommitment: number; sustainabilityImpact: number }) { return apiFetch(`/association-applications/${id}/evaluation`, { method: 'POST', body: JSON.stringify({ ...scores, opId: newOpId() }) }); }
-export function previewApplicationSelection(): Promise<{ threshold: number; items: WorkflowRecord[] }> { return apiFetch('/association-applications/selection/preview', { method: 'POST' }); }
+export function previewApplicationSelection(): Promise<{ threshold: number | null; items: WorkflowRecord[] }> { return apiFetch('/association-applications/selection/preview', { method: 'POST' }); }
 export function commitApplicationSelection(mainTargetCount: number) { return apiFetch('/association-applications/selection/commit', { method: 'POST', body: JSON.stringify({ mainTargetCount, opId: newOpId() }) }); }
 
 export function failDelivery(missionId: string, failureReason: DeliveryFailureReason, notes?: string): Promise<{ ok: true; attemptId: string }> {
