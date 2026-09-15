@@ -42,6 +42,16 @@ export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
   return body as T;
 }
 
+async function apiUploadWithHeaders<T>(path: string, form: FormData, headers: Record<string, string>): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, { method: 'POST', credentials: 'include', headers, body: form });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = body as ApiErrorBody | null;
+    throw new ApiClientError(err?.error?.code ?? 'UNKNOWN_ERROR', err?.error?.message ?? 'حدث خطأ غير متوقع');
+  }
+  return body as T;
+}
+
 export interface Paginated<T> {
   items: T[];
   total: number;
@@ -148,7 +158,81 @@ export interface ApplicationSummary {
   evaluationScore: number | null;
   evaluationRank: number | null;
   selectionList: 'NONE' | 'MAIN' | 'RESERVE';
+  schemaVersion: number;
+  v2Payload: Record<string, unknown> | null;
+  regionOfficialCode: string | null;
+  governorateOfficialCode: string | null;
+  centerOfficialCode: string | null;
+  locationNeedsVerification: boolean;
+  processingStartedAt: string | null;
+  currentAssets: number | null;
+  currentLiabilities: number | null;
+  financialResult: number | null;
+  netWorkingCapital: number | null;
+  financialPriority: 'HIGHER_CAPACITY_LOWER_AID_PRIORITY' | 'STANDARD_PRIORITY_REVIEW' | null;
+  eligibilityEvidence: Record<string, unknown> | null;
+  evaluationEvidence: Record<string, unknown> | null;
+  evaluationBreakdown: Record<string, unknown> | null;
+  attachmentKeys: string[];
+  latestInformationRequest: ApplicationInformationRequest | null;
 }
+
+export interface GeographicUnit {
+  officialCode: string;
+  nameAr: string;
+  unitType: 'REGION' | 'EMIRATE_SEAT' | 'GOVERNORATE' | 'ADMIN_CENTER';
+  parentOfficialCode: string | null;
+  category: string | null;
+  projectScopeGroup: string | null;
+  hasChildren: boolean;
+}
+
+export interface ApplicationDraftView {
+  ok: true;
+  draftCode: string;
+  revision: number;
+  status: 'ACTIVE' | 'SUBMITTED' | 'ABANDONED';
+  payload: Record<string, unknown>;
+  expiresAt: string;
+  submitted: boolean;
+  attachments: string[];
+}
+
+export interface ApplicationInformationRequest {
+  id: string;
+  status?: string;
+  note: string | null;
+  deadline: string | null;
+  requestedAt?: string;
+  submittedAt?: string | null;
+  items: Array<{ type: 'FIELD' | 'ATTACHMENT'; key: string; reason: string }>;
+}
+
+export interface ApplicationTrackView {
+  ok: true;
+  draft: boolean;
+  draftCode?: string;
+  revision?: number;
+  id?: string;
+  stage: 'DRAFT' | 'RECEIVED' | 'PROCESSING' | 'NEEDS_INFO' | 'EVALUATION' | 'MAIN' | 'RESERVE' | 'INELIGIBLE';
+  submittedAt?: string;
+  timeline: Array<{ key: string; label: string; state: 'COMPLETED' | 'CURRENT' | 'UPCOMING' }>;
+  needsInfo?: ApplicationInformationRequest | null;
+}
+
+const resumeHeaders = (resumeToken: string) => ({ 'x-application-resume-token': resumeToken });
+export function getApplicationGeography(parent?: string): Promise<{ source: string; items: GeographicUnit[] }> { return apiFetch(`/association-applications/geography${parent ? `?parent=${encodeURIComponent(parent)}` : ''}`); }
+export function createApplicationDraft(clientRequestId: string): Promise<{ ok: true; draftCode: string; resumeToken: string; revision: number; expiresAt: string }> { return apiFetch('/association-applications/drafts', { method: 'POST', body: JSON.stringify({ clientRequestId }) }); }
+export function loadApplicationDraft(draftCode: string, resumeToken: string): Promise<ApplicationDraftView> { return apiFetch(`/association-applications/drafts/${encodeURIComponent(draftCode)}`, { headers: resumeHeaders(resumeToken) }); }
+export function saveApplicationDraft(draftCode: string, resumeToken: string, revision: number, payload: Record<string, unknown>): Promise<ApplicationDraftView> { return apiFetch(`/association-applications/drafts/${encodeURIComponent(draftCode)}`, { method: 'PUT', headers: resumeHeaders(resumeToken), body: JSON.stringify({ revision, payload }) }); }
+export function uploadApplicationAttachment(draftCode: string, resumeToken: string, fieldKey: string, file: File) { const form = new FormData(); form.set('fieldKey', fieldKey); form.set('file', file); return apiUploadWithHeaders<{ ok: true; fieldKey: string; size: number }>(`/association-applications/drafts/${encodeURIComponent(draftCode)}/attachments`, form, resumeHeaders(resumeToken)); }
+export function submitApplicationDraft(draftCode: string, resumeToken: string, revision: number): Promise<{ ok: true; id: string; message: string; duplicate?: boolean }> { return apiFetch(`/association-applications/drafts/${encodeURIComponent(draftCode)}/submit`, { method: 'POST', headers: resumeHeaders(resumeToken), body: JSON.stringify({ revision }) }); }
+export function trackApplicationV2(draftCode: string, resumeToken: string): Promise<ApplicationTrackView> { return apiFetch(`/association-applications/track/${encodeURIComponent(draftCode)}`, { headers: resumeHeaders(resumeToken) }); }
+export function submitApplicationInformation(draftCode: string, resumeToken: string, requestId: string, payload: Record<string, unknown>) { return apiFetch(`/association-applications/track/${encodeURIComponent(draftCode)}/information/${encodeURIComponent(requestId)}`, { method: 'POST', headers: resumeHeaders(resumeToken), body: JSON.stringify({ payload, opId: newOpId() }) }); }
+export function startApplicationProcessing(applicationIds: string[]) { return apiFetch<{ ok: true; started: number; alreadyStarted: number }>('/association-applications/processing/start', { method: 'POST', body: JSON.stringify({ applicationIds, opId: newOpId() }) }); }
+export function getApplicationEligibilityEvidence(id: string) { return apiFetch<Record<string, unknown>>(`/association-applications/${id}/eligibility-evidence`); }
+export function requestApplicationInformation(id: string, input: { note?: string; deadline?: string; items: Array<{ type: 'FIELD' | 'ATTACHMENT'; key: string; reason: string }> }) { return apiFetch(`/association-applications/${id}/information-request`, { method: 'POST', body: JSON.stringify({ ...input, opId: newOpId() }) }); }
+export function decideApplicationSelection(id: string, decision: 'MAIN' | 'RESERVE', reason?: string) { return apiFetch(`/association-applications/${id}/selection-decision`, { method: 'POST', body: JSON.stringify({ decision, reason, opId: newOpId() }) }); }
 
 export interface ApplicationPublicStatus {
   ok: true;

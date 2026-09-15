@@ -82,6 +82,30 @@ enum AssociationSelectionList {
   RESERVE
 }
 
+enum ApplicationDraftStatus {
+  ACTIVE
+  SUBMITTED
+  ABANDONED
+}
+
+enum ApplicationInformationRequestStatus {
+  OPEN
+  SUBMITTED
+  CLOSED
+}
+
+enum ApplicationInformationItemType {
+  FIELD
+  ATTACHMENT
+}
+
+enum GeographicUnitType {
+  REGION
+  EMIRATE_SEAT
+  GOVERNORATE
+  ADMIN_CENTER
+}
+
 enum ParticipationStatus {
   APPROVED_AWAITING_SETUP
   ACTIVE
@@ -242,6 +266,7 @@ enum FileCategory {
   /// NODE-4.2: محضر/ختم الجمعية عند تأكيد الاستلام — PDF أو صورة، اختياري افتراضيًا (إلزامه عبر system_settings).
   RECEIPT_ASSOCIATION_REPORT
   APPLICATION_INITIAL_BENEFICIARIES
+  APPLICATION_SUPPORTING_DOCUMENT
   PARTICIPATION_AGREEMENT
   ESCALATION_EVIDENCE
   PURCHASE_ORDER_DOCUMENT
@@ -432,6 +457,8 @@ model Account {
   eligibilityReviews AssociationApplication[] @relation("ApplicationEligibilityReviewer")
   selectionApprovals AssociationApplication[] @relation("ApplicationSelectionApprover")
   evaluatedApplications AssociationApplication[] @relation("ApplicationEvaluator")
+  processingApplications AssociationApplication[] @relation("ApplicationProcessingStarter")
+  applicationInformationRequests ApplicationInformationRequest[] @relation("ApplicationInformationRequester")
   participationSetupCompletions ProjectParticipation[] @relation("ParticipationSetupCompletedBy")
   agreementsCreated ParticipationAgreement[] @relation("AgreementCreatedBy")
   agreementsAssociationSigned ParticipationAgreement[] @relation("AgreementAssociationSigner")
@@ -554,6 +581,7 @@ model AssociationApplication {
   id                     String            @id @default(dbgenerated("uuidv7()")) @db.Uuid
   publicCode             String            @unique @map("public_code")
   clientRequestId        String?           @unique @map("client_request_id")
+  schemaVersion          Int               @default(1) @map("schema_version")
   name                   String
   /// NODE-2: "التصنيف" (ASSOCIATION_CATEGORY) — اختياري في Legacy فعليًا
   /// (submitAssociationApplication_ لا يفرضه)؛ كان NOT NULL خطأً منذ NODE-0.
@@ -592,11 +620,27 @@ model AssociationApplication {
   approxBeneficiaryCount Int?              @map("approx_beneficiary_count")
   approxNeedCount        Int?              @map("approx_need_count")
   initialBeneficiaryFileId String?          @unique @map("initial_beneficiary_file_id") @db.Uuid
+  v2Payload               Json?             @map("v2_payload")
+  regionOfficialCode      String?           @map("region_official_code")
+  governorateOfficialCode String?           @map("governorate_official_code")
+  centerOfficialCode      String?           @map("center_official_code")
+  locationOtherText       String?           @map("location_other_text")
+  locationNeedsVerification Boolean         @default(false) @map("location_needs_verification")
+  processingStartedAt     DateTime?         @map("processing_started_at")
+  processingStartedById   String?           @map("processing_started_by") @db.Uuid
+  revenue                 Decimal?          @db.Decimal(18, 2)
+  expenses                Decimal?          @db.Decimal(18, 2)
+  currentAssets           Decimal?          @map("current_assets") @db.Decimal(18, 2)
+  currentLiabilities      Decimal?          @map("current_liabilities") @db.Decimal(18, 2)
+  financialResult         Decimal?          @map("financial_result") @db.Decimal(18, 2)
+  netWorkingCapital       Decimal?          @map("net_working_capital") @db.Decimal(18, 2)
   eligibilityStatus      EligibilityStatus @default(PENDING) @map("eligibility_status")
   eligibilityReviewedAt  DateTime?          @map("eligibility_reviewed_at")
   eligibilityReviewedById String?           @map("eligibility_reviewed_by") @db.Uuid
   eligibilityNotes       String?            @map("eligibility_notes")
+  eligibilityEvidence    Json?              @map("eligibility_evidence")
   evaluationBreakdown    Json?              @map("evaluation_breakdown")
+  evaluationEvidence     Json?              @map("evaluation_evidence")
   evaluationScore        Decimal?           @map("evaluation_score") @db.Decimal(5, 2)
   evaluationRank         Int?               @map("evaluation_rank")
   evaluatedAt            DateTime?          @map("evaluated_at")
@@ -616,8 +660,12 @@ model AssociationApplication {
   eligibilityReviewedBy    Account?    @relation("ApplicationEligibilityReviewer", fields: [eligibilityReviewedById], references: [id])
   selectionApprovedBy      Account?    @relation("ApplicationSelectionApprover", fields: [selectionApprovedById], references: [id])
   evaluatedBy              Account?    @relation("ApplicationEvaluator", fields: [evaluatedById], references: [id])
+  processingStartedBy      Account?    @relation("ApplicationProcessingStarter", fields: [processingStartedById], references: [id])
   answers                  ApplicationAnswer[]
   participation            ProjectParticipation?
+  sourceDraft              AssociationApplicationDraft?
+  attachments              ApplicationAttachment[]
+  informationRequests      ApplicationInformationRequest[]
 
   /// NODE-2: partial unique indexes حقيقية (raw SQL في migration.sql —
   /// Prisma @@unique العادي لا يدعم شرط WHERE) تمنع أكثر من طلب
@@ -627,7 +675,105 @@ model AssociationApplication {
   @@index([email])
   @@index([phone])
   @@index([licenseNumber])
+  @@index([schemaVersion, processingStartedAt])
+  @@index([eligibilityStatus, selectionList])
+  @@index([regionOfficialCode, governorateOfficialCode])
+  @@index([currentAssets])
   @@map("association_applications")
+}
+
+model AssociationApplicationDraft {
+  id                    String                 @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  publicCode            String                 @unique @map("public_code")
+  schemaVersion         Int                    @default(2) @map("schema_version")
+  status                ApplicationDraftStatus @default(ACTIVE)
+  resumeTokenHash       String                 @unique @map("resume_token_hash")
+  clientRequestId       String?                @unique @map("client_request_id")
+  revision              Int                    @default(0)
+  payload               Json                   @default("{}")
+  contactEmail          String?                @map("contact_email")
+  expiresAt             DateTime               @map("expires_at")
+  submittedApplicationId String?               @unique @map("submitted_application_id") @db.Uuid
+  createdAt             DateTime               @default(now()) @map("created_at")
+  updatedAt             DateTime               @updatedAt @map("updated_at")
+
+  submittedApplication AssociationApplication? @relation(fields: [submittedApplicationId], references: [id])
+  attachments          ApplicationAttachment[]
+
+  @@index([status, expiresAt])
+  @@map("association_application_drafts")
+}
+
+model ApplicationAttachment {
+  id            String                       @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  applicationId String?                      @map("application_id") @db.Uuid
+  draftId       String?                      @map("draft_id") @db.Uuid
+  fieldKey      String                       @map("field_key")
+  fileId        String                       @unique @map("file_id") @db.Uuid
+  createdAt     DateTime                     @default(now()) @map("created_at")
+
+  application   AssociationApplication?      @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  draft         AssociationApplicationDraft? @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  file          FileObject                   @relation("ApplicationSupportingFile", fields: [fileId], references: [id], onDelete: Restrict)
+
+  @@unique([applicationId, fieldKey])
+  @@unique([draftId, fieldKey])
+  @@index([applicationId])
+  @@index([draftId])
+  @@map("application_attachments")
+}
+
+model ApplicationInformationRequest {
+  id            String                              @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  applicationId String                              @map("application_id") @db.Uuid
+  status        ApplicationInformationRequestStatus @default(OPEN)
+  note          String?
+  deadline      DateTime?                           @db.Date
+  requestedById String                              @map("requested_by") @db.Uuid
+  requestedAt   DateTime                            @default(now()) @map("requested_at")
+  submittedAt   DateTime?                           @map("submitted_at")
+  closedAt      DateTime?                           @map("closed_at")
+  responsePayload Json?                             @map("response_payload")
+  responseOpId     String?                          @unique @map("response_op_id")
+
+  application   AssociationApplication              @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  requestedBy   Account                             @relation("ApplicationInformationRequester", fields: [requestedById], references: [id])
+  items         ApplicationInformationItem[]
+
+  @@index([applicationId, status])
+  @@map("application_information_requests")
+}
+
+model ApplicationInformationItem {
+  id         String                         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  requestId  String                         @map("request_id") @db.Uuid
+  type       ApplicationInformationItemType
+  key        String
+  reason     String
+
+  request    ApplicationInformationRequest  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, type, key])
+  @@map("application_information_items")
+}
+
+model GeographicUnit {
+  id                 String             @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  officialCode       String             @unique @map("official_code")
+  nameAr             String             @map("name_ar")
+  unitType           GeographicUnitType @map("unit_type")
+  parentOfficialCode String?            @map("parent_official_code")
+  category           String?
+  source             String
+  projectScopeGroup  String?            @map("project_scope_group")
+  active             Boolean            @default(true)
+  sortOrder          Int                @default(0) @map("sort_order")
+
+  parent             GeographicUnit?    @relation("GeographicUnitHierarchy", fields: [parentOfficialCode], references: [officialCode])
+  children           GeographicUnit[]   @relation("GeographicUnitHierarchy")
+
+  @@index([parentOfficialCode, unitType, active, sortOrder])
+  @@map("geographic_units")
 }
 
 // ============================================================
@@ -811,6 +957,7 @@ model FileObject {
 
   associationApplications AssociationApplication[]
   applicationInitialBeneficiary AssociationApplication[] @relation("ApplicationInitialBeneficiaryFile")
+  applicationSupportingAttachments ApplicationAttachment[] @relation("ApplicationSupportingFile")
   receiptBatchQuantityPhoto ReceiptBatch[] @relation("ReceiptBatchQuantityPhoto")
   receiptBatchSignaturePhoto ReceiptBatch[] @relation("ReceiptBatchSignaturePhoto")
   receiptBatchAdminProof ReceiptBatch[] @relation("ReceiptBatchAdminProof")

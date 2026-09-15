@@ -6,6 +6,7 @@ import {
   APPLICATION_STATUS_LABELS,
   ApiClientError,
   apiFetch,
+  startApplicationProcessing,
   type ApplicationStatus,
   type ApplicationSummary,
   type Paginated,
@@ -42,18 +43,22 @@ export default function AdminApplicationsPage() {
   const [status, setStatus] = useState<'' | ApplicationStatus>(() => (initialQueryParam('status') as ApplicationStatus) || '');
   const [listError, setListError] = useState<string | null>(null);
   const [selected, setSelected] = useState<ApplicationSummary | null>(null);
+  const [workflow, setWorkflow] = useState('');
+  const [checked, setChecked] = useState<string[]>([]);
+  const [actionMessage, setActionMessage] = useState('');
 
   const load = useCallback(async () => {
     setListError(null);
     const params = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE) });
     if (search) params.set('search', search);
     if (status) params.set('status', status);
+    if (workflow) params.set('workflow', workflow);
     try {
-      setData(await apiFetch<Paginated<ApplicationSummary>>(`/association-applications?${params.toString()}`));
+      setData(await apiFetch<Paginated<ApplicationSummary> & { counts?: Record<string, number> }>(`/association-applications?${params.toString()}`));
     } catch (err) {
       setListError(err instanceof ApiClientError ? err.message : 'تعذّر تحميل قائمة الطلبات.');
     }
-  }, [page, search, status]);
+  }, [page, search, status, workflow]);
 
   useEffect(() => {
     if (user) void load();
@@ -64,6 +69,8 @@ export default function AdminApplicationsPage() {
   return (
     <AppShell user={user}>
       <div className="workflow-row" style={{ marginBottom: 16 }}><div><h1 style={{ fontSize: 22, marginBottom: 6 }}>طلبات انضمام الجمعيات</h1><p style={mutedStyle}>الطلب ← الأهلية ← التقييم ← اختيار القائمة الأساسية أو الاحتياطية ← الاتفاقية والتجهيز ← التفعيل</p></div><Link href="/admin/selection" style={{ ...primaryButtonStyle, textDecoration: 'none' }}>الأهلية والتقييم والاختيار</Link></div>
+      <div className="button-row" style={{ marginBottom: 16 }}>{[['','الكل'],['new','جديدة'],['processing','قيد المعالجة'],['missing','بانتظار الاستكمال']].map(([key,label]) => <button key={key} type="button" style={workflow === key ? primaryButtonStyle : secondaryButtonStyle} onClick={() => { setWorkflow(key); setPage(1); }}>{label}{data && 'counts' in data ? ` (${(data as Paginated<ApplicationSummary> & { counts?: Record<string, number> }).counts?.[key || 'all'] ?? 0})` : ''}</button>)}</div>
+      {actionMessage && <p role="status" style={actionMessage.startsWith('تم') ? { color: 'var(--success)' } : errorStyle}>{actionMessage}</p>}
 
       <form
         onSubmit={(e) => {
@@ -131,7 +138,7 @@ export default function AdminApplicationsPage() {
             )}
             {data?.items.map((row) => (
               <tr key={row.id} onClick={() => setSelected(row)} style={{ cursor: 'pointer' }}>
-                <td style={tdStyle}>{row.name}</td>
+                <td style={tdStyle}><input type="checkbox" aria-label={`تحديد ${row.name}`} checked={checked.includes(row.id)} onClick={(event) => event.stopPropagation()} onChange={(event) => setChecked((old) => event.target.checked ? [...new Set([...old, row.id])] : old.filter((id) => id !== row.id))} /> {row.name}</td>
                 <td style={{ ...tdStyle, ...ltrStyle }}>{row.publicCode}</td>
                 <td style={tdStyle}>
                   <span style={statusBadgeStyle(row.status === 'ACCEPTED' ? 'good' : row.status === 'REJECTED' ? 'bad' : 'neutral')}>
@@ -153,6 +160,7 @@ export default function AdminApplicationsPage() {
           </tbody>
         </table>
       </div>
+      <div className="button-row" style={{ marginTop: 12 }}><button type="button" style={primaryButtonStyle} disabled={!checked.length} onClick={async () => { setActionMessage(''); try { const result = await startApplicationProcessing(checked); setActionMessage(`تم بدء معالجة ${result.started} طلب، وسبق بدء ${result.alreadyStarted}.`); setChecked([]); await load(); } catch (reason) { setActionMessage(reason instanceof Error ? reason.message : 'تعذر بدء المعالجة.'); } }}>بدء معالجة المحدد ({checked.length})</button></div>
 
       {data && (
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 16, flexWrap: 'wrap' }}>
@@ -260,6 +268,8 @@ function ApplicationDetail({
           )}
         </dl>
 
+        {application.schemaVersion === 2 && application.v2Payload && <V2Dossier application={application} />}
+
         <h3 style={{ fontSize: 16, marginTop: 20, marginBottom: 8 }}>
           أسئلة القبول <span style={{ ...mutedStyle, ...ltrStyle }}>({application.scoreLabel})</span>
         </h3>
@@ -310,3 +320,19 @@ function eligibilityLabel(value: ApplicationSummary['eligibilityStatus']) {
 function selectionLabel(value: ApplicationSummary['selectionList']) {
   return ({ NONE: 'لم يدخل الاختيار', MAIN: 'القائمة الأساسية', RESERVE: 'قائمة الاحتياط' })[value];
 }
+
+const DOSSIER_SECTIONS: Array<{ title: string; fields: Array<[string, string]> }> = [
+  { title: 'الجمعية والموقع', fields: [['organization.name','اسم الجمعية'],['organization.category','التصنيف'],['organization.sector','المجال'],['location.serviceScope','نطاق الخدمة'],['coordinator.name','منسق المشروع'],['covenantRepresentative.name','ممثل الميثاق']] },
+  { title: 'القيادة والجاهزية', fields: [['executive.name','المدير التنفيذي'],['executive.education','المؤهل'],['executive.experienceYears','سنوات الخبرة'],['team.fullTime','الموظفون المتفرغون'],['readiness.fieldTeamCount','الفريق الميداني'],['readiness.weeklyDeliveryCapacity','القدرة الأسبوعية']] },
+  { title: 'المستفيدون والبيانات', fields: [['beneficiaries.registeredFamilies','الأسر المسجلة'],['beneficiaries.databaseUpdatedAt','آخر تحديث للقاعدة'],['beneficiaries.systemName','نظام المستفيدين'],['beneficiaries.classifications','تصنيفات الحاجة']] },
+  { title: 'الخبرة السابقة', fields: [['experience.hasRecentInKindProject','مشروع دعم عيني حديث'],['experience.projectName','اسم المشروع'],['experience.recentProjectsCount','عدد المشاريع الحديثة'],['experience.recentBeneficiariesCount','مستفيدو المشاريع الحديثة']] },
+  { title: 'الحوكمة والمالية', fields: [['finance.hasAccountingSystem','نظام محاسبي'],['finance.accountingSystemName','اسم النظام'],['finance.hasSpendingPolicy','لائحة صرف'],['finance.revenue','الإيرادات'],['finance.expenses','المصروفات'],['finance.currentAssets','الأصول المتداولة'],['finance.currentLiabilities','الخصوم المتداولة']] },
+  { title: 'التخطيط والاستدامة', fields: [['planning.hasStrategicPlan','خطة استراتيجية'],['planning.hasOperationalPlan','خطة تشغيلية'],['planning.hasPostAidFollowUp','متابعة ما بعد المساعدة'],['planning.measuresSatisfaction','قياس الرضا'],['planning.lastYearProgramsCount','برامج العام الماضي'],['planning.lastYearBeneficiariesCount','مستفيدو العام الماضي']] },
+];
+
+function V2Dossier({ application }: { application: ApplicationSummary }) {
+  return <div style={{ marginTop: 22 }}><h3>ملف الطلب التفصيلي — الإصدار 2</h3>{application.locationNeedsVerification && <p style={errorStyle}>الموقع المُدخل يدويًا يحتاج تحققًا إداريًا.</p>}<p style={mutedStyle}>المرفقات: {application.attachmentKeys.length ? application.attachmentKeys.join('، ') : 'لا توجد'}</p>{DOSSIER_SECTIONS.map((section) => <details key={section.title} open><summary style={{ cursor: 'pointer', fontWeight: 700, marginBlock: 12 }}>{section.title}</summary><dl style={{ display: 'grid', gridTemplateColumns: 'minmax(130px, 190px) 1fr', gap: 8 }}>{section.fields.map(([path, label]) => <div key={path} style={{ display: 'contents' }}><dt>{label}</dt><dd style={{ margin: 0 }}>{displayValue(valueAt(application.v2Payload, path))}</dd></div>)}</dl></details>)}</div>;
+}
+
+function valueAt(root: Record<string, unknown> | null, path: string): unknown { let current: unknown = root; for (const key of path.split('.')) { if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined; current = (current as Record<string, unknown>)[key]; } return current; }
+function displayValue(value: unknown): string { if (value === true) return 'نعم'; if (value === false) return 'لا'; if (value == null || value === '') return '—'; if (typeof value === 'number') return new Intl.NumberFormat('ar-SA').format(value); return String(value); }

@@ -4,129 +4,58 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppShell } from '../../components/AppShell';
 import { PageHeader } from '../../components/PageHeader';
 import { useRoleGuard } from '../../lib/use-role-guard';
-import {
-  apiFetch, commitApplicationSelection, decideApplicationEligibility, evaluateApplication,
-  listSystemSettings, previewApplicationSelection, saveSystemSetting,
-  type ApplicationSummary, type Paginated, type WorkflowRecord,
-} from '../../lib/api';
+import { apiFetch, decideApplicationEligibility, decideApplicationSelection, evaluateApplication, getApplicationEligibilityEvidence, requestApplicationInformation, type ApplicationSummary, type Paginated } from '../../lib/api';
 import { cardStyle, errorStyle, inputStyle, labelStyle, modalOverlayStyle, modalStyle, primaryButtonStyle, secondaryButtonStyle, successStyle } from '../../lib/ui';
 
 type EligibilityDecision = 'PASSED' | 'FAILED' | 'NEEDS_INFO';
-type Scores = {
-  operationalReadiness: number; technicalCapability: number; previousExperience: number;
-  integrityTransparency: number; participationCommitment: number; sustainabilityImpact: number;
-};
+type Scores = { operationalReadiness: number; technicalCapability: number; previousExperience: number; integrityTransparency: number; participationCommitment: number; sustainabilityImpact: number };
 const CRITERIA: Array<{ key: keyof Scores; label: string; weight: number }> = [
-  { key: 'operationalReadiness', label: 'الجاهزية التشغيلية', weight: 30 },
-  { key: 'technicalCapability', label: 'القدرة التقنية', weight: 20 },
-  { key: 'previousExperience', label: 'الخبرة السابقة', weight: 20 },
-  { key: 'integrityTransparency', label: 'النزاهة والشفافية', weight: 15 },
-  { key: 'participationCommitment', label: 'الالتزام بالمشاركة', weight: 10 },
-  { key: 'sustainabilityImpact', label: 'الاستدامة والأثر', weight: 5 },
+  { key: 'operationalReadiness', label: 'الجاهزية التشغيلية', weight: 30 }, { key: 'technicalCapability', label: 'القدرة التقنية', weight: 20 },
+  { key: 'previousExperience', label: 'الخبرة السابقة', weight: 20 }, { key: 'integrityTransparency', label: 'النزاهة والشفافية', weight: 15 },
+  { key: 'participationCommitment', label: 'الالتزام بالمشاركة', weight: 10 }, { key: 'sustainabilityImpact', label: 'الاستدامة والأثر', weight: 5 },
 ];
-const EMPTY_SCORES: Scores = { operationalReadiness: 0, technicalCapability: 0, previousExperience: 0, integrityTransparency: 0, participationCommitment: 0, sustainabilityImpact: 0 };
+const EMPTY_SCORES: Scores = { operationalReadiness: 1, technicalCapability: 1, previousExperience: 1, integrityTransparency: 1, participationCommitment: 1, sustainabilityImpact: 1 };
 const ELIGIBILITY_LABELS: Record<ApplicationSummary['eligibilityStatus'], string> = { PENDING: 'بانتظار القرار', PASSED: 'مجتاز', FAILED: 'غير مجتاز', NEEDS_INFO: 'يحتاج معلومات' };
 
 export default function SelectionPage() {
-  const { user, loading } = useRoleGuard(['ADMIN']);
-  const [apps, setApps] = useState<ApplicationSummary[]>([]);
-  const [preview, setPreview] = useState<WorkflowRecord[]>([]);
-  const [threshold, setThreshold] = useState('');
-  const [mainTarget, setMainTarget] = useState('');
-  const [eligibilityTarget, setEligibilityTarget] = useState<ApplicationSummary | null>(null);
-  const [evaluationTarget, setEvaluationTarget] = useState<ApplicationSummary | null>(null);
-  const [message, setMessage] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const load = useCallback(async () => {
-    try {
-      const [result, settingsBody] = await Promise.all([
-        apiFetch<Paginated<ApplicationSummary>>('/association-applications?page=1&pageSize=100'),
-        listSystemSettings() as Promise<{ items?: Array<{ key: string; value: unknown }> }>,
-      ]);
-      setApps(result.items);
-      const settings = settingsBody.items ?? [];
-      const pass = settings.find((item) => item.key === 'selection.passThreshold')?.value;
-      const target = settings.find((item) => item.key === 'selection.mainTargetCount')?.value;
-      setThreshold(typeof pass === 'number' ? String(pass) : '');
-      setMainTarget(typeof target === 'number' ? String(target) : '');
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'تعذر تحميل شاشة الاختيار'); }
-  }, []);
+  const { user, loading } = useRoleGuard(['ADMIN']); const [apps, setApps] = useState<ApplicationSummary[]>([]); const [filter, setFilter] = useState('');
+  const [eligibilityTarget, setEligibilityTarget] = useState<ApplicationSummary | null>(null); const [evaluationTarget, setEvaluationTarget] = useState<ApplicationSummary | null>(null); const [infoTarget, setInfoTarget] = useState<ApplicationSummary | null>(null);
+  const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => { try { const result = await apiFetch<Paginated<ApplicationSummary>>('/association-applications?page=1&pageSize=100'); setApps(result.items); } catch (reason) { setMessage(readError(reason)); } }, []);
   useEffect(() => { if (user) void load(); }, [user, load]);
-
-  async function run(action: () => Promise<unknown>, success = 'تم حفظ القرار.') {
-    setBusy(true); setMessage('');
-    try { await action(); setMessage(success); await load(); }
-    catch (error) { setMessage(error instanceof Error ? error.message : 'تعذر التنفيذ'); }
-    finally { setBusy(false); }
-  }
-
+  async function run(action: () => Promise<unknown>, success: string) { setBusy(true); setMessage(''); try { await action(); setMessage(success); await load(); } catch (reason) { setMessage(readError(reason)); } finally { setBusy(false); } }
+  const visible = useMemo(() => apps.filter((app) => !filter || app.eligibilityStatus === filter || app.selectionList === filter), [apps, filter]);
+  const ranked = useMemo(() => apps.filter((app) => app.eligibilityStatus === 'PASSED' && app.evaluationScore != null).sort((a, b) => (b.evaluationScore ?? 0) - (a.evaluationScore ?? 0) || a.publicCode.localeCompare(b.publicCode, 'ar')), [apps]);
   if (loading || !user) return null;
-  const configured = threshold !== '' && mainTarget !== '';
   return <AppShell user={user}>
-    <PageHeader title="الأهلية والتقييم والاختيار" subtitle="مسار منفصل وواضح من قرار الأهلية حتى اعتماد القائمتين الأساسية والاحتياطية." />
+    <PageHeader title="الأهلية والتقييم والاختيار" subtitle="الأهلية ثلاثة قرارات مستقلة، ثم تقييم موزون، ثم قرار يدوي نهائي للقائمة الأساسية أو الاحتياطية." />
     {message && <p role="status" style={message.startsWith('تم') ? successStyle : errorStyle}>{message}</p>}
-
-    <section style={cardStyle}>
-      <h2>إعدادات قرار الاختيار</h2>
-      <p>لا توجد قيم افتراضية مخفية. يجب اعتماد القيم هنا قبل اعتماد القائمة النهائية.</p>
-      <div className="form-grid">
-        <label style={labelStyle}>حد الاجتياز من 100<input style={inputStyle} type="number" min="0" max="100" value={threshold} onChange={(event) => setThreshold(event.target.value)} /></label>
-      <label style={labelStyle}>عدد الجمعيات في القائمة الأساسية<input style={inputStyle} type="number" min="1" value={mainTarget} onChange={(event) => setMainTarget(event.target.value)} /></label>
-      </div>
-      <button style={primaryButtonStyle} disabled={busy || threshold === '' || mainTarget === ''} onClick={() => run(async () => {
-        await saveSystemSetting('selection.passThreshold', Number(threshold));
-        await saveSystemSetting('selection.mainTargetCount', Number(mainTarget));
-      }, 'تم حفظ إعدادات الاختيار المعتمدة.')}>حفظ الإعدادات</button>
-    </section>
-
-    <section style={cardStyle}>
-      <h2>طلبات الجمعيات</h2>
-      {apps.length === 0 ? <p>لا توجد طلبات حالية.</p> : apps.map((application) => <article key={application.id} className="workflow-row">
-        <div><strong>{application.name}</strong><p>{application.publicCode} · {application.city} · الأهلية: {ELIGIBILITY_LABELS[application.eligibilityStatus]}</p></div>
-        <div className="button-row">
-          <button style={secondaryButtonStyle} onClick={() => setEligibilityTarget(application)}>قرار الأهلية</button>
-          <button style={secondaryButtonStyle} disabled={application.eligibilityStatus !== 'PASSED'} onClick={() => setEvaluationTarget(application)}>نموذج التقييم</button>
-          {application.evaluationScore != null && <span className="status-pill">النتيجة {application.evaluationScore}/100</span>}
-        </div>
-      </article>)}
-    </section>
-
-    <section style={cardStyle}>
-      <h2>الترتيب والاختيار النهائي</h2>
-      {!configured && <p>لم يُعتمد حد الاجتياز وعدد القائمة الأساسية بعد؛ يمكن معاينة الترتيب الأولي، ولا يمكن اعتماد القائمة النهائية قبل اعتماد الإعدادات.</p>}
-      <button style={secondaryButtonStyle} disabled={busy} onClick={() => run(async () => { const result = await previewApplicationSelection(); setPreview(result.items); }, 'تم تحديث معاينة الترتيب الأولية.')}>معاينة أولية للترتيب</button>
-      {preview.map((row) => <p key={row.id}>{String(row.rank)}. {String(row.name)} — {String(row.score)}/100{typeof row.passesThreshold === 'boolean' ? ` — ${row.passesThreshold ? 'مجتاز الحد المعتمد' : 'دون الحد المعتمد'}` : ''}</p>)}
-      <button style={primaryButtonStyle} disabled={!configured || busy} onClick={() => run(() => commitApplicationSelection(Number(mainTarget)), 'تم اعتماد القائمتين الأساسية والاحتياطية.')}>اعتماد القائمة النهائية</button>
-    </section>
-
+    <section style={cardStyle}><h2>تصفية الطلبات</h2><label style={labelStyle}>الحالة<select style={inputStyle} value={filter} onChange={(e) => setFilter(e.target.value)}><option value="">الكل</option><option value="PENDING">بانتظار قرار الأهلية</option><option value="NEEDS_INFO">يحتاج معلومات</option><option value="PASSED">مجتاز الأهلية</option><option value="FAILED">غير مجتاز</option><option value="MAIN">القائمة الأساسية</option><option value="RESERVE">قائمة الاحتياط</option></select></label></section>
+    <section style={cardStyle}><h2>طلبات الجمعيات</h2>{visible.length === 0 ? <p>لا توجد طلبات مطابقة.</p> : visible.map((application) => <article key={application.id} className="workflow-row"><div><strong>{application.name}</strong><p>{application.publicCode} · {application.city} · الأهلية: {ELIGIBILITY_LABELS[application.eligibilityStatus]} · الاختيار: {selectionLabel(application.selectionList)}</p></div><div className="button-row"><button style={secondaryButtonStyle} onClick={() => setEligibilityTarget(application)}>الأهلية والأدلة</button><button style={secondaryButtonStyle} disabled={application.status !== 'UNDER_REVIEW'} onClick={() => setInfoTarget(application)}>طلب استكمال</button><button style={secondaryButtonStyle} disabled={application.eligibilityStatus !== 'PASSED'} onClick={() => setEvaluationTarget(application)}>التقييم 1–5</button>{application.evaluationScore != null && <span className="status-pill">{application.evaluationScore}/100</span>}</div></article>)}</section>
+    <section style={cardStyle}><h2>الترتيب وقرار الاختيار النهائي</h2><p>الترتيب أداة مساعدة فقط. لا يوجد رفض آلي بحد اجتياز، ويظل قرار الأساسية أو الاحتياطية قرارًا إداريًا صريحًا لكل طلب.</p>{ranked.length === 0 ? <p>لا توجد طلبات مكتملة التقييم.</p> : ranked.map((application, index) => <article key={application.id} className="workflow-row"><div><strong>{index + 1}. {application.name}</strong><p>{application.publicCode} · {application.evaluationScore}/100 · {financialLabel(application.financialPriority)}</p></div><div className="button-row"><button style={primaryButtonStyle} disabled={busy} onClick={() => void run(() => decideApplicationSelection(application.id, 'MAIN'), 'تم اعتماد الطلب في القائمة الأساسية.')}>اعتماد أساسية</button><button style={secondaryButtonStyle} disabled={busy} onClick={() => void run(() => decideApplicationSelection(application.id, 'RESERVE'), 'تم اعتماد الطلب في قائمة الاحتياط.')}>اعتماد احتياط</button></div></article>)}</section>
     {eligibilityTarget && <EligibilityDialog application={eligibilityTarget} busy={busy} onClose={() => setEligibilityTarget(null)} onSubmit={(decision, notes) => run(() => decideApplicationEligibility(eligibilityTarget.id, decision, notes), 'تم حفظ قرار الأهلية.').then(() => setEligibilityTarget(null))} />}
     {evaluationTarget && <EvaluationDialog application={evaluationTarget} busy={busy} onClose={() => setEvaluationTarget(null)} onSubmit={(scores) => run(() => evaluateApplication(evaluationTarget.id, scores), 'تم حفظ التقييم الموزون.').then(() => setEvaluationTarget(null))} />}
+    {infoTarget && <InformationDialog application={infoTarget} busy={busy} onClose={() => setInfoTarget(null)} onSubmit={(input) => run(() => requestApplicationInformation(infoTarget.id, input), 'تم إرسال طلب الاستكمال.').then(() => setInfoTarget(null))} />}
   </AppShell>;
 }
 
 function EligibilityDialog({ application, busy, onClose, onSubmit }: { application: ApplicationSummary; busy: boolean; onClose: () => void; onSubmit: (decision: EligibilityDecision, notes?: string) => Promise<void> }) {
-  const [decision, setDecision] = useState<EligibilityDecision>(application.eligibilityStatus === 'PENDING' ? 'PASSED' : application.eligibilityStatus);
-  const [notes, setNotes] = useState(application.eligibilityNotes ?? '');
-  const requiresNotes = decision !== 'PASSED';
-  return <div style={modalOverlayStyle} role="dialog" aria-modal="true"><div style={{ ...modalStyle, maxWidth: 520 }}>
-    <h2>قرار أهلية — {application.name}</h2>
-    <label style={labelStyle}>القرار<select style={inputStyle} value={decision} onChange={(event) => setDecision(event.target.value as EligibilityDecision)}><option value="PASSED">مجتاز</option><option value="FAILED">غير مجتاز</option><option value="NEEDS_INFO">يحتاج معلومات إضافية</option></select></label>
-    <label style={labelStyle}>الملاحظات {requiresNotes ? '(إلزامية)' : '(اختيارية)'}<textarea style={{ ...inputStyle, minHeight: 100 }} value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
-    <div className="button-row"><button style={primaryButtonStyle} disabled={busy || (requiresNotes && !notes.trim())} onClick={() => onSubmit(decision, notes.trim() || undefined)}>حفظ القرار</button><button style={secondaryButtonStyle} onClick={onClose}>إلغاء</button></div>
-  </div></div>;
+  const [decision, setDecision] = useState<EligibilityDecision>(application.eligibilityStatus === 'PENDING' ? 'PASSED' : application.eligibilityStatus); const [notes, setNotes] = useState(application.eligibilityNotes ?? ''); const [evidence, setEvidence] = useState<Record<string, unknown> | null>(null); const [error, setError] = useState('');
+  useEffect(() => { getApplicationEligibilityEvidence(application.id).then(setEvidence).catch((reason) => setError(readError(reason))); }, [application.id]); const checks = Array.isArray(evidence?.checks) ? evidence.checks as Array<{ key: string; label: string; result: string; detail: string }> : [];
+  return <Dialog title={`الأهلية والأدلة — ${application.name}`} onClose={onClose}><h3>الأدلة الآلية</h3>{error && <p style={errorStyle}>{error}</p>}{!evidence && !error ? <p>جارٍ تحميل الأدلة…</p> : checks.length ? <ul>{checks.map((check) => <li key={check.key}><strong>{check.label}:</strong> {check.result === 'PASS' ? 'مستوفى' : check.result === 'FAIL' ? 'غير مستوفى' : 'يتطلب مراجعة'}{check.detail ? ` — ${check.detail}` : ''}</li>)}</ul> : <p>{String(evidence?.summary ?? 'تتطلب البيانات مراجعة بشرية.')}</p>}<label style={labelStyle}>القرار<select style={inputStyle} value={decision} onChange={(e) => setDecision(e.target.value as EligibilityDecision)}><option value="PASSED">مجتاز</option><option value="FAILED">غير مجتاز</option><option value="NEEDS_INFO">يحتاج معلومات إضافية</option></select></label><label style={labelStyle}>الملاحظات {decision === 'PASSED' ? '(اختيارية)' : '(إلزامية)'}<textarea style={{ ...inputStyle, minHeight: 90 }} value={notes} onChange={(e) => setNotes(e.target.value)} /></label><div className="button-row"><button style={primaryButtonStyle} disabled={busy || (decision !== 'PASSED' && !notes.trim())} onClick={() => void onSubmit(decision, notes.trim() || undefined)}>حفظ القرار</button><button style={secondaryButtonStyle} onClick={onClose}>إلغاء</button></div></Dialog>;
 }
 
 function EvaluationDialog({ application, busy, onClose, onSubmit }: { application: ApplicationSummary; busy: boolean; onClose: () => void; onSubmit: (scores: Scores) => Promise<void> }) {
-  const [scores, setScores] = useState<Scores>(EMPTY_SCORES);
-  const [reviewed, setReviewed] = useState(false);
-  const total = useMemo(() => CRITERIA.reduce((sum, criterion) => sum + scores[criterion.key] * criterion.weight / 100, 0), [scores]);
-  return <div style={modalOverlayStyle} role="dialog" aria-modal="true"><div style={{ ...modalStyle, maxWidth: 720, maxHeight: '90vh', overflow: 'auto' }}>
-    <h2>التقييم الموزون — {application.name}</h2>
-    <p>أدخل درجة كل معيار من 0 إلى 100. يُحتسب المجموع من المعايير الستة والأوزان المعتمدة أدناه فقط.</p>
-    {CRITERIA.map((criterion) => <label key={criterion.key} style={labelStyle}>{criterion.label} — الوزن {criterion.weight}%<input style={inputStyle} type="number" min="0" max="100" value={scores[criterion.key]} onChange={(event) => setScores((current) => ({ ...current, [criterion.key]: Math.max(0, Math.min(100, Number(event.target.value))) }))} /><span>النقاط: {(scores[criterion.key] * criterion.weight / 100).toFixed(2)}</span></label>)}
-    <div className="selection-total"><strong>المجموع المباشر</strong><span>{total.toFixed(2)} / 100</span></div>
-    <label className="check-row"><input type="checkbox" checked={reviewed} onChange={(event) => setReviewed(event.target.checked)} />راجعت جميع الدرجات والمجموع قبل الإرسال.</label>
-    <div className="button-row"><button style={primaryButtonStyle} disabled={busy || !reviewed} onClick={() => onSubmit(scores)}>حفظ التقييم</button><button style={secondaryButtonStyle} onClick={onClose}>إلغاء</button></div>
-  </div></div>;
+  const [scores, setScores] = useState<Scores>(EMPTY_SCORES); const [reviewed, setReviewed] = useState(false); const total = useMemo(() => CRITERIA.reduce((sum, criterion) => sum + scores[criterion.key] / 5 * criterion.weight, 0), [scores]);
+  return <Dialog title={`التقييم الموزون — ${application.name}`} onClose={onClose}><p>قيّم كل محور بدرجة صحيحة من 1 إلى 5. الأوزان ثابتة ولا توجد أوزان فرعية مخفية.</p>{CRITERIA.map((criterion) => <label key={criterion.key} style={labelStyle}>{criterion.label} — الوزن {criterion.weight}%<select style={inputStyle} value={scores[criterion.key]} onChange={(e) => setScores((old) => ({ ...old, [criterion.key]: Number(e.target.value) }))}>{[1,2,3,4,5].map((value) => <option key={value} value={value}>{value} من 5</option>)}</select><span>النقاط: {(scores[criterion.key] / 5 * criterion.weight).toFixed(2)}</span></label>)}<div className="selection-total"><strong>المجموع</strong><span>{total.toFixed(2)} / 100</span></div><label className="check-row"><input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.target.checked)} />راجعت الدرجات والأدلة قبل الإرسال.</label><div className="button-row"><button style={primaryButtonStyle} disabled={busy || !reviewed} onClick={() => void onSubmit(scores)}>حفظ التقييم</button><button style={secondaryButtonStyle} onClick={onClose}>إلغاء</button></div></Dialog>;
 }
+
+function InformationDialog({ application, busy, onClose, onSubmit }: { application: ApplicationSummary; busy: boolean; onClose: () => void; onSubmit: (input: { note?: string; deadline?: string; items: Array<{ type: 'FIELD' | 'ATTACHMENT'; key: string; reason: string }> }) => Promise<void> }) {
+  const [type, setType] = useState<'FIELD' | 'ATTACHMENT'>('FIELD'); const [key, setKey] = useState(''); const [reason, setReason] = useState(''); const [note, setNote] = useState(''); const [deadline, setDeadline] = useState('');
+  return <Dialog title={`طلب استكمال — ${application.name}`} onClose={onClose}><p>حدد العنصر المطلوب وسبب طلبه بدقة. سيظهر لصاحب الطلب ضمن الطلب نفسه.</p><label style={labelStyle}>نوع العنصر<select style={inputStyle} value={type} onChange={(e) => setType(e.target.value as 'FIELD' | 'ATTACHMENT')}><option value="FIELD">بيان</option><option value="ATTACHMENT">مرفق</option></select></label><label style={labelStyle}>مفتاح البيان أو المرفق<input style={inputStyle} value={key} onChange={(e) => setKey(e.target.value)} placeholder="مثال: coordinator.phone" /></label><label style={labelStyle}>سبب الاستكمال<textarea style={{ ...inputStyle, minHeight: 90 }} value={reason} onChange={(e) => setReason(e.target.value)} /></label><label style={labelStyle}>ملاحظة عامة (اختيارية)<textarea style={{ ...inputStyle, minHeight: 70 }} value={note} onChange={(e) => setNote(e.target.value)} /></label><label style={labelStyle}>المهلة (اختيارية)<input type="date" style={inputStyle} value={deadline} onChange={(e) => setDeadline(e.target.value)} /></label><div className="button-row"><button style={primaryButtonStyle} disabled={busy || !key.trim() || !reason.trim()} onClick={() => void onSubmit({ note: note.trim() || undefined, deadline: deadline || undefined, items: [{ type, key: key.trim(), reason: reason.trim() }] })}>إرسال الطلب</button><button style={secondaryButtonStyle} onClick={onClose}>إلغاء</button></div></Dialog>;
+}
+
+function Dialog({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) { return <div style={modalOverlayStyle} role="dialog" aria-modal="true"><div style={{ ...modalStyle, maxWidth: 760, maxHeight: '90vh', overflow: 'auto' }}><h2>{title}</h2>{children}</div></div>; }
+function selectionLabel(value: ApplicationSummary['selectionList']) { return ({ NONE: 'لم يُحدد', MAIN: 'القائمة الأساسية', RESERVE: 'قائمة الاحتياط' })[value]; }
+function financialLabel(value: ApplicationSummary['financialPriority']) { return value === 'HIGHER_CAPACITY_LOWER_AID_PRIORITY' ? 'قدرة مالية أعلى / أولوية دعم أقل وفق مؤشر 10 ملايين' : value === 'STANDARD_PRIORITY_REVIEW' ? 'أولوية مالية للمراجعة' : 'المؤشر المالي غير مكتمل'; }
+function readError(reason: unknown) { return reason instanceof Error ? reason.message : 'تعذّر تنفيذ العملية.'; }

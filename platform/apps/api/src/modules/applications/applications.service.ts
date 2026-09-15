@@ -274,10 +274,20 @@ export class ApplicationsService {
   // ================================================================
   // ADMIN LIST
   // ================================================================
-  async listApplications(params: PaginationParams & { search?: string; status?: ApplicationStatus }): Promise<PaginatedResult<unknown>> {
+  async listApplications(params: PaginationParams & { search?: string; status?: ApplicationStatus; eligibilityStatus?: EligibilityStatus; selectionList?: AssociationSelectionList; workflow?: 'new' | 'processing' | 'missing'; financial?: 'assets_lte_10m' | 'assets_gt_10m' | 'surplus' | 'deficit' | 'working_capital' }): Promise<PaginatedResult<unknown> & { counts: Record<string, number> }> {
     const { page, pageSize, skip, take } = normalizePagination(params);
     const where: Prisma.AssociationApplicationWhereInput = {};
     if (params.status) where.status = params.status;
+    if (params.eligibilityStatus) where.eligibilityStatus = params.eligibilityStatus;
+    if (params.selectionList) where.selectionList = params.selectionList;
+    if (params.workflow === 'new') where.processingStartedAt = null;
+    if (params.workflow === 'processing') where.processingStartedAt = { not: null };
+    if (params.workflow === 'missing') where.eligibilityStatus = EligibilityStatus.NEEDS_INFO;
+    if (params.financial === 'assets_lte_10m') where.currentAssets = { lte: 10_000_000 };
+    if (params.financial === 'assets_gt_10m') where.currentAssets = { gt: 10_000_000 };
+    if (params.financial === 'surplus') where.financialResult = { gt: 0 };
+    if (params.financial === 'deficit') where.financialResult = { lt: 0 };
+    if (params.financial === 'working_capital') where.netWorkingCapital = { gt: 0 };
     if (params.search) {
       const q = params.search.trim();
       where.OR = [
@@ -292,7 +302,7 @@ export class ApplicationsService {
     const [rows, total] = await Promise.all([
       prisma.associationApplication.findMany({
         where,
-        include: { answers: true, reviewedBy: true, licenseFile: true },
+        include: { answers: true, reviewedBy: true, licenseFile: true, attachments: true, informationRequests: { include: { items: true }, orderBy: { requestedAt: 'desc' }, take: 1 } },
         orderBy: { submittedAt: 'desc' },
         skip,
         take,
@@ -300,7 +310,17 @@ export class ApplicationsService {
       prisma.associationApplication.count({ where }),
     ]);
 
-    return toPaginatedResult(rows.map(mapApplicationSummary), total, page, pageSize);
+    const [all, fresh, processing, missing, eligible, ineligible, main, reserve] = await Promise.all([
+      prisma.associationApplication.count(),
+      prisma.associationApplication.count({ where: { processingStartedAt: null, status: ApplicationStatus.UNDER_REVIEW } }),
+      prisma.associationApplication.count({ where: { processingStartedAt: { not: null }, status: ApplicationStatus.UNDER_REVIEW } }),
+      prisma.associationApplication.count({ where: { eligibilityStatus: EligibilityStatus.NEEDS_INFO } }),
+      prisma.associationApplication.count({ where: { eligibilityStatus: EligibilityStatus.PASSED } }),
+      prisma.associationApplication.count({ where: { OR: [{ eligibilityStatus: EligibilityStatus.FAILED }, { status: ApplicationStatus.REJECTED }] } }),
+      prisma.associationApplication.count({ where: { selectionList: AssociationSelectionList.MAIN } }),
+      prisma.associationApplication.count({ where: { selectionList: AssociationSelectionList.RESERVE } }),
+    ]);
+    return { ...toPaginatedResult(rows.map(mapApplicationSummary), total, page, pageSize), counts: { all, new: fresh, processing, missing, eligible, ineligible, main, reserve } };
   }
 
   // ================================================================
@@ -309,7 +329,7 @@ export class ApplicationsService {
   async getApplicationDetail(id: string) {
     const application = await prisma.associationApplication.findUnique({
       where: { id },
-      include: { answers: true, reviewedBy: true, licenseFile: true },
+      include: { answers: true, reviewedBy: true, licenseFile: true, attachments: true, informationRequests: { include: { items: true }, orderBy: { requestedAt: 'desc' } } },
     });
     if (!application) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب الانضمام غير موجود', 404);
     return mapApplicationSummary(application);
@@ -338,7 +358,7 @@ export class ApplicationsService {
     return this.rejectApplication(ctx, id, reason, opId);
   }
 
-  async decideEligibility(ctx: AuthContext, id: string, decision: EligibilityStatus, notes: string | undefined, opId: string) {
+  async decideEligibility(ctx: AuthContext, id: string, decision: EligibilityStatus, notes: string | undefined, opId: string, evidence?: unknown) {
     if (decision === EligibilityStatus.PENDING) throw new ApiError('ELIGIBILITY_DECISION_INVALID', 'قرار الأهلية غير صالح', 400);
     return prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'application-eligibility', opId, { id, decision, notes: notes ?? null });
@@ -347,9 +367,9 @@ export class ApplicationsService {
       if (!locked[0]) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب الانضمام غير موجود', 404);
       const application = await tx.associationApplication.findUniqueOrThrow({ where: { id }, include: { answers: true } });
       if (application.status !== ApplicationStatus.UNDER_REVIEW) throw new ApiError('APPLICATION_ALREADY_REVIEWED', 'سبق البتّ في هذا الطلب', 409);
-      if (application.answers.length !== QUESTION_KEYS.length) throw new ApiError('ELIGIBILITY_ANSWERS_INCOMPLETE', 'إجابات بوابة الأهلية غير مكتملة', 409);
-      await tx.associationApplication.update({ where: { id }, data: { eligibilityStatus: decision, eligibilityNotes: notes?.trim() || null, eligibilityReviewedAt: new Date(), eligibilityReviewedById: ctx.accountId, ...(decision !== EligibilityStatus.PASSED ? { evaluationBreakdown: Prisma.DbNull, evaluationScore: null, evaluationRank: null, selectionList: AssociationSelectionList.NONE } : {}) } });
-      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_ELIGIBILITY_DECIDED', entityType: 'association_applications', entityId: id, metadata: { decision, notes: notes ?? null } } });
+      if (application.schemaVersion === 1 && application.answers.length !== QUESTION_KEYS.length) throw new ApiError('ELIGIBILITY_ANSWERS_INCOMPLETE', 'إجابات بوابة الأهلية غير مكتملة', 409);
+      await tx.associationApplication.update({ where: { id }, data: { eligibilityStatus: decision, eligibilityNotes: notes?.trim() || null, eligibilityEvidence: evidence == null ? undefined : evidence as Prisma.InputJsonValue, eligibilityReviewedAt: new Date(), eligibilityReviewedById: ctx.accountId, ...(decision !== EligibilityStatus.PASSED ? { evaluationBreakdown: Prisma.DbNull, evaluationScore: null, evaluationRank: null, selectionList: AssociationSelectionList.NONE } : {}) } });
+      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_ELIGIBILITY_DECIDED', entityType: 'association_applications', entityId: id, metadata: { decision, notes: notes ?? null, evidence: evidence ?? null } as Prisma.InputJsonValue } });
       const response = { ok: true as const }; await this.idempotency.complete(tx, ctx.accountId, 'application-eligibility', opId, response); return response;
     });
   }
@@ -371,31 +391,27 @@ export class ApplicationsService {
   }
 
   async previewSelection() {
-    const configuredThreshold = await this.settings.getValue<unknown>('selection.passThreshold');
-    const threshold = typeof configuredThreshold === 'number' && Number.isFinite(configuredThreshold) ? configuredThreshold : null;
     const rows = await prisma.associationApplication.findMany({ where: { eligibilityStatus: EligibilityStatus.PASSED, evaluationScore: { not: null }, selectionList: AssociationSelectionList.NONE }, select: { id: true, publicCode: true, name: true, evaluationScore: true, evaluationBreakdown: true } });
     const ranked = rankApplications(rows.map((row) => ({ ...row, score: Number(row.evaluationScore) })));
-    return { threshold, items: ranked.map((item, index) => ({ ...item, rank: index + 1, passesThreshold: threshold === null ? null : item.score >= threshold })) };
+    return { threshold: null, items: ranked.map((item, index) => ({ ...item, rank: index + 1 })) };
   }
 
   async commitSelection(ctx: AuthContext, mainTargetCount: number, opId: string) {
-    const threshold = await this.settings.requireNumber('selection.passThreshold');
     const configuredMainTargetCount = await this.settings.requireNumber('selection.mainTargetCount');
     if (!Number.isInteger(mainTargetCount) || mainTargetCount < 1) throw new ApiError('SELECTION_TARGET_INVALID', 'عدد القائمة الأساسية غير صالح', 400);
     if (mainTargetCount !== configuredMainTargetCount) throw new ApiError('SELECTION_TARGET_MISMATCH', 'عدد القائمة الأساسية لا يطابق السعة المعتمدة في إعدادات الاختيار', 409);
     return prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
-      const claim = await this.idempotency.claim<{ ok: true; main: number; reserve: number; rejected: number }>(tx, ctx.accountId, 'application-selection', opId, { mainTargetCount, threshold });
+      const claim = await this.idempotency.claim<{ ok: true; main: number; reserve: number; rejected: number }>(tx, ctx.accountId, 'application-selection', opId, { mainTargetCount });
       if (!claim.claimed) return claim.existingResponse!;
-      const rows = await tx.associationApplication.findMany({ where: { status: ApplicationStatus.UNDER_REVIEW, eligibilityStatus: EligibilityStatus.PASSED, evaluationScore: { not: null }, selectionList: AssociationSelectionList.NONE }, select: { id: true, evaluationScore: true, contactName: true, coordinatorPhone: true, coordinatorEmail: true, coordinatorTitle: true } });
+      const rows = await tx.associationApplication.findMany({ where: { status: ApplicationStatus.UNDER_REVIEW, eligibilityStatus: EligibilityStatus.PASSED, evaluationScore: { not: null }, selectionList: AssociationSelectionList.NONE }, select: { id: true, publicCode: true, evaluationScore: true, evaluationBreakdown: true, contactName: true, coordinatorPhone: true, coordinatorEmail: true, coordinatorTitle: true } });
       const ranked = rankApplications(rows.map((row) => ({ ...row, score: Number(row.evaluationScore) })));
-      const passing = ranked.filter((row) => row.score >= threshold); const main = passing.slice(0, mainTargetCount); const reserve = passing.slice(mainTargetCount); const rejected = ranked.filter((row) => row.score < threshold); const now = new Date();
+      const main = ranked.slice(0, mainTargetCount); const reserve = ranked.slice(mainTargetCount); const rejected: typeof ranked = []; const now = new Date();
       for (let i = 0; i < ranked.length; i += 1) await tx.associationApplication.update({ where: { id: ranked[i].id }, data: { evaluationRank: i + 1 } });
       if (main.length) await tx.associationApplication.updateMany({ where: { id: { in: main.map((r) => r.id) } }, data: { selectionList: AssociationSelectionList.MAIN, status: ApplicationStatus.ACCEPTED, selectionApprovedAt: now, selectionApprovedById: ctx.accountId } });
       if (reserve.length) await tx.associationApplication.updateMany({ where: { id: { in: reserve.map((r) => r.id) } }, data: { selectionList: AssociationSelectionList.RESERVE, status: ApplicationStatus.ACCEPTED, selectionApprovedAt: now, selectionApprovedById: ctx.accountId } });
-      if (rejected.length) await tx.associationApplication.updateMany({ where: { id: { in: rejected.map((r) => r.id) } }, data: { status: ApplicationStatus.REJECTED, rejectReason: 'لم يحقق حد الاجتياز المعتمد', reviewedAt: now, reviewedById: ctx.accountId } });
       for (const row of main) await tx.projectParticipation.create({ data: { applicationId: row.id, status: ParticipationStatus.APPROVED_AWAITING_SETUP, activationBasis: ActivationBasis.AGREEMENT_COMPLETED, coordinatorName: row.contactName, coordinatorPhone: row.coordinatorPhone, coordinatorEmail: row.coordinatorEmail, coordinatorTitle: row.coordinatorTitle } });
-      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_SELECTION_COMMITTED', entityType: 'association_applications', metadata: { mainIds: main.map((r) => r.id), reserveIds: reserve.map((r) => r.id), rejectedIds: rejected.map((r) => r.id), threshold } } });
+      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_SELECTION_COMMITTED', entityType: 'association_applications', metadata: { mainIds: main.map((r) => r.id), reserveIds: reserve.map((r) => r.id), rejectedIds: [] } } });
       const response = { ok: true as const, main: main.length, reserve: reserve.length, rejected: rejected.length }; await this.idempotency.complete(tx, ctx.accountId, 'application-selection', opId, response); return response;
     });
   }
@@ -655,6 +671,22 @@ function mapApplicationSummary(row: {
   evaluationScore?: Prisma.Decimal | number | null;
   evaluationRank?: number | null;
   selectionList?: AssociationSelectionList;
+  schemaVersion?: number;
+  v2Payload?: Prisma.JsonValue | null;
+  regionOfficialCode?: string | null;
+  governorateOfficialCode?: string | null;
+  centerOfficialCode?: string | null;
+  locationNeedsVerification?: boolean;
+  processingStartedAt?: Date | null;
+  currentAssets?: Prisma.Decimal | number | null;
+  currentLiabilities?: Prisma.Decimal | number | null;
+  financialResult?: Prisma.Decimal | number | null;
+  netWorkingCapital?: Prisma.Decimal | number | null;
+  eligibilityEvidence?: Prisma.JsonValue | null;
+  evaluationEvidence?: Prisma.JsonValue | null;
+  evaluationBreakdown?: Prisma.JsonValue | null;
+  attachments?: { fieldKey: string }[];
+  informationRequests?: { id: string; status: string; note: string | null; deadline: Date | null; requestedAt: Date; submittedAt: Date | null; items: { type: string; key: string; reason: string }[] }[];
 }) {
   const answersList = LEGACY_APPLICATION_QUESTIONS.map((q) => {
     const found = row.answers?.find((a) => a.questionKey === q.key);
@@ -695,6 +727,23 @@ function mapApplicationSummary(row: {
     evaluationScore: row.evaluationScore == null ? null : Number(row.evaluationScore),
     evaluationRank: row.evaluationRank ?? null,
     selectionList: row.selectionList ?? AssociationSelectionList.NONE,
+    schemaVersion: row.schemaVersion ?? 1,
+    v2Payload: row.v2Payload ?? null,
+    regionOfficialCode: row.regionOfficialCode ?? null,
+    governorateOfficialCode: row.governorateOfficialCode ?? null,
+    centerOfficialCode: row.centerOfficialCode ?? null,
+    locationNeedsVerification: row.locationNeedsVerification ?? false,
+    processingStartedAt: row.processingStartedAt ?? null,
+    currentAssets: row.currentAssets == null ? null : Number(row.currentAssets),
+    currentLiabilities: row.currentLiabilities == null ? null : Number(row.currentLiabilities),
+    financialResult: row.financialResult == null ? null : Number(row.financialResult),
+    netWorkingCapital: row.netWorkingCapital == null ? null : Number(row.netWorkingCapital),
+    financialPriority: row.currentAssets == null ? null : Number(row.currentAssets) > 10_000_000 ? 'HIGHER_CAPACITY_LOWER_AID_PRIORITY' : 'STANDARD_PRIORITY_REVIEW',
+    eligibilityEvidence: row.eligibilityEvidence ?? null,
+    evaluationEvidence: row.evaluationEvidence ?? null,
+    evaluationBreakdown: row.evaluationBreakdown ?? null,
+    attachmentKeys: row.attachments?.map((item) => item.fieldKey) ?? [],
+    latestInformationRequest: row.informationRequests?.[0] ?? null,
   };
 }
 

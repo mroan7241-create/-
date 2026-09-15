@@ -1,5 +1,5 @@
 import { IsIn, IsOptional } from 'class-validator';
-import { ApplicationStatus } from '@alzad/db';
+import { ApplicationStatus, AssociationSelectionList, EligibilityStatus } from '@alzad/db';
 import { PaginationQueryDto } from '../../../common/validation/pagination-query.dto';
 
 /**
@@ -21,4 +21,20 @@ export class ListApplicationsQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsIn(Object.values(ApplicationStatus))
   status?: ApplicationStatus;
+
+  @IsOptional()
+  @IsIn(Object.values(EligibilityStatus))
+  eligibilityStatus?: EligibilityStatus;
+
+  @IsOptional()
+  @IsIn(Object.values(AssociationSelectionList))
+  selectionList?: AssociationSelectionList;
+
+  @IsOptional()
+  @IsIn(['new', 'processing', 'missing'])
+  workflow?: 'new' | 'processing' | 'missing';
+
+  @IsOptional()
+  @IsIn(['assets_lte_10m', 'assets_gt_10m', 'surplus', 'deficit', 'working_capital'])
+  financial?: 'assets_lte_10m' | 'assets_gt_10m' | 'surplus' | 'deficit' | 'working_capital';
 }
