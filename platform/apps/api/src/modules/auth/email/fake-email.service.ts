@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { EmailService, PasswordResetEmailParams, SecurityAlertEmailParams } from './email.service';
+import { ApplicationAccessEmailParams, EmailService, PasswordResetEmailParams, SecurityAlertEmailParams } from './email.service';
 
 /**
  * تطبيق للاختبارات فقط — يلتقط آخر رسالة (والرمز) في الذاكرة ليقرأها
@@ -10,6 +10,7 @@ import { EmailService, PasswordResetEmailParams, SecurityAlertEmailParams } from
 export class FakeEmailService implements EmailService {
   lastPasswordReset: PasswordResetEmailParams | null = null;
   lastSecurityAlert: SecurityAlertEmailParams | null = null;
+  lastApplicationAccess: ApplicationAccessEmailParams | null = null;
 
   async sendPasswordResetCode(params: PasswordResetEmailParams): Promise<void> {
     this.lastPasswordReset = params;
@@ -19,8 +20,13 @@ export class FakeEmailService implements EmailService {
     this.lastSecurityAlert = params;
   }
 
+  async sendApplicationAccess(params: ApplicationAccessEmailParams): Promise<void> {
+    this.lastApplicationAccess = params;
+  }
+
   reset(): void {
     this.lastPasswordReset = null;
     this.lastSecurityAlert = null;
+    this.lastApplicationAccess = null;
   }
 }

@@ -1,4 +1,4 @@
-import { IsArray, IsIn, IsInt, IsObject, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsArray, IsEmail, IsIn, IsInt, IsObject, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
 import { AssociationSelectionList, ApplicationInformationItemType } from '@alzad/db';
 
 export class CreateApplicationDraftDto {
@@ -17,6 +17,14 @@ export class SubmitApplicationDraftDto {
 
 export class ApplicationAttachmentDto {
   @IsString() fieldKey!: string;
+}
+
+export class RequestApplicationAccessDto {
+  @IsEmail() email!: string;
+}
+
+export class ExchangeApplicationAccessDto {
+  @IsString() @MinLength(40) token!: string;
 }
 
 export class BulkStartProcessingDto {

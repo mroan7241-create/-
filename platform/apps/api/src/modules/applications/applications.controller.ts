@@ -1,5 +1,5 @@
-import { BadRequestException, Body, Controller, Get, Headers, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Put, Query, Req, UploadedFile, UploadedFiles, UseInterceptors } from '@nestjs/common';
-import type { Request } from 'express';
+import { BadRequestException, Body, Controller, Get, Headers, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Put, Query, Req, Res, UploadedFile, UploadedFiles, UseInterceptors } from '@nestjs/common';
+import type { Request, Response } from 'express';
 import { FileFieldsInterceptor, FileInterceptor } from '@nestjs/platform-express';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AccountRole } from '@alzad/db';
@@ -14,12 +14,13 @@ import { ReviewApplicationDto, SubmitApplicationDto } from './dto/submit-applica
 import { ListApplicationsQueryDto } from './dto/list-applications-query.dto';
 import { EligibilityDecisionDto, EvaluationDto, SelectionCommitDto } from './dto/application-workflow.dto';
 import { ApplicationV2Service } from './application-v2.service';
-import { ApplicationAttachmentDto, BulkStartProcessingDto, CreateApplicationDraftDto, CreateInformationRequestDto, SaveApplicationDraftDto, SelectionDecisionDto, SubmitApplicationDraftDto, SubmitInformationResponseDto } from './dto/application-v2.dto';
+import { ApplicationAttachmentDto, BulkStartProcessingDto, CreateApplicationDraftDto, CreateInformationRequestDto, ExchangeApplicationAccessDto, RequestApplicationAccessDto, SaveApplicationDraftDto, SelectionDecisionDto, SubmitApplicationDraftDto, SubmitInformationResponseDto } from './dto/application-v2.dto';
+import { APPLICANT_SESSION_COOKIE, ApplicationAccessService } from './application-access.service';
 
 @ApiTags('applications')
 @Controller()
 export class ApplicationsController {
-  constructor(private readonly applications: ApplicationsService, private readonly applicationV2: ApplicationV2Service) {}
+  constructor(private readonly applications: ApplicationsService, private readonly applicationV2: ApplicationV2Service, private readonly applicationAccess: ApplicationAccessService) {}
 
   @Public()
   @Get('association-applications/geography')
@@ -33,31 +34,53 @@ export class ApplicationsController {
 
   @Public()
   @Get('association-applications/drafts/:draftCode')
-  loadDraft(@Param('draftCode') draftCode: string, @Headers('x-application-resume-token') token = '') { return this.applicationV2.loadDraft(draftCode, token); }
+  loadDraft(@Param('draftCode') draftCode: string, @Headers('x-application-resume-token') token = '', @Req() req: Request) { return this.applicationV2.loadDraft(draftCode, token, req.cookies?.[APPLICANT_SESSION_COOKIE] ?? ''); }
 
   @Public()
   @Put('association-applications/drafts/:draftCode')
-  saveDraft(@Param('draftCode') draftCode: string, @Headers('x-application-resume-token') token: string = '', @Body() dto: SaveApplicationDraftDto) { return this.applicationV2.saveDraft(draftCode, token, dto.revision, dto.payload); }
+  saveDraft(@Param('draftCode') draftCode: string, @Headers('x-application-resume-token') token: string = '', @Body() dto: SaveApplicationDraftDto, @Req() req: Request) { return this.applicationV2.saveDraft(draftCode, token, dto.revision, dto.payload, req.cookies?.[APPLICANT_SESSION_COOKIE] ?? ''); }
 
   @Public()
   @Post('association-applications/drafts/:draftCode/attachments')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: LICENSE_FILE_MAX_BYTES + 1024 } }))
-  uploadDraftAttachment(@Param('draftCode') draftCode: string, @Headers('x-application-resume-token') token: string = '', @Body() dto: ApplicationAttachmentDto, @UploadedFile() file?: Express.Multer.File) {
+  uploadDraftAttachment(@Param('draftCode') draftCode: string, @Headers('x-application-resume-token') token: string = '', @Body() dto: ApplicationAttachmentDto, @Req() req: Request, @UploadedFile() file?: Express.Multer.File) {
     if (!file) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'الملف مطلوب', 400);
-    return this.applicationV2.uploadAttachment(draftCode, token, dto.fieldKey, file);
+    return this.applicationV2.uploadAttachment(draftCode, token, dto.fieldKey, file, req.cookies?.[APPLICANT_SESSION_COOKIE] ?? '');
   }
 
   @Public()
   @Post('association-applications/drafts/:draftCode/submit')
-  submitDraft(@Param('draftCode') draftCode: string, @Headers('x-application-resume-token') token: string = '', @Body() dto: SubmitApplicationDraftDto) { return this.applicationV2.submitDraft(draftCode, token, dto.revision); }
+  submitDraft(@Param('draftCode') draftCode: string, @Headers('x-application-resume-token') token: string = '', @Body() dto: SubmitApplicationDraftDto, @Req() req: Request) { return this.applicationV2.submitDraft(draftCode, token, dto.revision, req.cookies?.[APPLICANT_SESSION_COOKIE] ?? ''); }
 
   @Public()
   @Get('association-applications/track/:draftCode')
-  trackV2(@Param('draftCode') draftCode: string, @Headers('x-application-resume-token') token: string = '') { return this.applicationV2.publicStatus(draftCode, token); }
+  trackV2(@Param('draftCode') draftCode: string, @Headers('x-application-resume-token') token: string = '', @Req() req: Request) { return this.applicationV2.publicStatus(draftCode, token, req.cookies?.[APPLICANT_SESSION_COOKIE] ?? ''); }
 
   @Public()
   @Post('association-applications/track/:draftCode/information/:requestId')
-  submitInformation(@Param('draftCode') draftCode: string, @Param('requestId', ParseUUIDPipe) requestId: string, @Headers('x-application-resume-token') token: string = '', @Body() dto: SubmitInformationResponseDto) { return this.applicationV2.submitInformation(draftCode, token, requestId, dto); }
+  submitInformation(@Param('draftCode') draftCode: string, @Param('requestId', ParseUUIDPipe) requestId: string, @Headers('x-application-resume-token') token: string = '', @Body() dto: SubmitInformationResponseDto, @Req() req: Request) { return this.applicationV2.submitInformation(draftCode, token, requestId, dto, req.cookies?.[APPLICANT_SESSION_COOKIE] ?? ''); }
+
+  @Public()
+  @Post('association-applications/access/request')
+  @HttpCode(HttpStatus.OK)
+  requestAccess(@Body() dto: RequestApplicationAccessDto, @Req() req: Request) {
+    return this.applicationAccess.requestAccess(dto.email, req.ip || req.socket.remoteAddress || 'unknown');
+  }
+
+  @Public()
+  @Post('association-applications/access/exchange')
+  @HttpCode(HttpStatus.OK)
+  async exchangeAccess(@Body() dto: ExchangeApplicationAccessDto, @Res({ passthrough: true }) res: Response) {
+    const result = await this.applicationAccess.exchange(dto.token);
+    res.cookie(APPLICANT_SESSION_COOKIE, result.sessionToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      expires: result.expiresAt,
+    });
+    return { ok: true, draftCode: result.draftCode, destination: result.destination };
+  }
 
   @Public()
   @Post('association-applications')
@@ -162,6 +185,13 @@ export class ApplicationsController {
   @Post('association-applications/:id/information-request')
   @Roles(AccountRole.ADMIN)
   informationRequest(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: CreateInformationRequestDto) { return this.applicationV2.requestInformation(ctx, id, dto); }
+
+  @Post('association-applications/:id/information-request/resend')
+  @Roles(AccountRole.ADMIN)
+  async resendInformationRequest(@Param('id', ParseUUIDPipe) id: string) {
+    await this.applicationAccess.sendNeedsInfo(id);
+    return { ok: true };
+  }
 
   @Post('association-applications/:id/evaluation')
   @Roles(AccountRole.ADMIN)

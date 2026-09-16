@@ -4,8 +4,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { SessionAuthGuard } from './guards/session-auth.guard';
 import { RateLimitService } from '../../common/rate-limit.service';
-import { EmailService } from './email/email.service';
-import { DevEmailService } from './email/dev-email.service';
+import { EmailModule } from './email/email.module';
 
 /**
  * SessionAuthGuard مُسجَّل هنا كـAPP_GUARD عالمي — يُطبَّق على كل
@@ -18,11 +17,11 @@ import { DevEmailService } from './email/dev-email.service';
  * تغيير على AuthService نفسها.
  */
 @Module({
+  imports: [EmailModule],
   controllers: [AuthController],
   providers: [
     AuthService,
     RateLimitService,
-    { provide: EmailService, useClass: DevEmailService },
     { provide: APP_GUARD, useClass: SessionAuthGuard },
   ],
   exports: [AuthService],

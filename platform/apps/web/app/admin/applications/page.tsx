@@ -6,6 +6,7 @@ import {
   APPLICATION_STATUS_LABELS,
   ApiClientError,
   apiFetch,
+  resendApplicationInformation,
   startApplicationProcessing,
   type ApplicationStatus,
   type ApplicationSummary,
@@ -200,6 +201,7 @@ function ApplicationDetail({
 }) {
   const [licenseUrl, setLicenseUrl] = useState<string | null>(null);
   const [licenseError, setLicenseError] = useState<string | null>(null);
+  const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
 
   const decided = application.status !== 'UNDER_REVIEW';
 
@@ -298,6 +300,11 @@ function ApplicationDetail({
             {licenseError}
           </p>
         )}
+
+        {application.eligibilityStatus === 'NEEDS_INFO' && <div style={{ marginTop: 16 }}>
+          <button type="button" style={secondaryButtonStyle} onClick={async () => { setNotificationMessage(null); try { await resendApplicationInformation(application.id); setNotificationMessage('تمت إعادة إرسال إشعار الاستكمال إلى البريد الرسمي.'); } catch (reason) { setNotificationMessage(reason instanceof ApiClientError ? reason.message : 'تعذّرت إعادة إرسال الإشعار.'); } }}>إعادة إرسال إشعار الاستكمال</button>
+          {notificationMessage && <p role="status" style={notificationMessage.startsWith('تم') ? { color: '#17663a' } : errorStyle}>{notificationMessage}</p>}
+        </div>}
 
         {!decided && (
           <div style={{ marginTop: 24, borderTop: '1px solid var(--line)', paddingTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>

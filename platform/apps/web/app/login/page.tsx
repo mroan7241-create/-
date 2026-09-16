@@ -29,7 +29,6 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [showForgotCode, setShowForgotCode] = useState(false);
-  const [showRecovery, setShowRecovery] = useState(false);
   const [passwordChanged, setPasswordChanged] = useState(false);
   useEffect(() => {
     setPasswordChanged(new URLSearchParams(window.location.search).get('passwordChanged') === '1');
@@ -140,8 +139,7 @@ export default function LoginPage() {
           )}
 
           {passwordChanged && <p role="status" style={{ margin: 0, fontSize: 14 }}>تم تغيير كلمة المرور. سجّل الدخول بكلمة المرور الجديدة.</p>}
-          {tab === 'user' && <button type="button" onClick={() => setShowRecovery(!showRecovery)} aria-expanded={showRecovery} style={{ background: 'none', border: 0, padding: 0, textAlign: 'right', color: 'var(--zad-800)', textDecoration: 'underline', cursor: 'pointer' }}>نسيت كلمة المرور؟</button>}
-          {tab === 'user' && showRecovery && <p role="status" style={{ margin: 0, fontSize: 14, lineHeight: 1.7 }}>استعادة كلمة المرور بالبريد غير متاحة حاليًا. للجمعيات وأبانمي: تواصل مع إدارة المشروع لإعادة التعيين. للإدارة: تواصل مع المسؤول التقني للمشروع.</p>}
+          {tab === 'user' && <a href="/forgot-password" style={{ color: 'var(--zad-800)', textDecoration: 'underline', fontSize: 14 }}>نسيت كلمة المرور؟</a>}
           {tab === 'delegate' && (
             <p style={{ margin: 0, fontSize: 14 }}>
               <button

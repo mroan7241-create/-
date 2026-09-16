@@ -34,6 +34,7 @@ import type {
   SelectionDecisionDto,
   SubmitInformationResponseDto,
 } from './dto/application-v2.dto';
+import { ApplicationAccessService } from './application-access.service';
 
 const DRAFT_TTL_DAYS = 45;
 const ALLOWED_ATTACHMENT_KEYS = new Set([
@@ -55,6 +56,7 @@ export class ApplicationV2Service {
     private readonly idempotency: IdempotencyService,
     private readonly storage: StorageService,
     private readonly rateLimit: RateLimitService,
+    private readonly access: ApplicationAccessService,
   ) {}
 
   async geography(parentOfficialCode?: string) {
@@ -98,16 +100,17 @@ export class ApplicationV2Service {
     return { ok: true as const, draftCode: draft.publicCode, resumeToken, revision: draft.revision, expiresAt: draft.expiresAt };
   }
 
-  async loadDraft(draftCode: string, token: string) {
-    const draft = await this.requireDraft(draftCode, token, true);
+  async loadDraft(draftCode: string, token: string, applicantSession = '') {
+    const draft = await this.requireDraft(draftCode, token, true, applicantSession);
     return this.draftView(draft);
   }
 
-  async saveDraft(draftCode: string, token: string, revision: number, payload: JsonMap) {
-    const draft = await this.requireDraft(draftCode, token, true);
+  async saveDraft(draftCode: string, token: string, revision: number, payload: JsonMap, applicantSession = '') {
+    const draft = await this.requireDraft(draftCode, token, true, applicantSession);
     if (draft.status !== ApplicationDraftStatus.ACTIVE) throw new ApiError('APPLICATION_DRAFT_SUBMITTED', 'سبق إرسال هذا الطلب', 409);
     if (!isPlainObject(payload)) throw new ApiError('APPLICATION_DRAFT_INVALID', 'بيانات المسودة غير صالحة', 400);
-    const contactEmail = readOptionalString(pathValue(payload, 'organization.officialEmail'));
+    const contactEmailRaw = readOptionalString(pathValue(payload, 'organization.officialEmail'));
+    const contactEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmailRaw) ? contactEmailRaw.toLowerCase() : '';
     const updated = await prisma.associationApplicationDraft.updateMany({
       where: { id: draft.id, revision },
       data: { payload: payload as Prisma.InputJsonValue, contactEmail: contactEmail || null, revision: { increment: 1 }, expiresAt: addDays(new Date(), DRAFT_TTL_DAYS) },
@@ -117,10 +120,10 @@ export class ApplicationV2Service {
     return this.draftView(current);
   }
 
-  async uploadAttachment(draftCode: string, token: string, fieldKeyRaw: string, file: Express.Multer.File) {
+  async uploadAttachment(draftCode: string, token: string, fieldKeyRaw: string, file: Express.Multer.File, applicantSession = '') {
     const fieldKey = fieldKeyRaw.trim();
     if (!ALLOWED_ATTACHMENT_KEYS.has(fieldKey)) throw new ApiError('APPLICATION_ATTACHMENT_FIELD_INVALID', 'نوع المرفق غير صالح', 400);
-    const draft = await this.requireDraft(draftCode, token, true);
+    const draft = await this.requireDraft(draftCode, token, true, applicantSession);
     const validated = validateApplicationAttachment(fieldKey, file);
     const objectKey = `association-applications/${draft.publicCode}/${fieldKey}/${randomUUID()}.${validated.extension}`;
     await this.storage.uploadPrivateObject(objectKey, file.buffer, validated.mimeType);
@@ -150,8 +153,8 @@ export class ApplicationV2Service {
     return { ok: true as const, fieldKey, name: fieldKey, size: file.buffer.length };
   }
 
-  async submitDraft(draftCode: string, token: string, revision: number) {
-    const draft = await this.requireDraft(draftCode, token, true);
+  async submitDraft(draftCode: string, token: string, revision: number, applicantSession = '') {
+    const draft = await this.requireDraft(draftCode, token, true, applicantSession);
     if (draft.status === ApplicationDraftStatus.SUBMITTED && draft.submittedApplication) {
       return { ok: true as const, id: draft.submittedApplication.publicCode, duplicate: true, message: 'تم استلام طلبكم مسبقًا' };
     }
@@ -222,11 +225,12 @@ export class ApplicationV2Service {
       await tx.associationApplicationDraft.update({ where: { id: draft.id }, data: { status: ApplicationDraftStatus.SUBMITTED, submittedApplicationId: application.id } });
       return application;
     });
+    try { await this.access.sendSubmitted(draft.id); } catch { /* نجاح الإرسال لا يغيّر قرار حفظ الطلب */ }
     return { ok: true as const, id: result.publicCode, message: 'تم استلام طلب المشاركة بنجاح' };
   }
 
-  async publicStatus(draftCode: string, token: string) {
-    const draft = await this.requireDraft(draftCode, token, true);
+  async publicStatus(draftCode: string, token: string, applicantSession = '') {
+    const draft = await this.requireDraft(draftCode, token, true, applicantSession);
     const application = draft.submittedApplication;
     if (!application) return { ok: true as const, draft: true as const, draftCode, revision: draft.revision, stage: 'DRAFT', timeline: timeline('DRAFT') };
     const request = await prisma.applicationInformationRequest.findFirst({ where: { applicationId: application.id, status: ApplicationInformationRequestStatus.OPEN }, include: { items: true }, orderBy: { requestedAt: 'desc' } });
@@ -243,8 +247,8 @@ export class ApplicationV2Service {
     };
   }
 
-  async submitInformation(draftCode: string, token: string, requestId: string, dto: SubmitInformationResponseDto) {
-    const draft = await this.requireDraft(draftCode, token, true);
+  async submitInformation(draftCode: string, token: string, requestId: string, dto: SubmitInformationResponseDto, applicantSession = '') {
+    const draft = await this.requireDraft(draftCode, token, true, applicantSession);
     if (!draft.submittedApplicationId) throw new ApiError('APPLICATION_NOT_SUBMITTED', 'لم يُرسل الطلب بعد', 409);
     return prisma.$transaction(async (tx) => {
       const replay = await tx.applicationInformationRequest.findUnique({ where: { responseOpId: dto.opId } });
@@ -289,7 +293,7 @@ export class ApplicationV2Service {
     if (!dto.items.length || dto.items.length > 50) throw new ApiError('APPLICATION_INFORMATION_ITEMS_REQUIRED', 'حدد حقلًا أو مرفقًا واحدًا على الأقل', 400);
     if (dto.items.some((item) => item.type === ApplicationInformationItemType.ATTACHMENT && !ALLOWED_ATTACHMENT_KEYS.has(item.key.trim()))) throw new ApiError('APPLICATION_ATTACHMENT_FIELD_INVALID', 'نوع المرفق المطلوب غير صالح', 400);
     const deadline = dto.deadline ? parseDate(dto.deadline, 'المهلة') : null;
-    return prisma.$transaction(async (tx) => {
+    const response = await prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ ok: true; requestId: string }>(tx, ctx.accountId, 'application-information-request', dto.opId, { applicationId, items: dto.items, note: dto.note ?? null, deadline });
       if (!claim.claimed) return claim.existingResponse!;
       const application = await tx.associationApplication.findUnique({ where: { id: applicationId } });
@@ -306,6 +310,8 @@ export class ApplicationV2Service {
       await this.idempotency.complete(tx, ctx.accountId, 'application-information-request', dto.opId, response);
       return response;
     });
+    try { await this.access.sendNeedsInfo(applicationId); } catch { /* القرار الإداري محفوظ؛ يمكن إعادة الإرسال من المسار المخصص */ }
+    return response;
   }
 
   async eligibilityEvidence(applicationId: string) {
@@ -350,9 +356,10 @@ export class ApplicationV2Service {
     });
   }
 
-  private async requireDraft(draftCodeRaw: string, tokenRaw: string, includeApplication = false) {
+  private async requireDraft(draftCodeRaw: string, tokenRaw: string, includeApplication = false, applicantSession = '') {
     const draftCode = draftCodeRaw.trim();
     const token = tokenRaw.trim();
+    if (!token && applicantSession.trim()) return this.access.requireSessionDraft(draftCode, applicantSession, includeApplication);
     if (!draftCode || token.length < 32) throw new ApiError('APPLICATION_RESUME_INVALID', 'بيانات استكمال الطلب غير صحيحة', 403);
     await this.rateLimit.consume('association-application-resume', sha256Hex(`${draftCode}:${token}`), { limit: 60, windowSeconds: 3600 });
     const draft = await prisma.associationApplicationDraft.findFirst({

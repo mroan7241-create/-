@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { EmailService, PasswordResetEmailParams, SecurityAlertEmailParams } from './email.service';
+import { ApplicationAccessEmailParams, EmailService, PasswordResetEmailParams, SecurityAlertEmailParams } from './email.service';
 
 /**
  * تطبيق تطوير آمن: لا يرسل أي بريد فعلي، ولا يطبع رمز الاستعادة في
@@ -20,5 +20,11 @@ export class DevEmailService implements EmailService {
 
   async sendSecurityAlert(params: SecurityAlertEmailParams): Promise<void> {
     this.logger.log(`[dev] كان سيُرسَل تنبيه أمني: ${params.subject} (بلا طباعة محتوى حساس).`);
+  }
+
+  async sendApplicationAccess(params: ApplicationAccessEmailParams): Promise<void> {
+    if (process.env.NODE_ENV === 'production') throw new Error('Production email delivery is not configured');
+    this.logger.log('[dev] كان سيُرسَل بريد وصول إلى طلب مشاركة (بلا طباعة البريد أو الروابط).');
+    void params;
   }
 }

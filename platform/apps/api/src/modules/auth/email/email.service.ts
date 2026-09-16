@@ -17,7 +17,22 @@ export interface SecurityAlertEmailParams {
   body: string;
 }
 
+export interface ApplicationAccessEmailItem {
+  label: string;
+  code: string;
+  url: string;
+}
+
+export interface ApplicationAccessEmailParams {
+  to: string;
+  name: string;
+  subject: string;
+  intro: string;
+  items: ApplicationAccessEmailItem[];
+}
+
 export abstract class EmailService {
   abstract sendPasswordResetCode(params: PasswordResetEmailParams): Promise<void>;
   abstract sendSecurityAlert(params: SecurityAlertEmailParams): Promise<void>;
+  abstract sendApplicationAccess(params: ApplicationAccessEmailParams): Promise<void>;
 }
