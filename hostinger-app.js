@@ -79,7 +79,10 @@ function build() {
   const app = readApp();
   run('npm run build --workspace packages/shared');
   if (app === 'api') {
-    // توليد Prisma Client فقط — لا migrate deploy ولا seed هنا إطلاقًا.
+    // Run migrations only when explicitly enabled for deployment.
+    if (process.env.RUN_PRISMA_MIGRATIONS === 'true') {
+      run('npm run migrate:deploy --workspace packages/db');
+    }
     run('npm run prisma:generate --workspace packages/db');
     run('npm run build --workspace packages/db');
     run('npm run build --workspace apps/api');
