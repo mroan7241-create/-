@@ -19,7 +19,6 @@ import { IdempotencyService } from '../../common/idempotency.service';
 import { PublicCodeService } from '../../common/public-code.service';
 import { sha256Hex } from '../../common/crypto.util';
 import { requiredEmail, requiredText } from '../../common/validation/text.util';
-import { normalizeSaudiPhone } from '../../common/validation/phone.util';
 import { StorageService } from '../files/storage.service';
 import { storageConfig } from '../../config/storage.config';
 import { validateReceiptDocumentFile } from '../files/file-validation.util';
@@ -41,10 +40,7 @@ const ALLOWED_ATTACHMENT_KEYS = new Set([
   'licenseFile', 'previousProjectEvidence', 'spendingPolicyFile', 'strategicPlanFile',
   'operationalPlanFile', 'initialBeneficiaryFile', 'financialStatementsFile',
 ]);
-const REQUIRED_ACKNOWLEDGEMENTS = [
-  'dataAccuracy', 'verificationPermission', 'auditConsent', 'coordinatorCommitment',
-  'covenantCommitment', 'beneficiaryListPreliminary', 'participationTerms',
-] as const;
+const APPLICATION_CONSENT_VERSION = 'application-declarations-v1';
 const FINANCIAL_PRIORITY_THRESHOLD = 10_000_000;
 
 type JsonMap = Record<string, unknown>;
@@ -101,11 +97,13 @@ export class ApplicationV2Service {
   }
 
   async loadDraft(draftCode: string, token: string, applicantSession = '') {
+    await this.rateLimit.consume('association-application-draft-read', applicantAccessSubject(draftCode, token, applicantSession), { limit: 120, windowSeconds: 3600 });
     const draft = await this.requireDraft(draftCode, token, true, applicantSession);
     return this.draftView(draft);
   }
 
   async saveDraft(draftCode: string, token: string, revision: number, payload: JsonMap, applicantSession = '') {
+    await this.rateLimit.consume('association-application-autosave', applicantAccessSubject(draftCode, token, applicantSession), { limit: 240, windowSeconds: 3600 });
     const draft = await this.requireDraft(draftCode, token, true, applicantSession);
     if (draft.status !== ApplicationDraftStatus.ACTIVE) throw new ApiError('APPLICATION_DRAFT_SUBMITTED', 'سبق إرسال هذا الطلب', 409);
     if (!isPlainObject(payload)) throw new ApiError('APPLICATION_DRAFT_INVALID', 'بيانات المسودة غير صالحة', 400);
@@ -121,17 +119,23 @@ export class ApplicationV2Service {
   }
 
   async uploadAttachment(draftCode: string, token: string, fieldKeyRaw: string, file: Express.Multer.File, applicantSession = '') {
+    await this.rateLimit.consume('association-application-attachment-upload', applicantAccessSubject(draftCode, token, applicantSession), { limit: 60, windowSeconds: 3600 });
     const fieldKey = fieldKeyRaw.trim();
     if (!ALLOWED_ATTACHMENT_KEYS.has(fieldKey)) throw new ApiError('APPLICATION_ATTACHMENT_FIELD_INVALID', 'نوع المرفق غير صالح', 400);
     const draft = await this.requireDraft(draftCode, token, true, applicantSession);
     const validated = validateApplicationAttachment(fieldKey, file);
+    await this.requireAttachmentMutation(prisma, draft.id, fieldKey);
     const objectKey = `association-applications/${draft.publicCode}/${fieldKey}/${randomUUID()}.${validated.extension}`;
     await this.storage.uploadPrivateObject(objectKey, file.buffer, validated.mimeType);
     let oldObjectKey: string | null = null;
     try {
       await prisma.$transaction(async (tx) => {
-        const owner = draft.submittedApplicationId ? { applicationId: draft.submittedApplicationId, draftId: null } : { applicationId: null, draftId: draft.id };
-        const existing = await tx.applicationAttachment.findFirst({ where: draft.submittedApplicationId ? { applicationId: draft.submittedApplicationId, fieldKey } : { draftId: draft.id, fieldKey }, include: { file: true } });
+        await tx.$queryRaw`SELECT id FROM association_application_drafts WHERE id=${draft.id}::uuid FOR UPDATE`;
+        const current = await tx.associationApplicationDraft.findUniqueOrThrow({ where: { id: draft.id } });
+        if (current.submittedApplicationId) await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${current.submittedApplicationId}::uuid FOR UPDATE`;
+        await this.requireAttachmentMutation(tx, draft.id, fieldKey);
+        const owner = current.submittedApplicationId ? { applicationId: current.submittedApplicationId, draftId: null } : { applicationId: null, draftId: draft.id };
+        const existing = await tx.applicationAttachment.findFirst({ where: current.submittedApplicationId ? { applicationId: current.submittedApplicationId, fieldKey } : { draftId: draft.id, fieldKey }, include: { file: true } });
         const created = await tx.fileObject.create({ data: {
           storageProvider: 'S3', bucket: storageConfig.bucket, objectKey,
           originalName: fieldKey, mimeType: validated.mimeType, sizeBytes: BigInt(file.buffer.length),
@@ -140,10 +144,13 @@ export class ApplicationV2Service {
         if (existing) {
           oldObjectKey = existing.file.objectKey;
           await tx.applicationAttachment.update({ where: { id: existing.id }, data: { fileId: created.id } });
-          await tx.fileObject.delete({ where: { id: existing.fileId } });
         } else {
           await tx.applicationAttachment.create({ data: { ...owner, fieldKey, fileId: created.id } });
         }
+        if (current.submittedApplicationId && fieldKey === 'licenseFile') {
+          await tx.associationApplication.update({ where: { id: current.submittedApplicationId }, data: { licenseFileId: created.id } });
+        }
+        if (existing) await tx.fileObject.delete({ where: { id: existing.fileId } });
       });
     } catch (error) {
       await this.storage.deleteObjectBestEffort(objectKey);
@@ -230,6 +237,7 @@ export class ApplicationV2Service {
   }
 
   async publicStatus(draftCode: string, token: string, applicantSession = '') {
+    await this.rateLimit.consume('association-application-status-read', applicantAccessSubject(draftCode, token, applicantSession), { limit: 120, windowSeconds: 3600 });
     const draft = await this.requireDraft(draftCode, token, true, applicantSession);
     const application = draft.submittedApplication;
     if (!application) return { ok: true as const, draft: true as const, draftCode, revision: draft.revision, stage: 'DRAFT', timeline: timeline('DRAFT') };
@@ -248,9 +256,11 @@ export class ApplicationV2Service {
   }
 
   async submitInformation(draftCode: string, token: string, requestId: string, dto: SubmitInformationResponseDto, applicantSession = '') {
+    await this.rateLimit.consume('association-application-information-submit', applicantAccessSubject(draftCode, token, applicantSession), { limit: 30, windowSeconds: 3600 });
     const draft = await this.requireDraft(draftCode, token, true, applicantSession);
     if (!draft.submittedApplicationId) throw new ApiError('APPLICATION_NOT_SUBMITTED', 'لم يُرسل الطلب بعد', 409);
     return prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${draft.submittedApplicationId!}::uuid FOR UPDATE`;
       const replay = await tx.applicationInformationRequest.findUnique({ where: { responseOpId: dto.opId } });
       if (replay) {
         if (replay.id !== requestId) throw new ApiError('APPLICATION_IDEMPOTENCY_CONFLICT', 'معرّف العملية مستخدم لاستكمال مختلف', 409);
@@ -265,7 +275,13 @@ export class ApplicationV2Service {
       const existingFiles = await tx.applicationAttachment.findMany({ where: { applicationId: request.applicationId, fieldKey: { in: requiredFiles } } });
       if (existingFiles.length !== requiredFiles.length) throw new ApiError('APPLICATION_INFORMATION_ATTACHMENTS_MISSING', 'أرفق جميع الملفات المطلوبة قبل إرسال الاستكمال', 400);
       const merged = deepMerge(asMap(request.application.v2Payload), dto.payload);
-      await tx.associationApplication.update({ where: { id: request.applicationId }, data: { v2Payload: merged as Prisma.InputJsonValue, eligibilityStatus: EligibilityStatus.PENDING, eligibilityNotes: null } });
+      const identity = await correctedAccountIdentity(tx, merged, responseKeys);
+      try {
+        await tx.associationApplication.update({ where: { id: request.applicationId }, data: { ...identity, v2Payload: merged as Prisma.InputJsonValue, eligibilityStatus: EligibilityStatus.PENDING, eligibilityNotes: null } });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ApiError('APPLICATION_DUPLICATE_PENDING', 'يوجد طلب سابق بنفس البريد أو الجوال أو رقم الترخيص', 409);
+        throw error;
+      }
       await tx.applicationInformationRequest.update({ where: { id: request.id }, data: { status: ApplicationInformationRequestStatus.SUBMITTED, responsePayload: dto.payload as Prisma.InputJsonValue, responseOpId: dto.opId, submittedAt: new Date() } });
       await tx.auditLog.create({ data: { actorAccountId: null, actorRole: null, action: 'APPLICATION_INFORMATION_SUBMITTED', entityType: 'association_applications', entityId: request.applicationId, metadata: { requestId } } });
       const response = { ok: true as const };
@@ -356,12 +372,23 @@ export class ApplicationV2Service {
     });
   }
 
+  private async requireAttachmentMutation(tx: Prisma.TransactionClient, draftId: string, fieldKey: string) {
+    const current = await tx.associationApplicationDraft.findUniqueOrThrow({ where: { id: draftId }, include: { submittedApplication: true } });
+    if (current.expiresAt <= new Date()) throw new ApiError('APPLICATION_RESUME_INVALID', 'رابط الاستكمال غير صالح أو انتهت صلاحيته', 403);
+    if (current.status === ApplicationDraftStatus.ACTIVE && !current.submittedApplicationId) return;
+    const application = current.submittedApplication;
+    const permitted = application?.status === ApplicationStatus.UNDER_REVIEW && application.eligibilityStatus === EligibilityStatus.NEEDS_INFO && await tx.applicationInformationRequest.findFirst({ where: {
+      applicationId: application.id, status: ApplicationInformationRequestStatus.OPEN,
+      items: { some: { type: ApplicationInformationItemType.ATTACHMENT, key: fieldKey } },
+    }, select: { id: true } });
+    if (!permitted) throw new ApiError('APPLICATION_ATTACHMENT_NOT_REQUESTED', 'لا يمكن تعديل المرفق إلا ضمن طلب استكمال مفتوح لهذا المرفق', 403);
+  }
+
   private async requireDraft(draftCodeRaw: string, tokenRaw: string, includeApplication = false, applicantSession = '') {
     const draftCode = draftCodeRaw.trim();
     const token = tokenRaw.trim();
     if (!token && applicantSession.trim()) return this.access.requireSessionDraft(draftCode, applicantSession, includeApplication);
     if (!draftCode || token.length < 32) throw new ApiError('APPLICATION_RESUME_INVALID', 'بيانات استكمال الطلب غير صحيحة', 403);
-    await this.rateLimit.consume('association-application-resume', sha256Hex(`${draftCode}:${token}`), { limit: 60, windowSeconds: 3600 });
     const draft = await prisma.associationApplicationDraft.findFirst({
       where: { publicCode: draftCode, resumeTokenHash: sha256Hex(token) },
       include: { attachments: true, ...(includeApplication ? { submittedApplication: true } : {}) },
@@ -382,21 +409,23 @@ async function validateV2Payload(payload: JsonMap, attachments: Set<string>) {
   if (licenseExpiryDate < todayRiyadh()) throw new ApiError('APPLICATION_LICENSE_EXPIRED', 'ترخيص الجمعية منتهٍ', 400);
   const category = requiredPathText(payload, 'organization.category', 'تصنيف الجمعية', 120);
   const sector = requiredPathText(payload, 'organization.sector', 'مجال عمل الجمعية', 120);
+  if (category === 'أخرى') requiredPathText(payload, 'organization.categoryOther', 'تحديد تصنيف الجمعية', 200);
+  if (sector === 'أخرى') requiredPathText(payload, 'organization.sectorOther', 'تحديد مجال عمل الجمعية', 200);
   const officialEmail = requiredEmail(requiredPathText(payload, 'organization.officialEmail', 'البريد الرسمي', 254));
-  const officialPhone = normalizeSaudiPhone(requiredPathText(payload, 'organization.officialPhone', 'رقم التواصل الرسمي', 30));
+  const officialPhone = requiredApplicantPhone(payload, 'organization.officialPhone', 'رقم التواصل الرسمي');
   const coordinatorName = requiredPathText(payload, 'coordinator.name', 'اسم منسق المشروع', 150);
   const coordinatorTitle = requiredPathText(payload, 'coordinator.title', 'المسمى الوظيفي للمنسق', 120);
-  const coordinatorPhone = normalizeSaudiPhone(requiredPathText(payload, 'coordinator.phone', 'جوال المنسق', 30));
+  const coordinatorPhone = requiredApplicantPhone(payload, 'coordinator.phone', 'جوال المنسق');
   const coordinatorEmail = requiredEmail(requiredPathText(payload, 'coordinator.email', 'بريد المنسق', 254));
   requiredPathText(payload, 'covenantRepresentative.name', 'اسم ممثل الجمعية في الميثاق', 150);
   requiredPathText(payload, 'covenantRepresentative.title', 'صفة ممثل الجمعية في الميثاق', 120);
   requiredPathText(payload, 'executive.name', 'اسم المدير التنفيذي', 150);
-  normalizeSaudiPhone(requiredPathText(payload, 'executive.phone', 'جوال المدير التنفيذي', 30));
+  requiredApplicantPhone(payload, 'executive.phone', 'جوال المدير التنفيذي');
   requiredPathText(payload, 'executive.education', 'المؤهل العلمي للمدير التنفيذي', 120);
   requiredInteger(payload, 'executive.experienceYears', 'سنوات خبرة المدير التنفيذي', 0, 80);
   ['fullTime','partTime','activeVolunteers','nonSaudis','universityOrHigher'].forEach((key) => requiredInteger(payload, `team.${key}`, 'بيانات فريق الجمعية', 0, 1_000_000));
   requiredBoolean(payload, 'socialResearcher.exists', 'وجود باحث اجتماعي');
-  if (pathValue(payload, 'socialResearcher.exists') === true) { requiredPathText(payload, 'socialResearcher.name', 'اسم الباحث الاجتماعي', 150); normalizeSaudiPhone(requiredPathText(payload, 'socialResearcher.phone', 'جوال الباحث الاجتماعي', 30)); }
+  if (pathValue(payload, 'socialResearcher.exists') === true) { requiredPathText(payload, 'socialResearcher.name', 'اسم الباحث الاجتماعي', 150); requiredApplicantPhone(payload, 'socialResearcher.phone', 'جوال الباحث الاجتماعي'); }
   requiredInteger(payload, 'readiness.fieldTeamCount', 'عدد أفراد الفريق الميداني', 0, 1_000_000);
   requiredInteger(payload, 'readiness.weeklyDeliveryCapacity', 'القدرة الأسبوعية للتسليم', 0, 10_000_000);
   requiredBoolean(payload, 'readiness.hasReceiptStorage', 'توفر موقع أو آلية للاستلام والحفظ');
@@ -416,10 +445,11 @@ async function validateV2Payload(payload: JsonMap, attachments: Set<string>) {
   requiredBoolean(payload, 'experience.hasRecentInKindProject', 'خبرة مشروع دعم عيني');
   if (pathValue(payload, 'experience.hasRecentInKindProject') === true) {
     requiredPathText(payload, 'experience.projectName', 'اسم المشروع السابق', 200);
-    requiredInteger(payload, 'experience.projectYear', 'سنة المشروع السابق', 2000, new Date().getUTCFullYear());
+    const projectYear = requiredInteger(payload, 'experience.projectYear', 'سنة المشروع السابق', 2000, 9999);
+    if (!riyadhRecentYears().includes(projectYear)) throw new ApiError('APPLICATION_PROJECT_YEAR_INVALID', 'اختر سنة التنفيذ من آخر سنتين ميلاديتين', 400);
     requiredPathText(payload, 'experience.supportType', 'نوع الدعم السابق', 200);
     requiredInteger(payload, 'experience.projectBeneficiaries', 'عدد مستفيدي المشروع السابق', 0, 10_000_000);
-    if (!attachments.has('previousProjectEvidence')) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'شاهد تنفيذ المشروع السابق مطلوب', 400);
+    requiredPathText(payload, 'experience.supporter', 'الجهة الداعمة', 200);
   }
   requiredInteger(payload, 'experience.recentProjectsCount', 'عدد مشاريع الدعم العيني', 0, 1_000_000);
   requiredInteger(payload, 'experience.recentBeneficiariesCount', 'إجمالي مستفيدي المشاريع السابقة', 0, 10_000_000);
@@ -439,6 +469,7 @@ async function validateV2Payload(payload: JsonMap, attachments: Set<string>) {
   const expenses = requiredMoney(payload, 'finance.expenses', 'المصروفات');
   const currentAssets = requiredMoney(payload, 'finance.currentAssets', 'الأصول المتداولة');
   const currentLiabilities = requiredMoney(payload, 'finance.currentLiabilities', 'الخصوم المتداولة');
+  if (!attachments.has('financialStatementsFile')) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'القوائم المالية المعتمدة/المراجعة مطلوبة', 400);
   requiredBoolean(payload, 'planning.hasStrategicPlan', 'الخطة الاستراتيجية');
   if (pathValue(payload, 'planning.hasStrategicPlan') === true && !attachments.has('strategicPlanFile')) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'الخطة الاستراتيجية مطلوبة', 400);
   requiredBoolean(payload, 'planning.hasOperationalPlan', 'الخطة التشغيلية');
@@ -446,10 +477,13 @@ async function validateV2Payload(payload: JsonMap, attachments: Set<string>) {
   requiredBoolean(payload, 'planning.hasPostAidFollowUp', 'متابعة الأسر بعد المساعدة');
   if (pathValue(payload, 'planning.hasPostAidFollowUp') === true) requiredPathText(payload, 'planning.postAidFollowUpDescription', 'آلية متابعة الأسر', 1000);
   requiredBoolean(payload, 'planning.measuresSatisfaction', 'قياس رضا المستفيدين');
-  if (pathValue(payload, 'planning.measuresSatisfaction') === true) requiredPathText(payload, 'planning.satisfactionTool', 'أداة قياس الرضا', 120);
+  if (pathValue(payload, 'planning.measuresSatisfaction') === true) {
+    const satisfactionTool = requiredPathText(payload, 'planning.satisfactionTool', 'أداة قياس الرضا', 120);
+    if (satisfactionTool === 'أخرى') requiredPathText(payload, 'planning.satisfactionOther', 'تحديد أداة قياس الرضا', 200);
+  }
   requiredInteger(payload, 'planning.lastYearProgramsCount', 'عدد برامج السنة الماضية', 0, 1_000_000);
   requiredInteger(payload, 'planning.lastYearBeneficiariesCount', 'عدد مستفيدي السنة الماضية', 0, 10_000_000);
-  for (const key of REQUIRED_ACKNOWLEDGEMENTS) if (pathValue(payload, `acknowledgements.${key}`) !== true) throw new ApiError('APPLICATION_ACKNOWLEDGEMENT_REQUIRED', 'جميع الإقرارات مطلوبة قبل الإرسال', 400);
+  if (pathValue(payload, 'acknowledgements.allAccepted') !== true || pathValue(payload, 'acknowledgements.consentVersion') !== APPLICATION_CONSENT_VERSION || !validIsoTimestamp(pathValue(payload, 'acknowledgements.acceptedAt'))) throw new ApiError('APPLICATION_ACKNOWLEDGEMENT_REQUIRED', 'الموافقة على الإقرارات مطلوبة قبل الإرسال', 400);
   if (!attachments.has('licenseFile')) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'ملف الترخيص مطلوب', 400);
 
   const regionCode = requiredPathText(payload, 'location.regionCode', 'المنطقة الإدارية', 10);
@@ -461,9 +495,8 @@ async function validateV2Payload(payload: JsonMap, attachments: Set<string>) {
     centerCode ? prisma.geographicUnit.findFirst({ where: { officialCode: centerCode, parentOfficialCode: governorateCode, unitType: GeographicUnitType.ADMIN_CENTER, active: true } }) : Promise.resolve(null),
   ]);
   if (!region || !governorate || (centerCode && !center)) throw new ApiError('APPLICATION_LOCATION_INVALID', 'الموقع الإداري المختار غير صالح أو خارج نطاق المشروع', 400);
-  const locationOtherText = readOptionalString(pathValue(payload, 'location.otherText')) || null;
-  if (pathValue(payload, 'location.useOther') === true && !locationOtherText) throw new ApiError('APPLICATION_LOCATION_OTHER_REQUIRED', 'اكتب الموقع غير الموجود ليتم التحقق منه إداريًا', 400);
-  const locationNeedsVerification = Boolean(locationOtherText);
+  const locationOtherText = requiredPathText(payload, 'location.districtCustom', 'الحي', 200);
+  const locationNeedsVerification = true;
   const serviceScope = requiredPathText(payload, 'location.serviceScope', 'نطاق خدمة الجمعية', 1000);
   return { name, licenseNumber, licenseExpiryDate, category, sector, officialEmail, officialPhone, coordinatorName, coordinatorTitle, coordinatorPhone, coordinatorEmail, registeredFamilies, beneficiaryDatabaseUpdatedAt, revenue, expenses, currentAssets, currentLiabilities, regionCode, governorateCode, centerCode, regionName: region.nameAr.replace(/^منطقة\s+/, ''), governorateName: governorate.nameAr.replace(/^(مدينة|محافظة)\s+/, ''), locationOtherText, locationNeedsVerification, serviceScope, notes: readOptionalString(pathValue(payload, 'organization.notes')) || null };
 }
@@ -487,7 +520,7 @@ function buildEligibilityEvidence(payload: JsonMap, attachments: Set<string>, ne
     check('recentExperience', 'خبرة دعم عيني خلال سنتين', pathValue(payload, 'experience.hasRecentInKindProject') === true, ''),
     check('recentExperienceEvidence', 'شاهد المشروع السابق موجود', attachments.has('previousProjectEvidence'), ''),
     check('coordinator', 'منسق المشروع مكتمل', Boolean(pathValue(payload, 'coordinator.name') && pathValue(payload, 'coordinator.phone')), ''),
-    check('acknowledgements', 'الإقرارات مكتملة', REQUIRED_ACKNOWLEDGEMENTS.every((key) => pathValue(payload, `acknowledgements.${key}`) === true), ''),
+    check('acknowledgements', 'الإقرارات مكتملة', pathValue(payload, 'acknowledgements.allAccepted') === true && pathValue(payload, 'acknowledgements.consentVersion') === APPLICATION_CONSENT_VERSION, ''),
   ];
   return { checks, counts: { pass: checks.filter((item) => item.result === 'PASS').length, fail: checks.filter((item) => item.result === 'FAIL').length, needsReview: checks.filter((item) => item.result === 'NEEDS_REVIEW').length }, needsInfoRounds };
 }
@@ -517,14 +550,39 @@ function evidence(entries: Array<[string, unknown]>) { return { evidence: entrie
 function pickRatings(dto: EvaluationV2Dto): EvaluationInput { return { operationalReadiness: dto.operationalReadiness, technicalCapability: dto.technicalCapability, previousExperience: dto.previousExperience, integrityTransparency: dto.integrityTransparency, participationCommitment: dto.participationCommitment, sustainabilityImpact: dto.sustainabilityImpact }; }
 function publicApplicationStage(application: { status: ApplicationStatus; processingStartedAt: Date | null; eligibilityStatus: EligibilityStatus; selectionList: AssociationSelectionList }, needsInfo: boolean) { if (needsInfo || application.eligibilityStatus === EligibilityStatus.NEEDS_INFO) return 'NEEDS_INFO'; if (application.selectionList === AssociationSelectionList.MAIN) return 'MAIN'; if (application.selectionList === AssociationSelectionList.RESERVE) return 'RESERVE'; if (application.eligibilityStatus === EligibilityStatus.FAILED || application.status === ApplicationStatus.REJECTED) return 'INELIGIBLE'; if (application.eligibilityStatus === EligibilityStatus.PASSED) return 'EVALUATION'; if (application.processingStartedAt) return 'PROCESSING'; return 'RECEIVED'; }
 function timeline(stage: string) { const order = ['DRAFT','RECEIVED','PROCESSING','NEEDS_INFO','EVALUATION','MAIN','RESERVE','INELIGIBLE']; const labels: Record<string,string> = { DRAFT:'مسودة محفوظة',RECEIVED:'تم استلام الطلب',PROCESSING:'جاري المعالجة',NEEDS_INFO:'مطلوب استكمال',EVALUATION:'قيد التقييم والمفاضلة',MAIN:'تم اعتماد المشاركة',RESERVE:'قائمة احتياطية',INELIGIBLE:'غير مستوفٍ' }; const current = order.indexOf(stage); return order.filter((item) => !['MAIN','RESERVE','INELIGIBLE'].includes(item) || item === stage).map((item,index) => ({ key:item,label:labels[item],state:index<current?'COMPLETED':index===current?'CURRENT':'UPCOMING' })); }
+// Only projections consumed by participation account/association creation.
+async function correctedAccountIdentity(tx: Prisma.TransactionClient, payload: JsonMap, changed: string[]): Promise<Prisma.AssociationApplicationUpdateInput> {
+  const data: Prisma.AssociationApplicationUpdateInput = {};
+  if (changed.includes('organization.officialEmail')) data.email = requiredEmail(requiredPathText(payload, 'organization.officialEmail', 'البريد الرسمي', 254));
+  if (changed.includes('organization.name')) data.name = requiredPathText(payload, 'organization.name', 'اسم الجمعية', 150);
+  if (changed.includes('organization.category')) data.category = requiredPathText(payload, 'organization.category', 'تصنيف الجمعية', 120);
+  if (changed.includes('organization.officialPhone')) data.phone = requiredApplicantPhone(payload, 'organization.officialPhone', 'رقم التواصل الرسمي');
+  if (changed.includes('location.regionCode') || changed.includes('location.governorateCode')) {
+    const regionCode = requiredPathText(payload, 'location.regionCode', 'المنطقة الإدارية', 10);
+    const governorateCode = requiredPathText(payload, 'location.governorateCode', 'المحافظة أو مقر الإمارة', 10);
+    const region = await tx.geographicUnit.findFirst({ where: { officialCode: regionCode, unitType: GeographicUnitType.REGION, active: true } });
+    const city = await tx.geographicUnit.findFirst({ where: { officialCode: governorateCode, parentOfficialCode: regionCode, unitType: { in: [GeographicUnitType.EMIRATE_SEAT, GeographicUnitType.GOVERNORATE] }, active: true } });
+    if (!region || !city) throw new ApiError('APPLICATION_LOCATION_INVALID', 'الموقع الإداري المختار غير صالح أو خارج نطاق المشروع', 400);
+    data.region = region.nameAr.replace(/^منطقة\s+/, '');
+    data.city = city.nameAr.replace(/^(مدينة|محافظة)\s+/, '');
+    data.regionOfficialCode = regionCode;
+    data.governorateOfficialCode = governorateCode;
+  }
+  return data;
+}
+
 function asMap(value: Prisma.JsonValue | null): JsonMap { return isPlainObject(value) ? value : {}; }
 function isPlainObject(value: unknown): value is JsonMap { return Boolean(value) && typeof value === 'object' && !Array.isArray(value); }
 function pathValue(root: JsonMap, path: string): unknown { let value: unknown = root; for (const key of path.split('.')) { if (!isPlainObject(value)) return undefined; value = value[key]; } return value; }
 function requiredPathText(root: JsonMap, path: string, label: string, max: number): string { return requiredText(readOptionalString(pathValue(root, path)), label, max); }
 function readOptionalString(value: unknown): string { return typeof value === 'string' ? value.trim() : ''; }
+function applicantAccessSubject(draftCode:string,token:string,session:string):string { return sha256Hex(`${draftCode.trim()}:${token.trim()||session.trim()||'anonymous'}`); }
 function requiredBoolean(root: JsonMap, path: string, label: string): boolean { const value = pathValue(root,path); if (typeof value !== 'boolean') throw new ApiError('APPLICATION_VALIDATION_FAILED', `${label}: اختر نعم أو لا`, 400); return value; }
 function requiredInteger(root: JsonMap, path: string, label: string, min: number, max: number): number { const value=Number(pathValue(root,path)); if (!Number.isInteger(value)||value<min||value>max) throw new ApiError('APPLICATION_VALIDATION_FAILED', `${label}: أدخل رقمًا صحيحًا صالحًا`, 400); return value; }
 function requiredMoney(root: JsonMap, path: string, label: string): number { const raw=pathValue(root,path); const value=typeof raw==='string'?Number(raw.replace(/,/g,'')):Number(raw); if(!Number.isFinite(value)||value<0||value>999_999_999_999_999) throw new ApiError('APPLICATION_VALIDATION_FAILED', `${label}: أدخل مبلغًا صالحًا غير سالب`,400); return Math.round(value*100)/100; }
+function requiredApplicantPhone(root: JsonMap, path: string, label: string): string { const value=requiredPathText(root,path,label,30); if(!/^5\d{8}$/.test(value)) throw new ApiError('APPLICATION_PHONE_INVALID','تحقق من أرقام الجوال: يجب إدخال 9 أرقام تبدأ بالرقم 5.',400); return `0${value}`; }
+function riyadhRecentYears(now=new Date()):number[]{ const year=Number(new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Riyadh',year:'numeric'}).format(now)); return [year,year-1]; }
+function validIsoTimestamp(value:unknown):boolean { if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) return false; return Number.isFinite(Date.parse(value)); }
 function parseDate(raw: string, label: string): Date { const match=/^(\d{4})-(\d{2})-(\d{2})$/.exec(raw); if(!match) throw new ApiError('APPLICATION_VALIDATION_FAILED', `${label} غير صالح`,400); const date=new Date(Date.UTC(Number(match[1]),Number(match[2])-1,Number(match[3]))); if(date.getUTCFullYear()!==Number(match[1])||date.getUTCMonth()+1!==Number(match[2])||date.getUTCDate()!==Number(match[3])) throw new ApiError('APPLICATION_VALIDATION_FAILED',`${label} غير صالح`,400); return date; }
 function safeDate(value: unknown): Date | null { try { return typeof value==='string'?parseDate(value,'التاريخ'):null; } catch { return null; } }
 function todayRiyadh(): Date { const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()); const get=(type:string)=>parts.find((part)=>part.type===type)!.value; return new Date(`${get('year')}-${get('month')}-${get('day')}T00:00:00.000Z`); }

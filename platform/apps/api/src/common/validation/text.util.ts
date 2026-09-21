@@ -18,8 +18,9 @@ export function requiredText(value: unknown, label: string, max: number): string
 
 export function requiredEmail(value: unknown): string {
   const email = String(value ?? '').trim().toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 180) {
-    throw new BadRequestException('البريد الإلكتروني غير صحيح');
+  const practicalEmail = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$/;
+  if (!practicalEmail.test(email) || email.length > 180) {
+    throw new BadRequestException('أدخل بريدًا إلكترونيًا صحيحًا، مثل name@example.com');
   }
   return email;
 }
