@@ -35,7 +35,7 @@ jobs:
       # و OBJECT_STORAGE_EXTERNAL=true يمنع الاختبارات من تشغيل s3rver.
       # الاختبارات نفسها بلا أي تغيير كود — الفارق كله في متغيرات البيئة.
       minio:
-        image: minio/minio:edge-cicd
+        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
         env:
           MINIO_ROOT_USER: alzad_ci_storage
           MINIO_ROOT_PASSWORD: alzad_ci_storage_password
