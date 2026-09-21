@@ -55,6 +55,42 @@ npm run dev:api    # طرفية منفصلة
 npm run dev:web    # طرفية أخرى
 ```
 
+## تشغيل اختبارات API E2E التدميرية بأمان
+
+هذه الاختبارات تنفذ `deleteMany`، ولذلك لا تُشغَّل على قاعدة تطوير عادية أو
+أي مورد إنتاج. أنشئ قاعدة PostgreSQL **منفصلة مخصصة للاختبارات فقط** باسم
+واضح مثل `alzad_platform_test`، وطبّق عليها الـmigrations بعد التحقق من
+الاسم والمضيف. لا تستخدم رابط Supabase/Hostinger أو تخزين الإنتاج.
+
+من جذر `platform/` في PowerShell، وبعد تجهيز قاعدة الاختبار المعزولة:
+
+```powershell
+$env:NODE_ENV = 'test'
+$env:DATABASE_URL = 'postgresql://test_user:test_password@localhost:5432/alzad_platform_test?schema=public'
+$env:ALLOW_DESTRUCTIVE_E2E = 'true'
+$env:E2E_ALLOWED_DATABASE_NAMES = 'alzad_platform_test'
+$env:OBJECT_STORAGE_BUCKET = 'alzad-platform-test'
+$env:E2E_ALLOWED_BUCKET_NAMES = 'alzad-platform-test'
+$env:E2E_INIT_CANARY = 'true'
+npx ts-node --transpile-only apps/api/test/utils/init-test-db-roles.ts
+npm run migrate:deploy --workspace packages/db
+npx ts-node --transpile-only apps/api/test/utils/create-test-canary.ts
+Remove-Item Env:E2E_INIT_CANARY
+npm run test:e2e --workspace apps/api -- --runInBand
+```
+
+القيم أعلاه أمثلة اختبارية فقط وليست بيانات اعتماد حقيقية. سكربت إنشاء
+الـcanary لا يعمل إلا عند تحقق شروط البيئة والـallowlist، وينشئ جدول
+`e2e_safety_canary` داخل قاعدة الاختبار فقط. يفحص Jest وجود العلامة من
+قاعدة البيانات المتصلة **قبل تحميل أي ملف اختبار**؛ غيابها أو تعذّر
+الاتصال يوقف الاختبارات قبل أي seed أو cleanup. في CI تُنشأ قاعدة
+`alzad_platform_ci` وbucket اختبار محلي، ثم تُنشأ العلامة وتُفحَص قبل
+البذر. لا توجد migration إنتاجية لهذا الجدول.
+
+إذا استُخدم MinIO خارجي للاختبارات، اضبط
+`OBJECT_STORAGE_EXTERNAL=true` و`OBJECT_STORAGE_ENDPOINT` على عنوان
+محلي (`localhost` أو `127.0.0.1`) فقط. لا تستخدم endpoint إنتاجيًا.
+
 ## أوامر شائعة (من جذر `platform/`)
 
 | الأمر | الوصف |

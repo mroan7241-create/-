@@ -12,6 +12,19 @@ import { LEGACY_APPLICATION_QUESTIONS } from '@alzad/shared';
 /** كل جمعية/طلب تُنشئه اختبارات NODE-2 يحمل هذه العلامة في الاسم — تجعل التنظيف دقيقًا ولا يمسّ بذور seed. */
 export const NODE2_MARKER = 'NODE2E2E';
 
+// Legacy NODE-2 uploads have their own keys. Other suites can leave valid
+// draft, receipt, or delivery files in the shared isolated E2E database.
+const NODE2_FILE_FILTER = {
+  OR: [
+    { objectKey: { startsWith: 'association-licenses/' } },
+    { objectKey: { startsWith: 'application-initial-beneficiaries/' } },
+  ],
+};
+
+export async function countNode2FileObjects(): Promise<number> {
+  return prisma.fileObject.count({ where: NODE2_FILE_FILTER });
+}
+
 // ————————————————————————————————————————————————
 // صور اختبار صغيرة حقيقية (magic bytes صحيحة فعلًا)
 // ————————————————————————————————————————————————
@@ -148,7 +161,7 @@ export async function cleanNode2State(): Promise<void> {
   await prisma.applicationAnswer.deleteMany({});
   await prisma.associationApplication.deleteMany({});
   await prisma.idempotencyKey.deleteMany({});
-  await prisma.fileObject.deleteMany({});
+  await prisma.fileObject.deleteMany({ where: NODE2_FILE_FILTER });
 
   const associations = await prisma.association.findMany({
     where: { name: { contains: NODE2_MARKER } },

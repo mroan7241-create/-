@@ -1,6 +1,7 @@
 import * as argon2 from 'argon2';
 import { prisma, AccountRole, AccountStatus, AssociationStatus, AuthCredentialType } from '@alzad/db';
 import { delegateCredentialLookupHash, normalizeDelegateCode } from '../../src/common/crypto.util';
+import { assertE2eNotTargetingProduction } from './production-target.guard';
 
 export async function hashSecret(secret: string): Promise<string> {
   return argon2.hash(secret, { type: argon2.argon2id });
@@ -8,6 +9,7 @@ export async function hashSecret(secret: string): Promise<string> {
 
 /** ينظّف كل الجداول التي تنتجها اختبارات NODE-1 — لا يمسّ الحسابات/الجمعيات الثابتة نفسها. */
 export async function cleanAuthState(): Promise<void> {
+  assertE2eNotTargetingProduction();
   await prisma.authRateLimit.deleteMany({});
   await prisma.passwordResetToken.deleteMany({});
   await prisma.authSession.deleteMany({});
@@ -58,6 +60,7 @@ interface TestFixtures {
  * مرة واحدة في beforeAll لكل ملف اختبار — الجداول idempotent عبر upsert.
  */
 export async function seedTestFixtures(): Promise<TestFixtures> {
+  assertE2eNotTargetingProduction();
   const activeAssociation = await prisma.association.upsert({
     where: { publicCode: 'E2E-ASC-ACTIVE' },
     update: { status: AssociationStatus.ACTIVE },

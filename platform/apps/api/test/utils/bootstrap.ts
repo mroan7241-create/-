@@ -8,6 +8,7 @@ import { HttpExceptionFilter } from '../../src/common/http-exception.filter';
 import { JSON_BODY_LIMIT } from '../../src/common/body-limit.const';
 import { EmailService } from '../../src/modules/auth/email/email.service';
 import { FakeEmailService } from '../../src/modules/auth/email/fake-email.service';
+import { trustedProxyHops } from '../../src/config/proxy.config';
 
 /**
  * يبني تطبيق Nest حقيقي بنفس إعدادات main.ts (cookieParser + ValidationPipe
@@ -23,6 +24,7 @@ export async function createTestApp(): Promise<{ app: INestApplication; fakeEmai
     .compile();
 
   const app = moduleRef.createNestApplication({ bodyParser: false });
+  app.getHttpAdapter().getInstance().set('trust proxy', trustedProxyHops());
   app.use(json({ limit: JSON_BODY_LIMIT }));
   app.use(urlencoded({ extended: true, limit: JSON_BODY_LIMIT }));
   app.use(cookieParser());

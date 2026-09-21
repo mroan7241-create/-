@@ -12,6 +12,7 @@ import { AllowMustChangePassword } from './decorators/allow-must-change-password
 import { CurrentUser } from './decorators/current-user.decorator';
 import type { AuthContext } from './auth.types';
 import { AccountRole } from '@alzad/db';
+import { PublicSourceLimit } from '../../common/public-source-limit.guard';
 
 function requestMeta(req: Request) {
   return { ipAddress: req.ip, userAgent: req.get('user-agent') ?? undefined };
@@ -46,6 +47,7 @@ export class AuthController {
 
   @Public()
   @Post('login')
+  @PublicSourceLimit('auth-login', 60, 900)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'تسجيل دخول ADMIN/ASSOCIATION/ABANMI (بريد+كلمة مرور) أو DELEGATE (رمز دخول)' })
   async login(@Body() dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
@@ -88,6 +90,7 @@ export class AuthController {
 
   @Public()
   @Post('password-reset/request')
+  @PublicSourceLimit('password-reset-request', 30, 900)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'طلب استعادة كلمة مرور — رد موحَّد دائمًا، بلا كشف حالة الحساب' })
   async requestPasswordReset(@Body() dto: RequestPasswordResetDto) {
@@ -96,6 +99,7 @@ export class AuthController {
 
   @Public()
   @Post('password-reset/confirm')
+  @PublicSourceLimit('password-reset-confirm', 60, 900)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'إتمام استعادة كلمة المرور برمز صالح' })
   async confirmPasswordReset(@Body() dto: ConfirmPasswordResetDto) {

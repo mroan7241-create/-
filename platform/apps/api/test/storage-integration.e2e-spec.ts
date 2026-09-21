@@ -3,7 +3,7 @@ import { INestApplication } from '@nestjs/common';
 import { prisma } from '@alzad/db';
 import { createTestApp } from './utils/bootstrap';
 import { cleanAuthState, seedTestFixtures } from './utils/fixtures';
-import { JPEG_1X1, PNG_1X1, cleanNode2State, submitApplication, validApplicationPayload } from './utils/node2-fixtures';
+import { JPEG_1X1, PNG_1X1, cleanNode2State, countNode2FileObjects, submitApplication, validApplicationPayload } from './utils/node2-fixtures';
 import { clearLicenseObjects, listLicenseObjectKeys, objectExists, startTestStorage, stopTestStorage } from './utils/storage-harness';
 import { StorageService } from '../src/modules/files/storage.service';
 import { PublicCodeService } from '../src/common/public-code.service';
@@ -110,7 +110,7 @@ describe('NODE-2 — تكامل تخزين الكائنات (خادم S3 حقي�
     spy.mockRestore();
 
     expect(await listLicenseObjectKeys()).toHaveLength(0);
-    expect(await prisma.fileObject.count()).toBe(0);
+    expect(await countNode2FileObjects()).toBe(0);
     expect(await prisma.associationApplication.count()).toBe(0);
   });
 

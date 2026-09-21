@@ -2,6 +2,7 @@ import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { prisma } from '@alzad/db';
 import { Public } from '../common/decorators/public.decorator';
+import { emailReadiness } from '../config/email.config';
 
 interface HealthResponse {
   status: 'ok' | 'degraded';
@@ -9,6 +10,7 @@ interface HealthResponse {
   checks: {
     api: 'ok';
     postgres: 'ok' | 'error';
+    email: 'ok' | 'development-only' | 'error';
   };
 }
 
@@ -26,13 +28,14 @@ export class HealthController {
       postgres = 'error';
     }
 
+    const email = emailReadiness();
     const response: HealthResponse = {
-      status: postgres === 'ok' ? 'ok' : 'degraded',
+      status: postgres === 'ok' && email !== 'error' ? 'ok' : 'degraded',
       timestamp: new Date().toISOString(),
-      checks: { api: 'ok', postgres },
+      checks: { api: 'ok', postgres, email },
     };
 
-    if (postgres === 'error') {
+    if (postgres === 'error' || email === 'error') {
       throw new ServiceUnavailableException(response);
     }
     return response;

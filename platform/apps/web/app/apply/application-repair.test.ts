@@ -14,6 +14,36 @@ test('geolocation allows only self and preserves camera/microphone restrictions'
   assert.equal(policy, 'camera=(), microphone=(), geolocation=(self)');
 });
 
+test('security headers keep local development usable and enforce production HTTPS', async () => {
+  const requireConfig = createRequire(import.meta.url);
+  const modulePath = requireConfig.resolve('../../next.config.js');
+  const previous = process.env.NODE_ENV;
+  try {
+    Reflect.set(process.env, 'NODE_ENV', 'development');
+    delete requireConfig.cache[modulePath];
+    const devHeaders = (await requireConfig(modulePath).headers())[0].headers as { key: string; value: string }[];
+    const devCsp = devHeaders.find((header) => header.key === 'Content-Security-Policy')?.value ?? '';
+    assert.match(devCsp, /'unsafe-eval'/);
+    assert.match(devCsp, /http:\/\/localhost/);
+    assert.equal(devHeaders.some((header) => header.key === 'Strict-Transport-Security'), false);
+
+    Reflect.set(process.env, 'NODE_ENV', 'production');
+    delete requireConfig.cache[modulePath];
+    const prodHeaders = (await requireConfig(modulePath).headers())[0].headers as { key: string; value: string }[];
+    const prodCsp = prodHeaders.find((header) => header.key === 'Content-Security-Policy')?.value ?? '';
+    assert.doesNotMatch(prodCsp, /'unsafe-eval'|http:\/\/localhost/);
+    assert.match(prodCsp, /frame-ancestors 'none'/);
+    assert.match(prodCsp, /upgrade-insecure-requests/);
+    for (const key of ['X-Content-Type-Options', 'Referrer-Policy', 'Permissions-Policy', 'Strict-Transport-Security']) {
+      assert.equal(prodHeaders.some((header) => header.key === key), true, key);
+    }
+  } finally {
+    if (previous === undefined) Reflect.deleteProperty(process.env, 'NODE_ENV');
+    else Reflect.set(process.env, 'NODE_ENV', previous);
+    delete requireConfig.cache[modulePath];
+  }
+});
+
 for (const final of ['A', 'C']) {
   test(`autosave A -> B in flight -> ${final} persists the latest UI without stale success`, async () => {
     let release!: () => void;

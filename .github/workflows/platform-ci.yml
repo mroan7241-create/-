@@ -2,7 +2,7 @@ name: platform-ci
 
 on:
   push:
-    branches: [platform/node-migration]
+    branches: [platform/node-migration, release/applicant-step1-20260921]
     paths: ['platform/**', '.github/workflows/platform-ci.yml']
   pull_request:
     paths: ['platform/**', '.github/workflows/platform-ci.yml']
@@ -50,6 +50,9 @@ jobs:
     env:
       DATABASE_URL: postgresql://alzad_ci:alzad_ci_password@localhost:5432/alzad_platform_ci?schema=public
       NODE_ENV: test
+      ALLOW_DESTRUCTIVE_E2E: 'true'
+      E2E_ALLOWED_DATABASE_NAMES: alzad_platform_ci
+      E2E_ALLOWED_BUCKET_NAMES: alzad-platform-test
 
       OBJECT_STORAGE_EXTERNAL: 'true'
       OBJECT_STORAGE_ENDPOINT: http://localhost:9000
@@ -69,7 +72,10 @@ jobs:
           cache-dependency-path: platform/package-lock.json
 
       - name: install
-        run: npm install --workspaces --include-workspace-root
+        run: npm ci --workspaces --include-workspace-root
+
+      - name: dependency tree
+        run: npm ls --all=false
 
       # NODE-2: bucket خاص تمامًا — لا سياسة وصول عام بحال. المسار الوحيد
       # للقراءة هو signed URL قصير العمر يُصدره endpoint محروس بـADMIN.
@@ -81,20 +87,24 @@ jobs:
           "$RUNNER_TEMP/mc" mb --ignore-existing "ci/$OBJECT_STORAGE_BUCKET"
           "$RUNNER_TEMP/mc" anonymous set none "ci/$OBJECT_STORAGE_BUCKET"
 
-      - name: build shared package
-        run: npm run build --workspace packages/shared
-
       - name: prisma validate
         run: npm run prisma:validate --workspace packages/db
 
-      - name: prisma generate
-        run: npm run prisma:generate --workspace packages/db
+      - name: provision Supabase-compatible NOLOGIN roles in isolated CI PostgreSQL
+        run: npx ts-node --transpile-only apps/api/test/utils/init-test-db-roles.ts
+        env:
+          E2E_INIT_CANARY: 'true'
 
       - name: prisma migrate deploy (against CI PostgreSQL — schema only, no data)
         run: npm run migrate:deploy --workspace packages/db
 
-      - name: build db package
-        run: npm run build --workspace packages/db
+      - name: provision E2E canary in isolated CI database
+        run: npx ts-node --transpile-only apps/api/test/utils/create-test-canary.ts
+        env:
+          E2E_INIT_CANARY: 'true'
+
+      - name: verify E2E safety before any seed or cleanup
+        run: npm run test:e2e --workspace apps/api -- --runInBand test/safety-preflight.e2e-spec.ts
 
       - name: seed CI database (idempotent — reference data + dev/test fixtures)
         run: npm run db:seed
@@ -130,10 +140,7 @@ jobs:
       - name: API e2e / integration tests (NODE-1 + NODE-2)
         run: npm run test:e2e --workspace apps/api
 
-      - name: build api
-        run: npm run build --workspace apps/api
-
-      - name: build web
-        run: npm run build --workspace apps/web
+      - name: build all workspaces
+        run: npm run build
         env:
           NEXT_PUBLIC_API_BASE_URL: http://localhost:3001/api/v1

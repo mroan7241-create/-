@@ -260,18 +260,28 @@ offline) لإيجاد الرمز الأصلي من الـhash المخزَّن �
 
 ---
 
-## 10) `EmailService` — تجريد بلا مزوّد إنتاجي بعد
+## 10) `EmailService` — SMTP إلزامي في الإنتاج
 
-واجهة (`EmailService`) بطريقتين: `sendPasswordResetCode`،
-`sendSecurityAlert`. NODE-1 يوفّر تطبيقين فقط:
+واجهة `EmailService` ترسل استعادة كلمة المرور والتنبيهات وروابط الطلب
+والملخصات التشغيلية. التطبيقات:
 - `DevEmailService` — يسجّل فقط أن رسالة "كانت لتُرسَل"، **لا يطبع
-  الرمز أبدًا** في أي بيئة (حتى Development).
+  الرمز أبدًا**؛ متاح فقط في development/test.
 - `FakeEmailService` — للاختبارات فقط، يلتقط آخر رسالة/رمز في الذاكرة
   (`app.get(EmailService)` بعد `overrideProvider` في اختبارات e2e).
+- `SmtpEmailService` — البريد الإنتاجي الحقيقي. لا تُرسَل رسالة تلقائيًا
+  عند الإقلاع أو في اختبارات الإعداد.
 
-**لا مزوّد بريد إنتاجي حقيقي متصل في NODE-1** — قرار مؤجَّل عمدًا (خارج
-النطاق صراحة). عقد `Production adapter` مستقبلي يُضاف لاحقًا خلف نفس
-الواجهة بلا تغيير في `AuthService`.
+في `NODE_ENV=production` يمنع `assertProductionEmailConfigured()` الإقلاع
+قبل `listen` ما لم يكن `EMAIL_PROVIDER=SMTP` وجميع متغيرات SMTP صالحة،
+و`PUBLIC_WEB_URL` يبدأ بـHTTPS. رسالة الخطأ تسرد **أسماء المتغيرات**
+فقط، بلا قيم. `GET /health` يضيف `checks.email` بقيمة `ok` أو
+`development-only` أو `error` دون كشف إعدادات أو أسرار.
+
+Smoke test بعد النشر (بقرار المشغّل فقط، لا ينفذ آليًا): راجع
+`checks.email=ok`، ثم استخدم حسابًا تجريبيًا مخصصًا وعنوان بريد
+اختبار يملكه المشغّل لطلب استعادة كلمة المرور مرة واحدة، وتحقق من
+الاستلام ومن عدم ظهور الرمز أو الرابط أو البريد الكامل في logs. لا
+تستخدم حسابًا حقيقيًا أو عنوانًا غير مخصص للاختبار.
 
 ---
 
@@ -286,7 +296,9 @@ attempt_count, expires_at, created_at, updated_at،
 
 التحديث ذرّي عبر استعلام SQL خام واحد (`INSERT ... ON CONFLICT
 (scope, subject_hash) DO UPDATE ...  RETURNING attempt_count`) لضمان
-السلامة تحت التزامن.
+السلامة تحت التزامن. النافذة **ثابتة**: لا يتغيّر `window_started_at`
+أو `expires_at` قبل انتهائها، حتى لو استمرت الطلبات المرفوضة؛ وبعد
+انتهائها يبدأ عدّاد جديد. يتوقف العدّاد عند `limit+1` لتفادي تضخمه.
 
 | Scope | الحد | النافذة |
 |---|---|---|
@@ -296,11 +308,34 @@ attempt_count, expires_at, created_at, updated_at،
 | `password-reset-verify` | 10 | 15 دقيقة |
 | `association-password-reset` (مُعرَّف، غير مُستهلَك بعد في NODE-1) | 5 | 15 دقيقة |
 
-**استراتيجية التنظيف** (موثَّقة، غير منفَّذة كـcron في NODE-1): صفوف
-`auth_rate_limits` حيث `expires_at < now() - interval '1 day'` قابلة
-للحذف الآمن دوريًا (job مستقبلي أو `DELETE` مجدول) — لا حاجة تشغيلية
-فورية لأن الجدول صغير جدًا (صف واحد لكل `scope+subject` النشط فقط) ولا
-يُقرَأ إلا بمفتاحه الفريد.
+توجد طبقة مستقلة على عنوان المصدر لمسارات الدخول واستعادة كلمة المرور
+ومسارات الطلب العامة. حدود الدخول: 60 محاولة/15 دقيقة لكل مصدر، مقابل
+8/15 دقيقة لكل بريد أو رمز مندوب. طلب الاستعادة: 30/15 دقيقة للمصدر
+مقابل 5/15 دقيقة للبريد. حفظ وقراءة المسودة ومسارات المتابعة لها كذلك
+حد مصدر مستقل عن حد الرمز/المسودة. كل subject، بما فيه IP، يُخزَّن
+كـHMAC فقط في `auth_rate_limits`.
+
+`TRUST_PROXY_HOPS=0` افتراضيًا؛ بذلك لا يُصدَّق `X-Forwarded-For`
+القادم من العميل. إن كان الـAPI خلف reverse proxy موثوق **ولا يمكن
+الوصول إليه مباشرة**، اضبط عدد hops الفعلي فقط (`1` إلى `3`). لا تستخدم
+`trust proxy=true`. يوصى كذلك بوضع حد إضافي عند CDN/reverse proxy،
+لكن ذلك لا يحل محل حدود التطبيق.
+
+تنظيف الصفوف المنتهية يعمل كل خمس دقائق، بحد 5000 صف في الدورة، عبر
+فهرس `expires_at` و`FOR UPDATE SKIP LOCKED`؛ لا يحذف نافذة نشطة ولا
+ينفذ حذفًا عند كل طلب. عند الحاجة لتنظيف يدوي، تأكد أولًا من هوية قاعدة
+البيانات ثم نفذ دفعة محدودة فقط (باستخدام اتصال التشغيل المحفوظ خارج
+المستودع، ولا تطبع الرابط أو كلمة المرور):
+
+```sql
+SELECT current_database(), inet_server_addr(), inet_server_port();
+WITH expired AS (
+  SELECT id FROM auth_rate_limits WHERE expires_at < now()
+  ORDER BY expires_at LIMIT 5000 FOR UPDATE SKIP LOCKED
+)
+DELETE FROM auth_rate_limits AS limits USING expired
+WHERE limits.id = expired.id;
+```
 
 ---
 

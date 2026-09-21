@@ -31,8 +31,15 @@ export interface ApplicationAccessEmailParams {
   items: ApplicationAccessEmailItem[];
 }
 
+export interface OperationalDigestEmailParams {
+  to: string;
+  subject: string;
+  text: string;
+}
+
 export abstract class EmailService {
   abstract sendPasswordResetCode(params: PasswordResetEmailParams): Promise<void>;
   abstract sendSecurityAlert(params: SecurityAlertEmailParams): Promise<void>;
   abstract sendApplicationAccess(params: ApplicationAccessEmailParams): Promise<void>;
+  abstract sendOperationalDigest(params: OperationalDigestEmailParams): Promise<void>;
 }

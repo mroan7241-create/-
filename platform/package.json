@@ -3,13 +3,20 @@
   "private": true,
   "description": "منصة جمعية الزاد المستقلة (Node.js/NestJS/Next.js/PostgreSQL) — NODE-0: تأسيس فقط، لا نقل منطق أعمال كامل بعد. المرجع الوحيد للميزات هو الفرع القديم claude/code-index-review-kz5k4u.",
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.0.0",
+    "npm": ">=11.0.0 <12"
   },
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
+  "overrides": {
+    "multer": "^2.4.0",
+    "qs": "^6.16.0"
+  },
   "scripts": {
+    "postinstall": "node scripts/ensure-prisma-client.cjs && npm run build --workspace packages/shared && npm run build --workspace packages/db",
+    "prebuild": "node scripts/ensure-prisma-client.cjs",
     "lint": "npm run lint --workspace apps/api && npm run lint --workspace apps/web",
     "typecheck": "npm run typecheck --workspace apps/api && npm run typecheck --workspace apps/web && npm run typecheck --workspace packages/db && npm run typecheck --workspace packages/shared",
     "test": "npm run test --workspace apps/api --if-present && npm run test --workspace apps/web --if-present && npm run test --workspace packages/db --if-present",
@@ -24,10 +31,5 @@
   "devDependencies": {
     "typescript": "^5.6.3",
     "uuid": "^11.1.1"
-  },
-  "overrides": {
-    "exceljs": {
-      "uuid": "^11.1.1"
-    }
   }
 }

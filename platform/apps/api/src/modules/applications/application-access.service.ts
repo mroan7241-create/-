@@ -120,8 +120,22 @@ export class ApplicationAccessService {
     const draft = await prisma.associationApplicationDraft.findUnique({ where: { id: draftId }, include: { submittedApplication: true } });
     const email = normalizeEmail(draft?.submittedApplication?.email ?? draft?.contactEmail ?? '');
     if (!draft || !email) return;
-    await this.issueAndSend(email, [{ id: draft.id, publicCode: draft.publicCode, status: draft.status, name: draft.submittedApplication?.name ?? 'الجمعية', needsInfo: false }],
+    await this.issueAndSend(email, [{ id: draft.id, publicCode: draft.publicCode, displayCode: draft.submittedApplication?.publicCode, status: draft.status, name: draft.submittedApplication?.name ?? 'الجمعية', needsInfo: false }],
       'متابعة طلب المشاركة — مشروع الأجهزة الكهربائية', 'تم استلام طلبك. استخدم الرابط الآمن لمتابعة حالته.');
+  }
+
+  async sendSelectionDecision(applicationId: string): Promise<void> {
+    const application = await prisma.associationApplication.findUnique({
+      where: { id: applicationId }, include: { sourceDraft: true },
+    });
+    const draft = application?.sourceDraft;
+    const email = normalizeEmail(application?.email ?? '');
+    if (!application || !draft || !email) throw new ApiError('APPLICATION_EMAIL_UNAVAILABLE', 'تعذر إرسال قرار الاختيار لعدم وجود بريد أو مسودة مرتبطة', 409);
+    const intro = application.selectionList === 'MAIN'
+      ? 'تم اختيار جمعيتكم في القائمة الأساسية. يمكنكم متابعة متطلبات التهيئة عبر رابط الطلب الآمن.'
+      : 'تم اختيار جمعيتكم في قائمة الاحتياط. يمكنكم متابعة حالة الطلب عبر الرابط الآمن.';
+    await this.issueAndSend(email, [{ id: draft.id, publicCode: draft.publicCode, displayCode: application.publicCode, status: draft.status, name: application.name, needsInfo: false }],
+      'قرار اختيار الجمعية — مشروع الأجهزة الكهربائية', intro);
   }
 
   async sendNeedsInfo(applicationId: string): Promise<void> {
@@ -142,7 +156,7 @@ export class ApplicationAccessService {
 
   private async issueAndSend(
     email: string,
-    drafts: Array<{ id: string; publicCode: string; status: ApplicationDraftStatus; name: string; needsInfo: boolean }>,
+    drafts: Array<{ id: string; publicCode: string; displayCode?: string; status: ApplicationDraftStatus; name: string; needsInfo: boolean }>,
     subject: string,
     intro: string,
   ) {
@@ -173,12 +187,27 @@ export class ApplicationAccessService {
         intro,
         items: issued.map(({ draft, raw }) => ({
           label: draft.status === ApplicationDraftStatus.ACTIVE ? 'مسودة' : draft.needsInfo ? 'طلب يحتاج استكمالًا' : 'طلب',
-          code: draft.publicCode,
+          code: draft.displayCode ?? draft.publicCode,
           url: `${base}/apply/access?token=${encodeURIComponent(raw)}`,
         })),
       });
+      await prisma.auditLog.createMany({ data: issued.map((item) => ({
+        actorAccountId: null,
+        actorRole: null,
+        action: 'APPLICATION_ACCESS_EMAIL_SENT',
+        entityType: 'association_application_drafts',
+        entityId: item.draft.id,
+        metadata: { purpose: item.draft.needsInfo ? 'NEEDS_INFO' : item.draft.status === ApplicationDraftStatus.ACTIVE ? 'DRAFT_RESUME' : 'SUBMITTED_STATUS' },
+      })) });
     } catch (error) {
       await prisma.applicationAccessToken.updateMany({ where: { tokenHash: { in: issued.map((item) => sha256Hex(item.raw)) }, consumedAt: null }, data: { consumedAt: new Date() } });
+      await prisma.auditLog.createMany({ data: issued.map((item) => ({
+        actorAccountId: null,
+        actorRole: null,
+        action: 'APPLICATION_ACCESS_EMAIL_FAILED',
+        entityType: 'association_application_drafts',
+        entityId: item.draft.id,
+      })) });
       throw error;
     }
   }

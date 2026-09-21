@@ -16,6 +16,7 @@ import { EligibilityDecisionDto, EvaluationDto, SelectionCommitDto } from './dto
 import { ApplicationV2Service } from './application-v2.service';
 import { ApplicationAttachmentDto, BulkStartProcessingDto, CreateApplicationDraftDto, CreateInformationRequestDto, ExchangeApplicationAccessDto, RequestApplicationAccessDto, SaveApplicationDraftDto, SelectionDecisionDto, SubmitApplicationDraftDto, SubmitInformationResponseDto } from './dto/application-v2.dto';
 import { APPLICANT_SESSION_COOKIE, ApplicationAccessService } from './application-access.service';
+import { PublicSourceLimit } from '../../common/public-source-limit.guard';
 
 @ApiTags('applications')
 @Controller()
@@ -28,20 +29,24 @@ export class ApplicationsController {
 
   @Public()
   @Post('association-applications/drafts')
+  @PublicSourceLimit('application-draft-create', 60, 3600)
   createDraft(@Body() dto: CreateApplicationDraftDto, @Req() req: Request) {
     return this.applicationV2.createDraft(dto.clientRequestId, dto.website, req.ip || req.socket.remoteAddress || 'unknown');
   }
 
   @Public()
   @Get('association-applications/drafts/:draftCode')
+  @PublicSourceLimit('application-draft-read', 240, 3600)
   loadDraft(@Param('draftCode') draftCode: string, @Headers('x-application-resume-token') token = '', @Req() req: Request) { return this.applicationV2.loadDraft(draftCode, token, req.cookies?.[APPLICANT_SESSION_COOKIE] ?? ''); }
 
   @Public()
   @Put('association-applications/drafts/:draftCode')
+  @PublicSourceLimit('application-draft-save', 360, 3600)
   saveDraft(@Param('draftCode') draftCode: string, @Headers('x-application-resume-token') token: string = '', @Body() dto: SaveApplicationDraftDto, @Req() req: Request) { return this.applicationV2.saveDraft(draftCode, token, dto.revision, dto.payload, req.cookies?.[APPLICANT_SESSION_COOKIE] ?? ''); }
 
   @Public()
   @Post('association-applications/drafts/:draftCode/attachments')
+  @PublicSourceLimit('application-draft-attachment', 120, 3600)
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: LICENSE_FILE_MAX_BYTES + 1024 } }))
   uploadDraftAttachment(@Param('draftCode') draftCode: string, @Headers('x-application-resume-token') token: string = '', @Body() dto: ApplicationAttachmentDto, @Req() req: Request, @UploadedFile() file?: Express.Multer.File) {
     if (!file) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'الملف مطلوب', 400);
@@ -50,18 +55,22 @@ export class ApplicationsController {
 
   @Public()
   @Post('association-applications/drafts/:draftCode/submit')
+  @PublicSourceLimit('application-draft-submit', 60, 3600)
   submitDraft(@Param('draftCode') draftCode: string, @Headers('x-application-resume-token') token: string = '', @Body() dto: SubmitApplicationDraftDto, @Req() req: Request) { return this.applicationV2.submitDraft(draftCode, token, dto.revision, req.cookies?.[APPLICANT_SESSION_COOKIE] ?? ''); }
 
   @Public()
   @Get('association-applications/track/:draftCode')
+  @PublicSourceLimit('application-track', 240, 3600)
   trackV2(@Param('draftCode') draftCode: string, @Headers('x-application-resume-token') token: string = '', @Req() req: Request) { return this.applicationV2.publicStatus(draftCode, token, req.cookies?.[APPLICANT_SESSION_COOKIE] ?? ''); }
 
   @Public()
   @Post('association-applications/track/:draftCode/information/:requestId')
+  @PublicSourceLimit('application-information-submit', 60, 3600)
   submitInformation(@Param('draftCode') draftCode: string, @Param('requestId', ParseUUIDPipe) requestId: string, @Headers('x-application-resume-token') token: string = '', @Body() dto: SubmitInformationResponseDto, @Req() req: Request) { return this.applicationV2.submitInformation(draftCode, token, requestId, dto, req.cookies?.[APPLICANT_SESSION_COOKIE] ?? ''); }
 
   @Public()
   @Post('association-applications/access/request')
+  @PublicSourceLimit('application-access-request', 30, 3600)
   @HttpCode(HttpStatus.OK)
   requestAccess(@Body() dto: RequestApplicationAccessDto, @Req() req: Request) {
     return this.applicationAccess.requestAccess(dto.email, req.ip || req.socket.remoteAddress || 'unknown');
@@ -69,6 +78,7 @@ export class ApplicationsController {
 
   @Public()
   @Post('association-applications/access/exchange')
+  @PublicSourceLimit('application-access-exchange', 60, 3600)
   @HttpCode(HttpStatus.OK)
   async exchangeAccess(@Body() dto: ExchangeApplicationAccessDto, @Res({ passthrough: true }) res: Response) {
     const result = await this.applicationAccess.exchange(dto.token);
@@ -84,6 +94,7 @@ export class ApplicationsController {
 
   @Public()
   @Post('association-applications')
+  @PublicSourceLimit('application-legacy-submit', 60, 3600)
   @HttpCode(HttpStatus.OK)
   @UseInterceptors(FileFieldsInterceptor([{ name: 'licenseFile', maxCount: 1 }, { name: 'initialBeneficiaryFile', maxCount: 1 }], { limits: { fileSize: LICENSE_FILE_MAX_BYTES + 1024 } }))
   @ApiOperation({ summary: 'تقديم طلب انضمام جمعية — عام، multipart/form-data' })
@@ -134,6 +145,7 @@ export class ApplicationsController {
 
   @Public()
   @Get('association-applications/status/:clientRequestId')
+  @PublicSourceLimit('application-legacy-status', 240, 3600)
   @ApiOperation({ summary: 'متابعة حالة طلب انضمام — عام، بلا أي PII، عبر clientRequestId فقط' })
   async status(@Param('clientRequestId') clientRequestId: string) {
     return this.applications.getApplicationStatus(clientRequestId);

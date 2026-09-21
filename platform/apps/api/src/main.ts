@@ -10,11 +10,14 @@ import { HttpExceptionFilter } from './common/http-exception.filter';
 import { assertProductionSecretsConfigured } from './config/auth.config';
 import { assertProductionStorageConfigured } from './config/storage.config';
 import { JSON_BODY_LIMIT } from './common/body-limit.const';
+import { trustedProxyHops } from './config/proxy.config';
+import { assertProductionEmailConfigured } from './config/email.config';
 
 async function bootstrap() {
   // يرفض الإقلاع بوضوح إن كان NODE_ENV=production وأي مفتاح HMAC أمني حسّاس ما زال بقيمته الافتراضية للتطوير.
   assertProductionSecretsConfigured();
   assertProductionStorageConfigured();
+  assertProductionEmailConfigured();
 
   const corsOrigin = process.env.CORS_ORIGIN ?? 'http://localhost:3000';
   const app = await NestFactory.create(AppModule, {
@@ -23,6 +26,7 @@ async function bootstrap() {
     // (استيراد حتى 1000 صف مستفيد دفعة JSON واحدة) — راجع body-limit.const.ts.
     bodyParser: false,
   });
+  app.getHttpAdapter().getInstance().set('trust proxy', trustedProxyHops());
   app.getHttpAdapter().getInstance().disable('x-powered-by');
   app.use((_request: Request, response: Response, next: NextFunction) => {
     response.setHeader('X-Content-Type-Options', 'nosniff');

@@ -10,6 +10,7 @@ import {
   PNG_1X1,
   WEBP_1X1,
   cleanNode2State,
+  countNode2FileObjects,
   oversizedImage,
   submitApplication,
   validApplicationPayload,
@@ -120,7 +121,7 @@ describe('NODE-2 — تقديم طلب الانضمام (عام)', () => {
 
     expect(await prisma.associationApplication.count()).toBe(0);
     expect(await prisma.applicationAnswer.count()).toBe(0);
-    expect(await prisma.fileObject.count()).toBe(0);
+    expect(await countNode2FileObjects()).toBe(0);
     expect(await prisma.auditLog.count()).toBe(0);
     expect(await listLicenseObjectKeys()).toEqual(before);
   });
@@ -333,7 +334,7 @@ describe('NODE-2 — تقديم طلب الانضمام (عام)', () => {
     expect(res.status).toBe(500);
 
     expect(await prisma.associationApplication.count()).toBe(0);
-    expect(await prisma.fileObject.count()).toBe(0);
+    expect(await countNode2FileObjects()).toBe(0);
     expect(await listLicenseObjectKeys()).toHaveLength(0);
 
     spy.mockRestore();
@@ -377,7 +378,7 @@ describe('NODE-2 — تقديم طلب الانضمام (عام)', () => {
     expect(second.body.id).toBe(first.body.id);
 
     expect(await prisma.associationApplication.count()).toBe(1);
-    expect(await prisma.fileObject.count()).toBe(1);
+    expect(await countNode2FileObjects()).toBe(1);
     expect(await listLicenseObjectKeys()).toHaveLength(1);
   });
 

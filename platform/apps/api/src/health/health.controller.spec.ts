@@ -22,6 +22,7 @@ describe('HealthController', () => {
     expect(result.status).toBe('ok');
     expect(result.checks.postgres).toBe('ok');
     expect(result.checks.api).toBe('ok');
+    expect(result.checks.email).toBe('development-only');
   });
 
   it('يرمي ServiceUnavailableException عندما يفشل اتصال PostgreSQL', async () => {

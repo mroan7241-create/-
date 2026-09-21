@@ -3,6 +3,7 @@ import nodemailer, { type Transporter } from 'nodemailer';
 import {
   ApplicationAccessEmailParams,
   EmailService,
+  OperationalDigestEmailParams,
   PasswordResetEmailParams,
   SecurityAlertEmailParams,
 } from './email.service';
@@ -15,7 +16,9 @@ export class SmtpEmailService implements EmailService {
   constructor() {
     const host = required('SMTP_HOST');
     const port = parsePort(required('SMTP_PORT'));
-    const secure = required('SMTP_SECURE').toLowerCase() === 'true';
+    const secureValue = required('SMTP_SECURE');
+    if (secureValue !== 'true' && secureValue !== 'false') throw new Error('Email configuration has an invalid SMTP_SECURE');
+    const secure = secureValue === 'true';
     const user = required('SMTP_USER');
     const password = required('SMTP_PASSWORD');
     this.from = { address: required('SMTP_FROM_EMAIL'), name: required('SMTP_FROM_NAME') };
@@ -52,6 +55,11 @@ export class SmtpEmailService implements EmailService {
     await this.send(params.to, params.subject,
       `مرحبًا ${params.name}\n\n${params.intro}\n\n${rows}\n\nتنتهي الروابط خلال وقت قصير وتُستخدم مرة واحدة.`,
       layout(`مرحبًا ${escapeHtml(params.name)}`, `<p>${escapeHtml(params.intro)}</p>${htmlRows}<p>تنتهي الروابط خلال وقت قصير وتُستخدم مرة واحدة.</p>`));
+  }
+
+  async sendOperationalDigest(params: OperationalDigestEmailParams): Promise<void> {
+    const content = escapeHtml(params.text).replace(/\n/g, '<br>');
+    await this.send(params.to, params.subject, params.text, layout(escapeHtml(params.subject), `<p style="line-height:1.9">${content}</p>`));
   }
 
   private async send(to: string, subject: string, text: string, html: string): Promise<void> {

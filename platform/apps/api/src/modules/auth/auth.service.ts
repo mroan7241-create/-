@@ -265,6 +265,14 @@ export class AuthService {
       await this.emailService.sendPasswordResetCode({ to: email, name: account.name, code });
     } catch {
       // فشل الإرسال لا يُفصح عنه، والرمز لا يُخزَّن أصلًا — لا فائدة من رمز لن يصل صاحبه.
+      await prisma.auditLog.create({ data: {
+        actorAccountId: account.id,
+        actorRole: account.role,
+        associationId: account.associationId,
+        action: 'PASSWORD_RESET_EMAIL_FAILED',
+        entityType: 'accounts',
+        entityId: account.id,
+      } });
       return generic;
     }
 

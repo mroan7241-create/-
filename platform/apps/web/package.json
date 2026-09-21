@@ -9,7 +9,8 @@
     "postbuild": "node scripts/copy-standalone-assets.js",
     "start": "next start",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint \"app/**/*.{js,jsx,ts,tsx}\""
+    "lint": "eslint \"app/**/*.{js,jsx,ts,tsx}\"",
+    "test": "node --test app/apply/application-repair.test.ts app/delegate/delegate-route.test.ts"
   },
   "dependencies": {
     "@alzad/shared": "*",

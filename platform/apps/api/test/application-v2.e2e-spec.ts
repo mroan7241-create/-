@@ -51,6 +51,7 @@ describe('Application V2 launch gate', () => {
     const row = await prisma.associationApplication.findUniqueOrThrow({ where: { publicCode: submitted.body.id } });
     expect(row.schemaVersion).toBe(2); expect(row.currentAssets?.toNumber()).toBe(11_000_000);
     expect(fakeEmail.lastApplicationAccess?.subject).toContain('متابعة طلب المشاركة');
+    expect(fakeEmail.lastApplicationAccess?.items[0]?.code).toBe(submitted.body.id);
 
     await http().post('/api/v1/association-applications/processing/start').set('Cookie', adminCookie).send({ applicationIds: [row.id], opId: randomUUID() }).expect(201);
     const requested = await http().post(`/api/v1/association-applications/${row.id}/information-request`).set('Cookie', adminCookie).send({ items: [{ type: 'FIELD', key: 'organization.notes', reason: 'أضف وصفًا مختصرًا' }], note: 'استكمال محدد', opId: randomUUID() }).expect(201);
@@ -65,6 +66,10 @@ describe('Application V2 launch gate', () => {
     const evaluation = await http().post(`/api/v1/association-applications/${row.id}/evaluation`).set('Cookie', adminCookie).send({ operationalReadiness: 5, technicalCapability: 4, previousExperience: 3, integrityTransparency: 5, participationCommitment: 4, sustainabilityImpact: 5, opId: randomUUID() }).expect(201);
     expect(evaluation.body.score).toBe(86);
     await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(201);
+    expect(fakeEmail.lastApplicationAccess?.subject).toContain('قرار اختيار الجمعية');
+    expect(fakeEmail.lastApplicationAccess?.intro).toContain('قائمة الاحتياط');
+    expect(fakeEmail.lastApplicationAccess?.items[0]?.code).toBe(submitted.body.id);
+    expect(fakeEmail.lastApplicationAccess?.items[0]?.url).toContain('/apply/access?token=');
     const final = await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id }, include: { participation: true, sourceDraft: true } });
     expect(final.selectionList).toBe('RESERVE'); expect(final.participation).toBeNull(); expect(final.sourceDraft?.resumeTokenHash).not.toBe(created.body.resumeToken);
   });

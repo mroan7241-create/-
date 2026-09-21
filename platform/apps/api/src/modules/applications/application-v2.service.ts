@@ -355,7 +355,8 @@ export class ApplicationV2Service {
   }
 
   async decideSelection(ctx: AuthContext, applicationId: string, dto: SelectionDecisionDto) {
-    return prisma.$transaction(async (tx) => {
+    let newlyDecided = false;
+    const result = await prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ ok: true; decision: AssociationSelectionList }>(tx, ctx.accountId, 'application-selection-decision', dto.opId, { applicationId, decision: dto.decision, reason: dto.reason ?? null });
       if (!claim.claimed) return claim.existingResponse!;
       const application = await tx.associationApplication.findUnique({ where: { id: applicationId } });
@@ -368,8 +369,13 @@ export class ApplicationV2Service {
       await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_SELECTION_DECIDED', entityType: 'association_applications', entityId: applicationId, metadata: { decision: dto.decision, reason: dto.reason ?? null } } });
       const response = { ok: true as const, decision: dto.decision };
       await this.idempotency.complete(tx, ctx.accountId, 'application-selection-decision', dto.opId, response);
+      newlyDecided = true;
       return response;
     });
+    if (newlyDecided) {
+      try { await this.access.sendSelectionDecision(applicationId); } catch { /* القرار الإداري محفوظ؛ فشل البريد مسجل في سجل التدقيق عند محاولة الإرسال */ }
+    }
+    return result;
   }
 
   private async requireAttachmentMutation(tx: Prisma.TransactionClient, draftId: string, fieldKey: string) {

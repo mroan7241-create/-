@@ -1,5 +1,9 @@
 # نظام متابعة توزيع الأجهزة — جمعية الزاد
 
+> **المنصة الحالية للإطلاق:** تطبيق Node.js/Next.js/NestJS/PostgreSQL في
+> [`platform/`](platform/README.md). بقية هذا الملف تصف نظام Google Apps
+> Script التاريخي ولا تُستخدم لتشغيل Production الحالي.
+
 تطبيق ويب على Google Apps Script، بالشراكة مع مؤسسة سليمان أبانمي الأهلية.
 
 ## الملفات

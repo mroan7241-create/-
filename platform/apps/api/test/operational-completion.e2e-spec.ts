@@ -41,7 +41,7 @@ describe('final operational workflows', () => {
       email, contactName: 'مسؤول القبول التشغيلي', pledgeAccepted: true, pledgeAcceptedAt: new Date(),
     } });
     await prisma.applicationAnswer.createMany({ data: LEGACY_APPLICATION_QUESTIONS.map((question) => ({ applicationId: application.id, questionKey: question.key, answer: true })) });
-    const originalSettings = await prisma.systemSetting.findMany({ where: { key: { in: ['selection.passThreshold', 'selection.mainTargetCount'] } } });
+    const originalSettings = await prisma.systemSetting.findMany({ where: { key: 'selection.mainTargetCount' } });
     let resultingAssociationId: string | undefined;
     let resultingAccountId: string | undefined;
     try {
@@ -51,18 +51,18 @@ describe('final operational workflows', () => {
       expect(eligibility.body.temporaryPassword).toBeUndefined();
 
       const evaluation = await http().post(`/api/v1/association-applications/${application.id}/evaluation`).set('Cookie', adminCookie).send({
-        operationalReadiness: 100, technicalCapability: 100, previousExperience: 100,
-        integrityTransparency: 100, participationCommitment: 100, sustainabilityImpact: 100,
+        operationalReadiness: 5, technicalCapability: 5, previousExperience: 5,
+        integrityTransparency: 5, participationCommitment: 5, sustainabilityImpact: 5,
         opId: opId('evaluation'),
       });
       expect(evaluation.status).toBe(201);
       expect(evaluation.body.temporaryPassword).toBeUndefined();
 
-      await prisma.systemSetting.upsert({ where: { key: 'selection.passThreshold' }, create: { key: 'selection.passThreshold', value: 100 }, update: { value: 100 } });
       await prisma.systemSetting.upsert({ where: { key: 'selection.mainTargetCount' }, create: { key: 'selection.mainTargetCount', value: 1 }, update: { value: 1 } });
       const preview = await http().post('/api/v1/association-applications/selection/preview').set('Cookie', adminCookie);
       expect(preview.status).toBe(201);
-      expect(preview.body.items.some((item: { id: string; passesThreshold: boolean }) => item.id === application.id && item.passesThreshold)).toBe(true);
+      expect(preview.body.threshold).toBeNull();
+      expect(preview.body.items.some((item: { id: string; score: number }) => item.id === application.id && item.score === 100)).toBe(true);
 
       const commit = await http().post('/api/v1/association-applications/selection/commit').set('Cookie', adminCookie)
         .send({ mainTargetCount: 1, opId: opId('selection') });
@@ -109,7 +109,7 @@ describe('final operational workflows', () => {
       await prisma.associationApplication.deleteMany({ where: { id: application.id } });
       if (resultingAccountId) await prisma.account.deleteMany({ where: { id: resultingAccountId } });
       if (resultingAssociationId) await prisma.association.deleteMany({ where: { id: resultingAssociationId } });
-      await prisma.systemSetting.deleteMany({ where: { key: { in: ['selection.passThreshold', 'selection.mainTargetCount'] } } });
+      await prisma.systemSetting.deleteMany({ where: { key: 'selection.mainTargetCount' } });
       for (const setting of originalSettings) await prisma.systemSetting.create({ data: { key: setting.key, value: setting.value === null ? Prisma.JsonNull : setting.value as Prisma.InputJsonValue } });
     }
   });

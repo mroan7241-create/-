@@ -4,6 +4,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { SessionAuthGuard } from './guards/session-auth.guard';
 import { RateLimitService } from '../../common/rate-limit.service';
+import { PublicSourceLimitGuard } from '../../common/public-source-limit.guard';
 import { EmailModule } from './email/email.module';
 
 /**
@@ -23,6 +24,7 @@ import { EmailModule } from './email/email.module';
     AuthService,
     RateLimitService,
     { provide: APP_GUARD, useClass: SessionAuthGuard },
+    { provide: APP_GUARD, useClass: PublicSourceLimitGuard },
   ],
   exports: [AuthService],
 })
