@@ -858,7 +858,7 @@ export function confirmDelivery(missionId: string, proofPhoto: File, recipientSi
 // bulk defaults in the UI are advisory and the API remains authoritative.
 export type WorkflowRecord = Record<string, unknown> & { id: string };
 export function listParticipations(): Promise<WorkflowRecord[]> { return apiFetch('/participations'); }
-export function createAgreement(participationId: string, version: number, templateVersion: string, reference?: string) { return apiFetch(`/participations/${participationId}/agreements`, { method: 'POST', body: JSON.stringify({ version, templateVersion, reference: reference?.trim() || undefined, opId: newOpId() }) }); }
+export function createAgreement(participationId: string, version: number, templateVersion: string, reference?: string) { return apiFetch(`/participations/${participationId}/agreements`, { method: 'POST', body: JSON.stringify({ version, templateVersion, reference: reference?.trim() || undefined }) }); }
 export function transitionAgreement(id: string, status: string, signerName?: string) { return apiFetch(`/participations/agreements/${id}/transition`, { method: 'POST', body: JSON.stringify({ status, signerName, opId: newOpId() }) }); }
 export function completeParticipationSetup(id: string) { return apiFetch(`/participations/${id}/setup-complete`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) }); }
 export function activateParticipation(id: string) { return apiFetch(`/participations/${id}/activate`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) }); }

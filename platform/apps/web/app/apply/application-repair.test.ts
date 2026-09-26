@@ -10,6 +10,27 @@ import { CONSENT_VERSION, riyadhRecentYears, validateStep } from './application-
 import { financialSummary } from '../lib/financial-summary.ts';
 // @ts-ignore -- standalone node --test, not a browser import
 import { workflowLabel } from '../lib/workflow-label.ts';
+// @ts-ignore -- standalone node --test, not a browser import
+import { createAgreement } from '../lib/api.ts';
+
+test('create Covenant button sends only the fields accepted by CreateAgreementDto', async () => {
+  const originalFetch = globalThis.fetch;
+  let sent: Record<string, unknown> | undefined;
+  let url = '';
+  try {
+    globalThis.fetch = async (input, init) => {
+      url = String(input);
+      sent = JSON.parse(String(init?.body));
+      assert.equal(init?.credentials, 'include');
+      return Response.json({ id: 'synthetic-agreement' }, { status: 201 });
+    };
+    await createAgreement('synthetic-participation', 1, '1.0', '  COV-TEST  ');
+    assert.match(url, /\/participations\/synthetic-participation\/agreements$/);
+    assert.deepEqual(sent, { version: 1, templateVersion: '1.0', reference: 'COV-TEST' });
+    await createAgreement('synthetic-participation', 1, '1.0');
+    assert.deepEqual(sent, { version: 1, templateVersion: '1.0' });
+  } finally { globalThis.fetch = originalFetch; }
+});
 
 test('pending participation actions identify the actual application instead of indistinguishable records', () => {
   assert.equal(workflowLabel({ application: { name: 'جمعية تجريبية', publicCode: 'APP-TEST' } }, 'participations'), 'جمعية تجريبية — APP-TEST');
