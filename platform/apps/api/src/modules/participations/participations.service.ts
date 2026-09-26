@@ -13,6 +13,7 @@ import { validateReceiptEvidenceFile } from '../files/file-validation.util';
 import type { AuthContext } from '../auth/auth.types';
 import type { AssociationCovenantSignDto, CreateAgreementDto, CoordinatorChangeDto } from './dto/participation.dto';
 import { COVENANT_SOURCE_SHA256, COVENANT_VERSION, CovenantDocumentService, PARTY_ONE_NAME, PARTY_ONE_TITLE } from './covenant-document.service';
+import { OnboardingEmailService } from '../auth/email/onboarding-email.service';
 
 @Injectable()
 export class ParticipationsService {
@@ -21,6 +22,7 @@ export class ParticipationsService {
     private readonly idempotency: IdempotencyService,
     private readonly storage: StorageService,
     private readonly covenantDocument: CovenantDocumentService,
+    private readonly onboardingEmail: OnboardingEmailService,
   ) {}
 
   list(ctx: AuthContext) {
@@ -94,6 +96,7 @@ export class ParticipationsService {
       await this.idempotency.complete(tx, ctx.accountId, scope, opId, response);
       return { replayed: false as const, response, temporaryPassword };
     });
+    if (!outcome.replayed) await this.onboardingEmail.sendCredentials(outcome.response.accountId, outcome.temporaryPassword);
     return { ok: true as const, ...outcome.response, temporaryPassword: outcome.replayed ? null : outcome.temporaryPassword, temporaryPasswordPreviouslyIssued: outcome.replayed };
   }
 
@@ -278,6 +281,7 @@ export class ParticipationsService {
       await audit(tx, ctx, 'ASSOCIATION_ACTIVATED', 'project_participations', id, { associationId: association.id, accountId: account.id });
       const response = { associationId: association.id, accountId: account.id }; await this.idempotency.complete(tx, ctx.accountId, scope, opId, response); return { replayed: false as const, response, temporaryPassword };
     });
+    if (!outcome.replayed) await this.onboardingEmail.sendCredentials(outcome.response.accountId, outcome.temporaryPassword);
     return { ok: true as const, ...outcome.response, temporaryPassword: outcome.replayed ? null : outcome.temporaryPassword, temporaryPasswordPreviouslyIssued: outcome.replayed };
   }
 

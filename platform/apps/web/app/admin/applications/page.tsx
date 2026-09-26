@@ -14,6 +14,7 @@ import {
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
 import { AppShell } from '../../components/AppShell';
+import { FinancialSummary } from '../../components/FinancialSummary';
 import { initialQueryParam } from '../../lib/query';
 import {
   cardStyle,
@@ -272,6 +273,7 @@ function ApplicationDetail({
 
         {application.schemaVersion === 2 && application.v2Payload && <V2Dossier application={application} />}
 
+        {application.schemaVersion !== 2 && <>
         <h3 style={{ fontSize: 16, marginTop: 20, marginBottom: 8 }}>
           أسئلة القبول <span style={{ ...mutedStyle, ...ltrStyle }}>({application.scoreLabel})</span>
         </h3>
@@ -283,6 +285,7 @@ function ApplicationDetail({
             </li>
           ))}
         </ul>
+        </>}
 
         <h3 style={{ fontSize: 16, marginTop: 20, marginBottom: 8 }}>صورة الترخيص</h3>
         {!application.hasLicenseFile ? (
@@ -338,7 +341,7 @@ const DOSSIER_SECTIONS: Array<{ title: string; fields: Array<[string, string]> }
 ];
 
 function V2Dossier({ application }: { application: ApplicationSummary }) {
-  return <div style={{ marginTop: 22 }}><h3>ملف الطلب التفصيلي — الإصدار 2</h3>{application.locationNeedsVerification && <p style={errorStyle}>الموقع المُدخل يدويًا يحتاج تحققًا إداريًا.</p>}<p style={mutedStyle}>المرفقات: {application.attachmentKeys.length ? application.attachmentKeys.join('، ') : 'لا توجد'}</p>{DOSSIER_SECTIONS.map((section) => <details key={section.title} open><summary style={{ cursor: 'pointer', fontWeight: 700, marginBlock: 12 }}>{section.title}</summary><dl style={{ display: 'grid', gridTemplateColumns: 'minmax(130px, 190px) 1fr', gap: 8 }}>{section.fields.map(([path, label]) => <div key={path} style={{ display: 'contents' }}><dt>{label}</dt><dd style={{ margin: 0 }}>{displayValue(valueAt(application.v2Payload, path))}</dd></div>)}</dl></details>)}</div>;
+  return <div style={{ marginTop: 22 }}><h3>ملف الطلب التفصيلي — الإصدار 2</h3>{application.locationNeedsVerification && <p style={errorStyle}>الموقع المُدخل يدويًا يحتاج تحققًا إداريًا.</p>}<p style={mutedStyle}>المرفقات: {application.attachmentKeys.length ? application.attachmentKeys.join('، ') : 'لا توجد'}</p>{DOSSIER_SECTIONS.map((section) => <details key={section.title} open><summary style={{ cursor: 'pointer', fontWeight: 700, marginBlock: 12 }}>{section.title}</summary><dl style={{ display: 'grid', gridTemplateColumns: 'minmax(130px, 190px) 1fr', gap: 8 }}>{section.fields.map(([path, label]) => <div key={path} style={{ display: 'contents' }}><dt>{label}</dt><dd style={{ margin: 0 }}>{displayValue(valueAt(application.v2Payload, path))}</dd></div>)}</dl>{section.title === 'الحوكمة والمالية' && <FinancialSummary finance={application.v2Payload?.finance} />}</details>)}</div>;
 }
 
 function valueAt(root: Record<string, unknown> | null, path: string): unknown { let current: unknown = root; for (const key of path.split('.')) { if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined; current = (current as Record<string, unknown>)[key]; } return current; }

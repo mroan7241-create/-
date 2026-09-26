@@ -11,8 +11,10 @@ import { cleanAuthState, hashSecret, seedTestFixtures } from './utils/fixtures';
 import { loginAs, loginAsDelegate } from './utils/node2-fixtures';
 import { startTestStorage, stopTestStorage, storageClient, testBucket } from './utils/storage-harness';
 import { COVENANT_SOURCE_SHA256 } from '../src/modules/participations/covenant-document.service';
+import type { FakeEmailService } from '../src/modules/auth/email/fake-email.service';
 
 describe('Covenant V1 execution gate', () => {
+  let fakeEmail: FakeEmailService;
   let app: INestApplication; let adminCookie = ''; let otherAssociationCookie = ''; let delegateCookie = ''; let associationCookie = ''; let abanmiCookie = '';
   let applicationId = ''; let participationId = ''; let agreementId = ''; let associationId = ''; let accountId = ''; let abanmiAccountId = '';
   let temporaryPassword = ''; const currentPassword = 'Covenant!Current2026'; let partyOneToken = ''; let finalSha256 = '';
@@ -20,14 +22,25 @@ describe('Covenant V1 execution gate', () => {
   const http = () => request(app.getHttpServer()); const opId = (label: string) => `${label}-${randomUUID()}`;
 
   beforeAll(async () => {
-    await startTestStorage(); ({ app } = await createTestApp()); const fixtures = await seedTestFixtures();
+    await startTestStorage(); ({ app, fakeEmail } = await createTestApp()); const fixtures = await seedTestFixtures();
     adminCookie = await loginAs(app, fixtures.adminEmail, fixtures.adminPassword); otherAssociationCookie = await loginAs(app, fixtures.assocEmail, fixtures.assocPassword); delegateCookie = await loginAsDelegate(app, fixtures.delegateCode);
     const suffix = randomUUID().slice(0, 8); const email = `covenant-${suffix}@example.org`;
     const application = await prisma.associationApplication.create({ data: { publicCode: `E2E-COV-${suffix}`, clientRequestId: `e2e-cov-${suffix}`, name: `جمعية ميثاق تجريبية ${suffix}`, category: 'جمعية خيرية', sector: 'رعاية الأيتام', region: 'الرياض', city: 'الرياض', phone: `055${Math.floor(Math.random() * 10_000_000).toString().padStart(7, '0')}`, email, contactName: 'ممثل ميثاق تجريبي', pledgeAccepted: true, pledgeAcceptedAt: new Date(), selectionList: AssociationSelectionList.MAIN } }); applicationId = application.id;
     const participation = await prisma.projectParticipation.create({ data: { applicationId, status: ParticipationStatus.APPROVED_AWAITING_SETUP, activationBasis: 'AGREEMENT_COMPLETED', setupCompletedAt: new Date(), setupCompletedById: (await prisma.account.findFirstOrThrow({ where: { email: fixtures.adminEmail } })).id } }); participationId = participation.id;
     const created = await http().post(`/api/v1/participations/${participationId}/agreements`).set('Cookie', adminCookie).send({ version: 1, templateVersion: '1.0' }).expect(201); agreementId = created.body.id;
     await http().post(`/api/v1/participations/agreements/${agreementId}/transition`).set('Cookie', adminCookie).send({ status: AgreementStatus.SENT, opId: opId('sent') }).expect(201);
-    const prepared = await http().post(`/api/v1/participations/${participationId}/signing-account`).set('Cookie', adminCookie).send({ opId: opId('account') }).expect(201); temporaryPassword = prepared.body.temporaryPassword; associationId = prepared.body.associationId; accountId = prepared.body.accountId;
+    const accountOperation = opId('account');
+    const prepared = await http().post(`/api/v1/participations/${participationId}/signing-account`).set('Cookie', adminCookie).send({ opId: accountOperation }).expect(201); temporaryPassword = prepared.body.temporaryPassword; associationId = prepared.body.associationId; accountId = prepared.body.accountId;
+    expect(fakeEmail.lastSecurityAlert).toMatchObject({ to: email, subject: 'بيانات دخول الجمعية — مشروع الأجهزة الكهربائية' });
+    expect(fakeEmail.lastSecurityAlert!.body).toContain(temporaryPassword);
+    expect(fakeEmail.lastSecurityAlert!.body).toContain('/login');
+    fakeEmail.lastSecurityAlert = null;
+    const replay = await http().post(`/api/v1/participations/${participationId}/signing-account`).set('Cookie', adminCookie).send({ opId: accountOperation }).expect(201);
+    expect(replay.body.temporaryPassword).toBeNull();
+    expect(fakeEmail.lastSecurityAlert).toBeNull();
+    const emailAudits = await prisma.auditLog.findMany({ where: { entityId: accountId, action: 'ASSOCIATION_CREDENTIALS_EMAIL_SENT' } });
+    expect(emailAudits).toHaveLength(1);
+    expect(JSON.stringify(emailAudits)).not.toContain(temporaryPassword);
     abanmiAccountId = (await prisma.account.create({ data: { publicCode: `E2E-ABN-COV-${suffix}`, name: 'أبانمي اختبار الميثاق', email: `abanmi-cov-${suffix}@example.org`, role: AccountRole.ABANMI, status: AccountStatus.ACTIVE } })).id;
     await prisma.authCredential.create({ data: { accountId: abanmiAccountId, type: AuthCredentialType.EMAIL_PASSWORD, identifier: `abanmi-cov-${suffix}@example.org`, secretHash: await hashSecret('Abanmi!Covenant2026') } });
     abanmiCookie = await loginAs(app, `abanmi-cov-${suffix}@example.org`, 'Abanmi!Covenant2026');

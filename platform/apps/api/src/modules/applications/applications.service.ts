@@ -33,6 +33,7 @@ import type { AuthContext } from '../auth/auth.types';
 import { normalizePagination, toPaginatedResult, type PaginatedResult, type PaginationParams } from '../../common/pagination.util';
 import { SettingsService } from '../settings/settings.service';
 import { rankApplications, scoreApplication, type EvaluationInput } from './application-evaluation.util';
+import { OnboardingEmailService } from '../auth/email/onboarding-email.service';
 
 const QUESTION_KEYS = LEGACY_APPLICATION_QUESTIONS.map((q) => q.key);
 
@@ -75,6 +76,7 @@ export class ApplicationsService {
     private readonly audit: AuditService,
     private readonly storage: StorageService,
     private readonly settings: SettingsService,
+    private readonly onboardingEmail: OnboardingEmailService,
   ) {}
 
   // ================================================================
@@ -522,6 +524,7 @@ export class ApplicationsService {
       { associationId: outcome.response.associationId, associationName: outcome.applicationName },
     );
 
+    await this.onboardingEmail.sendCredentials(outcome.response.accountId, outcome.temporaryPassword);
     return {
       ok: true as const,
       alreadyProcessed: false as const,
@@ -563,6 +566,7 @@ export class ApplicationsService {
       await this.audit.log({ id: ctx.accountId, role: ctx.role, associationId: ctx.associationId }, 'APPLICATION_REJECTED', 'association_applications', id, {
         reason,
       });
+      await this.onboardingEmail.sendRejection(id);
     }
 
     return { ok: true as const };

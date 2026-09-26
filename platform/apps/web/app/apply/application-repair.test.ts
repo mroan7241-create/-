@@ -6,6 +6,17 @@ import { createRequire } from 'node:module';
 import { createAutosaveQueue } from './autosave-queue.ts';
 // @ts-ignore -- standalone node --test, not a browser import
 import { CONSENT_VERSION, riyadhRecentYears, validateStep } from './application-form-utils.ts';
+// @ts-ignore -- standalone node --test, not a browser import
+import { financialSummary } from '../lib/financial-summary.ts';
+
+test('financial indicators distinguish surplus, deficit and current liabilities without deciding eligibility', () => {
+  assert.match(financialSummary({ revenue: 100, expenses: 120, currentAssets: 80, currentLiabilities: 90 }).join(' '), /عجز.*٢٠.*الخصوم المتداولة تتجاوز/);
+  assert.match(financialSummary({ revenue: 100, expenses: 50, currentAssets: 100, currentLiabilities: 10 }).join(' '), /فائض.*٥٠.*٥٠.*تغطي/);
+  assert.match(financialSummary({ revenue: 0, expenses: 0, currentAssets: 0, currentLiabilities: 0 }).join(' '), /متوازنة.*لا توجد خصوم/);
+  assert.deepEqual(financialSummary({}), []);
+  assert.deepEqual(financialSummary({ revenue: -1, expenses: 1, currentAssets: NaN, currentLiabilities: 1 }), []);
+  assert.deepEqual(financialSummary({ revenue: '100', expenses: 1 }), []);
+});
 
 test('geolocation allows only self and preserves camera/microphone restrictions', async () => {
   const config = createRequire(import.meta.url)('../../next.config.js');

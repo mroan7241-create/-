@@ -14,16 +14,18 @@ import {
 } from './utils/node2-fixtures';
 import { clearLicenseObjects, startTestStorage, stopTestStorage } from './utils/storage-harness';
 import { MAX_PAGE } from '../src/common/pagination.util';
+import type { FakeEmailService } from '../src/modules/auth/email/fake-email.service';
 
 /** NODE-2 — مراجعة الطلبات (ADMIN حصرًا): قائمة/تفاصيل/ملف الترخيص/قبول/رفض. */
 describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
   let app: INestApplication;
   let fixtures: Awaited<ReturnType<typeof seedTestFixtures>>;
   let adminCookie: string;
+  let fakeEmail: FakeEmailService;
 
   beforeAll(async () => {
     await startTestStorage();
-    ({ app } = await createTestApp());
+    ({ app, fakeEmail } = await createTestApp());
     fixtures = await seedTestFixtures();
   }, 60000);
 
@@ -32,6 +34,7 @@ describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
     await cleanNode2State();
     await clearLicenseObjects();
     adminCookie = await loginAs(app, fixtures.adminEmail, fixtures.adminPassword);
+    fakeEmail.reset();
   });
 
   afterAll(async () => {
@@ -355,8 +358,15 @@ describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
       expect(res.status).toBe(400);
     }
 
-    const ok = await reject(id, randomUUID(), 'الترخيص غير ساري والمستندات ناقصة');
+    const rejectOperation = randomUUID();
+    const ok = await reject(id, rejectOperation, 'الترخيص غير ساري والمستندات ناقصة');
     expect(ok.status).toBe(201);
+    expect(fakeEmail.lastSecurityAlert).toMatchObject({ to: payload.email.toLowerCase(), subject: 'نتيجة طلب المشاركة — مشروع الأجهزة الكهربائية' });
+    expect(fakeEmail.lastSecurityAlert!.body).toContain('الترخيص غير ساري والمستندات ناقصة');
+    fakeEmail.lastSecurityAlert = null;
+    expect((await reject(id, rejectOperation, 'الترخيص غير ساري والمستندات ناقصة')).status).toBe(201);
+    expect(fakeEmail.lastSecurityAlert).toBeNull();
+    expect(await prisma.auditLog.count({ where: { entityId: id, action: 'APPLICATION_REJECTION_EMAIL_SENT' } })).toBe(1);
 
     const application = await prisma.associationApplication.findUniqueOrThrow({ where: { id } });
     expect(application.status).toBe(ApplicationStatus.REJECTED);

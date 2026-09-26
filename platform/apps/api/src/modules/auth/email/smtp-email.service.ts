@@ -46,7 +46,7 @@ export class SmtpEmailService implements EmailService {
 
   async sendSecurityAlert(params: SecurityAlertEmailParams): Promise<void> {
     await this.send(params.to, params.subject, `${params.name}\n\n${params.body}`,
-      layout(`مرحبًا ${escapeHtml(params.name)}`, `<p>${escapeHtml(params.body)}</p>`));
+      layout(`مرحبًا ${escapeHtml(params.name)}`, `<p style="line-height:1.9">${escapeHtml(params.body).replace(/\n/g, '<br>')}</p>`));
   }
 
   async sendApplicationAccess(params: ApplicationAccessEmailParams): Promise<void> {

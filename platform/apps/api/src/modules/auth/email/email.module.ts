@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { DevEmailService } from './dev-email.service';
 import { EmailService } from './email.service';
 import { SmtpEmailService } from './smtp-email.service';
+import { OnboardingEmailService } from './onboarding-email.service';
 import { assertProductionEmailConfigured } from '../../../config/email.config';
 
 export function createEmailService(): EmailService {
@@ -13,11 +14,12 @@ export function createEmailService(): EmailService {
 
 @Module({
   providers: [
+    OnboardingEmailService,
     {
       provide: EmailService,
       useFactory: createEmailService,
     },
   ],
-  exports: [EmailService],
+  exports: [EmailService, OnboardingEmailService],
 })
 export class EmailModule {}
