@@ -97,15 +97,13 @@ jobs:
       # محلّ LockService القديم. تُشغَّل صراحةً قبل بقية e2e لأنها أسرع
       # إشارة إلى كسر بنيوي في المخطط أو الهجرات.
       - name: DB-level tests (atomic public codes + partial unique indexes + concurrency)
-        run: npx jest --config test/jest-e2e.json --runInBand test/association-applications-db.e2e-spec.ts
-        working-directory: platform/apps/api
+        run: npm run test:e2e --workspace apps/api -- test/association-applications-db.e2e-spec.ts
 
-      # NODE-2: تكامل تخزين حقيقي ضد MinIO أعلاه (لا mock): رفع، رابط
+      # NODE-2: تكامل تخزين حقيقي ضد خادم S3 الاختباري (لا mock): رفع، رابط
       # موقَّع يُجلَب فعليًا بالبايتات، حذف تعويضي، ولا كائن يتيم بعد فشل
       # معاملة قاعدة البيانات.
       - name: storage integration tests (isolated S3 HTTP server)
-        run: npx jest --config test/jest-e2e.json --runInBand test/storage-integration.e2e-spec.ts
-        working-directory: platform/apps/api
+        run: npm run test:e2e --workspace apps/api -- test/storage-integration.e2e-spec.ts
 
       # اختبارات API e2e/تكامل حقيقية (NODE-1: مصادقة/جلسات/بيانات مرجعية،
       # NODE-2: طلبات الانضمام/إدارة الجمعيات/التخزين) ضد PostgreSQL CI
