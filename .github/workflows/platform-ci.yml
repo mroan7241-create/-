@@ -30,23 +30,6 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
-      # NODE-2: تخزين كائنات حقيقي في CI. البيئة المحلية (بلا Docker)
-      # تستخدم s3rver داخل الاختبارات نفسها؛ هنا يعمل MinIO فعليًا،
-      # و OBJECT_STORAGE_EXTERNAL=true يمنع الاختبارات من تشغيل s3rver.
-      # الاختبارات نفسها بلا أي تغيير كود — الفارق كله في متغيرات البيئة.
-      minio:
-        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
-        env:
-          MINIO_ROOT_USER: alzad_ci_storage
-          MINIO_ROOT_PASSWORD: alzad_ci_storage_password
-        ports:
-          - 9000:9000
-        options: >-
-          --health-cmd "curl -fsS http://localhost:9000/minio/health/live"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-
     env:
       DATABASE_URL: postgresql://alzad_ci:alzad_ci_password@localhost:5432/alzad_platform_ci?schema=public
       NODE_ENV: test
@@ -76,6 +59,19 @@ jobs:
 
       - name: dependency tree
         run: npm ls --all=false
+
+      - name: start isolated MinIO server
+        run: |
+          docker run -d --name alzad-ci-minio -p 127.0.0.1:9000:9000 \
+            -e MINIO_ROOT_USER="$OBJECT_STORAGE_ACCESS_KEY" \
+            -e MINIO_ROOT_PASSWORD="$OBJECT_STORAGE_SECRET_KEY" \
+            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772 server /data
+          for attempt in $(seq 1 30); do
+            if curl -fsS "$OBJECT_STORAGE_ENDPOINT/minio/health/live"; then exit 0; fi
+            sleep 2
+          done
+          docker logs alzad-ci-minio
+          exit 1
 
       # NODE-2: bucket خاص تمامًا — لا سياسة وصول عام بحال. المسار الوحيد
       # للقراءة هو signed URL قصير العمر يُصدره endpoint محروس بـADMIN.
