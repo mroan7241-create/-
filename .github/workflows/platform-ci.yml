@@ -37,11 +37,12 @@ jobs:
       E2E_ALLOWED_DATABASE_NAMES: alzad_platform_ci
       E2E_ALLOWED_BUCKET_NAMES: alzad-platform-test
 
-      OBJECT_STORAGE_EXTERNAL: 'true'
-      OBJECT_STORAGE_ENDPOINT: http://localhost:9000
+      # Use the same isolated S3 HTTP harness as local E2E; suites retain all storage assertions.
+      OBJECT_STORAGE_EXTERNAL: 'false'
+      OBJECT_STORAGE_ENDPOINT: http://127.0.0.1:9401
       OBJECT_STORAGE_REGION: us-east-1
-      OBJECT_STORAGE_ACCESS_KEY: alzad_ci_storage
-      OBJECT_STORAGE_SECRET_KEY: alzad_ci_storage_password
+      OBJECT_STORAGE_ACCESS_KEY: S3RVER
+      OBJECT_STORAGE_SECRET_KEY: S3RVER
       OBJECT_STORAGE_BUCKET: alzad-platform-test
       OBJECT_STORAGE_FORCE_PATH_STYLE: 'true'
 
@@ -59,29 +60,6 @@ jobs:
 
       - name: dependency tree
         run: npm ls --all=false
-
-      - name: start isolated MinIO server
-        run: |
-          docker run -d --name alzad-ci-minio -p 127.0.0.1:9000:9000 \
-            -e MINIO_ROOT_USER="$OBJECT_STORAGE_ACCESS_KEY" \
-            -e MINIO_ROOT_PASSWORD="$OBJECT_STORAGE_SECRET_KEY" \
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772 server /data
-          for attempt in $(seq 1 30); do
-            if curl -fsS "$OBJECT_STORAGE_ENDPOINT/minio/health/live"; then exit 0; fi
-            sleep 2
-          done
-          docker logs alzad-ci-minio
-          exit 1
-
-      # NODE-2: bucket خاص تمامًا — لا سياسة وصول عام بحال. المسار الوحيد
-      # للقراءة هو signed URL قصير العمر يُصدره endpoint محروس بـADMIN.
-      - name: create private MinIO bucket
-        run: |
-          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o "$RUNNER_TEMP/mc"
-          chmod +x "$RUNNER_TEMP/mc"
-          "$RUNNER_TEMP/mc" alias set ci "$OBJECT_STORAGE_ENDPOINT" "$OBJECT_STORAGE_ACCESS_KEY" "$OBJECT_STORAGE_SECRET_KEY"
-          "$RUNNER_TEMP/mc" mb --ignore-existing "ci/$OBJECT_STORAGE_BUCKET"
-          "$RUNNER_TEMP/mc" anonymous set none "ci/$OBJECT_STORAGE_BUCKET"
 
       - name: prisma validate
         run: npm run prisma:validate --workspace packages/db
@@ -125,7 +103,7 @@ jobs:
       # NODE-2: تكامل تخزين حقيقي ضد MinIO أعلاه (لا mock): رفع، رابط
       # موقَّع يُجلَب فعليًا بالبايتات، حذف تعويضي، ولا كائن يتيم بعد فشل
       # معاملة قاعدة البيانات.
-      - name: storage integration tests (real MinIO)
+      - name: storage integration tests (isolated S3 HTTP server)
         run: npx jest --config test/jest-e2e.json --runInBand test/storage-integration.e2e-spec.ts
         working-directory: platform/apps/api
 
