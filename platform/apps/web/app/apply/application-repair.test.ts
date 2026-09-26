@@ -12,6 +12,16 @@ import { financialSummary } from '../lib/financial-summary.ts';
 import { workflowLabel } from '../lib/workflow-label.ts';
 // @ts-ignore -- standalone node --test, not a browser import
 import { createAgreement } from '../lib/api.ts';
+// @ts-ignore -- standalone node --test, not a browser import
+import { licensePreviewKind } from '../lib/license-preview.ts';
+
+test('PDF licenses open as documents while validated image uploads keep their preview', () => {
+  assert.equal(licensePreviewKind('https://storage.example.org/private/license.pdf?signature=synthetic'), 'file');
+  assert.equal(licensePreviewKind('https://storage.example.org/private/license.PNG?signature=synthetic'), 'image');
+  assert.equal(licensePreviewKind('https://storage.example.org/private/license.jpg'), 'image');
+  assert.equal(licensePreviewKind('https://storage.example.org/private/license.pdf?name=fake.png'), 'file');
+  assert.equal(licensePreviewKind('invalid'), 'file');
+});
 
 test('create Covenant button sends only the fields accepted by CreateAgreementDto', async () => {
   const originalFetch = globalThis.fetch;

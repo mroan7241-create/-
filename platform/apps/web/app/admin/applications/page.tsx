@@ -15,6 +15,7 @@ import {
 import { useRoleGuard } from '../../lib/use-role-guard';
 import { AppShell } from '../../components/AppShell';
 import { FinancialSummary } from '../../components/FinancialSummary';
+import { licensePreviewKind } from '../../lib/license-preview';
 import { initialQueryParam } from '../../lib/query';
 import {
   cardStyle,
@@ -287,15 +288,17 @@ function ApplicationDetail({
         </ul>
         </>}
 
-        <h3 style={{ fontSize: 16, marginTop: 20, marginBottom: 8 }}>صورة الترخيص</h3>
+        <h3 style={{ fontSize: 16, marginTop: 20, marginBottom: 8 }}>ملف الترخيص</h3>
         {!application.hasLicenseFile ? (
           <p style={mutedStyle}>لا يوجد ملف ترخيص مرفق.</p>
+        ) : licenseUrl && licensePreviewKind(licenseUrl) === 'file' ? (
+          <a href={licenseUrl} target="_blank" rel="noopener noreferrer" style={secondaryButtonStyle}>فتح ملف الترخيص</a>
         ) : licenseUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={licenseUrl} alt="صورة الترخيص" style={{ maxWidth: '100%', borderRadius: 'var(--r-sm)', border: '1px solid var(--line)' }} />
         ) : (
           <button type="button" style={secondaryButtonStyle} onClick={showLicense}>
-            عرض صورة الترخيص
+            عرض ملف الترخيص
           </button>
         )}
         {licenseError && (
