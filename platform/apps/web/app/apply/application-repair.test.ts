@@ -8,6 +8,14 @@ import { createAutosaveQueue } from './autosave-queue.ts';
 import { CONSENT_VERSION, riyadhRecentYears, validateStep } from './application-form-utils.ts';
 // @ts-ignore -- standalone node --test, not a browser import
 import { financialSummary } from '../lib/financial-summary.ts';
+// @ts-ignore -- standalone node --test, not a browser import
+import { workflowLabel } from '../lib/workflow-label.ts';
+
+test('pending participation actions identify the actual application instead of indistinguishable records', () => {
+  assert.equal(workflowLabel({ application: { name: 'جمعية تجريبية', publicCode: 'APP-TEST' } }, 'participations'), 'جمعية تجريبية — APP-TEST');
+  assert.equal(workflowLabel({ association: { name: 'جمعية مفعلة' }, application: { name: 'طلب سابق', publicCode: 'APP-OLD' } }, 'participations'), 'جمعية مفعلة — APP-OLD');
+  assert.equal(workflowLabel({ publicCode: 'DEL-TEST' }, 'deliveries'), 'DEL-TEST');
+});
 
 test('financial indicators distinguish surplus, deficit and current liabilities without deciding eligibility', () => {
   assert.match(financialSummary({ revenue: 100, expenses: 120, currentAssets: 80, currentLiabilities: 90 }).join(' '), /عجز.*٢٠.*الخصوم المتداولة تتجاوز/);

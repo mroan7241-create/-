@@ -15,6 +15,7 @@ import {
 import { cardStyle, errorStyle, inputStyle, labelStyle, primaryButtonStyle, secondaryButtonStyle, successStyle } from '../lib/ui';
 import { reportValueLabel } from '../lib/report-labels';
 import Link from 'next/link';
+import { workflowLabel } from '../lib/workflow-label';
 
 type Section = { key: string; title: string; rows: WorkflowRecord[]; error?: string };
 export type WorkflowSectionKey = 'participations' | 'deliveries' | 'procurement' | 'escalations' | 'notifications' | 'beneficiaries' | 'outbox' | 'project-closure';
@@ -106,7 +107,7 @@ function BusinessCalendarSettings({ busy, act }: { busy: boolean; act: (action: 
 }
 
 function OperationalRow({ user, section, row, busy, setForm, act }: { user: CurrentUser; section: string; row: WorkflowRecord; busy: boolean; setForm: (form: OpenForm) => void; act: (action: () => Promise<unknown>, success?: string, credentialEmail?: string) => Promise<void> }) {
-  const publicLabel = String(row.publicCode ?? row.orderNumber ?? row.title ?? row.name ?? 'سجل تشغيلي');
+  const publicLabel = workflowLabel(row, section);
   const status = String(row.status ?? row.listType ?? '');
   const buttons: React.ReactNode[] = [];
   const button = (label: string, action: () => Promise<unknown>) => buttons.push(<button key={label} style={secondaryButtonStyle} disabled={busy} onClick={() => void act(action)}>{label}</button>);
