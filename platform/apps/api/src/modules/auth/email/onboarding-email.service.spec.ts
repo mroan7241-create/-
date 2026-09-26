@@ -36,4 +36,13 @@ describe('Onboarding notification privacy and delivery', () => {
     expect(email.lastSecurityAlert).toBeNull();
     expect(audit).not.toHaveBeenCalled();
   });
+
+  it('reports failed eligibility accurately without pretending the legacy status changed', async () => {
+    const email = new FakeEmailService();
+    jest.spyOn(prisma.associationApplication, 'findUniqueOrThrow').mockResolvedValue({ status: 'UNDER_REVIEW', eligibilityStatus: 'FAILED', eligibilityNotes: 'المتطلبات غير مكتملة', email: 'test@example.org', publicCode: 'APP-TEST', name: 'جمعية تجريبية' } as never);
+    jest.spyOn(prisma.auditLog, 'create').mockResolvedValue({} as never);
+    await new OnboardingEmailService(email).sendRejection('test-application');
+    expect(email.lastSecurityAlert?.body).toContain('لم يجتز طلبكم متطلبات الأهلية');
+    expect(email.lastSecurityAlert?.body).toContain('المتطلبات غير مكتملة');
+  });
 });

@@ -20,13 +20,13 @@ export class OnboardingEmailService {
 
   async sendRejection(applicationId: string): Promise<void> {
     const application = await prisma.associationApplication.findUniqueOrThrow({ where: { id: applicationId } });
-    if (application.status !== 'REJECTED') throw new Error('Application rejection is not committed');
+    if (application.status !== 'REJECTED' && application.eligibilityStatus !== 'FAILED') throw new Error('Application rejection is not committed');
     await this.deliver('APPLICATION_REJECTION_EMAIL', 'association_applications', applicationId, async () => {
       if (!application.email) throw new Error('Application notification email is missing');
       await this.email.sendSecurityAlert({
       to: application.email, name: application.name,
       subject: 'نتيجة طلب المشاركة — مشروع الأجهزة الكهربائية',
-      body: `شكرًا لتقديم جمعيتكم. نعتذر عن عدم قبول الطلب ${application.publicCode}.\nالسبب: ${application.rejectReason ?? 'عدم استيفاء متطلبات المشاركة'}\nمتابعة الطلب: ${publicWebUrl()}/apply/status\nنقدّر اهتمامكم بالمشروع.`,
+      body: `شكرًا لتقديم جمعيتكم. ${application.eligibilityStatus === 'FAILED' ? 'لم يجتز طلبكم متطلبات الأهلية' : 'نعتذر عن عدم قبول الطلب'} ${application.publicCode}.\nالسبب: ${application.rejectReason ?? application.eligibilityNotes ?? 'عدم استيفاء متطلبات المشاركة'}\nمتابعة الطلب: ${publicWebUrl()}/apply/status\nنقدّر اهتمامكم بالمشروع.`,
       });
     });
   }

@@ -362,7 +362,8 @@ export class ApplicationsService {
 
   async decideEligibility(ctx: AuthContext, id: string, decision: EligibilityStatus, notes: string | undefined, opId: string, evidence?: unknown) {
     if (decision === EligibilityStatus.PENDING) throw new ApiError('ELIGIBILITY_DECISION_INVALID', 'قرار الأهلية غير صالح', 400);
-    return prisma.$transaction(async (tx) => {
+    let newlyDecided = false;
+    const result = await prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'application-eligibility', opId, { id, decision, notes: notes ?? null });
       if (!claim.claimed) return claim.existingResponse!;
       const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM association_applications WHERE id=${id}::uuid FOR UPDATE`;
@@ -372,8 +373,10 @@ export class ApplicationsService {
       if (application.schemaVersion === 1 && application.answers.length !== QUESTION_KEYS.length) throw new ApiError('ELIGIBILITY_ANSWERS_INCOMPLETE', 'إجابات بوابة الأهلية غير مكتملة', 409);
       await tx.associationApplication.update({ where: { id }, data: { eligibilityStatus: decision, eligibilityNotes: notes?.trim() || null, eligibilityEvidence: evidence == null ? undefined : evidence as Prisma.InputJsonValue, eligibilityReviewedAt: new Date(), eligibilityReviewedById: ctx.accountId, ...(decision !== EligibilityStatus.PASSED ? { evaluationBreakdown: Prisma.DbNull, evaluationScore: null, evaluationRank: null, selectionList: AssociationSelectionList.NONE } : {}) } });
       await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_ELIGIBILITY_DECIDED', entityType: 'association_applications', entityId: id, metadata: { decision, notes: notes ?? null, evidence: evidence ?? null } as Prisma.InputJsonValue } });
-      const response = { ok: true as const }; await this.idempotency.complete(tx, ctx.accountId, 'application-eligibility', opId, response); return response;
+      const response = { ok: true as const }; await this.idempotency.complete(tx, ctx.accountId, 'application-eligibility', opId, response); newlyDecided = true; return response;
     });
+    if (newlyDecided && decision === EligibilityStatus.FAILED) await this.onboardingEmail.sendRejection(id);
+    return result;
   }
 
   async evaluate(ctx: AuthContext, id: string, input: EvaluationInput, opId: string) {

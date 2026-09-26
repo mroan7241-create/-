@@ -15,6 +15,24 @@ describe('Application V2 launch gate', () => {
   let app: INestApplication; let adminCookie: string; let fixtures: Awaited<ReturnType<typeof seedTestFixtures>>; let fakeEmail: FakeEmailService;
   const http = () => request(app.getHttpServer());
 
+  it('failed eligibility sends its real outcome once, after commit, without creating an account', async () => {
+    const suffix = randomUUID();
+    const application = await prisma.associationApplication.create({ data: { schemaVersion: 2, publicCode: `${PREFIX}${suffix}`, clientRequestId: suffix, name: `${PREFIX}عدم اجتياز اصطناعي`, region: 'الرياض', city: 'الرياض', email: `ineligible-${suffix}@example.org`, phone: '0550000000', contactName: 'ممثل تجريبي', v2Payload: {}, pledgeAccepted: true } });
+    const opId = randomUUID();
+    const route = `/api/v1/association-applications/${application.id}/eligibility`;
+    const input = { decision: 'FAILED', notes: 'متطلبات أهلية غير مكتملة', opId };
+    await http().post(route).set('Cookie', adminCookie).send(input).expect(201);
+    const persisted = await prisma.associationApplication.findUniqueOrThrow({ where: { id: application.id } });
+    expect(persisted.eligibilityStatus).toBe('FAILED');
+    expect(persisted.resultingAssociationId).toBeNull();
+    expect(fakeEmail.lastSecurityAlert?.to).toBe(application.email);
+    expect(fakeEmail.lastSecurityAlert?.body).toContain('متطلبات أهلية غير مكتملة');
+    fakeEmail.lastSecurityAlert = null;
+    await http().post(route).set('Cookie', adminCookie).send(input).expect(201);
+    expect(fakeEmail.lastSecurityAlert).toBeNull();
+    expect(await prisma.auditLog.count({ where: { entityId: application.id, action: 'APPLICATION_REJECTION_EMAIL_SENT' } })).toBe(1);
+  });
+
   beforeAll(async () => { await startTestStorage(); ({ app, fakeEmail } = await createTestApp()); fixtures = await seedTestFixtures(); }, 60_000);
   beforeEach(async () => { await cleanAuthState(); await cleanup(); await clearLicenseObjects(); fakeEmail.reset(); adminCookie = await loginAs(app, fixtures.adminEmail, fixtures.adminPassword); });
   afterAll(async () => { await cleanup(); await app.close(); await stopTestStorage(); });
