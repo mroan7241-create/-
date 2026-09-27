@@ -1,5 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { prisma } from '@alzad/db';
+import { prisma, Prisma } from '@alzad/db';
+import { createHash } from 'node:crypto';
+import { ApiError } from '../../../common/api-error';
 import { EmailService } from './email.service';
 
 /** Post-commit notifications. Never store a temporary credential in audit metadata. */
@@ -7,6 +9,47 @@ import { EmailService } from './email.service';
 export class OnboardingEmailService {
   private readonly logger = new Logger(OnboardingEmailService.name);
   constructor(@Inject(EmailService) private readonly email: EmailService) {}
+
+  async sendCovenantCompletion(agreementId: string, finalPdf: Buffer) {
+    const agreement = await prisma.participationAgreement.findUniqueOrThrow({ where: { id: agreementId }, include: { associationAccount: true, finalFile: true } });
+    const account = agreement.associationAccount;
+    if (agreement.status !== 'SIGNED' || !agreement.fullyExecutedAt || !agreement.finalFile || !account?.email || createHash('sha256').update(finalPdf).digest('hex') !== agreement.finalSha256) {
+      throw new ApiError('COVENANT_FINAL_NOT_FOUND', 'النسخة المعتمدة للميثاق غير متاحة', 409);
+    }
+    const key = `COVENANT_COMPLETION_EMAIL:${agreement.id}`;
+    const inserted = await prisma.systemSetting.createMany({ data: [{ key, value: { status: 'PROCESSING', attempts: 1 } }], skipDuplicates: true });
+    let attempts = 1;
+    if (!inserted.count) {
+      const row = await prisma.systemSetting.findUniqueOrThrow({ where: { key } });
+      const marker = row.value as { status?: string; attempts?: number };
+      if (marker.status === 'SENT') return { ok: true, alreadySent: true };
+      if ((marker.status === 'PROCESSING' && row.updatedAt.getTime() > Date.now() - 5 * 60_000) || (marker.attempts ?? 0) >= 5) return { ok: false };
+      attempts = (marker.attempts ?? 0) + 1;
+      const claimed = await prisma.systemSetting.updateMany({ where: { key, value: { equals: row.value as Prisma.InputJsonValue } }, data: { value: { status: 'PROCESSING', attempts } } });
+      if (!claimed.count) return { ok: false };
+    }
+    try {
+      await this.email.sendSecurityAlert({
+        to: account.email, name: account.name,
+        subject: 'اكتمال اعتماد الميثاق وتفعيل بوابة الجمعية — مشروع الأجهزة الكهربائية',
+        body: `اكتمل توقيع ميثاق الالتزام بالمشاركة والتنفيذ من الطرفين، وتم تفعيل بوابة جمعيتكم.\nرقم الميثاق: ${agreement.reference ?? agreement.id}\nتجدون النسخة المعتمدة مرفقة بهذه الرسالة، ويمكنكم الدخول ببيانات حسابكم الحالية ومباشرة مهام المشروع.\nبوابة الجمعية: ${publicWebUrl()}/association\nنسعد بشراكتكم، ونتطلع إلى تعاون مثمر.`,
+        action: { label: 'الدخول إلى بوابة الجمعية', url: `${publicWebUrl()}/association` },
+        pdfAttachment: { filename: `covenant-${agreement.reference ?? agreement.id}.pdf`, content: finalPdf },
+      });
+      await prisma.$transaction([
+        prisma.systemSetting.update({ where: { key }, data: { value: { status: 'SENT', attempts, sentAt: new Date().toISOString() } } }),
+        prisma.auditLog.create({ data: { action: 'COVENANT_COMPLETION_EMAIL_SENT', entityType: 'participation_agreements', entityId: agreement.id } }),
+      ]);
+      return { ok: true, alreadySent: false };
+    } catch {
+      await prisma.$transaction([
+        prisma.systemSetting.update({ where: { key }, data: { value: { status: 'FAILED', attempts } } }),
+        prisma.auditLog.create({ data: { action: 'COVENANT_COMPLETION_EMAIL_FAILED', entityType: 'participation_agreements', entityId: agreement.id } }),
+      ]);
+      this.logger.warn('Covenant completion email failed; retry through the authenticated Covenant page.');
+      return { ok: false };
+    }
+  }
 
   async sendCredentials(accountId: string, temporaryPassword: string): Promise<void> {
     const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });

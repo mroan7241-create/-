@@ -15,6 +15,8 @@ export interface SecurityAlertEmailParams {
   name: string;
   subject: string;
   body: string;
+  action?: { label: string; url: string };
+  pdfAttachment?: { filename: string; content: Buffer };
 }
 
 export interface ApplicationAccessEmailItem {

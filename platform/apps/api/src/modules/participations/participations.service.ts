@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { prisma, AccountRole, AccountStatus, AgreementStatus, AssociationSelectionList, AssociationStatus, AuthCredentialType, CoordinatorChangeStatus, FileCategory, ParticipationStatus, Prisma } from '@alzad/db';
 import { ApiError } from '../../common/api-error';
@@ -17,6 +17,7 @@ import { OnboardingEmailService } from '../auth/email/onboarding-email.service';
 
 @Injectable()
 export class ParticipationsService {
+  private readonly logger = new Logger(ParticipationsService.name);
   constructor(
     private readonly codes: PublicCodeService,
     private readonly idempotency: IdempotencyService,
@@ -226,6 +227,9 @@ export class ParticipationsService {
       });
       if (outcome.replayed) {
         for (const key of uploaded) await this.storage.deleteObjectBestEffort(key);
+      } else {
+        try { await this.onboardingEmail.sendCovenantCompletion(agreement.id, finalBytes); }
+        catch { this.logger.warn('Committed Covenant remains valid; completion email requires retry.'); }
       }
       return outcome.response;
     } catch (error) {
@@ -242,6 +246,15 @@ export class ParticipationsService {
         : null;
     if (!agreement?.finalFile || agreement.status !== AgreementStatus.SIGNED) throw new ApiError('COVENANT_FINAL_NOT_FOUND', 'النسخة النهائية للميثاق غير متاحة', 404);
     return { url: await this.storage.getSignedGetUrl(agreement.finalFile.objectKey, storageConfig.licenseSignedUrlSeconds), sha256: agreement.finalSha256 };
+  }
+
+  async sendOwnCovenantEmail(ctx: AuthContext) {
+    if (ctx.role !== AccountRole.ASSOCIATION || !ctx.associationId) throw new ApiError('COVENANT_NOT_FOUND', 'الميثاق غير متاح', 404);
+    const agreement = await prisma.participationAgreement.findFirst({ where: { participation: { associationId: ctx.associationId }, associationAccountId: ctx.accountId, status: AgreementStatus.SIGNED }, include: { finalFile: true }, orderBy: { version: 'desc' } });
+    if (!agreement?.finalFile) throw new ApiError('COVENANT_FINAL_NOT_FOUND', 'النسخة المعتمدة للميثاق غير متاحة', 404);
+    const result = await this.onboardingEmail.sendCovenantCompletion(agreement.id, await this.storage.getPrivateObject(agreement.finalFile.objectKey));
+    if (!result.ok) throw new ApiError('COVENANT_EMAIL_DELIVERY_FAILED', 'تعذر إرسال البريد حاليًا. حاول لاحقًا أو راجع الإدارة.', 503);
+    return result;
   }
 
   private async validPartyOneAgreement(token: string) {

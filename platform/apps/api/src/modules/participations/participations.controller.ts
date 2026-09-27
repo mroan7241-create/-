@@ -25,6 +25,7 @@ export class ParticipationsController {
   @Public() @Post('covenant/party-one/:token/sign') @UseInterceptors(FileInterceptor('signature', { limits: { fileSize: RECEIPT_EVIDENCE_MAX_BYTES + 1024 } }))
   partyOneSign(@Param('token') token: string, @Body() dto: PartyOneCovenantSignDto, @UploadedFile() signature?: Express.Multer.File) { return this.service.signPartyOne(token, dto.opId, { buffer: signature?.buffer ?? Buffer.alloc(0), declaredMimeType: signature?.mimetype }); }
   @Get('covenant/final') @Roles(AccountRole.ASSOCIATION) ownFinal(@CurrentUser() ctx: AuthContext) { return this.service.getFinalCovenantUrl(ctx); }
+  @Post('covenant/completion-email') @Roles(AccountRole.ASSOCIATION) ownCompletionEmail(@CurrentUser() ctx: AuthContext) { return this.service.sendOwnCovenantEmail(ctx); }
   @Get('agreements/:id/final') @Roles(AccountRole.ADMIN) adminFinal(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string) { return this.service.getFinalCovenantUrl(ctx, id); }
   @Post(':id/setup-complete') @Roles(AccountRole.ADMIN) setup(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: OperationDto) { return this.service.completeSetup(ctx, id, dto.opId); }
   @Post(':id/activate') @Roles(AccountRole.ADMIN) activate(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: OperationDto) { return this.service.activate(ctx, id, dto.opId); }

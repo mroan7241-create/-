@@ -11,7 +11,7 @@ import { financialSummary } from '../lib/financial-summary.ts';
 // @ts-ignore -- standalone node --test, not a browser import
 import { workflowLabel } from '../lib/workflow-label.ts';
 // @ts-ignore -- standalone node --test, not a browser import
-import { createAgreement, signAssociationCovenant } from '../lib/api.ts';
+import { createAgreement, sendOwnCovenantCompletionEmail, signAssociationCovenant } from '../lib/api.ts';
 // @ts-ignore -- standalone node --test, not a browser import
 import { licensePreviewKind } from '../lib/license-preview.ts';
 // @ts-ignore -- standalone node --test, not a browser import
@@ -46,6 +46,19 @@ test('Covenant signing explicitly transmits the two-month commitment', async () 
       return Response.json({ ok: true, status: 'SIGNED_BY_ORG' });
     };
     await signAssociationCovenant({ representativeName: 'ممثل تجريبي', representativeTitle: 'مدير', currentPassword: 'synthetic-only', signature: new File(['synthetic'], 'test.png', { type: 'image/png' }), completionAcknowledgement: true });
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('completed Covenant email uses authenticated own-account route without recipient or file input', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (input, init) => {
+      assert.match(String(input), /\/participations\/covenant\/completion-email$/);
+      assert.equal(init?.method, 'POST'); assert.equal(init?.credentials, 'include');
+      assert.deepEqual(JSON.parse(String(init?.body)), {});
+      return Response.json({ ok: true, alreadySent: false }, { status: 201 });
+    };
+    assert.deepEqual(await sendOwnCovenantCompletionEmail(), { ok: true, alreadySent: false });
   } finally { globalThis.fetch = originalFetch; }
 });
 

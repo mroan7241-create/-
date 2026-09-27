@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import nodemailer, { type Transporter } from 'nodemailer';
+import { emailLayout } from './email-layout';
 import {
   ApplicationAccessEmailParams,
   EmailService,
@@ -45,8 +46,10 @@ export class SmtpEmailService implements EmailService {
   }
 
   async sendSecurityAlert(params: SecurityAlertEmailParams): Promise<void> {
+    const action = params.action ? `<p><a href="${escapeAttribute(params.action.url)}" style="display:inline-block;background:#65102f;color:#fff;padding:12px 20px;text-decoration:none;border-radius:8px">${escapeHtml(params.action.label)}</a></p>` : '';
     await this.send(params.to, params.subject, `${params.name}\n\n${params.body}`,
-      layout(`مرحبًا ${escapeHtml(params.name)}`, `<p style="line-height:1.9">${escapeHtml(params.body).replace(/\n/g, '<br>')}</p>`));
+      layout(`السادة/ ${escapeHtml(params.name)} المحترمون`, `<p style="line-height:1.9;direction:rtl;text-align:right">${escapeHtml(params.body).replace(/\n/g, '<br>')}</p>${action}`),
+      params.pdfAttachment ? [{ filename: params.pdfAttachment.filename, content: params.pdfAttachment.content, contentType: 'application/pdf' }] : undefined);
   }
 
   async sendApplicationAccess(params: ApplicationAccessEmailParams): Promise<void> {
@@ -62,8 +65,8 @@ export class SmtpEmailService implements EmailService {
     await this.send(params.to, params.subject, params.text, layout(escapeHtml(params.subject), `<p style="line-height:1.9">${content}</p>`));
   }
 
-  private async send(to: string, subject: string, text: string, html: string): Promise<void> {
-    await this.transporter.sendMail({ from: this.from, to, subject, text, html });
+  private async send(to: string, subject: string, text: string, html: string, attachments?: Array<{ filename: string; content: Buffer; contentType: string }>): Promise<void> {
+    await this.transporter.sendMail({ from: this.from, to, subject, text, html, attachments });
   }
 }
 
@@ -88,5 +91,5 @@ function escapeAttribute(value: string): string {
 }
 
 function layout(title: string, body: string): string {
-  return `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"></head><body style="margin:0;background:#f8f4f5;font-family:Tahoma,Arial,sans-serif;color:#2b1720"><div style="max-width:620px;margin:0 auto;padding:28px"><div style="background:#fff;border-radius:14px;padding:28px;border:1px solid #eadce1"><h1 style="font-size:20px;color:#65102f">${title}</h1>${body}<p style="margin-top:24px;color:#6d5b62;font-size:13px">منصة مشروع الأجهزة الكهربائية — جمعية الزاد</p></div></div></body></html>`;
+  return emailLayout(title, body);
 }

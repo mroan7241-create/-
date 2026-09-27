@@ -870,6 +870,7 @@ export interface CovenantView {
   finalSha256: string | null; finalDocumentAvailable: boolean; partyOneRepresentative: string; partyOneTitle: string;
 }
 export function getOwnCovenant(): Promise<CovenantView> { return apiFetch('/participations/covenant'); }
+export function sendOwnCovenantCompletionEmail() { return apiFetch<{ ok: boolean; alreadySent: boolean }>('/participations/covenant/completion-email', { method: 'POST', body: JSON.stringify({}) }); }
 export function signAssociationCovenant(input: { representativeName: string; representativeTitle: string; currentPassword: string; signature: File; completionAcknowledgement: true }) {
   const form = new FormData(); form.set('representativeName', input.representativeName); form.set('representativeTitle', input.representativeTitle); form.set('authorizedAcknowledgement', 'true'); form.set('acceptanceAcknowledgement', 'true'); form.set('completionAcknowledgement', String(input.completionAcknowledgement)); form.set('currentPassword', input.currentPassword); form.set('opId', newOpId()); form.set('signature', input.signature); return apiUpload<{ ok: true; status: string }>('/participations/covenant/sign', form);
 }
