@@ -123,21 +123,26 @@ export async function backup() {
     const snapshot=join(directory,'snapshot'); await mkdir(snapshot,{mode:0o700});
     const objects=join(snapshot,'objects'); await mkdir(objects,{mode:0o700});
     const dump=join(snapshot,'database.dump');
+    console.log('BACKUP_STAGE: READ_ONLY_DATABASE_EXPORT');
     await run(process.env.PG_DUMP_PATH||'pg_dump',['--no-password','--format=custom','--schema=public','--no-owner','--no-acl','--lock-wait-timeout=15000','--file',dump],{env:{...process.env,...config.pg}});
     if((await stat(dump)).size===0) throw new Error('Empty database dump');
     await run(process.env.PG_RESTORE_PATH||'pg_restore',['--list',dump]);
+    console.log('BACKUP_STAGE: ISOLATED_RESTORE');
     const restoreVerification=await verifyRestore(dump);
+    console.log('BACKUP_STAGE: PRIVATE_OBJECTS');
     const s3=require('@aws-sdk/client-s3');
     const client=new s3.S3Client({endpoint:config.OBJECT_STORAGE_ENDPOINT,region:config.OBJECT_STORAGE_REGION,forcePathStyle:String(config.OBJECT_STORAGE_FORCE_PATH_STYLE||'true')==='true',credentials:{accessKeyId:config.OBJECT_STORAGE_ACCESS_KEY,secretAccessKey:config.OBJECT_STORAGE_SECRET_KEY},maxAttempts:3});
     let manifest;
     try { manifest=await collectObjects(client,s3,config.OBJECT_STORAGE_BUCKET,objects); } finally { client.destroy(); }
     await writeFile(join(snapshot,'manifest.json'),JSON.stringify({format:1,id,createdAt:new Date().toISOString(),database:{file:'database.dump',sha256:await hashFile(dump),schema:'public'},restoreVerification,objects:manifest,limitations:['No global atomic snapshot across database and object storage','Server roles, passwords and deployment secrets are not included']},null,2),{flag:'wx',mode:0o600});
     const archive=join(directory,'snapshot.tar.gz'),encrypted=join(directory,'backup.enc');
+    console.log('BACKUP_STAGE: ENCRYPTION');
     await run('tar',['-czf',archive,'-C',snapshot,'.']);
     await encryptFile(archive,encrypted,publicKey);
     const nodemailer=require('nodemailer');
     const secure=String(config.SMTP_SECURE)==='true';
     const transport=nodemailer.createTransport({host:config.SMTP_HOST,port:Number(config.SMTP_PORT),secure,requireTLS:!secure,auth:{user:config.SMTP_USER,pass:config.SMTP_PASSWORD},connectionTimeout:10000,greetingTimeout:10000,socketTimeout:60000,logger:false,debug:false});
+    console.log('BACKUP_STAGE: ENCRYPTED_EMAIL_DELIVERY');
     try { const result=await sendParts(transport,encrypted,{name:config.SMTP_FROM_NAME,address:config.SMTP_FROM_EMAIL},id); console.log(JSON.stringify({status:'SMTP_ACCEPTED',...result,objects:manifest.length})); } finally { transport.close(); }
   } finally {
     // Only this invocation's freshly created, known child directory is removed.
