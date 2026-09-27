@@ -45,9 +45,11 @@ export async function verifyRestore(dump, execute = capture) {
       catch { await new Promise(resolveWait => setTimeout(resolveWait, 1000)); }
     }
     if (!ready) throw new Error('Isolated restore database did not become ready');
-    // Technical Supabase policy roles only, inside this networkless disposable container.
+    // The dump recreates public. Remove only the empty initdb schema in our new
+    // networkless container (no CASCADE); never clean a restored or remote DB.
+    // Technical Supabase policy roles also exist only inside that container.
     await docker(['exec', name, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-d', 'alzad_backup_restore_test', '-c',
-      'CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN;']);
+      'DROP SCHEMA public; CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN;']);
     await docker(['exec', name, 'pg_restore', '--exit-on-error', '--no-owner', '--no-acl', '-U', 'postgres',
       '--dbname', 'alzad_backup_restore_test', '/backup.dump']);
     const query = "SELECT coalesce(json_agg(row_to_json(c)), '[]'::json) FROM (SELECT table_name, (xpath('/row/count/text()', query_to_xml(format('SELECT count(*) FROM %I.%I',table_schema,table_name),true,true,'')))[1]::text AS row_count FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name) c;";
