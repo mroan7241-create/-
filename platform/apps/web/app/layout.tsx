@@ -3,7 +3,7 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'منصة جمعية الزاد',
-  description: 'منصة توزيع الأجهزة الجديدة — RTL، لا تزال قيد الهجرة التدريجية من Google Apps Script.',
+  description: 'منصة جمعية الزاد لمشروع الأجهزة الكهربائية.',
 };
 
 /**

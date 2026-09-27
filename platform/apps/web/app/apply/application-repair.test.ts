@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 // Node's type-stripping runner needs explicit TypeScript extensions.
 // @ts-ignore -- standalone node --test, not a browser import
 import { createAutosaveQueue } from './autosave-queue.ts';
@@ -16,6 +17,13 @@ import { createAgreement, sendOwnCovenantCompletionEmail, signAssociationCovenan
 import { licensePreviewKind } from '../lib/license-preview.ts';
 // @ts-ignore -- standalone node --test, not a browser import
 import { covenantSigningError } from '../lib/covenant-signing.ts';
+
+test('shared link description identifies the platform without obsolete migration wording', () => {
+  const layout = readFileSync(new URL('../layout.tsx', import.meta.url), 'utf8');
+  const description = layout.match(/description:\s*'([^']+)'/)?.[1];
+  assert.equal(description, 'منصة جمعية الزاد لمشروع الأجهزة الكهربائية.');
+  assert.doesNotMatch(description!, /Google Apps Script|قيد الهجرة/);
+});
 
 test('Covenant validation identifies each missing requirement and does not accept an unconfirmed drawing', () => {
   const ready = { representativeName: 'ممثل', representativeTitle: 'مدير', authorized: true, accepted: true, completionAcknowledged: true, signatureReady: true, password: 'synthetic-only' };
