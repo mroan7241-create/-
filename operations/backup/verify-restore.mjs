@@ -5,10 +5,14 @@ export const POSTGRES_IMAGE = 'postgres:18@sha256:5a5a84b19854a9ffaa54082c166ff4
 
 export function capture(command, args, options = {}) {
   return new Promise((accept, reject) => {
-    const { timeoutMs = 5 * 60 * 1000, ...spawnOptions } = options;
+    const { timeoutMs = 5 * 60 * 1000, syntheticDiagnostics = false, ...spawnOptions } = options;
+    if (syntheticDiagnostics && (process.env.ALZAD_BACKUP_CONFIG || spawnOptions.env?.ALZAD_BACKUP_CONFIG)) {
+      reject(new Error('Synthetic diagnostics are forbidden with Production settings')); return;
+    }
     const child = spawn(command, args, { ...spawnOptions, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let output = '', overflow = false;
-    child.stderr.resume();
+    let output = '', overflow = false, diagnostic = '';
+    if (syntheticDiagnostics) child.stderr.on('data', bytes => { diagnostic = (diagnostic + bytes.toString()).slice(-4000); });
+    else child.stderr.resume();
     child.stdout.on('data', bytes => {
       output += bytes.toString();
       if (output.length > 2 * 1024 * 1024) { overflow = true; child.kill('SIGKILL'); }
@@ -17,7 +21,7 @@ export function capture(command, args, options = {}) {
     child.on('error', () => { clearTimeout(timer); reject(new Error('Isolated restore command could not start')); });
     child.on('close', code => {
       clearTimeout(timer);
-      code === 0 && !overflow ? accept(output.trim()) : reject(new Error('Isolated restore command failed or timed out'));
+      code === 0 && !overflow ? accept(output.trim()) : reject(new Error(syntheticDiagnostics ? `Synthetic ${command} failed: ${diagnostic}` : 'Isolated restore command failed or timed out'));
     });
   });
 }
