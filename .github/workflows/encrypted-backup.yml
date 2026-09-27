@@ -1,0 +1,70 @@
+name: encrypted-production-backup
+on:
+  schedule:
+    - cron: '0 3 * * *' # 06:00 Asia/Riyadh; GitHub may delay or drop a scheduled run.
+  workflow_dispatch:
+    inputs:
+      initial_verification:
+        description: 'Approved one-time backup/restore check before enabling the schedule'
+        type: boolean
+        default: false
+  push:
+    branches: [release/applicant-step1-20260921, codex/encrypted-backup-20260928]
+    paths: ['operations/backup/**', '.github/workflows/encrypted-backup.yml']
+permissions:
+  contents: read
+concurrency:
+  group: encrypted-production-backup
+  cancel-in-progress: false
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - run: node --test operations/backup/backup.test.mjs
+      - name: Verify PostgreSQL 18 client availability before any Production access
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client-18
+          /usr/lib/postgresql/18/bin/pg_dump --version
+      - name: Real synthetic dump/restore in two networkless disposable databases
+        run: node --test operations/backup/restore-integration.test.mjs
+  backup:
+    needs: test
+    if: >-
+      github.repository == 'mroan7241-create/-' &&
+      github.ref == 'refs/heads/platform/node-migration' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      (vars.BACKUP_ENABLED == 'true' ||
+       (github.event_name == 'workflow_dispatch' && inputs.initial_verification))
+    environment: production-backup
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Install locked dependencies without lifecycle scripts or Production secrets
+        working-directory: platform
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client-18
+      - name: Read-only export, private objects, encryption and SMTP
+        run: node operations/backup/backup.mjs
+        env:
+          ALZAD_BACKUP_CONFIG: ${{ secrets.ALZAD_BACKUP_CONFIG }}
+          BACKUP_PUBLIC_KEY: ${{ secrets.BACKUP_PUBLIC_KEY }}
+          PG_DUMP_PATH: /usr/lib/postgresql/18/bin/pg_dump
+          PG_RESTORE_PATH: /usr/lib/postgresql/18/bin/pg_restore
+      # No upload-artifact, cache of backups, commit, migration, seed, deploy or restore.
