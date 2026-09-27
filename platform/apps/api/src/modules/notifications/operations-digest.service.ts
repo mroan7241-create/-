@@ -139,18 +139,22 @@ export class OperationsDigestService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async claim(key: string) {
-    try {
-      await prisma.systemSetting.create({ data: { key, value: { status: 'PROCESSING', attempts: 1 } } });
-      return true;
-    } catch (error) {
-      if (!isUniqueViolation(error)) throw error;
-      const row = await prisma.systemSetting.findUnique({ where: { key } });
-      const marker = (row?.value ?? {}) as Marker;
-      if (marker.status === 'SENT' || marker.status === 'PROCESSING' || (marker.attempts ?? 0) >= MAX_ATTEMPTS) return false;
-      const attempts = (marker.attempts ?? 0) + 1;
-      await prisma.systemSetting.update({ where: { key }, data: { value: { status: 'PROCESSING', attempts } } });
-      return true;
-    }
+    // A previously claimed key is normal, not a Prisma/runtime error.
+    const inserted = await prisma.systemSetting.createMany({
+      data: [{ key, value: { status: 'PROCESSING', attempts: 1 } }], skipDuplicates: true,
+    });
+    if (inserted.count === 1) return true;
+    const row = await prisma.systemSetting.findUnique({ where: { key } });
+    if (!row) return false;
+    const marker = (row.value ?? {}) as Marker;
+    if (marker.status === 'SENT' || marker.status === 'PROCESSING' || (marker.attempts ?? 0) >= MAX_ATTEMPTS) return false;
+    const attempts = (marker.attempts ?? 0) + 1;
+    // Compare-and-set: only one worker can retry the same failed marker.
+    const claimed = await prisma.systemSetting.updateMany({
+      where: { key, value: { equals: row.value as Prisma.InputJsonValue } },
+      data: { value: { status: 'PROCESSING', attempts } },
+    });
+    return claimed.count === 1;
   }
 
   private async fail(key: string, error: unknown) {
@@ -168,7 +172,6 @@ function recipient() { return process.env.DAILY_DIGEST_RECIPIENT?.trim() || DEFA
 function productionCommit() { return process.env.APP_COMMIT_SHA?.trim() || process.env.GIT_COMMIT_SHA?.trim() || 'غير متاح'; }
 function readDate(value: unknown) { const date = typeof value === 'string' ? new Date(value) : null; return date && Number.isFinite(date.getTime()) ? date : null; }
 function safeError(error: unknown) { return error instanceof Error ? error.message : String(error); }
-function isUniqueViolation(error: unknown) { return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002'; }
 function pad(value: number) { return String(value).padStart(2, '0'); }
 function riyadhParts(value: Date) {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' }).formatToParts(value);
