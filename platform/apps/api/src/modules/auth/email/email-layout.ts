@@ -1,7 +1,7 @@
+export const EMAIL_LOGO_CID = 'alzad-approved-logo';
+
 /** Inline direction/alignment survives mail clients that discard html/body attributes. */
 export function emailLayout(title: string, body: string): string {
-  const web = new URL(process.env.PUBLIC_WEB_URL?.trim() || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3000'));
-  if (process.env.NODE_ENV === 'production' && web.protocol !== 'https:') throw new Error('PUBLIC_WEB_URL must use HTTPS');
-  const logo = `${web.origin}/brand/zadLogo.png`;
+  const logo = `cid:${EMAIL_LOGO_CID}`;
   return `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body dir="rtl" style="margin:0;background:#f8f4f5;font-family:Tahoma,Arial,sans-serif;color:#2b1720;direction:rtl;text-align:right"><table role="presentation" dir="rtl" width="100%" cellpadding="0" cellspacing="0" style="direction:rtl;text-align:right"><tr><td align="center" style="padding:20px 12px"><table role="presentation" dir="rtl" width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;background:#fff;border:1px solid #eadce1;border-radius:14px;direction:rtl;text-align:right"><tr><td dir="rtl" align="right" style="padding:24px;direction:rtl;text-align:right;line-height:1.8;overflow-wrap:anywhere"><img src="${logo}" width="96" alt="جمعية الزاد" style="display:block;width:96px;max-width:100%;height:auto;margin:0 0 16px auto"><p style="margin:0;color:#65102f;direction:rtl;text-align:right">جمعية الزاد — مشروع الأجهزة الكهربائية</p><h1 style="font-size:20px;color:#65102f;direction:rtl;text-align:right">${title}</h1><p style="direction:rtl;text-align:right">السلام عليكم ورحمة الله وبركاته،</p><div dir="rtl" style="direction:rtl;text-align:right">${body}</div><p style="margin-top:24px;color:#6d5b62;font-size:13px;direction:rtl;text-align:right">مع خالص التقدير،<br>جمعية الزاد</p></td></tr></table></td></tr></table></body></html>`;
 }

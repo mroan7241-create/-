@@ -16,10 +16,14 @@ describe('SMTP Arabic layout and completed Covenant attachment', () => {
     await new SmtpEmailService().sendSecurityAlert({ to: 'test@example.org', name: '<script>test</script>', subject: 'اكتمال الميثاق', body: '<script>unsafe</script>\nرسالة عربية', action: { label: 'بوابة الجمعية', url: 'https://web.example.org/association' }, pdfAttachment: { filename: 'covenant-test.pdf', content: pdf } });
     const sent = sendMail.mock.calls[0][0] as { html: string; attachments: unknown[] };
     expect(sent.html).toContain('dir="rtl"'); expect(sent.html).toContain('direction:rtl;text-align:right');
-    expect(sent.html).toContain('align="right"'); expect(sent.html).toContain('https://web.example.org/brand/zadLogo.png');
+    expect(sent.html).toContain('align="right"'); expect(sent.html).toContain('cid:alzad-approved-logo');
     expect(sent.html).toContain('width="96"'); expect(sent.html).not.toContain('<script>');
     expect(sent.html).toContain('السلام عليكم');
-    expect(sent.attachments).toEqual([{ filename: 'covenant-test.pdf', content: pdf, contentType: 'application/pdf' }]);
+    expect(sent.attachments).toHaveLength(2);
+    const logo = sent.attachments[0] as { content: Buffer; cid: string; contentType: string };
+    expect(logo.cid).toBe('alzad-approved-logo'); expect(logo.contentType).toBe('image/png');
+    expect(logo.content.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    expect(sent.attachments[1]).toEqual({ filename: 'covenant-test.pdf', content: pdf, contentType: 'application/pdf' });
   });
 
   it('applies the same branded Arabic template to tracking, password-reset and operational reports', async () => {
@@ -32,8 +36,8 @@ describe('SMTP Arabic layout and completed Covenant attachment', () => {
     expect(sendMail).toHaveBeenCalledTimes(3);
     for (const [value] of sendMail.mock.calls) {
       const sent = value as { html: string; attachments?: unknown[] };
-      expect(sent.html).toContain('align="right"'); expect(sent.html).toContain('/brand/zadLogo.png');
-      expect(sent.attachments).toBeUndefined();
+      expect(sent.html).toContain('align="right"'); expect(sent.html).toContain('cid:alzad-approved-logo');
+      expect(sent.attachments).toHaveLength(1);
     }
   });
 });

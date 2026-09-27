@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import nodemailer, { type Transporter } from 'nodemailer';
-import { emailLayout } from './email-layout';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { EMAIL_LOGO_CID, emailLayout } from './email-layout';
 import {
   ApplicationAccessEmailParams,
   EmailService,
@@ -13,8 +15,12 @@ import {
 export class SmtpEmailService implements EmailService {
   private readonly transporter: Transporter;
   private readonly from: { address: string; name: string };
+  private readonly logo: Buffer;
 
   constructor() {
+    const logoPath = [join(process.cwd(), 'apps', 'api', 'dist', 'assets', 'alzad-email-logo.png'), join(process.cwd(), 'dist', 'assets', 'alzad-email-logo.png'), join(process.cwd(), 'apps', 'api', 'src', 'assets', 'alzad-email-logo.png'), join(process.cwd(), 'src', 'assets', 'alzad-email-logo.png')].find(existsSync);
+    if (!logoPath) throw new Error('Email branding asset is missing');
+    this.logo = readFileSync(logoPath);
     const host = required('SMTP_HOST');
     const port = parsePort(required('SMTP_PORT'));
     const secureValue = required('SMTP_SECURE');
@@ -66,7 +72,7 @@ export class SmtpEmailService implements EmailService {
   }
 
   private async send(to: string, subject: string, text: string, html: string, attachments?: Array<{ filename: string; content: Buffer; contentType: string }>): Promise<void> {
-    await this.transporter.sendMail({ from: this.from, to, subject, text, html, attachments });
+    await this.transporter.sendMail({ from: this.from, to, subject, text, html, attachments: [{ filename: 'alzad-logo.png', content: this.logo, contentType: 'image/png', cid: EMAIL_LOGO_CID }, ...(attachments ?? [])] });
   }
 }
 
