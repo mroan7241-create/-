@@ -17,6 +17,7 @@ export class AssociationCovenantSignDto {
   @IsString() representativeTitle!: string;
   @IsBooleanString() authorizedAcknowledgement!: string;
   @IsBooleanString() acceptanceAcknowledgement!: string;
+  @IsOptional() @IsBooleanString() completionAcknowledgement?: string;
   @IsString() currentPassword!: string;
   @IsString() opId!: string;
 }

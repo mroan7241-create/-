@@ -108,12 +108,13 @@ export class ParticipationsService {
     return covenantView(participation, agreement);
   }
 
-  covenantTemplate() { return this.covenantDocument.templateBytes(); }
+  covenantTemplate() { return this.covenantDocument.previewBytes(); }
 
   async signAssociation(ctx: AuthContext, dto: AssociationCovenantSignDto, signature: { buffer: Buffer; declaredMimeType?: string }) {
     if (ctx.role !== AccountRole.ASSOCIATION || !ctx.associationId) throw new ApiError('COVENANT_NOT_FOUND', 'الميثاق غير متاح', 404);
     if (dto.authorizedAcknowledgement !== 'true') throw new ApiError('COVENANT_AUTHORIZATION_REQUIRED', 'إقرار التفويض بتمثيل الجمعية مطلوب', 400);
     if (dto.acceptanceAcknowledgement !== 'true') throw new ApiError('COVENANT_ACCEPTANCE_REQUIRED', 'إقرار الاطلاع والموافقة على الميثاق مطلوب', 400);
+    if (dto.completionAcknowledgement !== 'true') throw new ApiError('COVENANT_COMPLETION_REQUIRED', 'التعهد بإنجاز المهام وتسليم الأجهزة خلال شهرين من التوقيع مطلوب', 400);
     const validated = validateCovenantSignature(signature);
     const credential = await prisma.authCredential.findFirst({ where: { accountId: ctx.accountId, type: AuthCredentialType.EMAIL_PASSWORD } });
     if (!credential || !(await verifySecret(credential.secretHash, String(dto.currentPassword || '')))) throw new ApiError('COVENANT_PASSWORD_INVALID', 'كلمة المرور الحالية غير صحيحة', 400);
@@ -130,7 +131,7 @@ export class ParticipationsService {
         const file = await tx.fileObject.create({ data: { storageProvider: 's3', bucket: storageConfig.bucket, objectKey, originalName: 'association-covenant-signature', mimeType: validated.mime, sizeBytes: BigInt(signature.buffer.length), sha256: bufferSha256(signature.buffer), category: FileCategory.PARTICIPATION_AGREEMENT, uploadedById: ctx.accountId } });
         const now = new Date();
         await tx.participationAgreement.update({ where: { id: agreement.id }, data: { status: AgreementStatus.SIGNED_BY_ORG, orgSignerName: requiredText(dto.representativeName, 'اسم الممثل المخول', 200), orgSignerTitle: requiredText(dto.representativeTitle, 'صفة الممثل', 120), orgSignatureFileId: file.id, associationAccountId: ctx.accountId, signedByOrgAt: now } });
-        await audit(tx, ctx, 'COVENANT_ASSOCIATION_SIGNED', 'participation_agreements', agreement.id, { version: COVENANT_VERSION, templateSha256: COVENANT_SOURCE_SHA256 });
+        await audit(tx, ctx, 'COVENANT_ASSOCIATION_SIGNED', 'participation_agreements', agreement.id, { version: COVENANT_VERSION, templateSha256: COVENANT_SOURCE_SHA256, completionAcknowledgement: true, completionCommitment: 'أتعهد بإنجاز المهام وتسليم الأجهزة خلال شهرين من تاريخ توقيع هذا الميثاق.' });
         const response = { ok: true as const, status: AgreementStatus.SIGNED_BY_ORG };
         await this.idempotency.complete(tx, ctx.accountId, 'covenant-association-sign', dto.opId, response);
         return response;

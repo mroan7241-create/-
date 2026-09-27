@@ -11,9 +11,20 @@ import { financialSummary } from '../lib/financial-summary.ts';
 // @ts-ignore -- standalone node --test, not a browser import
 import { workflowLabel } from '../lib/workflow-label.ts';
 // @ts-ignore -- standalone node --test, not a browser import
-import { createAgreement } from '../lib/api.ts';
+import { createAgreement, signAssociationCovenant } from '../lib/api.ts';
 // @ts-ignore -- standalone node --test, not a browser import
 import { licensePreviewKind } from '../lib/license-preview.ts';
+// @ts-ignore -- standalone node --test, not a browser import
+import { covenantSigningError } from '../lib/covenant-signing.ts';
+
+test('Covenant validation identifies each missing requirement and does not accept an unconfirmed drawing', () => {
+  const ready = { representativeName: 'ممثل', representativeTitle: 'مدير', authorized: true, accepted: true, completionAcknowledged: true, signatureReady: true, password: 'synthetic-only' };
+  assert.equal(covenantSigningError(ready), '');
+  for (const key of ['authorized', 'accepted', 'completionAcknowledged', 'signatureReady'] as const) assert.notEqual(covenantSigningError({ ...ready, [key]: false }), '');
+  for (const key of ['representativeName', 'representativeTitle', 'password'] as const) assert.notEqual(covenantSigningError({ ...ready, [key]: '' }), '');
+  assert.match(covenantSigningError({ ...ready, signatureReady: false }), /اعتماد التوقيع/);
+  assert.match(covenantSigningError({ ...ready, password: '' }), /الحالية/);
+});
 
 test('PDF licenses open as documents while validated image uploads keep their preview', () => {
   assert.equal(licensePreviewKind('https://storage.example.org/private/license.pdf?signature=synthetic'), 'file');
@@ -21,6 +32,21 @@ test('PDF licenses open as documents while validated image uploads keep their pr
   assert.equal(licensePreviewKind('https://storage.example.org/private/license.jpg'), 'image');
   assert.equal(licensePreviewKind('https://storage.example.org/private/license.pdf?name=fake.png'), 'file');
   assert.equal(licensePreviewKind('invalid'), 'file');
+});
+
+test('Covenant signing explicitly transmits the two-month commitment', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (input, init) => {
+      assert.match(String(input), /\/participations\/covenant\/sign$/);
+      assert.ok(init?.body instanceof FormData);
+      assert.equal(init.body.get('completionAcknowledgement'), 'true');
+      assert.equal(init.body.get('authorizedAcknowledgement'), 'true');
+      assert.equal(init.body.get('acceptanceAcknowledgement'), 'true');
+      return Response.json({ ok: true, status: 'SIGNED_BY_ORG' });
+    };
+    await signAssociationCovenant({ representativeName: 'ممثل تجريبي', representativeTitle: 'مدير', currentPassword: 'synthetic-only', signature: new File(['synthetic'], 'test.png', { type: 'image/png' }), completionAcknowledgement: true });
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test('create Covenant button sends only the fields accepted by CreateAgreementDto', async () => {

@@ -870,8 +870,8 @@ export interface CovenantView {
   finalSha256: string | null; finalDocumentAvailable: boolean; partyOneRepresentative: string; partyOneTitle: string;
 }
 export function getOwnCovenant(): Promise<CovenantView> { return apiFetch('/participations/covenant'); }
-export function signAssociationCovenant(input: { representativeName: string; representativeTitle: string; currentPassword: string; signature: File }) {
-  const form = new FormData(); form.set('representativeName', input.representativeName); form.set('representativeTitle', input.representativeTitle); form.set('authorizedAcknowledgement', 'true'); form.set('acceptanceAcknowledgement', 'true'); form.set('currentPassword', input.currentPassword); form.set('opId', newOpId()); form.set('signature', input.signature); return apiUpload<{ ok: true; status: string }>('/participations/covenant/sign', form);
+export function signAssociationCovenant(input: { representativeName: string; representativeTitle: string; currentPassword: string; signature: File; completionAcknowledgement: true }) {
+  const form = new FormData(); form.set('representativeName', input.representativeName); form.set('representativeTitle', input.representativeTitle); form.set('authorizedAcknowledgement', 'true'); form.set('acceptanceAcknowledgement', 'true'); form.set('completionAcknowledgement', String(input.completionAcknowledgement)); form.set('currentPassword', input.currentPassword); form.set('opId', newOpId()); form.set('signature', input.signature); return apiUpload<{ ok: true; status: string }>('/participations/covenant/sign', form);
 }
 export function issuePartyOneSigningSession(agreementId: string): Promise<{ token: string; path: string; expiresAt: string }> { return apiFetch(`/participations/agreements/${agreementId}/party-one-session`, { method: 'POST' }); }
 export function getPartyOneCovenant(token: string): Promise<Record<string, string | null>> { return apiFetch(`/participations/covenant/party-one/${encodeURIComponent(token)}`); }

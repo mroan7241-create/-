@@ -8,7 +8,7 @@ export function SignaturePad({ onReady, label = 'التوقيع اليدوي' }:
   const drawing = useRef(false);
   const points = useRef<Array<[number, number]>>([]);
   const [confirmed, setConfirmed] = useState(false);
-  const [message, setMessage] = useState('وقّع داخل المساحة باستخدام الفأرة أو اللمس.');
+  const [message, setMessage] = useState('ارسم توقيعك بالفأرة أو اللمس، ثم اضغط «اعتماد التوقيع».');
 
   useEffect(() => {
     const canvas = canvasRef.current;

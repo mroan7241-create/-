@@ -7,6 +7,7 @@ import { PDFDocument, PDFPage, PDFFont, rgb } from 'pdf-lib';
 import reshaper from 'arabic-persian-reshaper';
 
 export const COVENANT_VERSION = '1.0';
+export const COVENANT_TITLE = 'ميثاق الالتزام بالمشاركة والتنفيذ';
 export const COVENANT_SOURCE_SHA256 = '66A8B13E96F07CF98E64B082C137E8B47C9A89065987C544B2D899A648A857D3';
 export const PARTY_ONE_NAME = 'الأستاذ/ موسى بن عبد الله اليحيى';
 export const PARTY_ONE_TITLE = 'المدير التنفيذي';
@@ -36,6 +37,12 @@ export class CovenantDocumentService {
     return bytes;
   }
 
+  async previewBytes(): Promise<Buffer> {
+    const pdf = await PDFDocument.load(this.templateBytes(), { updateMetadata: false });
+    pdf.setTitle(COVENANT_TITLE);
+    return Buffer.from(await pdf.save({ useObjectStreams: false, addDefaultPage: false }));
+  }
+
   async generateFinal(input: FinalCovenantInput): Promise<Buffer> {
     const pdf = await PDFDocument.load(this.templateBytes(), { updateMetadata: false });
     pdf.registerFontkit(fontkit);
@@ -61,7 +68,7 @@ export class CovenantDocumentService {
     drawRtl(page, font, COVENANT_SOURCE_SHA256, 470, 156, 5.4, 155);
     drawRtl(page, font, 'مكتمل ومعتمد', 268, 156, 7.2, 135);
 
-    pdf.setTitle(`Covenant ${input.reference}`);
+    pdf.setTitle(`${COVENANT_TITLE} — ${input.reference}`);
     pdf.setSubject(`Covenant V${COVENANT_VERSION} - ${input.associationName}`);
     pdf.setProducer('Alzad Platform');
     pdf.setCreationDate(input.partyOneSignedAt);

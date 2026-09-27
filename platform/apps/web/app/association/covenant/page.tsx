@@ -7,6 +7,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { SignaturePad } from '../../components/SignaturePad';
 import { ApiClientError, covenantTemplateUrl, getFinalCovenantUrl, getOwnCovenant, signAssociationCovenant, type CovenantView } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { covenantSigningError } from '../../lib/covenant-signing';
 import { cardStyle, errorStyle, inputStyle, labelStyle, primaryButtonStyle, secondaryButtonStyle, successStyle } from '../../lib/ui';
 
 export default function AssociationCovenantPage() {
@@ -18,6 +19,7 @@ export default function AssociationCovenantPage() {
   const [representativeTitle, setRepresentativeTitle] = useState('');
   const [authorized, setAuthorized] = useState(false);
   const [accepted, setAccepted] = useState(false);
+  const [completionAcknowledged, setCompletionAcknowledged] = useState(false);
   const [password, setPassword] = useState('');
   const [signature, setSignature] = useState<File | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -39,11 +41,17 @@ export default function AssociationCovenantPage() {
   }, [user]);
 
   async function submit() {
-    if (!signature || !authorized || !accepted || !representativeName.trim() || !representativeTitle.trim() || !password) { setError('أكمل بيانات الممثل والإقرارين والتوقيع وكلمة المرور الحالية.'); setConfirming(false); return; }
+    if (!validateSigning() || !signature) { setConfirming(false); return; }
     setBusy(true); setError('');
-    try { await signAssociationCovenant({ representativeName, representativeTitle, currentPassword: password, signature }); setPassword(''); setConfirming(false); setCovenant(await getOwnCovenant()); }
+    try { await signAssociationCovenant({ representativeName, representativeTitle, currentPassword: password, signature, completionAcknowledgement: true }); setPassword(''); setConfirming(false); setCovenant(await getOwnCovenant()); }
     catch (reason) { setError(readError(reason)); setConfirming(false); }
     finally { setBusy(false); }
+  }
+
+  function validateSigning() {
+    const message = covenantSigningError({ representativeName, representativeTitle, authorized, accepted, completionAcknowledged, signatureReady: Boolean(signature), password });
+    setError(message);
+    return !message;
   }
 
   async function downloadFinal() { const result = await getFinalCovenantUrl(); window.open(result.url, '_blank', 'noopener,noreferrer'); }
@@ -58,9 +66,10 @@ export default function AssociationCovenantPage() {
         {covenant.status === 'SIGNED_BY_ORG' ? <section style={{ ...cardStyle, ...successStyle }}><h2>تم اعتماد الميثاق من الجمعية</h2><p>بانتظار استكمال اعتماد الطرف الأول. ستظل العمليات مقيدة حتى اكتمال التوقيعين.</p><p>ممثل الجمعية: {covenant.representativeName} — {covenant.representativeTitle}</p></section> : <section style={cardStyle}><h2>توقيع ممثل الجمعية المخول</h2><div className="form-grid"><label style={labelStyle}>اسم الممثل المخول<input style={inputStyle} maxLength={200} value={representativeName} onChange={(event) => setRepresentativeName(event.target.value)} /></label><label style={labelStyle}>الصفة<input style={inputStyle} maxLength={120} value={representativeTitle} onChange={(event) => setRepresentativeTitle(event.target.value)} /></label></div>
           <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBlock: 14 }}><input type="checkbox" checked={authorized} onChange={(event) => setAuthorized(event.target.checked)} />أقر بأنني مخول بتمثيل الجمعية واعتماد هذا الميثاق نيابة عنها.</label>
           <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBlock: 14 }}><input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.target.checked)} />أقر بأنني اطلعت على الميثاق وفهمت أحكامه وأوافق عليها.</label>
+          <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBlock: 14 }}><input type="checkbox" checked={completionAcknowledged} onChange={(event) => setCompletionAcknowledged(event.target.checked)} />أتعهد بإنجاز المهام وتسليم الأجهزة خلال شهرين من تاريخ توقيع هذا الميثاق.</label>
           <SignaturePad onReady={setSignature} />
           <label style={{ ...labelStyle, marginTop: 14 }}>كلمة المرور الحالية للتأكيد النهائي<input type="password" autoComplete="current-password" style={inputStyle} value={password} onChange={(event) => setPassword(event.target.value)} /></label>
-          <button type="button" style={{ ...primaryButtonStyle, marginTop: 14 }} disabled={busy} onClick={() => setConfirming(true)}>مراجعة واعتماد الميثاق</button>
+          <button type="button" style={{ ...primaryButtonStyle, marginTop: 14 }} disabled={busy} onClick={() => { if (validateSigning()) setConfirming(true); }}>مراجعة واعتماد الميثاق</button>
         </section>}
       </>}
     </div>
