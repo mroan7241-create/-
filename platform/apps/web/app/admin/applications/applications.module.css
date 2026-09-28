@@ -1,0 +1,95 @@
+.hero {
+  padding: clamp(22px, 3vw, 34px);
+  margin-bottom: 18px;
+  border-radius: 22px;
+  color: #fff;
+  background: linear-gradient(115deg, #64112c, #9b3547 70%, #b36e45);
+}
+
+.hero h1 {
+  margin: 8px 0;
+  font-size: clamp(24px, 2.6vw, 34px);
+}
+
+.hero p {
+  margin: 0;
+  max-width: 58ch;
+  line-height: 1.7;
+}
+
+.eyebrow {
+  font-size: 13px;
+  opacity: .85;
+}
+
+.sections {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.sectionButton {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 12px;
+  text-align: start;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  cursor: pointer;
+}
+
+.sectionButton:hover,
+.sectionButton:focus-visible {
+  border-color: #8b2944;
+  box-shadow: 0 0 0 2px #8b294422;
+}
+
+.sectionActive {
+  border-color: #8b2944;
+  background: #fff7f6;
+  box-shadow: inset 0 -3px #8b2944;
+}
+
+.sectionButton strong,
+.sectionButton small {
+  display: block;
+}
+
+.sectionButton strong {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.sectionButton small {
+  margin-top: 3px;
+  color: #655e62;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.number {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: #fff;
+  background: #8b2944;
+  font-size: 12px;
+}
+
+@media (max-width: 1100px) {
+  .sections { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 600px) {
+  .sections { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sectionButton { padding: 11px 9px; }
+  .sectionButton small { display: none; }
+}

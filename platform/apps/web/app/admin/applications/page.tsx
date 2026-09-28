@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
 import {
   APPLICATION_STATUS_LABELS,
   ApiClientError,
@@ -15,6 +14,8 @@ import {
 import { useRoleGuard } from '../../lib/use-role-guard';
 import { AppShell } from '../../components/AppShell';
 import { SelectionBoard } from '../selection/page';
+import { WorkflowHub } from '../../components/WorkflowHub';
+import styles from './applications.module.css';
 import { FinancialSummary } from '../../components/FinancialSummary';
 import { licensePreviewKind } from '../../lib/license-preview';
 import { initialQueryParam } from '../../lib/query';
@@ -36,6 +37,14 @@ import {
 } from '../../lib/ui';
 
 const PAGE_SIZE = 25;
+type WorkspaceSection = 'review' | 'selection' | 'files' | 'activation' | 'settings';
+const WORKSPACE_SECTIONS: Array<{ key: WorkspaceSection; title: string; description: string }> = [
+  { key: 'review', title: 'المراجعة والأهلية', description: 'طلبات جديدة، استكمال، واجتياز' },
+  { key: 'selection', title: 'التقييم والاختيار', description: 'درجات، أساسية، واحتياطية' },
+  { key: 'activation', title: 'الميثاق والتفعيل', description: 'الاتفاقية، التجهيز، والدخول' },
+  { key: 'files', title: 'ملفات الطلبات', description: 'بحث وتفاصيل كل جمعية' },
+  { key: 'settings', title: 'موعد التقديم', description: 'التحكم في فترة الاستقبال' },
+];
 
 export default function AdminApplicationsPage() {
   const { user, loading: guardLoading } = useRoleGuard(['ADMIN']);
@@ -50,6 +59,10 @@ export default function AdminApplicationsPage() {
   const [workflow, setWorkflow] = useState('');
   const [checked, setChecked] = useState<string[]>([]);
   const [actionMessage, setActionMessage] = useState('');
+  const [activeSection, setActiveSection] = useState<WorkspaceSection>(() => {
+    const requested = initialQueryParam('view');
+    return WORKSPACE_SECTIONS.some(({ key }) => key === requested) ? requested as WorkspaceSection : initialQueryParam('status') ? 'files' : 'review';
+  });
 
   const load = useCallback(async () => {
     setListError(null);
@@ -65,15 +78,32 @@ export default function AdminApplicationsPage() {
   }, [page, search, status, workflow]);
 
   useEffect(() => {
-    if (user) void load();
-  }, [user, load]);
+    if (user && activeSection === 'files') void load();
+  }, [user, load, activeSection]);
 
   if (guardLoading || !user) return null;
 
   return (
     <AppShell user={user}>
-      <div className="workflow-row" style={{ marginBottom: 16 }}><div><h1 style={{ fontSize: 22, marginBottom: 6 }}>طلبات انضمام الجمعيات</h1><p style={mutedStyle}>الطلب ← الأهلية ← التقييم ← اختيار القائمة الأساسية أو الاحتياطية ← الاتفاقية والتجهيز ← التفعيل</p></div></div>
-      <SelectionBoard />
+      <header className={styles.hero}>
+        <span className={styles.eyebrow}>إدارة انضمام الجمعيات</span>
+        <h1>من الطلب إلى التفعيل</h1>
+        <p>راجع الأهلية، اختر الجمعيات الأساسية، ثم تابع الميثاق والتفعيل في مكان واحد.</p>
+      </header>
+      <nav className={styles.sections} aria-label="مراحل انضمام الجمعيات">
+        {WORKSPACE_SECTIONS.map((section, index) => <button
+          key={section.key}
+          type="button"
+          className={`${styles.sectionButton} ${activeSection === section.key ? styles.sectionActive : ''}`}
+          aria-current={activeSection === section.key ? 'step' : undefined}
+          onClick={() => setActiveSection(section.key)}
+        ><span className={styles.number}>{index + 1}</span><span><strong>{section.title}</strong><small>{section.description}</small></span></button>)}
+      </nav>
+      {activeSection === 'review' && <section aria-label="المراجعة والأهلية"><SelectionBoard mode="review" /></section>}
+      {activeSection === 'selection' && <section aria-label="التقييم والاختيار"><SelectionBoard mode="selection" /></section>}
+      {activeSection === 'activation' && <section aria-label="الميثاق والتفعيل"><WorkflowHub user={user} sectionKeys={['participations']} /></section>}
+      {activeSection === 'settings' && <section aria-label="موعد التقديم"><SelectionBoard mode="settings" /></section>}
+      {activeSection === 'files' && <section aria-label="ملفات الطلبات">
       <h2>تفاصيل الطلبات والبحث</h2>
       <div className="button-row" style={{ marginBottom: 16 }}>{[['','الكل'],['new','جديدة'],['processing','قيد المعالجة'],['missing','بانتظار الاستكمال']].map(([key,label]) => <button key={key} type="button" style={workflow === key ? primaryButtonStyle : secondaryButtonStyle} onClick={() => { setWorkflow(key); setPage(1); }}>{label}{data && 'counts' in data ? ` (${(data as Paginated<ApplicationSummary> & { counts?: Record<string, number> }).counts?.[key || 'all'] ?? 0})` : ''}</button>)}</div>
       {actionMessage && <p role="status" style={actionMessage.startsWith('تم') ? { color: 'var(--success)' } : errorStyle}>{actionMessage}</p>}
@@ -193,6 +223,7 @@ export default function AdminApplicationsPage() {
           onClose={() => setSelected(null)}
         />
       )}
+      </section>}
     </AppShell>
   );
 }
@@ -320,7 +351,7 @@ function ApplicationDetail({
             <h3 style={{ fontSize: 16 }}>الخطوة التالية</h3>
             <p style={mutedStyle}>هذا الملف للجاهزية والتقييم فقط. اجتياز الأهلية لا ينشئ جمعية ولا يولّد بيانات دخول. التفعيل يتم لاحقًا بعد الاختيار والاتفاقية والتجهيز.</p>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              <a href="/admin/selection" style={{ ...primaryButtonStyle, textDecoration: 'none' }}>فتح الأهلية والتقييم والاختيار</a>
+              <a href="/admin/applications" style={{ ...primaryButtonStyle, textDecoration: 'none' }}>فتح مراحل الأهلية والتقييم</a>
             </div>
           </div>
         )}

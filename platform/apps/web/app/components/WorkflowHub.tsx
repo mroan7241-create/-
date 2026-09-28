@@ -17,6 +17,7 @@ import { reportValueLabel } from '../lib/report-labels';
 import Link from 'next/link';
 import { workflowLabel } from '../lib/workflow-label';
 import { canPrepareCovenant } from '../lib/covenant-selection';
+import { settleSelectedWorkflowJobs, type WorkflowJob } from './workflow-jobs';
 
 type Section = { key: string; title: string; rows: WorkflowRecord[]; error?: string };
 export type WorkflowSectionKey = 'participations' | 'deliveries' | 'procurement' | 'escalations' | 'notifications' | 'beneficiaries' | 'outbox' | 'project-closure';
@@ -33,23 +34,18 @@ export function WorkflowHub({ user, sectionKeys }: { user: CurrentUser; sectionK
   const sectionKeySignature = sectionKeys?.join('|') ?? '';
 
   const load = useCallback(async () => {
-    let jobs: Array<[WorkflowSectionKey, string, Promise<unknown>]> = [
-      ['participations', 'المشاركات والاتفاقيات', listParticipations()],
-      ['deliveries', 'اعتمادات التسليم والإرجاع', listDeliveries({ pageSize: 100 })],
-      ['procurement', 'أوامر الشراء والشحنات', listProcurement()],
-      ['escalations', 'التصعيدات', listEscalations()],
-      ['notifications', 'الإشعارات', listNotifications()],
-      ['beneficiaries', 'قوائم المستفيدين', apiFetch('/beneficiaries?page=1&pageSize=100')],
+    const jobs: WorkflowJob<WorkflowSectionKey>[] = [
+      ['participations', 'المشاركات والاتفاقيات', () => listParticipations()],
+      ['deliveries', 'اعتمادات التسليم والإرجاع', () => listDeliveries({ pageSize: 100 })],
+      ['procurement', 'أوامر الشراء والشحنات', () => listProcurement()],
+      ['escalations', 'التصعيدات', () => listEscalations()],
+      ['notifications', 'الإشعارات', () => listNotifications()],
+      ['beneficiaries', 'قوائم المستفيدين', () => apiFetch('/beneficiaries?page=1&pageSize=100')],
     ];
-    if (user.role === 'ADMIN') jobs.push(['outbox', 'مراقبة أحداث الأتمتة المتعثرة', listOutboxFailures()]);
-    if (user.role === 'ADMIN') jobs.push(['project-closure', 'التقرير الختامي للمشروع', getProjectClosure().then((report) => report ? [report] : [])]);
-    if (sectionKeySignature) {
-      const requestedKeys = sectionKeySignature.split('|') as WorkflowSectionKey[];
-      jobs = jobs.filter(([key]) => requestedKeys.includes(key));
-    }
-    const settled = await Promise.allSettled(jobs.map((job) => job[2]));
-    setSections(settled.map((result, index) => {
-      const [key, title] = jobs[index];
+    if (user.role === 'ADMIN') jobs.push(['outbox', 'مراقبة أحداث الأتمتة المتعثرة', () => listOutboxFailures()]);
+    if (user.role === 'ADMIN') jobs.push(['project-closure', 'التقرير الختامي للمشروع', () => getProjectClosure().then((report) => report ? [report] : [])]);
+    const settled = await settleSelectedWorkflowJobs(jobs, sectionKeySignature ? sectionKeySignature.split('|') as WorkflowSectionKey[] : undefined);
+    setSections(settled.map(({ key, title, result }) => {
       if (result.status === 'rejected') return { key, title, rows: [], error: readError(result.reason) };
       const body = result.value as { items?: WorkflowRecord[] };
       return { key, title, rows: Array.isArray(body) ? body : body.items ?? [] };

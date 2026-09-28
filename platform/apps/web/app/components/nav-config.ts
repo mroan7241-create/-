@@ -43,7 +43,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/admin/deliveries', label: 'عمليات التسليم', icon: Truck, roles: ['ADMIN'], available: true, group: 'العمليات' },
   { href: '/admin/activities', label: 'متابعة المشروع', icon: TrendingUp, roles: ['ADMIN'], available: true, group: 'المتابعة' },
   { href: '/admin/reports', label: 'التقارير', icon: FileBarChart, roles: ['ADMIN'], available: true, group: 'المتابعة' },
-  { href: '/admin/participation', label: 'الاتفاقيات والتفعيل', icon: Workflow, roles: ['ADMIN'], available: true, group: 'المتابعة' },
+  { href: '/admin/participation', label: 'الاتفاقيات والتفعيل', icon: Workflow, roles: ['ADMIN'], available: false, group: 'المتابعة' },
   { href: '/admin/procurement', label: 'المشتريات والشحنات', icon: ClipboardList, roles: ['ADMIN'], available: true, group: 'العمليات' },
   { href: '/admin/escalations', label: 'التصعيدات والإغلاق', icon: Target, roles: ['ADMIN'], available: true, group: 'المتابعة' },
   { href: '/admin/audit', label: 'سجل العمليات', icon: ScrollText, roles: ['ADMIN'], available: true, group: 'السجل والبيانات' },
