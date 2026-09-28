@@ -13,6 +13,7 @@ const MAGIC = Buffer.from('ALZADBK1');
 const RECIPIENT = 'marwanalsawi@alzaad.org.sa';
 const PART_SIZE = 8 * 1024 * 1024;
 const MAX_EMAIL_BYTES = 64 * 1024 * 1024;
+const CAPACITY_WARNING_BYTES = 48 * 1024 * 1024;
 const require = createRequire(new URL('../../platform/apps/api/package.json', import.meta.url));
 const missing = name => { throw new Error(`Missing or invalid backup setting: ${name}`); };
 export function configuration(raw) {
@@ -109,6 +110,7 @@ export function assertSnapshotReferences(references, manifest, bucket) {
 export async function sendParts(transport,encryptedPath,from,id) {
   const size=(await stat(encryptedPath)).size,parts=Math.ceil(size/PART_SIZE),sha256=await hashFile(encryptedPath);
   if(size===0||size>MAX_EMAIL_BYTES) throw new Error('Backup exceeds safe email size limit; no parts sent');
+  const capacityWarning=size>=CAPACITY_WARNING_BYTES;
   let index=0;
   while(index<parts) {
     const chunks=[];
@@ -117,12 +119,12 @@ export async function sendParts(transport,encryptedPath,from,id) {
     if(content.length!==Math.min(PART_SIZE,size-index*PART_SIZE)) throw new Error('Incomplete backup part');
     index++;
     const filename=`alzad-${id}.enc.part-${String(index).padStart(4,'0')}`;
-    const text=`نسخة احتياطية مشفّرة — الجزء ${index} من ${parts}.\nمعرّف النسخة: ${id}\nاحتفظ بجميع الأجزاء. يلزم مفتاح الاستعادة المنفصل لفكها.\nSHA256 للملف المشفّر الكامل: ${sha256}\nيشمل مخطط public وبياناته وملفات التخزين الخاص. لا يشمل أسرار التشغيل أو كلمات مرور أدوار PostgreSQL.`;
+    const text=`نسخة احتياطية مشفّرة — الجزء ${index} من ${parts}.\nمعرّف النسخة: ${id}\nاحتفظ بجميع الأجزاء. يلزم مفتاح الاستعادة المنفصل لفكها.\nSHA256 للملف المشفّر الكامل: ${sha256}\nيشمل مخطط public وبياناته وملفات التخزين الخاص. لا يشمل أسرار التشغيل أو كلمات مرور أدوار PostgreSQL.${capacityWarning?'\nتنبيه سعة: اقترب حجم النسخة من حد البريد 64 MiB. يلزم اعتماد قناة تسليم/احتفاظ بديلة قبل تجاوز الحد.':''}`;
     const result=await transport.sendMail({from,to:RECIPIENT,subject:`النسخة الاحتياطية اليومية المشفّرة — ${id} — ${index}/${parts}`,text,html:`<div dir="rtl" style="text-align:right;font-family:Tahoma,Arial">${text.replaceAll('\n','<br>')}</div>`,attachments:[{filename,content,contentType:'application/octet-stream'}]});
     if(!result.accepted?.some(address=>String(address).toLowerCase()===RECIPIENT)) throw new Error('Backup recipient was not accepted by SMTP');
   }
   if(index!==parts) throw new Error('Incomplete backup part delivery');
-  return {id,parts,bytes:size,sha256};
+  return {id,parts,bytes:size,sha256,capacityWarning};
 }
 export async function backup() {
   const config=configuration(process.env.ALZAD_BACKUP_CONFIG);

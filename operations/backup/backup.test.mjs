@@ -51,7 +51,11 @@ test('multipart delivery preserves every byte and refuses oversized backups befo
     const path=join(dir,'parts'),payload=Buffer.alloc(8*1024*1024+123,42),received=[];
     await writeFile(path,payload);
     const result=await sendParts({sendMail:async message=>{received.push(message.attachments[0].content);return {accepted:['marwanalsawi@alzaad.org.sa']};}},path,{},'multipart-test');
-    assert.equal(result.parts,2);assert.deepEqual(Buffer.concat(received),payload);
+    assert.equal(result.parts,2);assert.equal(result.capacityWarning,false);assert.deepEqual(Buffer.concat(received),payload);
+    const warningFile=await open(path,'w');try {await warningFile.truncate(48*1024*1024);} finally {await warningFile.close();}
+    let warnings=0;
+    const nearLimit=await sendParts({sendMail:async message=>{if(message.text.includes('تنبيه سعة')) warnings++;return {accepted:['marwanalsawi@alzaad.org.sa']};}},path,{},'near-limit-test');
+    assert.equal(nearLimit.capacityWarning,true);assert.equal(warnings,nearLimit.parts);
     const file=await open(path,'w');try {await file.truncate(64*1024*1024+1);} finally {await file.close();}
     let attempts=0;await assert.rejects(sendParts({sendMail:async()=>{attempts++;}},path,{},'oversized-test'));assert.equal(attempts,0);
   } finally {await rm(dir,{recursive:true,force:true});}
