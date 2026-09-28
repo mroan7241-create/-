@@ -2,7 +2,7 @@ import request from 'supertest';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import cookieParser from 'cookie-parser';
-import { prisma, DeviceType, DeviceStatus, NeedFulfillmentStatus } from '@alzad/db';
+import { prisma, DeviceType, DeviceStatus, NeedFulfillmentStatus, OutboxEventType } from '@alzad/db';
 import { AppModule } from '../src/app.module';
 import { HttpExceptionFilter } from '../src/common/http-exception.filter';
 import { EmailService } from '../src/modules/auth/email/email.service';
@@ -12,6 +12,7 @@ import { loginAs } from './utils/node2-fixtures';
 import { cleanNode3State, createBeneficiary, newOpId, seedNode3Fixtures, type Node3Fixtures } from './utils/node3-fixtures';
 import { cleanNode4State, createAndSendBatch, confirmBatchRequest } from './utils/node4-fixtures';
 import { startTestStorage, stopTestStorage } from './utils/storage-harness';
+import { ALLOCATION_TRIGGER_PORT, type AllocationTriggerPort } from '../src/modules/allocation/allocation-trigger.port';
 
 jest.setTimeout(60000);
 
@@ -143,6 +144,30 @@ describe('DELIVERY-RETURN — إرجاع جهاز للمستودع نهائيً�
     const movement = await prisma.deviceMovement.findFirstOrThrow({ where: { deviceId, referenceId: missionId, reason: 'physical-return-confirmed' } });
     expect(movement.fromLocationType).toBe('DELEGATE');
     expect(movement.toLocationType).toBe('WAREHOUSE');
+  });
+
+  it('تأكيد الإرجاع يبقى ناجحًا ومحفوظًا عند فشل التخصيص وكتابة الحدث بعد الالتزام', async () => {
+    const { missionId, delegateCookie } = await assignedBeneficiary();
+    await http().post(`/api/v1/deliveries/${missionId}/return`).set('Cookie', delegateCookie)
+      .send({ notes: 'اختبار فشل التخصيص', opId: newOpId('return-before-failure') }).expect(201);
+    const trigger = app.get<AllocationTriggerPort>(ALLOCATION_TRIGGER_PORT);
+    const allocationFailure = jest.spyOn(trigger, 'triggerForAssociation').mockRejectedValue(new Error('injected allocation failure'));
+    const postCommitWrite = jest.spyOn(prisma.outboxEvent, 'create').mockRejectedValue(new Error('injected post-commit outbox failure'));
+    const opId = newOpId('return-post-commit');
+    try {
+      const first = await http().post(`/api/v1/deliveries/${missionId}/confirm-return`).set('Cookie', assocACookie)
+        .send({ condition: 'GOOD', notes: 'استلام تجريبي موثق', opId });
+      expect(first.status).toBe(201);
+      const second = await http().post(`/api/v1/deliveries/${missionId}/confirm-return`).set('Cookie', assocACookie)
+        .send({ condition: 'GOOD', notes: 'استلام تجريبي موثق', opId });
+      expect(second.status).toBe(201);
+      expect(postCommitWrite).not.toHaveBeenCalled();
+      expect((await prisma.deliveryMission.findUniqueOrThrow({ where: { id: missionId } })).status).toBe('RETURNED');
+      expect(await prisma.outboxEvent.count({ where: { type: OutboxEventType.ALLOCATION_RETRY_DUE, payload: { path: ['missionId'], equals: missionId } } })).toBe(1);
+    } finally {
+      postCommitWrite.mockRestore();
+      allocationFailure.mockRestore();
+    }
   });
 
   it('إرجاع جهاز محرَّر يُعاد تخصيصه فورًا لمستفيد آخر جاهز (allocation trigger يعمل بعد الإرجاع)', async () => {

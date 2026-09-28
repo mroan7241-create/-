@@ -10,6 +10,7 @@ import {
   DeviceType,
   NeedDecisionStatus,
   NeedFulfillmentStatus,
+  OutboxEventType,
 } from '@alzad/db';
 import { AppModule } from '../src/app.module';
 import { HttpExceptionFilter } from '../src/common/http-exception.filter';
@@ -594,6 +595,27 @@ describe('NODE-3 — مراجعة المستفيدين والاحتياجات', 
 
       const row = await prisma.beneficiary.findUniqueOrThrow({ where: { id } });
       expect(row.reviewStatus).toBe(BeneficiaryReviewStatus.APPROVED);
+    });
+
+    it('فشل التخصيص بعد حفظ المراجعة لا يجعل القرار فاشلًا أو قابلًا للتكرار', async () => {
+      spy.failFor.add(fx.associationAId);
+      const { id, needIds } = await createBeneficiary(app, assocACookie);
+      const opId = newOpId('review-post-commit');
+      const body = { opId, beneficiaryDecision: 'APPROVED', needDecisions: [{ needId: needIds[0], decision: 'APPROVED' }] };
+      const postCommitWrite = jest.spyOn(prisma.outboxEvent, 'create').mockRejectedValue(new Error('post-commit outbox unavailable'));
+      try {
+        const first = await http().post(`/api/v1/beneficiaries/${id}/review`).set('Cookie', adminCookie).send(body);
+        expect(first.status).toBe(201);
+        expect(first.body.replayed).toBe(false);
+        const second = await http().post(`/api/v1/beneficiaries/${id}/review`).set('Cookie', adminCookie).send(body);
+        expect(second.status).toBe(201);
+        expect(second.body.replayed).toBe(true);
+        expect(postCommitWrite).not.toHaveBeenCalled();
+        expect((await prisma.beneficiary.findUniqueOrThrow({ where: { id } })).reviewStatus).toBe(BeneficiaryReviewStatus.APPROVED);
+        expect(await prisma.outboxEvent.count({ where: { type: OutboxEventType.ALLOCATION_RETRY_DUE, payload: { path: ['beneficiaryId'], equals: id } } })).toBe(1);
+      } finally {
+        postCommitWrite.mockRestore();
+      }
     });
   });
 

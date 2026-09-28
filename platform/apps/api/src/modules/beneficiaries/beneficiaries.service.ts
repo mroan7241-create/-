@@ -12,6 +12,7 @@ import {
   DeliveryStatus,
   EscalationStatus,
   OutboxEventType,
+  OutboxEventStatus,
 } from '@alzad/db';
 import { ApiError, authForbidden } from '../../common/api-error';
 import { PublicCodeService } from '../../common/public-code.service';
@@ -765,7 +766,7 @@ export class BeneficiariesService {
         outcome.result.beneficiaryDecision === BeneficiaryReviewStatus.APPROVED &&
         outcome.result.approvedCount > 0
       ) {
-        await this.fireAllocationTrigger(outcome.result.associationId);
+        await this.fireAllocationTrigger(outcome.result.associationId, [outcome.allocationEventId].filter((eventId): eventId is string => !!eventId));
       }
     }
 
@@ -790,6 +791,7 @@ export class BeneficiariesService {
     const success: { beneficiaryId: string; approvedCount: number; rejectedCount: number }[] = [];
     const failed: { beneficiaryId: string; code: string; error: string }[] = [];
     const associationIdsToAllocate = new Set<string>();
+    const allocationEventIds = new Map<string, string[]>();
 
     // كل عنصر **معاملته الذرّية المستقلة**: قاعدة "كل شيء أو لا شيء" تبقى
     // محصورة داخل العنصر الواحد، لا عبر الدفعة. فشل عنصر لا يُرجِع أي
@@ -818,6 +820,11 @@ export class BeneficiariesService {
           ) {
             // Patch 3.2A.1: تُجمَع الجمعيات فقط، ولا يُشغَّل التخصيص هنا.
             associationIdsToAllocate.add(outcome.result.associationId);
+            if (outcome.allocationEventId) {
+              const ids = allocationEventIds.get(outcome.result.associationId) ?? [];
+              ids.push(outcome.allocationEventId);
+              allocationEventIds.set(outcome.result.associationId, ids);
+            }
           }
         }
       } catch (error) {
@@ -845,7 +852,7 @@ export class BeneficiariesService {
     // عناصرها الناجحة إلى failed.
     const allocationWarnings: { associationId: string; error: string }[] = [];
     for (const associationId of associationIdsToAllocate) {
-      const warning = await this.fireAllocationTrigger(associationId);
+      const warning = await this.fireAllocationTrigger(associationId, allocationEventIds.get(associationId) ?? []);
       if (warning) allocationWarnings.push({ associationId, error: warning });
     }
 
@@ -885,7 +892,7 @@ export class BeneficiariesService {
 
     return prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<ReviewOutcome>(tx, ctx.accountId, scope, input.opId, payload);
-      if (!claim.claimed) return { replayed: true as const, result: claim.existingResponse! };
+      if (!claim.claimed) return { replayed: true as const, result: claim.existingResponse!, allocationEventId: null as string | null };
 
       // `SELECT ... FOR UPDATE` — مراجعتان متزامنتان لنفس المستفيد
       // تتسلسلان هنا؛ الثانية ترى الحالة المبتوتة وتُرفض بـ409 نظيف.
@@ -1007,8 +1014,12 @@ export class BeneficiariesService {
         rejectedCount: resolved.length - approvedCount,
         associationId: locked.association_id,
       };
+      const allocationEventId = approvedCount > 0 ? (await tx.outboxEvent.create({ data: {
+        type: OutboxEventType.ALLOCATION_RETRY_DUE,
+        payload: { associationId: locked.association_id, source: 'beneficiary-review', beneficiaryId: id },
+      } })).id : null;
       await this.idempotency.complete(tx, ctx.accountId, scope, input.opId, result);
-      return { replayed: false as const, result };
+      return { replayed: false as const, result, allocationEventId };
     });
   }
 
@@ -1019,7 +1030,7 @@ export class BeneficiariesService {
     const reason = requiredText(reasonRaw, 'سبب قرار القائمة', 1000);
     const outcome = await prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'beneficiary-list-decision', opId, { id, listType, listRank: listRank ?? null, reason });
-      if (!claim.claimed) return { response: claim.existingResponse!, associationId: null as string | null, triggerAllocation: false };
+      if (!claim.claimed) return { response: claim.existingResponse!, associationId: null as string | null, triggerAllocation: false, allocationEventId: null as string | null };
       await tx.$queryRaw`SELECT id FROM beneficiaries WHERE id=${id}::uuid FOR UPDATE`;
       const beneficiary = await tx.beneficiary.findUnique({ where: { id } });
       if (!beneficiary || beneficiary.reviewStatus !== BeneficiaryReviewStatus.APPROVED) throw new ApiError('BENEFICIARY_LIST_INELIGIBLE', 'المستفيد غير معتمد للقائمة', 409);
@@ -1027,10 +1038,14 @@ export class BeneficiariesService {
       await tx.beneficiary.update({ where: { id }, data: { listType, listRank: listType === BeneficiaryListType.REJECTED ? null : listRank, listReason: reason, listApprovedAt: new Date(), listApprovedById: ctx.accountId } });
       await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'BENEFICIARY_LIST_DECIDED', entityType: 'beneficiaries', entityId: id, associationId: beneficiary.associationId, metadata: { listType, listRank: listRank ?? null, reason } } });
       const response = { ok: true as const };
+      const allocationEventId = listType === BeneficiaryListType.MAIN ? (await tx.outboxEvent.create({ data: {
+        type: OutboxEventType.ALLOCATION_RETRY_DUE,
+        payload: { associationId: beneficiary.associationId, source: 'beneficiary-list-decision', beneficiaryId: id },
+      } })).id : null;
       await this.idempotency.complete(tx, ctx.accountId, 'beneficiary-list-decision', opId, response);
-      return { response, associationId: beneficiary.associationId, triggerAllocation: listType === BeneficiaryListType.MAIN };
+      return { response, associationId: beneficiary.associationId, triggerAllocation: listType === BeneficiaryListType.MAIN, allocationEventId };
     });
-    if (outcome.triggerAllocation && outcome.associationId) await this.fireAllocationTrigger(outcome.associationId);
+    if (outcome.triggerAllocation && outcome.associationId) await this.fireAllocationTrigger(outcome.associationId, [outcome.allocationEventId].filter((eventId): eventId is string => !!eventId));
     return outcome.response;
   }
 
@@ -1077,17 +1092,20 @@ export class BeneficiariesService {
    * البذرة تُستدعى **بعد** التزام معاملة المراجعة حصرًا، وفشلها لا يُسقط
    * قرارًا نجح فعليًا — يُلتقَط ويُعاد كتحذير فقط (نفس عزل audit).
    */
-  private async fireAllocationTrigger(associationId: string): Promise<string | null> {
+  private async fireAllocationTrigger(associationId: string, eventIds: string[]): Promise<string | null> {
     try {
       await this.allocationTrigger.triggerForAssociation(associationId);
+      if (eventIds.length > 0) {
+        try {
+          await prisma.outboxEvent.updateMany({ where: { id: { in: eventIds }, status: OutboxEventStatus.PENDING }, data: { status: OutboxEventStatus.PROCESSED, processedAt: new Date() } });
+        } catch (error) {
+          this.logger.warn(`نجح التخصيص لكن تعذّر إغلاق أحداثه للجمعية ${associationId}؛ ستُعاد بأمان: ${String(error)}`);
+        }
+      }
       return null;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(`نجح قرار المراجعة فعليًا لكن فشلت إشارة التخصيص للجمعية ${associationId}: ${message}`);
-      await prisma.outboxEvent.create({ data: {
-        type: OutboxEventType.ALLOCATION_RETRY_DUE,
-        payload: { associationId, source: 'beneficiary-review', error: message },
-      } });
       return message;
     }
   }

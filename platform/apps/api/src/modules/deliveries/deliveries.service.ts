@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import {
   prisma,
@@ -18,6 +18,7 @@ import {
   DeliveryApprovalStage,
   ReturnCondition,
   OutboxEventType,
+  OutboxEventStatus,
 } from '@alzad/db';
 import { ApiError, authForbidden } from '../../common/api-error';
 import { PublicCodeService } from '../../common/public-code.service';
@@ -51,6 +52,7 @@ import type { AuthContext } from '../auth/auth.types';
  */
 @Injectable()
 export class DeliveriesService {
+  private readonly logger = new Logger(DeliveriesService.name);
   constructor(
     private readonly publicCode: PublicCodeService,
     private readonly idempotency: IdempotencyService,
@@ -502,7 +504,7 @@ export class DeliveriesService {
   async confirmPhysicalReturn(ctx: AuthContext, missionId: string, input: { condition: ReturnCondition; notes: string; opId: string }, adminOverride = false) {
     if (!input.notes?.trim()) throw new ApiError('RETURN_CONFIRMATION_REASON_REQUIRED', 'ملاحظات/سبب تأكيد الإرجاع مطلوبة', 400);
     const outcome = await prisma.$transaction(async (tx) => {
-      const scope = adminOverride ? 'delivery-return-admin-override' : 'delivery-return-confirm'; const claim = await this.idempotency.claim<{ ok: true; associationId: string }>(tx, ctx.accountId, scope, input.opId, { missionId, condition: input.condition, notes: input.notes }); if (!claim.claimed) return { replayed: true as const, ...claim.existingResponse! };
+      const scope = adminOverride ? 'delivery-return-admin-override' : 'delivery-return-confirm'; const claim = await this.idempotency.claim<{ ok: true; associationId: string }>(tx, ctx.accountId, scope, input.opId, { missionId, condition: input.condition, notes: input.notes }); if (!claim.claimed) return { replayed: true as const, ...claim.existingResponse!, allocationEventId: null as string | null };
       await tx.$queryRaw`SELECT id FROM delivery_missions WHERE id=${missionId}::uuid FOR UPDATE`;
       const mission = await tx.deliveryMission.findUnique({ where: { id: missionId } }); if (!mission || (!adminOverride && mission.associationId !== ctx.associationId)) throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
       if (mission.status !== DeliveryStatus.PENDING_RETURN_APPROVAL) throw new ApiError('RETURN_CONFIRMATION_INVALID', 'المهمة ليست بانتظار تأكيد الإرجاع', 409);
@@ -512,17 +514,12 @@ export class DeliveriesService {
       await tx.deviceUnit.updateMany({ where: { id: { in: allocations.map((a) => a.deviceId) } }, data: input.condition === ReturnCondition.GOOD ? { status: DeviceStatus.WAREHOUSE, currentLocationType: DeviceMovementLocationType.WAREHOUSE, currentLocationRef: null } : { status: DeviceStatus.DAMAGED, currentLocationType: DeviceMovementLocationType.DAMAGED_HOLDING, currentLocationRef: null } });
       if (input.condition === ReturnCondition.DAMAGED) await tx.damageCase.createMany({ data: allocations.map((a) => ({ deviceId: a.deviceId, associationId: mission.associationId, quantity: 1, description: input.notes.trim() })) });
       await tx.beneficiaryNeed.updateMany({ where: { id: { in: needs.map((n) => n.id) } }, data: { fulfillmentStatus: NeedFulfillmentStatus.AWAITING_DEVICE } }); await tx.deliveryMission.update({ where: { id: missionId }, data: { status: DeliveryStatus.RETURNED, returnCondition: input.condition } });
-      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, associationId: mission.associationId, action: adminOverride ? 'DELIVERY_RETURN_ADMIN_OVERRIDE' : 'DELIVERY_PHYSICAL_RETURN_CONFIRMED', entityType: 'delivery_missions', entityId: missionId, metadata: { condition: input.condition, notes: input.notes } } }); const response = { ok: true as const, associationId: mission.associationId }; await this.idempotency.complete(tx, ctx.accountId, scope, input.opId, response); return { replayed: false as const, ...response };
+      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, associationId: mission.associationId, action: adminOverride ? 'DELIVERY_RETURN_ADMIN_OVERRIDE' : 'DELIVERY_PHYSICAL_RETURN_CONFIRMED', entityType: 'delivery_missions', entityId: missionId, metadata: { condition: input.condition, notes: input.notes } } });
+      const allocationEventId = (await tx.outboxEvent.create({ data: { type: OutboxEventType.ALLOCATION_RETRY_DUE, payload: { associationId: mission.associationId, source: 'physical-return', missionId } } })).id;
+      const response = { ok: true as const, associationId: mission.associationId }; await this.idempotency.complete(tx, ctx.accountId, scope, input.opId, response); return { replayed: false as const, ...response, allocationEventId };
     });
     if (!outcome.replayed) {
-      try {
-        await this.allocationTrigger.triggerForAssociation(outcome.associationId);
-      } catch (error) {
-        await prisma.outboxEvent.create({ data: {
-          type: OutboxEventType.ALLOCATION_RETRY_DUE,
-          payload: { associationId: outcome.associationId, source: 'physical-return', missionId, error: String(error) },
-        } });
-      }
+      await this.triggerAllocationAfterCommittedReturn(outcome.associationId, outcome.allocationEventId);
     }
     return { ok: true as const };
   }
@@ -535,7 +532,7 @@ export class DeliveriesService {
 
     const outcome = await prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ attemptId: string; associationId: string }>(tx, ctx.accountId, 'delivery-return', input.opId, { missionId, ...input });
-      if (!claim.claimed) return { replayed: true as const, attemptId: claim.existingResponse!.attemptId, associationId: claim.existingResponse!.associationId };
+      if (!claim.claimed) return { replayed: true as const, attemptId: claim.existingResponse!.attemptId, associationId: claim.existingResponse!.associationId, allocationEventId: null as string | null };
 
       const mission = await tx.deliveryMission.findUnique({ where: { id: missionId } });
       if (!mission) throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
@@ -593,23 +590,32 @@ export class DeliveriesService {
       });
 
       const response = { attemptId: attempt.id, associationId: mission.associationId };
+      const allocationEventId = (await tx.outboxEvent.create({ data: { type: OutboxEventType.ALLOCATION_RETRY_DUE, payload: { associationId: mission.associationId, source: 'legacy-return', missionId } } })).id;
       await this.idempotency.complete(tx, ctx.accountId, 'delivery-return', input.opId, response);
-      return { replayed: false as const, attemptId: attempt.id, associationId: mission.associationId };
+      return { replayed: false as const, attemptId: attempt.id, associationId: mission.associationId, allocationEventId };
     });
 
     if (!outcome.replayed) {
       await this.audit.log(this.actor(ctx), 'DELIVERY_RETURNED', 'delivery_missions', missionId, { attemptId: outcome.attemptId });
       // إعادة تقييم فورية أفضل من انتظار الحدث التالي — فشلها لا يُسقط عملية الإرجاع نفسها (نفس مبدأ fireAllocationTrigger في beneficiaries.service.ts).
-      try {
-        await this.allocationTrigger.triggerForAssociation(outcome.associationId);
-      } catch (error) {
-        await prisma.outboxEvent.create({ data: {
-          type: OutboxEventType.ALLOCATION_RETRY_DUE,
-          payload: { associationId: outcome.associationId, source: 'legacy-return', missionId, error: String(error) },
-        } });
-      }
+      await this.triggerAllocationAfterCommittedReturn(outcome.associationId, outcome.allocationEventId);
     }
     return { ok: true as const, attemptId: outcome.attemptId };
+  }
+
+  private async triggerAllocationAfterCommittedReturn(associationId: string, eventId: string | null) {
+    try {
+      await this.allocationTrigger.triggerForAssociation(associationId);
+    } catch (error) {
+      this.logger.warn(`نجح الإرجاع لكن تعذّر التخصيص للجمعية ${associationId}؛ حدث إعادة المحاولة محفوظ: ${String(error)}`);
+      return;
+    }
+    if (!eventId) return;
+    try {
+      await prisma.outboxEvent.updateMany({ where: { id: eventId, status: OutboxEventStatus.PENDING }, data: { status: OutboxEventStatus.PROCESSED, processedAt: new Date() } });
+    } catch (error) {
+      this.logger.warn(`نجح الإرجاع والتخصيص لكن تعذّر إغلاق الحدث ${eventId}؛ ستُعاد المحاولة بأمان: ${String(error)}`);
+    }
   }
 
   // ================================================================
