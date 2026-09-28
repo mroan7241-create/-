@@ -194,7 +194,7 @@ describe('Application V2 launch gate', () => {
     await http().post(informationPath).set(auth).send({ payload: { organization: { officialEmail: 'invalid' } }, opId: randomUUID() }).expect(400);
     expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: application.id } })).email).toBe(original.organization.officialEmail);
     const collision = await prisma.associationApplication.create({ data: { publicCode: `${PREFIX}${randomUUID()}`, name: `${PREFIX}تعارض تجريبي`, region: 'الرياض', city: 'الرياض', phone: `05${randomInt(10000000, 100000000)}`, email: `collision-${randomUUID()}@example.org`, contactName: 'تجريبي', pledgeAccepted: true, pledgeAcceptedAt: new Date() } });
-    await http().post(informationPath).set(auth).send({ payload: { organization: { officialEmail: collision.email } }, opId: randomUUID() }).expect(409);
+    await http().post(informationPath).set(auth).send({ payload: { ...corrected, organization: { ...corrected.organization, officialEmail: collision.email } }, opId: randomUUID() }).expect(409);
     expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: application.id } })).email).toBe(original.organization.officialEmail);
     await http().post(informationPath).set(auth).send({ payload: corrected, opId: randomUUID() }).expect(201);
     const current = await prisma.associationApplication.findUniqueOrThrow({ where: { id: application.id } });
