@@ -13,7 +13,13 @@ export class DashboardService {
       delegates, devicesWithDelegate, devicesDelivered, deliveriesPreparing,
       deliveriesOutWithDelegate, deliveriesFailed, activities, recentOperations,
     ] = await prisma.$transaction([
-      prisma.associationApplication.count({ where: { status: 'UNDER_REVIEW' } }),
+      prisma.associationApplication.count({ where: {
+        status: 'UNDER_REVIEW',
+        OR: [
+          { eligibilityStatus: 'PENDING' },
+          { eligibilityStatus: 'PASSED', selectionList: 'NONE' },
+        ],
+      } }),
       prisma.association.count({ where: { archivedAt: null } }),
       prisma.association.count({ where: { archivedAt: null, status: 'ACTIVE' } }),
       prisma.association.count({ where: { archivedAt: null, status: 'INACTIVE' } }),

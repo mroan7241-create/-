@@ -144,6 +144,21 @@ describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
     const res = await http().get(`/api/v1/association-applications?page=${encodeURIComponent(page)}`).set('Cookie', adminCookie);
     expect(res.status).toBe(400);
   });
+
+  it('ملخص الإدارة لا يحسب طلب غير مجتاز ضمن الطلبات التي تنتظر إجراء', async () => {
+    const pending = await createApplication();
+    const failed = await createApplication();
+    await prisma.associationApplication.update({ where: { id: failed.id }, data: { eligibilityStatus: EligibilityStatus.FAILED } });
+
+    const dashboard = () => http().get('/api/v1/dashboard/admin').set('Cookie', adminCookie);
+    expect((await dashboard()).body.counts.pendingApplications).toBe(1);
+
+    await prisma.associationApplication.update({ where: { id: pending.id }, data: { eligibilityStatus: EligibilityStatus.PASSED } });
+    expect((await dashboard()).body.counts.pendingApplications).toBe(1);
+
+    await prisma.associationApplication.update({ where: { id: pending.id }, data: { selectionList: 'MAIN' } });
+    expect((await dashboard()).body.counts.pendingApplications).toBe(0);
+  });
   it('قيمة includeCounts غير صالحة تُرفض بدل تجاوز التحقق', async () => {
     await http().get('/api/v1/association-applications?includeCounts=maybe').set('Cookie', adminCookie).expect(400);
   });
