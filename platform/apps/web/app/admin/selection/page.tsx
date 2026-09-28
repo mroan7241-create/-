@@ -90,7 +90,7 @@ export function SelectionBoard({ showHeader = false, mode = 'all' }: { showHeade
   }
   const groups = mode === 'review' ? SELECTION_GROUPS.filter((group) => ['ACTION', 'NEW', 'PROCESSING', 'NEEDS_INFO', 'FAILED'].includes(group.key)) : mode === 'selection' ? SELECTION_GROUPS.filter((group) => ['PASSED_UNSELECTED', 'MAIN', 'RESERVE'].includes(group.key)) : SELECTION_GROUPS;
   const activeFilter = groups.some((group) => group.key === filter) ? filter : groups[0]?.key ?? 'ACTION';
-  const visible = useMemo(() => apps.filter((app) => activeFilter === 'ALL' || (activeFilter === 'ACTION' ? ACTIONABLE_GROUPS.includes(selectionGroup(app)) : selectionGroup(app) === activeFilter)), [apps, activeFilter]);
+  const visible = apps.filter((app) => activeFilter === 'ALL' || (activeFilter === 'ACTION' ? ACTIONABLE_GROUPS.includes(selectionGroup(app)) : selectionGroup(app) === activeFilter));
   const counts = useMemo(() => Object.fromEntries(SELECTION_GROUPS.map((group) => [group.key, apps.filter((app) => group.key === 'ALL' || (group.key === 'ACTION' ? ACTIONABLE_GROUPS.includes(selectionGroup(app)) : selectionGroup(app) === group.key)).length])) as Record<SelectionGroup, number>, [apps]);
   const ranked = useMemo(() => apps.filter((app) => app.eligibilityStatus === 'PASSED' && app.evaluationScore != null).sort((a, b) => (b.evaluationScore ?? 0) - (a.evaluationScore ?? 0) || a.publicCode.localeCompare(b.publicCode, 'ar')), [apps]);
   return <>
