@@ -92,6 +92,7 @@ export class ApplicationsService {
     if (input.website && input.website.trim().length > 0) {
       return FAKE_HONEYPOT_SUCCESS;
     }
+    await this.settings.assertApplicationIntakeOpen();
 
     // 2) clientRequestId
     const clientRequestId = String(input.clientRequestId ?? '').trim();
@@ -173,6 +174,8 @@ export class ApplicationsService {
       await this.storage.uploadPrivateObject(objectKey, licenseFileBuffer, detectedMime);
       if (initialUpload && initialObjectKey) await this.storage.uploadPrivateObject(initialObjectKey, initialBeneficiaryFile!.buffer, initialUpload.mimeType);
       const result = await prisma.$transaction(async (tx) => {
+        const intakeSetting = await tx.systemSetting.findUnique({ where: { key: 'application.intakeClosesAt' } });
+        if (intakeSetting?.value && typeof intakeSetting.value === 'string' && Date.now() >= Date.parse(intakeSetting.value)) throw new ApiError('APPLICATION_INTAKE_CLOSED', 'انتهت مدة استقبال طلبات الجمعيات. نشكركم على اهتمامكم بالمشاركة.', 409);
         const fileObject = await tx.fileObject.create({
           data: {
             storageProvider: 'S3',
@@ -362,6 +365,7 @@ export class ApplicationsService {
 
   async decideEligibility(ctx: AuthContext, id: string, decision: EligibilityStatus, notes: string | undefined, opId: string, evidence?: unknown) {
     if (decision === EligibilityStatus.PENDING) throw new ApiError('ELIGIBILITY_DECISION_INVALID', 'قرار الأهلية غير صالح', 400);
+    if (decision === EligibilityStatus.NEEDS_INFO) throw new ApiError('APPLICATION_INFORMATION_REQUEST_REQUIRED', 'استخدم طلب الاستكمال لتحديد النواقص وإرسالها للجمعية', 409);
     let newlyDecided = false;
     const result = await prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'application-eligibility', opId, { id, decision, notes: notes ?? null });
@@ -370,12 +374,13 @@ export class ApplicationsService {
       if (!locked[0]) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب الانضمام غير موجود', 404);
       const application = await tx.associationApplication.findUniqueOrThrow({ where: { id }, include: { answers: true } });
       if (application.status !== ApplicationStatus.UNDER_REVIEW) throw new ApiError('APPLICATION_ALREADY_REVIEWED', 'سبق البتّ في هذا الطلب', 409);
+      if (decision === EligibilityStatus.PASSED && await tx.applicationInformationRequest.findFirst({ where: { applicationId: id, status: 'OPEN' }, select: { id: true } })) throw new ApiError('APPLICATION_INFORMATION_PENDING', 'لا يمكن اجتياز الأهلية قبل استجابة الجمعية لطلب الاستكمال', 409);
       if (application.schemaVersion === 1 && application.answers.length !== QUESTION_KEYS.length) throw new ApiError('ELIGIBILITY_ANSWERS_INCOMPLETE', 'إجابات بوابة الأهلية غير مكتملة', 409);
       await tx.associationApplication.update({ where: { id }, data: { eligibilityStatus: decision, eligibilityNotes: notes?.trim() || null, eligibilityEvidence: evidence == null ? undefined : evidence as Prisma.InputJsonValue, eligibilityReviewedAt: new Date(), eligibilityReviewedById: ctx.accountId, ...(decision !== EligibilityStatus.PASSED ? { evaluationBreakdown: Prisma.DbNull, evaluationScore: null, evaluationRank: null, selectionList: AssociationSelectionList.NONE } : {}) } });
       await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_ELIGIBILITY_DECIDED', entityType: 'association_applications', entityId: id, metadata: { decision, notes: notes ?? null, evidence: evidence ?? null } as Prisma.InputJsonValue } });
       const response = { ok: true as const }; await this.idempotency.complete(tx, ctx.accountId, 'application-eligibility', opId, response); newlyDecided = true; return response;
     });
-    if (newlyDecided && decision === EligibilityStatus.FAILED) await this.onboardingEmail.sendRejection(id);
+    if (newlyDecided && decision === EligibilityStatus.FAILED) return { ...result, emailSent: await this.onboardingEmail.sendRejection(id) };
     return result;
   }
 
@@ -399,6 +404,10 @@ export class ApplicationsService {
     const rows = await prisma.associationApplication.findMany({ where: { eligibilityStatus: EligibilityStatus.PASSED, evaluationScore: { not: null }, selectionList: AssociationSelectionList.NONE }, select: { id: true, publicCode: true, name: true, evaluationScore: true, evaluationBreakdown: true } });
     const ranked = rankApplications(rows.map((row) => ({ ...row, score: Number(row.evaluationScore) })));
     return { threshold: null, items: ranked.map((item, index) => ({ ...item, rank: index + 1 })) };
+  }
+
+  async resendRejection(id: string) {
+    return { ok: true as const, emailSent: await this.onboardingEmail.sendRejection(id) };
   }
 
   async commitSelection(ctx: AuthContext, mainTargetCount: number, opId: string) {

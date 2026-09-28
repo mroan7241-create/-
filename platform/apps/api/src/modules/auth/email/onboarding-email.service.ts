@@ -61,10 +61,10 @@ export class OnboardingEmailService {
     }));
   }
 
-  async sendRejection(applicationId: string): Promise<void> {
+  async sendRejection(applicationId: string): Promise<boolean> {
     const application = await prisma.associationApplication.findUniqueOrThrow({ where: { id: applicationId } });
     if (application.status !== 'REJECTED' && application.eligibilityStatus !== 'FAILED') throw new Error('Application rejection is not committed');
-    await this.deliver('APPLICATION_REJECTION_EMAIL', 'association_applications', applicationId, async () => {
+    return this.deliver('APPLICATION_REJECTION_EMAIL', 'association_applications', applicationId, async () => {
       if (!application.email) throw new Error('Application notification email is missing');
       await this.email.sendSecurityAlert({
       to: application.email, name: application.name,
@@ -74,15 +74,16 @@ export class OnboardingEmailService {
     });
   }
 
-  private async deliver(action: string, entityType: string, entityId: string, send: () => Promise<void>): Promise<void> {
+  private async deliver(action: string, entityType: string, entityId: string, send: () => Promise<void>): Promise<boolean> {
     try {
       await send();
     } catch {
       await prisma.auditLog.create({ data: { action: `${action}_FAILED`, entityType, entityId } });
       this.logger.warn('Onboarding notification failed; inspect the audit event. No credential or recipient was logged.');
-      return;
+      return false;
     }
     await prisma.auditLog.create({ data: { action: `${action}_SENT`, entityType, entityId } });
+    return true;
   }
 }
 

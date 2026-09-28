@@ -33,8 +33,9 @@ export class ParticipationsService {
 
   createAgreement(ctx: AuthContext, participationId: string, dto: CreateAgreementDto) {
     return prisma.$transaction(async (tx) => {
-      const participation = await tx.projectParticipation.findUnique({ where: { id: participationId } });
+      const participation = await tx.projectParticipation.findUnique({ where: { id: participationId }, include: { application: { select: { selectionList: true } } } });
       if (!participation) throw new ApiError('PARTICIPATION_NOT_FOUND', 'المشاركة غير موجودة', 404);
+      if (participation.application?.selectionList !== AssociationSelectionList.MAIN) throw new ApiError('PARTICIPATION_NOT_MAIN', 'لا يمكن إنشاء ميثاق لطلب غير موجود في القائمة الأساسية', 409);
       if (dto.version !== 1 || dto.templateVersion !== COVENANT_VERSION) throw new ApiError('COVENANT_VERSION_INVALID', 'الإصدار المعتمد حاليًا هو ميثاق 1.0 فقط', 400);
       const existing = await tx.participationAgreement.findUnique({ where: { participationId_version: { participationId, version: 1 } } });
       if (existing) throw new ApiError('COVENANT_VERSION_EXISTS', 'سبق إنشاء الإصدار المعتمد من الميثاق لهذه المشاركة', 409);
@@ -56,8 +57,9 @@ export class ParticipationsService {
       const claim = await this.idempotency.claim<{ ok: true; status: AgreementStatus }>(tx, ctx.accountId, 'agreement-transition', opId, { agreementId, status });
       if (!claim.claimed) return claim.existingResponse!;
       await tx.$queryRaw`SELECT id FROM participation_agreements WHERE id=${agreementId}::uuid FOR UPDATE`;
-      const current = await tx.participationAgreement.findUnique({ where: { id: agreementId } });
+      const current = await tx.participationAgreement.findUnique({ where: { id: agreementId }, include: { participation: { include: { application: { select: { selectionList: true } } } } } });
       if (!current) throw new ApiError('AGREEMENT_NOT_FOUND', 'الاتفاقية غير موجودة', 404);
+      if (status === AgreementStatus.SENT && current.participation.application?.selectionList !== AssociationSelectionList.MAIN) throw new ApiError('PARTICIPATION_NOT_MAIN', 'لا يمكن إرسال ميثاق لطلب غير موجود في القائمة الأساسية', 409);
       const allowed: Partial<Record<AgreementStatus, AgreementStatus[]>> = {
         [AgreementStatus.DRAFT]: [AgreementStatus.SENT, AgreementStatus.CANCELLED],
         [AgreementStatus.SENT]: [AgreementStatus.CANCELLED],

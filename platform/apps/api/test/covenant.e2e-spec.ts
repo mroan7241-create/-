@@ -58,6 +58,26 @@ describe('Covenant V1 execution gate', () => {
     await app.close(); await stopTestStorage();
   }, 60000);
 
+  it('0. reserve applications cannot create or send a Covenant, including after demotion', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const reserve = await prisma.associationApplication.create({ data: { publicCode: `E2E-RES-${suffix}`, clientRequestId: `e2e-res-${suffix}`, name: `جمعية احتياط تجريبية ${suffix}`, category: 'جمعية خيرية', sector: 'رعاية الأيتام', region: 'الرياض', city: 'الرياض', phone: `055${Math.floor(Math.random() * 10_000_000).toString().padStart(7, '0')}`, email: `reserve-${suffix}@example.org`, contactName: 'ممثل تجريبي', pledgeAccepted: true, pledgeAcceptedAt: new Date(), selectionList: AssociationSelectionList.RESERVE } });
+    const participation = await prisma.projectParticipation.create({ data: { applicationId: reserve.id, status: ParticipationStatus.APPROVED_AWAITING_SETUP, activationBasis: 'AGREEMENT_COMPLETED' } });
+    let draftId = '';
+    try {
+      await http().post(`/api/v1/participations/${participation.id}/agreements`).set('Cookie', adminCookie).send({ version: 1, templateVersion: '1.0' }).expect(409).expect(({ body }) => expect(body.error.code).toBe('PARTICIPATION_NOT_MAIN'));
+      await prisma.associationApplication.update({ where: { id: reserve.id }, data: { selectionList: AssociationSelectionList.MAIN } });
+      const draft = await http().post(`/api/v1/participations/${participation.id}/agreements`).set('Cookie', adminCookie).send({ version: 1, templateVersion: '1.0' }).expect(201);
+      draftId = draft.body.id;
+      await prisma.associationApplication.update({ where: { id: reserve.id }, data: { selectionList: AssociationSelectionList.RESERVE } });
+      await http().post(`/api/v1/participations/agreements/${draftId}/transition`).set('Cookie', adminCookie).send({ status: AgreementStatus.SENT, opId: opId('reserve-send') }).expect(409).expect(({ body }) => expect(body.error.code).toBe('PARTICIPATION_NOT_MAIN'));
+      expect((await prisma.participationAgreement.findUniqueOrThrow({ where: { id: draftId } })).status).toBe(AgreementStatus.DRAFT);
+    } finally {
+      if (draftId) await prisma.participationAgreement.delete({ where: { id: draftId } });
+      await prisma.projectParticipation.delete({ where: { id: participation.id } });
+      await prisma.associationApplication.delete({ where: { id: reserve.id } });
+    }
+  });
+
   it('1. eligible restricted Association account can login', async () => { const response = await http().post('/api/v1/auth/login').send({ type: 'user', email: (await prisma.account.findUniqueOrThrow({ where: { id: accountId } })).email, password: temporaryPassword }).expect(200); expect(response.body.user.covenantRequired).toBe(true); });
   it('2. temporary credential requires first password change', async () => { const response = await http().post('/api/v1/auth/login').send({ type: 'user', email: (await prisma.account.findUniqueOrThrow({ where: { id: accountId } })).email, password: temporaryPassword }).expect(200); const cookie = cookieOf(response); await http().get('/api/v1/beneficiaries').set('Cookie', cookie).expect(403).expect(({ body }) => expect(body.error.code).toBe('AUTH_PASSWORD_CHANGE_REQUIRED')); await http().patch('/api/v1/auth/password').set('Cookie', cookie).send({ currentPassword: temporaryPassword, newPassword: currentPassword }).expect(200); });
   it('3. password change revokes the prior session and old temporary password', async () => { await http().post('/api/v1/auth/login').send({ type: 'user', email: (await prisma.account.findUniqueOrThrow({ where: { id: accountId } })).email, password: temporaryPassword }).expect(401); const response = await http().post('/api/v1/auth/login').send({ type: 'user', email: (await prisma.account.findUniqueOrThrow({ where: { id: accountId } })).email, password: currentPassword }).expect(200); associationCookie = cookieOf(response); expect(response.body.user.mustChangePassword).toBe(false); });

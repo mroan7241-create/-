@@ -7,6 +7,7 @@ export const SETTING_KEYS = [
   'selection.passThreshold', 'selection.mainTargetCount', 'selection.weightsVersion',
   'calendar.workingDays', 'calendar.holidays',
   'evidence.requireRecipientSignature',
+  'application.intakeClosesAt',
 ] as const;
 export type SettingKey = typeof SETTING_KEYS[number];
 
@@ -29,13 +30,23 @@ export class SettingsService {
     return value;
   }
 
+  async applicationIntakeStatus(now = new Date()) {
+    const closesAt = await this.getValue<string | null>('application.intakeClosesAt');
+    return applicationIntakeStatus(closesAt, now);
+  }
+
+  async assertApplicationIntakeOpen(now = new Date()) {
+    const status = await this.applicationIntakeStatus(now);
+    if (!status.open) throw new ApiError('APPLICATION_INTAKE_CLOSED', 'انتهت مدة استقبال طلبات الجمعيات. نشكركم على اهتمامكم بالمشاركة.', 409);
+  }
+
   async set(ctx: AuthContext, key: string, rawValue: unknown) {
     if (!SETTING_KEYS.includes(key as SettingKey)) throw new ApiError('SETTING_KEY_NOT_ALLOWED', 'مفتاح الإعداد غير معتمد', 400);
     const value = validateSetting(key as SettingKey, rawValue);
     return prisma.$transaction(async (tx) => {
       const old = await tx.systemSetting.findUnique({ where: { key } });
       const row = await tx.systemSetting.upsert({
-        where: { key }, create: { key, value: value as Prisma.InputJsonValue }, update: { value: value as Prisma.InputJsonValue },
+        where: { key }, create: { key, value: value === null ? Prisma.JsonNull : value as Prisma.InputJsonValue }, update: { value: value === null ? Prisma.JsonNull : value as Prisma.InputJsonValue },
       });
       await tx.auditLog.create({ data: {
         actorAccountId: ctx.accountId, actorRole: ctx.role, associationId: ctx.associationId ?? null,
@@ -70,7 +81,17 @@ export function validateSetting(key: SettingKey, value: unknown): unknown {
     if (value !== true) throw new ApiError('SETTING_VALUE_INVALID', 'متطلب توقيع المستفيد يجب أن يبقى مفعّلًا في النطاق الحالي', 400);
     return true;
   }
+  if (key === 'application.intakeClosesAt') {
+    if (value === null) return null;
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) || Number.isNaN(Date.parse(value)) || new Date(value).toISOString() !== value) throw invalid(key);
+    return value;
+  }
   throw invalid(key);
+}
+
+export function applicationIntakeStatus(closesAt: string | null | undefined, now = new Date()) {
+  const valid = typeof closesAt === 'string' && !Number.isNaN(Date.parse(closesAt));
+  return { open: !valid || now.getTime() < Date.parse(closesAt!), closesAt: valid ? closesAt : null };
 }
 
 function numberInRange(value: unknown, min: number, max: number, key: string): number {

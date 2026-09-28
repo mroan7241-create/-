@@ -130,7 +130,7 @@ export class ApplicationAccessService {
     });
     const draft = application?.sourceDraft;
     const email = normalizeEmail(application?.email ?? '');
-    if (!application || !draft || !email) throw new ApiError('APPLICATION_EMAIL_UNAVAILABLE', 'تعذر إرسال قرار الاختيار لعدم وجود بريد أو مسودة مرتبطة', 409);
+    if (!application || !draft || !email || !['MAIN', 'RESERVE'].includes(application.selectionList)) throw new ApiError('APPLICATION_EMAIL_UNAVAILABLE', 'تعذر إرسال قرار الاختيار لعدم اكتمال الاختيار أو بيانات البريد', 409);
     const intro = application.selectionList === 'MAIN'
       ? 'تم اختيار جمعيتكم في القائمة الأساسية. يمكنكم متابعة متطلبات التهيئة عبر رابط الطلب الآمن.'
       : 'تم اختيار جمعيتكم في قائمة الاحتياط. يمكنكم متابعة حالة الطلب عبر الرابط الآمن.';
@@ -143,15 +143,17 @@ export class ApplicationAccessService {
       where: { id: applicationId },
       include: {
         sourceDraft: true,
-        informationRequests: { where: { status: ApplicationInformationRequestStatus.OPEN }, orderBy: { requestedAt: 'desc' }, take: 1 },
+        informationRequests: { where: { status: ApplicationInformationRequestStatus.OPEN }, include: { items: true }, orderBy: { requestedAt: 'desc' }, take: 1 },
       },
     });
     const draft = application?.sourceDraft;
     const email = normalizeEmail(application?.email ?? draft?.contactEmail ?? '');
     if (!application || !draft || !email || !application.informationRequests.length) throw new ApiError('APPLICATION_EMAIL_UNAVAILABLE', 'لا يوجد بريد رسمي صالح أو مسودة مرتبطة لإرسال رابط الاستكمال', 409);
-    const note = application.informationRequests[0]!.note?.trim();
+    const request = application.informationRequests[0]!;
+    const details = request.items.map((item, index) => `${index + 1}. ${item.reason.trim()}`).join('\n');
+    const note = request.note?.trim();
     await this.issueAndSend(email, [{ id: draft.id, publicCode: draft.publicCode, status: draft.status, name: application.name, needsInfo: true }],
-      'مطلوب استكمال بيانات الطلب — مشروع الأجهزة الكهربائية', note ? `مطلوب استكمال بيانات الطلب: ${note}` : 'مطلوب استكمال بيانات محددة في طلبك.');
+      'مطلوب استكمال بيانات الطلب — مشروع الأجهزة الكهربائية', `يرجى استكمال المتطلبات التالية عبر رابط طلبكم الآمن:\n${details}${note ? `\nملاحظة: ${note}` : ''}`);
   }
 
   private async issueAndSend(

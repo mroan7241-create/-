@@ -16,6 +16,7 @@ import { cardStyle, errorStyle, inputStyle, labelStyle, primaryButtonStyle, seco
 import { reportValueLabel } from '../lib/report-labels';
 import Link from 'next/link';
 import { workflowLabel } from '../lib/workflow-label';
+import { canPrepareCovenant } from '../lib/covenant-selection';
 
 type Section = { key: string; title: string; rows: WorkflowRecord[]; error?: string };
 export type WorkflowSectionKey = 'participations' | 'deliveries' | 'procurement' | 'escalations' | 'notifications' | 'beneficiaries' | 'outbox' | 'project-closure';
@@ -115,10 +116,13 @@ function OperationalRow({ user, section, row, busy, setForm, act }: { user: Curr
 
   if (section === 'participations') {
     const agreement = (row.agreements as WorkflowRecord[] | undefined)?.[0];
+    const selectionList = (row.application as WorkflowRecord | null | undefined)?.selectionList;
     const closure = row.closureReport as WorkflowRecord | undefined;
     if (user.role === 'ADMIN') {
-      if (!agreement) formButton('إنشاء اتفاقية', 'agreement');
-      if (agreement?.status === 'DRAFT') button('إرسال الاتفاقية', () => transitionAgreement(agreement.id, 'SENT'));
+      if (canPrepareCovenant(selectionList, agreement?.status)) {
+        if (!agreement) formButton('إنشاء اتفاقية', 'agreement');
+        if (agreement?.status === 'DRAFT') button('إرسال الاتفاقية', () => transitionAgreement(agreement.id, 'SENT'));
+      }
       if (agreement?.status === 'SENT' && !row.associationId) buttons.push(<button key="signing-account" style={secondaryButtonStyle} disabled={busy} onClick={() => void act(() => prepareCovenantSigningAccount(row.id), 'تم إنشاء حساب توقيع مقيّد؛ لن تفتح العمليات قبل اكتمال الميثاق.', String((row.application as WorkflowRecord | undefined)?.email ?? ''))}>إنشاء حساب توقيع مقيّد</button>);
       if (agreement?.status === 'SIGNED_BY_ORG') button('إنشاء رابط توقيع الطرف الأول', () => issuePartyOneSigningSession(agreement.id));
       if (agreement?.status === 'SIGNED') button('تنزيل النسخة النهائية', () => getFinalCovenantUrl(agreement.id).then(({ url }) => { window.open(url, '_blank', 'noopener,noreferrer'); }));

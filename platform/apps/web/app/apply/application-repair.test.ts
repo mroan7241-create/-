@@ -2,6 +2,18 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
+// @ts-ignore -- standalone node --test, not a browser import
+import { selectionGroup } from '../admin/selection/selection-groups.ts';
+
+test('selection lists separate failed and needs-info applications from actionable and selected lists', () => {
+  assert.equal(selectionGroup({ eligibilityStatus: 'FAILED', selectionList: 'NONE', processingStartedAt: null }), 'FAILED');
+  assert.equal(selectionGroup({ eligibilityStatus: 'NEEDS_INFO', selectionList: 'NONE', processingStartedAt: null }), 'NEEDS_INFO');
+  assert.equal(selectionGroup({ eligibilityStatus: 'PENDING', selectionList: 'NONE', processingStartedAt: null }), 'NEW');
+  assert.equal(selectionGroup({ eligibilityStatus: 'PENDING', selectionList: 'NONE', processingStartedAt: '2026-09-28T00:00:00.000Z' }), 'PROCESSING');
+  assert.equal(selectionGroup({ eligibilityStatus: 'PASSED', selectionList: 'NONE', processingStartedAt: null }), 'PASSED_UNSELECTED');
+  assert.equal(selectionGroup({ eligibilityStatus: 'PASSED', selectionList: 'MAIN', processingStartedAt: null }), 'MAIN');
+  assert.equal(selectionGroup({ eligibilityStatus: 'PASSED', selectionList: 'RESERVE', processingStartedAt: null }), 'RESERVE');
+});
 // Node's type-stripping runner needs explicit TypeScript extensions.
 // @ts-ignore -- standalone node --test, not a browser import
 import { createAutosaveQueue } from './autosave-queue.ts';
@@ -29,6 +41,8 @@ import { createAgreement, sendOwnCovenantCompletionEmail, signAssociationCovenan
 import { licensePreviewKind } from '../lib/license-preview.ts';
 // @ts-ignore -- standalone node --test, not a browser import
 import { covenantSigningError } from '../lib/covenant-signing.ts';
+// @ts-ignore -- standalone node --test, not a browser import
+import { canPrepareCovenant } from '../lib/covenant-selection.ts';
 
 test('shared link description identifies the platform without obsolete migration wording', () => {
   const layout = readFileSync(new URL('../layout.tsx', import.meta.url), 'utf8');
@@ -126,6 +140,13 @@ test('financial analysis is visible to admin assessors, not to applicants', () =
   const admin = readFileSync(new URL('../admin/applications/page.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(applicant, /FinancialSummary/);
   assert.match(admin, /<FinancialSummary finance=\{application\.v2Payload\?\.finance\}/);
+});
+
+test('Covenant preparation actions appear only for MAIN selections with no sent agreement', () => {
+  assert.equal(canPrepareCovenant('MAIN', null), true);
+  assert.equal(canPrepareCovenant('MAIN', 'DRAFT'), true);
+  for (const selection of ['RESERVE', 'NONE', null]) assert.equal(canPrepareCovenant(selection, 'DRAFT'), false);
+  assert.equal(canPrepareCovenant('MAIN', 'SENT'), false);
 });
 
 test('geolocation allows only self and preserves camera/microphone restrictions', async () => {

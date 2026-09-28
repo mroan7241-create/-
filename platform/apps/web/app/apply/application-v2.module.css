@@ -12,6 +12,9 @@
 .save { min-height: 24px; color: var(--muted); font-size: 13px; }
 .saveDone { color: #16623d; font-size: 17px; font-weight: 800; }
 .credentials { border: 1px solid #e0c28a; background: #fff9e9; border-radius: 12px; padding: 14px; margin: 16px 0; }
+.closedNotice { margin: 18px 0; padding: 20px 24px; border: 1px solid #dcc3cb; border-radius: 16px; background: #fff8fa; color: var(--zad-800); }
+.closedNotice h2 { margin: 0 0 6px; font-size: 20px; }
+.closedNotice p { margin: 0; line-height: 1.8; }
 .credentials code { direction: ltr; display: block; overflow-wrap: anywhere; user-select: all; margin-top: 5px; }
 .stepper { list-style: none; padding: 0; margin: 22px 0; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
 .step { min-width: 0; padding: 10px 6px; border-radius: 10px; text-align: center; color: var(--muted); background: #fff; border: 1px solid var(--line); font-size: 12px; }

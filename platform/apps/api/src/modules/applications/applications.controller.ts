@@ -24,6 +24,10 @@ export class ApplicationsController {
   constructor(private readonly applications: ApplicationsService, private readonly applicationV2: ApplicationV2Service, private readonly applicationAccess: ApplicationAccessService) {}
 
   @Public()
+  @Get('association-applications/intake')
+  intakeStatus() { return this.applicationV2.intakeStatus(); }
+
+  @Public()
   @Get('association-applications/geography')
   geography(@Query('parent') parent?: string) { return this.applicationV2.geography(parent?.trim() || undefined); }
 
@@ -190,6 +194,10 @@ export class ApplicationsController {
     return this.applications.decideEligibility(ctx, id, dto.decision, dto.notes, dto.opId, evidence);
   }
 
+  @Post('association-applications/:id/eligibility/resend-rejection')
+  @Roles(AccountRole.ADMIN)
+  resendRejection(@Param('id', ParseUUIDPipe) id: string) { return this.applications.resendRejection(id); }
+
   @Get('association-applications/:id/eligibility-evidence')
   @Roles(AccountRole.ADMIN)
   eligibilityEvidence(@Param('id', ParseUUIDPipe) id: string) { return this.applicationV2.eligibilityEvidence(id); }
@@ -214,6 +222,13 @@ export class ApplicationsController {
   @Post('association-applications/:id/selection-decision')
   @Roles(AccountRole.ADMIN)
   selectionDecision(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: SelectionDecisionDto) { return this.applicationV2.decideSelection(ctx, id, dto); }
+
+  @Post('association-applications/:id/selection-decision/resend')
+  @Roles(AccountRole.ADMIN)
+  async resendSelectionDecision(@Param('id', ParseUUIDPipe) id: string) {
+    await this.applicationAccess.sendSelectionDecision(id);
+    return { ok: true };
+  }
 
   @Post('association-applications/selection/preview')
   @Roles(AccountRole.ADMIN)

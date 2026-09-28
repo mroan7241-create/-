@@ -14,6 +14,7 @@ import {
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
 import { AppShell } from '../../components/AppShell';
+import { SelectionBoard } from '../selection/page';
 import { FinancialSummary } from '../../components/FinancialSummary';
 import { licensePreviewKind } from '../../lib/license-preview';
 import { initialQueryParam } from '../../lib/query';
@@ -71,7 +72,9 @@ export default function AdminApplicationsPage() {
 
   return (
     <AppShell user={user}>
-      <div className="workflow-row" style={{ marginBottom: 16 }}><div><h1 style={{ fontSize: 22, marginBottom: 6 }}>طلبات انضمام الجمعيات</h1><p style={mutedStyle}>الطلب ← الأهلية ← التقييم ← اختيار القائمة الأساسية أو الاحتياطية ← الاتفاقية والتجهيز ← التفعيل</p></div><Link href="/admin/selection" style={{ ...primaryButtonStyle, textDecoration: 'none' }}>الأهلية والتقييم والاختيار</Link></div>
+      <div className="workflow-row" style={{ marginBottom: 16 }}><div><h1 style={{ fontSize: 22, marginBottom: 6 }}>طلبات انضمام الجمعيات</h1><p style={mutedStyle}>الطلب ← الأهلية ← التقييم ← اختيار القائمة الأساسية أو الاحتياطية ← الاتفاقية والتجهيز ← التفعيل</p></div></div>
+      <SelectionBoard />
+      <h2>تفاصيل الطلبات والبحث</h2>
       <div className="button-row" style={{ marginBottom: 16 }}>{[['','الكل'],['new','جديدة'],['processing','قيد المعالجة'],['missing','بانتظار الاستكمال']].map(([key,label]) => <button key={key} type="button" style={workflow === key ? primaryButtonStyle : secondaryButtonStyle} onClick={() => { setWorkflow(key); setPage(1); }}>{label}{data && 'counts' in data ? ` (${(data as Paginated<ApplicationSummary> & { counts?: Record<string, number> }).counts?.[key || 'all'] ?? 0})` : ''}</button>)}</div>
       {actionMessage && <p role="status" style={actionMessage.startsWith('تم') ? { color: 'var(--success)' } : errorStyle}>{actionMessage}</p>}
 

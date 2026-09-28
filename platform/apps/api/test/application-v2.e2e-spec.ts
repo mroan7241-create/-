@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { randomInt, randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
-import { prisma } from '@alzad/db';
+import { Prisma, prisma } from '@alzad/db';
 import { createTestApp } from './utils/bootstrap';
 import { cleanAuthState, seedTestFixtures } from './utils/fixtures';
 import { loginAs } from './utils/node2-fixtures';
@@ -66,17 +66,23 @@ describe('Application V2 launch gate', () => {
     await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/attachments`).set(auth).field('fieldKey', 'financialStatementsFile').attach('file', PDF, { filename: 'statements.pdf', contentType: 'application/pdf' }).expect(201);
     const submitted = await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/submit`).set(auth).send({ revision: saved.body.revision });
     if (submitted.status !== 201) throw new Error(`Application V2 submit failed (${submitted.status}): ${JSON.stringify(submitted.body)}`);
+    expect(submitted.body.emailSent).toBe(true);
     const row = await prisma.associationApplication.findUniqueOrThrow({ where: { publicCode: submitted.body.id } });
     expect(row.schemaVersion).toBe(2); expect(row.currentAssets?.toNumber()).toBe(11_000_000);
     expect(fakeEmail.lastApplicationAccess?.subject).toContain('متابعة طلب المشاركة');
     expect(fakeEmail.lastApplicationAccess?.items[0]?.code).toBe(submitted.body.id);
 
     await http().post('/api/v1/association-applications/processing/start').set('Cookie', adminCookie).send({ applicationIds: [row.id], opId: randomUUID() }).expect(201);
-    const requested = await http().post(`/api/v1/association-applications/${row.id}/information-request`).set('Cookie', adminCookie).send({ items: [{ type: 'FIELD', key: 'organization.notes', reason: 'أضف وصفًا مختصرًا' }], note: 'استكمال محدد', opId: randomUUID() }).expect(201);
+    const requested = await http().post(`/api/v1/association-applications/${row.id}/information-request`).set('Cookie', adminCookie).send({ items: [{ type: 'FIELD', key: 'organization.notes', reason: 'أضف وصفًا مختصرًا' }, { type: 'FIELD', key: 'coordinator.phone', reason: 'صحح رقم جوال المنسق' }], note: 'استكمال محدد', opId: randomUUID() }).expect(201);
+    expect(requested.body.emailSent).toBe(true);
     expect(fakeEmail.lastApplicationAccess?.subject).toContain('مطلوب استكمال');
+    expect(fakeEmail.lastApplicationAccess?.intro).toContain('أضف وصفًا مختصرًا');
     const tracking = await http().get(`/api/v1/association-applications/track/${created.body.draftCode}`).set(auth).expect(200);
     expect(tracking.body.stage).toBe('NEEDS_INFO'); expect(tracking.body.needsInfo.id).toBe(requested.body.requestId);
-    await http().post(`/api/v1/association-applications/track/${created.body.draftCode}/information/${requested.body.requestId}`).set(auth).send({ payload: { organization: { notes: 'تم الاستكمال' } }, opId: randomUUID() }).expect(201);
+    await http().post(`/api/v1/association-applications/track/${created.body.draftCode}/information/${requested.body.requestId}`).set(auth).send({ payload: { organization: { notes: 'تم الاستكمال' }, coordinator: { phone: '512345679' } }, opId: randomUUID() }).expect(201);
+    const corrected = await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id } });
+    expect(corrected.coordinatorPhone).toBe('0512345679');
+    expect((corrected.v2Payload as { coordinator: { phone: string } }).coordinator.phone).toBe('512345679');
 
     const evidence = await http().get(`/api/v1/association-applications/${row.id}/eligibility-evidence`).set('Cookie', adminCookie).expect(200);
     expect(evidence.body.checks.length).toBeGreaterThan(10);
@@ -90,6 +96,28 @@ describe('Application V2 launch gate', () => {
     expect(fakeEmail.lastApplicationAccess?.items[0]?.url).toContain('/apply/access?token=');
     const final = await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id }, include: { participation: true, sourceDraft: true } });
     expect(final.selectionList).toBe('RESERVE'); expect(final.participation).toBeNull(); expect(final.sourceDraft?.resumeTokenHash).not.toBe(created.body.resumeToken);
+    await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'MAIN', opId: randomUUID() }).expect(201);
+    expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id }, include: { participation: true } })).participation).not.toBeNull();
+    fakeEmail.lastApplicationAccess = null;
+    await http().post(`/api/v1/association-applications/${row.id}/selection-decision/resend`).set('Cookie', adminCookie).expect(201);
+    expect(fakeEmail.lastApplicationAccess?.intro).toContain('القائمة الأساسية');
+    await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(409);
+  });
+
+  it('enforces the administrator intake deadline before a new draft is created', async () => {
+    const key = 'application.intakeClosesAt';
+    const previous = await prisma.systemSetting.findUnique({ where: { key } });
+    try {
+      await http().put('/api/v1/settings').set('Cookie', adminCookie).send({ key, value: '2026-01-01T00:00:00.000Z' }).expect(200);
+      const status = await http().get('/api/v1/association-applications/intake').expect(200);
+      expect(status.body.open).toBe(false);
+      await http().post('/api/v1/association-applications/drafts').send({ clientRequestId: randomUUID() }).expect(409);
+      await http().put('/api/v1/settings').set('Cookie', adminCookie).send({ key, value: null }).expect(200);
+      expect((await http().get('/api/v1/association-applications/intake').expect(200)).body.open).toBe(true);
+    } finally {
+      const previousValue = previous?.value == null ? Prisma.JsonNull : previous.value as Prisma.InputJsonValue;
+      await prisma.systemSetting.upsert({ where: { key }, create: { key, value: previousValue }, update: { value: previousValue } });
+    }
   });
 
   it('scopes emailed access to one draft and rejects expired links', async () => {

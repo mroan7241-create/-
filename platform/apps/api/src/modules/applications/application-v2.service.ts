@@ -34,6 +34,7 @@ import type {
   SubmitInformationResponseDto,
 } from './dto/application-v2.dto';
 import { ApplicationAccessService } from './application-access.service';
+import { SettingsService, applicationIntakeStatus } from '../settings/settings.service';
 
 const DRAFT_TTL_DAYS = 45;
 const ALLOWED_ATTACHMENT_KEYS = new Set([
@@ -53,7 +54,10 @@ export class ApplicationV2Service {
     private readonly storage: StorageService,
     private readonly rateLimit: RateLimitService,
     private readonly access: ApplicationAccessService,
+    private readonly settings: SettingsService,
   ) {}
+
+  intakeStatus() { return this.settings.applicationIntakeStatus(); }
 
   async geography(parentOfficialCode?: string) {
     const where: Prisma.GeographicUnitWhereInput = { active: true };
@@ -76,6 +80,7 @@ export class ApplicationV2Service {
 
   async createDraft(clientRequestIdRaw?: string, honeypot?: string, rateLimitSubject = 'unknown') {
     if (honeypot?.trim()) return { ok: true as const, draftCode: '', resumeToken: '', revision: 0 };
+    await this.settings.assertApplicationIntakeOpen();
     const clientRequestId = clientRequestIdRaw?.trim() || null;
     if (clientRequestId && !applicationConfig.clientRequestIdPattern.test(clientRequestId)) {
       throw new ApiError('APPLICATION_INVALID_CLIENT_REQUEST_ID', 'تعذّر بدء الطلب — أعد تحميل الصفحة وحاول مجددًا', 400);
@@ -165,6 +170,7 @@ export class ApplicationV2Service {
     if (draft.status === ApplicationDraftStatus.SUBMITTED && draft.submittedApplication) {
       return { ok: true as const, id: draft.submittedApplication.publicCode, duplicate: true, message: 'تم استلام طلبكم مسبقًا' };
     }
+    await this.settings.assertApplicationIntakeOpen();
     if (draft.revision !== revision) throw new ApiError('APPLICATION_DRAFT_REVISION_CONFLICT', 'توجد نسخة أحدث من الطلب؛ أعد تحميله قبل الإرسال', 409);
     const payload = asMap(draft.payload);
     const attachmentKeys = new Set(draft.attachments.map((item) => item.fieldKey));
@@ -179,6 +185,8 @@ export class ApplicationV2Service {
     if (duplicate) throw new ApiError('APPLICATION_DUPLICATE_PENDING', 'يوجد طلب سابق قيد المراجعة بنفس البريد أو الجوال أو رقم الترخيص', 409);
 
     const result = await prisma.$transaction(async (tx) => {
+      const intakeSetting = await tx.systemSetting.findUnique({ where: { key: 'application.intakeClosesAt' } });
+      if (!applicationIntakeStatus(intakeSetting?.value as string | null | undefined).open) throw new ApiError('APPLICATION_INTAKE_CLOSED', 'انتهت مدة استقبال طلبات الجمعيات. نشكركم على اهتمامكم بالمشاركة.', 409);
       const locked = await tx.$queryRaw<{ id: string; status: ApplicationDraftStatus; revision: number }[]>`
         SELECT id, status, revision FROM association_application_drafts WHERE id=${draft.id}::uuid FOR UPDATE
       `;
@@ -232,8 +240,8 @@ export class ApplicationV2Service {
       await tx.associationApplicationDraft.update({ where: { id: draft.id }, data: { status: ApplicationDraftStatus.SUBMITTED, submittedApplicationId: application.id } });
       return application;
     });
-    try { await this.access.sendSubmitted(draft.id); } catch { /* نجاح الإرسال لا يغيّر قرار حفظ الطلب */ }
-    return { ok: true as const, id: result.publicCode, message: 'تم استلام طلب المشاركة بنجاح' };
+    try { await this.access.sendSubmitted(draft.id); return { ok: true as const, id: result.publicCode, message: 'تم استلام طلب المشاركة بنجاح', emailSent: true }; }
+    catch { return { ok: true as const, id: result.publicCode, message: 'تم استلام طلب المشاركة بنجاح', emailSent: false }; }
   }
 
   async publicStatus(draftCode: string, token: string, applicantSession = '') {
@@ -251,7 +259,7 @@ export class ApplicationV2Service {
       stage,
       submittedAt: application.submittedAt,
       timeline: timeline(stage),
-      needsInfo: request ? { id: request.id, note: request.note, deadline: request.deadline, items: request.items.map((item) => ({ type: item.type, key: item.key, reason: item.reason })) } : null,
+      needsInfo: request ? { id: request.id, note: request.note, deadline: request.deadline, items: request.items.map((item) => ({ type: item.type, key: item.key, reason: item.reason, kind: item.type === ApplicationInformationItemType.FIELD ? typeof pathValue(asMap(application.v2Payload), item.key) : undefined })) } : null,
     };
   }
 
@@ -271,6 +279,10 @@ export class ApplicationV2Service {
       const allowedFields = new Set(request.items.filter((item) => item.type === ApplicationInformationItemType.FIELD).map((item) => item.key));
       const responseKeys = flattenKeys(dto.payload);
       if (responseKeys.some((key) => !allowedFields.has(key))) throw new ApiError('APPLICATION_INFORMATION_SCOPE_INVALID', 'يمكن تعديل الحقول المطلوبة فقط', 403);
+      if ([...allowedFields].some((key) => {
+        const value = pathValue(dto.payload, key);
+        return !responseKeys.includes(key) || value == null || (typeof value === 'string' && !value.trim());
+      })) throw new ApiError('APPLICATION_INFORMATION_FIELDS_MISSING', 'أكمل جميع البيانات المطلوبة قبل إرسال الاستكمال', 400);
       const requiredFiles = request.items.filter((item) => item.type === ApplicationInformationItemType.ATTACHMENT).map((item) => item.key);
       const existingFiles = await tx.applicationAttachment.findMany({ where: { applicationId: request.applicationId, fieldKey: { in: requiredFiles } } });
       if (existingFiles.length !== requiredFiles.length) throw new ApiError('APPLICATION_INFORMATION_ATTACHMENTS_MISSING', 'أرفق جميع الملفات المطلوبة قبل إرسال الاستكمال', 400);
@@ -312,8 +324,9 @@ export class ApplicationV2Service {
     const response = await prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ ok: true; requestId: string }>(tx, ctx.accountId, 'application-information-request', dto.opId, { applicationId, items: dto.items, note: dto.note ?? null, deadline });
       if (!claim.claimed) return claim.existingResponse!;
-      const application = await tx.associationApplication.findUnique({ where: { id: applicationId } });
+      const application = await tx.associationApplication.findUnique({ where: { id: applicationId }, include: { sourceDraft: { select: { id: true } } } });
       if (!application || application.status !== ApplicationStatus.UNDER_REVIEW) throw new ApiError('APPLICATION_NOT_REVIEWABLE', 'الطلب غير متاح للاستكمال', 409);
+      if (application.schemaVersion !== 2 || !application.sourceDraft) throw new ApiError('APPLICATION_INFORMATION_UNSUPPORTED', 'هذا الطلب السابق لا يدعم الاستكمال الإلكتروني؛ لا يمكن إرسال رابط لا يعمل', 409);
       const open = await tx.applicationInformationRequest.findFirst({ where: { applicationId, status: ApplicationInformationRequestStatus.OPEN } });
       if (open) throw new ApiError('APPLICATION_INFORMATION_REQUEST_OPEN', 'يوجد طلب استكمال مفتوح بالفعل', 409);
       const request = await tx.applicationInformationRequest.create({ data: {
@@ -326,8 +339,8 @@ export class ApplicationV2Service {
       await this.idempotency.complete(tx, ctx.accountId, 'application-information-request', dto.opId, response);
       return response;
     });
-    try { await this.access.sendNeedsInfo(applicationId); } catch { /* القرار الإداري محفوظ؛ يمكن إعادة الإرسال من المسار المخصص */ }
-    return response;
+    try { await this.access.sendNeedsInfo(applicationId); return { ...response, emailSent: true as const }; }
+    catch { return { ...response, emailSent: false as const }; }
   }
 
   async eligibilityEvidence(applicationId: string) {
@@ -359,8 +372,10 @@ export class ApplicationV2Service {
     const result = await prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ ok: true; decision: AssociationSelectionList }>(tx, ctx.accountId, 'application-selection-decision', dto.opId, { applicationId, decision: dto.decision, reason: dto.reason ?? null });
       if (!claim.claimed) return claim.existingResponse!;
+      await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${applicationId}::uuid FOR UPDATE`;
       const application = await tx.associationApplication.findUnique({ where: { id: applicationId } });
       if (!application || application.eligibilityStatus !== EligibilityStatus.PASSED || application.evaluationScore == null) throw new ApiError('APPLICATION_SELECTION_NOT_READY', 'يجب اجتياز الأهلية وإكمال التقييم أولًا', 409);
+      if (application.selectionList === AssociationSelectionList.MAIN && dto.decision === AssociationSelectionList.RESERVE) throw new ApiError('APPLICATION_MAIN_ALREADY_STARTED', 'لا يمكن نقل جمعية أساسية بدأت تهيئتها إلى الاحتياط من هذه الصفحة', 409);
       const now = new Date();
       await tx.associationApplication.update({ where: { id: applicationId }, data: { selectionList: dto.decision, selectionReason: dto.reason?.trim() || null, status: ApplicationStatus.ACCEPTED, selectionApprovedAt: now, selectionApprovedById: ctx.accountId } });
       if (dto.decision === AssociationSelectionList.MAIN) {
@@ -372,10 +387,9 @@ export class ApplicationV2Service {
       newlyDecided = true;
       return response;
     });
-    if (newlyDecided) {
-      try { await this.access.sendSelectionDecision(applicationId); } catch { /* القرار الإداري محفوظ؛ فشل البريد مسجل في سجل التدقيق عند محاولة الإرسال */ }
-    }
-    return result;
+    if (!newlyDecided) return { ...result, emailSent: null };
+    try { await this.access.sendSelectionDecision(applicationId); return { ...result, emailSent: true }; }
+    catch { return { ...result, emailSent: false }; }
   }
 
   private async requireAttachmentMutation(tx: Prisma.TransactionClient, draftId: string, fieldKey: string) {
@@ -563,6 +577,27 @@ async function correctedAccountIdentity(tx: Prisma.TransactionClient, payload: J
   if (changed.includes('organization.name')) data.name = requiredPathText(payload, 'organization.name', 'اسم الجمعية', 150);
   if (changed.includes('organization.category')) data.category = requiredPathText(payload, 'organization.category', 'تصنيف الجمعية', 120);
   if (changed.includes('organization.officialPhone')) data.phone = requiredApplicantPhone(payload, 'organization.officialPhone', 'رقم التواصل الرسمي');
+  if (changed.includes('organization.licenseNumber')) data.licenseNumber = requiredPathText(payload, 'organization.licenseNumber', 'رقم الترخيص', 60);
+  if (changed.includes('organization.licenseExpiryDate')) data.licenseExpiryDate = parseDate(requiredPathText(payload, 'organization.licenseExpiryDate', 'تاريخ انتهاء الترخيص', 10), 'تاريخ انتهاء الترخيص');
+  if (changed.includes('organization.sector')) data.sector = requiredPathText(payload, 'organization.sector', 'مجال عمل الجمعية', 120);
+  if (changed.includes('organization.notes')) data.notes = readOptionalString(pathValue(payload, 'organization.notes')) || null;
+  if (changed.includes('coordinator.name')) data.contactName = requiredPathText(payload, 'coordinator.name', 'اسم منسق المشروع', 150);
+  if (changed.includes('coordinator.title')) data.coordinatorTitle = requiredPathText(payload, 'coordinator.title', 'المسمى الوظيفي للمنسق', 120);
+  if (changed.includes('coordinator.phone')) data.coordinatorPhone = requiredApplicantPhone(payload, 'coordinator.phone', 'جوال المنسق');
+  if (changed.includes('coordinator.email')) data.coordinatorEmail = requiredEmail(requiredPathText(payload, 'coordinator.email', 'بريد المنسق', 254));
+  if (changed.includes('location.serviceScope')) data.serviceScope = requiredPathText(payload, 'location.serviceScope', 'نطاق خدمة الجمعية', 1000);
+  if (changed.includes('location.districtCustom')) data.locationOtherText = requiredPathText(payload, 'location.districtCustom', 'الحي', 200);
+  if (changed.includes('beneficiaries.registeredFamilies')) data.approxBeneficiaryCount = requiredInteger(payload, 'beneficiaries.registeredFamilies', 'عدد الأسر المسجلة', 0, 10_000_000);
+  if (changed.includes('beneficiaries.databaseUpdatedAt')) data.beneficiaryDatabaseUpdatedAt = parseDate(requiredPathText(payload, 'beneficiaries.databaseUpdatedAt', 'تاريخ تحديث قاعدة المستفيدين', 10), 'تاريخ تحديث قاعدة المستفيدين');
+  const financialFields = ['finance.revenue', 'finance.expenses', 'finance.currentAssets', 'finance.currentLiabilities'];
+  if (changed.some((key) => financialFields.includes(key))) {
+    const revenue = requiredMoney(payload, 'finance.revenue', 'الإيرادات');
+    const expenses = requiredMoney(payload, 'finance.expenses', 'المصروفات');
+    const assets = requiredMoney(payload, 'finance.currentAssets', 'الأصول المتداولة');
+    const liabilities = requiredMoney(payload, 'finance.currentLiabilities', 'الخصوم المتداولة');
+    data.revenue = revenue; data.expenses = expenses; data.currentAssets = assets; data.currentLiabilities = liabilities;
+    data.financialResult = revenue - expenses; data.netWorkingCapital = assets - liabilities;
+  }
   if (changed.includes('location.regionCode') || changed.includes('location.governorateCode')) {
     const regionCode = requiredPathText(payload, 'location.regionCode', 'المنطقة الإدارية', 10);
     const governorateCode = requiredPathText(payload, 'location.governorateCode', 'المحافظة أو مقر الإمارة', 10);

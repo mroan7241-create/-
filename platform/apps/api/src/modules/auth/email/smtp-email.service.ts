@@ -63,7 +63,7 @@ export class SmtpEmailService implements EmailService {
     const htmlRows = params.items.map((item) => `<div style="border:1px solid #eadce1;border-radius:10px;padding:16px;margin:12px 0"><p style="margin:0 0 10px"><strong>${escapeHtml(item.label)} ${escapeHtml(item.code)}</strong></p><a href="${escapeAttribute(item.url)}" style="display:inline-block;background:#65102f;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">فتح الطلب بأمان</a></div>`).join('');
     await this.send(params.to, params.subject,
       `مرحبًا ${params.name}\n\n${params.intro}\n\n${rows}\n\nتنتهي الروابط خلال وقت قصير وتُستخدم مرة واحدة.`,
-      layout(`مرحبًا ${escapeHtml(params.name)}`, `<p>${escapeHtml(params.intro)}</p>${htmlRows}<p>تنتهي الروابط خلال وقت قصير وتُستخدم مرة واحدة.</p>`));
+      layout(`مرحبًا ${escapeHtml(params.name)}`, `<p style="line-height:1.9;direction:rtl;text-align:right">${escapeHtml(params.intro).replace(/\n/g, '<br>')}</p>${htmlRows}<p>تنتهي الروابط خلال وقت قصير وتُستخدم مرة واحدة.</p>`));
   }
 
   async sendOperationalDigest(params: OperationalDigestEmailParams): Promise<void> {
