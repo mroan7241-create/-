@@ -60,8 +60,14 @@ export function SelectionBoard({ showHeader = false, mode = 'all' }: { showHeade
     finally { setBusy(false); }
   }
   async function saveIntake(value: string | null) {
-    const saved = await run(() => saveSystemSetting('application.intakeClosesAt', value), value ? 'تم حفظ موعد إغلاق التقديم.' : 'أُعيد فتح التقديم.');
-    if (saved) { setIntake(await getApplicationIntake()); if (!value) setIntakeTime(''); }
+    setBusy(true); setMessage('');
+    try {
+      await saveSystemSetting('application.intakeClosesAt', value);
+      setIntake(await getApplicationIntake());
+      if (!value) setIntakeTime('');
+      setMessage(value ? 'تم حفظ موعد إغلاق التقديم.' : 'أُعيد فتح التقديم.');
+    } catch (reason) { setMessage(readError(reason)); }
+    finally { setBusy(false); }
   }
   async function choose(application: ApplicationSummary, decision: 'MAIN' | 'RESERVE') {
     setBusy(true); setMessage('');

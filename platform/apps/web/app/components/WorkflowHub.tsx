@@ -18,6 +18,7 @@ import Link from 'next/link';
 import { workflowLabel } from '../lib/workflow-label';
 import { canPrepareCovenant } from '../lib/covenant-selection';
 import { settleSelectedWorkflowJobs, type WorkflowJob } from './workflow-jobs';
+import { canCompleteParticipationSetup, canCreateCovenantSigningAccount, participationStageLabel, type ParticipationStageInput } from './participation-stage';
 
 type Section = { key: string; title: string; rows: WorkflowRecord[]; error?: string };
 export type WorkflowSectionKey = 'participations' | 'deliveries' | 'procurement' | 'escalations' | 'notifications' | 'beneficiaries' | 'outbox' | 'project-closure';
@@ -106,23 +107,31 @@ function BusinessCalendarSettings({ busy, act }: { busy: boolean; act: (action: 
 function OperationalRow({ user, section, row, busy, setForm, act }: { user: CurrentUser; section: string; row: WorkflowRecord; busy: boolean; setForm: (form: OpenForm) => void; act: (action: () => Promise<unknown>, success?: string, credentialEmail?: string) => Promise<void> }) {
   const publicLabel = workflowLabel(row, section);
   const status = String(row.status ?? row.listType ?? '');
+  const currentAgreement = (row.agreements as WorkflowRecord[] | undefined)?.[0];
+  const participationStage: ParticipationStageInput = {
+    status,
+    selectionList: (row.application as WorkflowRecord | null | undefined)?.selectionList,
+    agreementStatus: currentAgreement?.status,
+    setupCompletedAt: row.setupCompletedAt,
+    associationId: row.associationId,
+  };
   const buttons: React.ReactNode[] = [];
   const button = (label: string, action: () => Promise<unknown>) => buttons.push(<button key={label} style={secondaryButtonStyle} disabled={busy} onClick={() => void act(action)}>{label}</button>);
   const formButton = (label: string, kind: FormKind) => buttons.push(<button key={label} style={secondaryButtonStyle} disabled={busy} onClick={() => setForm({ kind, row })}>{label}</button>);
 
   if (section === 'participations') {
-    const agreement = (row.agreements as WorkflowRecord[] | undefined)?.[0];
-    const selectionList = (row.application as WorkflowRecord | null | undefined)?.selectionList;
+    const agreement = currentAgreement;
+    const selectionList = participationStage.selectionList;
     const closure = row.closureReport as WorkflowRecord | undefined;
     if (user.role === 'ADMIN') {
       if (canPrepareCovenant(selectionList, agreement?.status)) {
         if (!agreement) formButton('إنشاء اتفاقية', 'agreement');
         if (agreement?.status === 'DRAFT') button('إرسال الاتفاقية', () => transitionAgreement(agreement.id, 'SENT'));
       }
-      if (agreement?.status === 'SENT' && !row.associationId) buttons.push(<button key="signing-account" style={secondaryButtonStyle} disabled={busy} onClick={() => void act(() => prepareCovenantSigningAccount(row.id), 'تم إنشاء حساب توقيع مقيّد؛ لن تفتح العمليات قبل اكتمال الميثاق.', String((row.application as WorkflowRecord | undefined)?.email ?? ''))}>إنشاء حساب توقيع مقيّد</button>);
+      if (canCreateCovenantSigningAccount(participationStage)) buttons.push(<button key="signing-account" style={secondaryButtonStyle} disabled={busy} onClick={() => void act(() => prepareCovenantSigningAccount(row.id), 'تم إنشاء حساب توقيع مقيّد؛ لن تفتح العمليات قبل اكتمال الميثاق.', String((row.application as WorkflowRecord | undefined)?.email ?? ''))}>إنشاء حساب توقيع مقيّد</button>);
       if (agreement?.status === 'SIGNED_BY_ORG') button('إنشاء رابط توقيع الطرف الأول', () => issuePartyOneSigningSession(agreement.id));
       if (agreement?.status === 'SIGNED') button('تنزيل النسخة النهائية', () => getFinalCovenantUrl(agreement.id).then(({ url }) => { window.open(url, '_blank', 'noopener,noreferrer'); }));
-      if (!row.setupCompletedAt) button('إكمال التجهيز', () => completeParticipationSetup(row.id));
+      if (canCompleteParticipationSetup(participationStage)) button('إكمال التجهيز', () => completeParticipationSetup(row.id));
       if (closure?.status === 'SUBMITTED') button('بدء مراجعة الإغلاق', () => transitionOrganizationClosure(closure.id, 'UNDER_REVIEW'));
       if (closure?.status === 'UNDER_REVIEW') button('اعتماد تقرير الجمعية', () => transitionOrganizationClosure(closure.id, 'APPROVED'));
       if (closure?.status === 'APPROVED') button('إغلاق المشاركة', () => transitionOrganizationClosure(closure.id, 'CLOSED'));
@@ -161,7 +170,7 @@ function OperationalRow({ user, section, row, busy, setForm, act }: { user: Curr
     if (status === 'DONOR_FEEDBACK') button('إعادة الإرسال', () => transitionProjectClosure('RESUBMITTED'));
     if (status === 'DONOR_APPROVED') button('إغلاق المشروع', () => transitionProjectClosure('PROJECT_CLOSED'));
   }
-  return <article className="workflow-row"><div><strong>{publicLabel}</strong><p>{humanStatus(status)}</p>{section === 'procurement' && <ProcurementSummary row={row} />}</div><div className="button-row">{buttons}</div></article>;
+  return <article className="workflow-row"><div><strong>{publicLabel}</strong><p>{humanStatus(status)}</p>{section === 'participations' && user.role === 'ADMIN' && <p>الخطوة الحالية: {participationStageLabel(participationStage)}</p>}{section === 'procurement' && <ProcurementSummary row={row} />}</div><div className="button-row">{buttons}</div></article>;
 }
 
 function ProcurementSummary({ row }: { row: WorkflowRecord }) {
