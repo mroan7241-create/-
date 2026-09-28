@@ -98,9 +98,10 @@ describe('Application V2 launch gate', () => {
     expect(final.selectionList).toBe('RESERVE'); expect(final.participation).toBeNull(); expect(final.sourceDraft?.resumeTokenHash).not.toBe(created.body.resumeToken);
     await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'MAIN', opId: randomUUID() }).expect(201);
     expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id }, include: { participation: true } })).participation).not.toBeNull();
-    fakeEmail.lastApplicationAccess = null;
+    const previousSelectionUrl = fakeEmail.lastApplicationAccess?.items[0]?.url;
     await http().post(`/api/v1/association-applications/${row.id}/selection-decision/resend`).set('Cookie', adminCookie).expect(201);
     expect(fakeEmail.lastApplicationAccess?.intro).toContain('القائمة الأساسية');
+    expect(fakeEmail.lastApplicationAccess?.items[0]?.url).not.toBe(previousSelectionUrl);
     await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(409);
   });
 
