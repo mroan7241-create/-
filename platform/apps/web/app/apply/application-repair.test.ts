@@ -121,6 +121,13 @@ test('financial indicators distinguish surplus, deficit and current liabilities 
   assert.deepEqual(financialSummary({ revenue: '100', expenses: 1 }), []);
 });
 
+test('financial analysis is visible to admin assessors, not to applicants', () => {
+  const applicant = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8');
+  const admin = readFileSync(new URL('../admin/applications/page.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(applicant, /FinancialSummary/);
+  assert.match(admin, /<FinancialSummary finance=\{application\.v2Payload\?\.finance\}/);
+});
+
 test('geolocation allows only self and preserves camera/microphone restrictions', async () => {
   const config = createRequire(import.meta.url)('../../next.config.js');
   const routes = await config.headers();
