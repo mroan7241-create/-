@@ -19,6 +19,9 @@ import { PaginationQueryDto } from '../../../common/validation/pagination-query.
  */
 export class ListApplicationsQueryDto extends PaginationQueryDto {
   @IsOptional()
+  @IsIn(['true', 'false'])
+  includeCounts?: 'true' | 'false';
+  @IsOptional()
   @IsIn(Object.values(ApplicationStatus))
   status?: ApplicationStatus;
 

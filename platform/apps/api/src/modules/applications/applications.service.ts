@@ -279,7 +279,7 @@ export class ApplicationsService {
   // ================================================================
   // ADMIN LIST
   // ================================================================
-  async listApplications(params: PaginationParams & { search?: string; status?: ApplicationStatus; eligibilityStatus?: EligibilityStatus; selectionList?: AssociationSelectionList; workflow?: 'new' | 'processing' | 'missing'; financial?: 'assets_lte_10m' | 'assets_gt_10m' | 'surplus' | 'deficit' | 'working_capital' }): Promise<PaginatedResult<unknown> & { counts: Record<string, number> }> {
+  async listApplications(params: PaginationParams & { search?: string; status?: ApplicationStatus; eligibilityStatus?: EligibilityStatus; selectionList?: AssociationSelectionList; workflow?: 'new' | 'processing' | 'missing'; financial?: 'assets_lte_10m' | 'assets_gt_10m' | 'surplus' | 'deficit' | 'working_capital'; includeCounts?: 'true' | 'false' }): Promise<PaginatedResult<unknown> & { counts: Record<string, number> }> {
     const { page, pageSize, skip, take } = normalizePagination(params);
     const where: Prisma.AssociationApplicationWhereInput = {};
     if (params.status) where.status = params.status;
@@ -314,6 +314,8 @@ export class ApplicationsService {
       }),
       prisma.associationApplication.count({ where }),
     ]);
+
+    if (params.includeCounts === 'false') return { ...toPaginatedResult(rows.map(mapApplicationSummary), total, page, pageSize), counts: {} };
 
     const [all, fresh, processing, missing, eligible, ineligible, main, reserve] = await Promise.all([
       prisma.associationApplication.count(),

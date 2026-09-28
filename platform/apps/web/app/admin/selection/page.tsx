@@ -38,7 +38,7 @@ export function SelectionBoard({ showHeader = false }: { showHeader?: boolean })
     const sequence = ++loadSequence.current;
     setListLoading(true);
     try {
-      const all = await fetchPagedItems((page) => apiFetch<Paginated<ApplicationSummary>>(`/association-applications?page=${page}&pageSize=100`));
+      const all = await fetchPagedItems((page) => apiFetch<Paginated<ApplicationSummary>>(`/association-applications?page=${page}&pageSize=100&includeCounts=false`));
       if (sequence === loadSequence.current) setApps(all);
     } catch (reason) {
       if (sequence === loadSequence.current) setMessage(readError(reason));

@@ -118,6 +118,11 @@ describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
     const paged = await http().get('/api/v1/association-applications?page=2&pageSize=2').set('Cookie', adminCookie);
     expect(paged.body.items).toHaveLength(1);
     expect(paged.body.totalPages).toBe(2);
+    const leanPage = await http().get('/api/v1/association-applications?page=2&pageSize=2&includeCounts=false').set('Cookie', adminCookie);
+    expect(leanPage.status).toBe(200);
+    expect(leanPage.body.items.map((item: { id: string }) => item.id)).toEqual(paged.body.items.map((item: { id: string }) => item.id));
+    expect(leanPage.body.counts).toEqual({});
+    expect(all.body.counts.all).toBe(3);
 
     const filtered = await http().get('/api/v1/association-applications?status=REJECTED').set('Cookie', adminCookie);
     expect(filtered.body.total).toBe(1);
@@ -138,6 +143,9 @@ describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
   it.each(['abc', '-1', '0', '2.5'])('page غير صالح (%s) على قائمة الطلبات يُرفض بـ400 لا 500', async (page) => {
     const res = await http().get(`/api/v1/association-applications?page=${encodeURIComponent(page)}`).set('Cookie', adminCookie);
     expect(res.status).toBe(400);
+  });
+  it('قيمة includeCounts غير صالحة تُرفض بدل تجاوز التحقق', async () => {
+    await http().get('/api/v1/association-applications?includeCounts=maybe').set('Cookie', adminCookie).expect(400);
   });
 
   it.each(['abc', '-5', '0', '101', '99999'])('pageSize غير صالح (%s) على قائمة الطلبات يُرفض بـ400', async (pageSize) => {
