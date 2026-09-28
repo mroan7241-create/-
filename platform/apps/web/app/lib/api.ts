@@ -13,9 +13,18 @@ export class ApiClientError extends Error {
   }
 }
 
+async function fetchWithNetworkFeedback(input: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') throw error;
+    throw new ApiClientError('NETWORK_ERROR', 'تعذّر الاتصال بالخادم. تحقق من الاتصال وأعد المحاولة.');
+  }
+}
+
 /** كل الطلبات تُرسل مع credentials:'include' — الكوكي alzad_session هو الحامل الوحيد للجلسة، لا localStorage/sessionStorage إطلاقًا. */
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetchWithNetworkFeedback(`${API_BASE}${path}`, {
     ...init,
     credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
@@ -33,7 +42,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
  * يدويًا إطلاقًا (المتصفح يضبطه مع boundary الصحيح).
  */
 export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { method: 'POST', credentials: 'include', body: form });
+  const res = await fetchWithNetworkFeedback(`${API_BASE}${path}`, { method: 'POST', credentials: 'include', body: form });
   const body = await res.json().catch(() => null);
   if (!res.ok) {
     const err = body as ApiErrorBody | null;
@@ -43,7 +52,7 @@ export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
 }
 
 async function apiUploadWithHeaders<T>(path: string, form: FormData, headers: Record<string, string>): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { method: 'POST', credentials: 'include', headers, body: form });
+  const res = await fetchWithNetworkFeedback(`${API_BASE}${path}`, { method: 'POST', credentials: 'include', headers, body: form });
   const body = await res.json().catch(() => null);
   if (!res.ok) {
     const err = body as ApiErrorBody | null;
