@@ -49,6 +49,7 @@ describe('Application V2 launch gate', () => {
     const newDraftCookie = created.headers['set-cookie'][0];
     expect(newDraftCookie).toContain('alzad_applicant_session=');
     expect(newDraftCookie).toContain('HttpOnly');
+    expect(newDraftCookie).not.toMatch(/Expires=|Max-Age=/i);
     await http().get(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set('Cookie', newDraftCookie).expect(200);
     const auth = { 'x-application-resume-token': created.body.resumeToken };
     const applicantAccess = { Cookie: newDraftCookie };
@@ -114,6 +115,22 @@ describe('Application V2 launch gate', () => {
     expect(fakeEmail.lastApplicationAccess?.intro).toContain('القائمة الأساسية');
     expect(fakeEmail.lastApplicationAccess?.items[0]?.url).not.toBe(previousSelectionUrl);
     await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(409);
+  });
+
+  it('expires the short applicant session and recovers the same draft through its official email', async () => {
+    const created = await http().post('/api/v1/association-applications/drafts').send({ clientRequestId: randomUUID() }).expect(201);
+    const oldCookie = created.headers['set-cookie'][0];
+    const email = `recovery-${randomUUID()}@example.org`;
+    await http().put(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set('Cookie', oldCookie).send({ revision: 0, payload: { organization: { officialEmail: email } } }).expect(200);
+    const draft = await prisma.associationApplicationDraft.findUniqueOrThrow({ where: { publicCode: created.body.draftCode } });
+    await prisma.applicationApplicantSession.updateMany({ where: { draftId: draft.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+    await http().get(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set('Cookie', oldCookie).expect(403);
+    await http().post('/api/v1/association-applications/access/request').send({ email }).expect(200);
+    const accessUrl = fakeEmail.lastApplicationAccess?.items[0]?.url;
+    expect(accessUrl).toContain('/apply/access?token=');
+    const recovered = await http().post('/api/v1/association-applications/access/exchange').send({ token: new URL(accessUrl!).searchParams.get('token') }).expect(200);
+    expect(recovered.body.draftCode).toBe(created.body.draftCode);
+    await http().get(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set('Cookie', recovered.headers['set-cookie'][0]).expect(200);
   });
 
   it('enforces the administrator intake deadline before a new draft is created', async () => {
