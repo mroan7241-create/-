@@ -95,6 +95,17 @@ export async function collectObjects(client,commands,bucket,directory,maxBytes=2
   if(JSON.stringify(before.map(i=>[i.Key,i.ETag,i.Size]))!==JSON.stringify(after.map(i=>[i.Key,i.ETag,i.Size]))) throw new Error('Storage changed during backup; retry without reporting success');
   return manifest;
 }
+export function assertSnapshotReferences(references, manifest, bucket) {
+  const archived = new Map(manifest.map(item => [item.key, item]));
+  for (const reference of references) {
+    const object = archived.get(reference.key);
+    if (reference.bucket !== bucket || !object ||
+        (reference.sha256 && reference.sha256.toLowerCase() !== object.sha256.toLowerCase())) {
+      throw new Error('Database snapshot references an unavailable or mismatched private object; backup must not be reported successful');
+    }
+  }
+  return references.length;
+}
 export async function sendParts(transport,encryptedPath,from,id) {
   const size=(await stat(encryptedPath)).size,parts=Math.ceil(size/PART_SIZE),sha256=await hashFile(encryptedPath);
   if(size===0||size>MAX_EMAIL_BYTES) throw new Error('Backup exceeds safe email size limit; no parts sent');
@@ -134,7 +145,9 @@ export async function backup() {
     const client=new s3.S3Client({endpoint:config.OBJECT_STORAGE_ENDPOINT,region:config.OBJECT_STORAGE_REGION,forcePathStyle:String(config.OBJECT_STORAGE_FORCE_PATH_STYLE||'true')==='true',credentials:{accessKeyId:config.OBJECT_STORAGE_ACCESS_KEY,secretAccessKey:config.OBJECT_STORAGE_SECRET_KEY},maxAttempts:3});
     let manifest;
     try { manifest=await collectObjects(client,s3,config.OBJECT_STORAGE_BUCKET,objects); } finally { client.destroy(); }
-    await writeFile(join(snapshot,'manifest.json'),JSON.stringify({format:1,id,createdAt:new Date().toISOString(),database:{file:'database.dump',sha256:await hashFile(dump),schema:'public'},restoreVerification,objects:manifest,limitations:['No global atomic snapshot across database and object storage','Server roles, passwords and deployment secrets are not included']},null,2),{flag:'wx',mode:0o600});
+    const { referencedObjects, ...restoreSummary } = restoreVerification;
+    const verifiedFileReferences = assertSnapshotReferences(referencedObjects,manifest,config.OBJECT_STORAGE_BUCKET);
+    await writeFile(join(snapshot,'manifest.json'),JSON.stringify({format:1,id,createdAt:new Date().toISOString(),database:{file:'database.dump',sha256:await hashFile(dump),schema:'public'},restoreVerification:{...restoreSummary,verifiedFileReferences},objects:manifest,limitations:['Database-referenced objects verified against the dump, but no global atomic snapshot across database and object storage','Server roles, passwords and deployment secrets are not included']},null,2),{flag:'wx',mode:0o600});
     const archive=join(directory,'snapshot.tar.gz'),encrypted=join(directory,'backup.enc');
     console.log('BACKUP_STAGE: ENCRYPTION');
     await run('tar',['-czf',archive,'-C',snapshot,'.']);

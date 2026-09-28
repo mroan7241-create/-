@@ -25,8 +25,7 @@ describe('OperationsDigestService', () => {
     const service = new OperationsDigestService(email as unknown as EmailService);
     jest.spyOn(prisma.systemSetting, 'createMany').mockResolvedValue({ count: 1 });
     jest.spyOn(prisma.systemSetting, 'findUnique')
-      .mockResolvedValueOnce({ key: 'operations.digest.lastSuccessfulAt', value: '2026-09-19T03:00:00.000Z', updatedAt: new Date() })
-      .mockResolvedValueOnce({ key: 'operations.backup.lastSuccessful', value: { backupId: 'test' }, updatedAt: new Date() });
+      .mockResolvedValueOnce({ key: 'operations.digest.lastSuccessfulAt', value: '2026-09-19T03:00:00.000Z', updatedAt: new Date() });
     jest.spyOn(prisma.associationApplication, 'count').mockResolvedValue(3);
     jest.spyOn(prisma.auditLog, 'groupBy').mockResolvedValue([{ action: 'APPLICATION_EVALUATED', _count: { _all: 2 } }] as never);
     jest.spyOn(prisma.outboxEvent, 'count').mockResolvedValue(0);
@@ -43,6 +42,7 @@ describe('OperationsDigestService', () => {
     expect(email.sent).toHaveLength(1);
     expect(email.sent[0]?.text).toContain('طلبات جديدة: 3');
     expect(email.sent[0]?.text).toContain('APPLICATION_EVALUATED: 2');
+    expect(email.sent[0]?.text).toContain('النسخ الاحتياطي: غير مثبت آليًا');
   });
 
   it.each(['SENT', 'PROCESSING'])('skips %s markers without errors or sending again', async (status) => {

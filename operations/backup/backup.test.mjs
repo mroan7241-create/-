@@ -4,7 +4,7 @@ import {generateKeyPairSync} from 'node:crypto';
 import {mkdtemp,writeFile,readFile,rm,open} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {configuration,envelope,decryptBuffer,encryptFile,collectObjects,sendParts} from './backup.mjs';
+import {configuration,envelope,decryptBuffer,encryptFile,collectObjects,assertSnapshotReferences,sendParts} from './backup.mjs';
 import {verifyRestore} from './verify-restore.mjs';
 const keys=generateKeyPairSync('rsa',{modulusLength:3072,publicKeyEncoding:{type:'spki',format:'pem'},privateKeyEncoding:{type:'pkcs8',format:'pem'}});
 const config={DATABASE_URL:'postgresql://backup:synthetic-secret@db.example.org:5432/postgres',EXPECTED_DB_HOST:'db.example.org',EXPECTED_DB_NAME:'postgres',OBJECT_STORAGE_ENDPOINT:'https://storage.example.org',OBJECT_STORAGE_REGION:'test',OBJECT_STORAGE_ACCESS_KEY:'synthetic',OBJECT_STORAGE_SECRET_KEY:'synthetic',OBJECT_STORAGE_BUCKET:'test',SMTP_HOST:'smtp.example.org',SMTP_USER:'test',SMTP_PASSWORD:'synthetic',SMTP_FROM_EMAIL:'test@example.org',SMTP_FROM_NAME:'test',SMTP_PORT:'465',SMTP_SECURE:'true'};
@@ -37,6 +37,14 @@ test('storage rejects incomplete pagination before downloading any object',async
   await assert.rejects(collectObjects(client,{ListObjectsV2Command:List,GetObjectCommand:Get},'test',tmpdir()));assert.equal(calls,1);
 });
 
+test('backup rejects a database snapshot whose referenced private file vanished or changed before S3 capture',()=>{
+  const object={key:'private/test.jpg',sha256:'abc'};
+  assert.equal(assertSnapshotReferences([{bucket:'test',key:object.key,sha256:'abc'}],[object],'test'),1);
+  assert.throws(()=>assertSnapshotReferences([{bucket:'test',key:object.key,sha256:'abc'}],[],'test'));
+  assert.throws(()=>assertSnapshotReferences([{bucket:'test',key:object.key,sha256:'abc'}],[{...object,sha256:'def'}],'test'));
+  assert.throws(()=>assertSnapshotReferences([{bucket:'production',key:object.key}],[object],'test'));
+});
+
 test('multipart delivery preserves every byte and refuses oversized backups before any email',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
   try {
@@ -51,7 +59,7 @@ test('multipart delivery preserves every byte and refuses oversized backups befo
 
 test('restore verification is networkless, never receives Production settings, and cleans only its own container',async()=>{
   const calls=[];
-  const execute=async(command,args,options)=>{calls.push({command,args,options});return args.includes('-At')?'[{"table_name":"_prisma_migrations","row_count":"1"}]':'';};
+  const execute=async(command,args,options)=>{calls.push({command,args,options});return args.includes('-At')?(String(args.at(-1)).includes('to_regclass')?'f':'[{"table_name":"_prisma_migrations","row_count":"1"}]'):'';};
   const result=await verifyRestore(join(tmpdir(),'synthetic.dump'),execute);
   assert.equal(result.status,'RESTORE_PASS');
   assert.deepEqual(calls[0].args.slice(0,5),['run','--detach','--rm','--network','none']);

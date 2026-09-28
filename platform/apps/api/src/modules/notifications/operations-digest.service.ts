@@ -61,18 +61,19 @@ export class OperationsDigestService implements OnModuleInit, OnModuleDestroy {
       const last = await prisma.systemSetting.findUnique({ where: { key: 'operations.digest.lastSuccessfulAt' } });
       const cutoff = now;
       const from = readDate(last?.value) ?? new Date(cutoff.getTime() - 24 * 60 * 60 * 1000);
-      const [applications, auditGroups, failedOutbox, backup, db] = await Promise.all([
+      const [applications, auditGroups, failedOutbox, db] = await Promise.all([
         prisma.associationApplication.count({ where: { submittedAt: { gt: from, lte: cutoff } } }),
         prisma.auditLog.groupBy({ by: ['action'], where: { createdAt: { gt: from, lte: cutoff } }, _count: { _all: true }, orderBy: { action: 'asc' } }),
         prisma.outboxEvent.count({ where: { failedAt: { gt: from, lte: cutoff } } }),
-        prisma.systemSetting.findUnique({ where: { key: 'operations.backup.lastSuccessful' } }),
         prisma.$queryRaw<Array<{ ok: number }>>(Prisma.sql`SELECT 1 AS ok`),
       ]);
       const events = auditGroups.length
         ? auditGroups.map((item) => `- ${item.action}: ${item._count._all}`).join('\n')
         : '- لا توجد أحداث مسجلة في الفترة';
       const commit = productionCommit();
-      const backupStatus = backup ? 'ناجح ومسجل' : 'غير مسجل — يحتاج تدخلًا';
+      // لا تكتب مهمة النسخ الحالية علامة موثوقة في قاعدة البيانات، ووجود
+      // إعداد قديم بهذا الاسم لا يثبت نجاح نسخة أو وصولها أو استعادتها.
+      const backupStatus = 'غير مثبت آليًا — راجع سجل النسخ واختبار الاستعادة';
       const text = [
         `الفترة: (${from.toISOString()}, ${cutoff.toISOString()}]`,
         `طلبات جديدة: ${applications}`,
@@ -81,7 +82,7 @@ export class OperationsDigestService implements OnModuleInit, OnModuleDestroy {
         `النسخ الاحتياطي: ${backupStatus}`,
         `Production commit: ${commit}`,
         `API: يعمل`, `Web: تحقق خارجي مطلوب`, `DB: ${db[0]?.ok === 1 ? 'يعمل' : 'غير متاح'}`,
-        `يتطلب تدخلًا بشريًا: ${backup ? 'لا يوجد حسب البيانات الحالية' : 'إثبات النسخ الاحتياطي والاستعادة'}`,
+        'يتطلب تدخلًا بشريًا: إثبات النسخ الاحتياطي والاستعادة',
       ].join('\n');
       await this.email.sendOperationalDigest({ to: recipient(), subject: `التقرير التشغيلي اليومي لمنصة الأجهزة الكهربائية — ${date}`, text });
       await prisma.$transaction([

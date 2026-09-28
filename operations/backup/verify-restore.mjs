@@ -59,7 +59,16 @@ export async function verifyRestore(dump, execute = capture) {
         !counts.some(row => row.table_name === '_prisma_migrations' && Number(row.row_count) > 0)) {
       throw new Error('Restored application database verification failed');
     }
-    return { status: 'RESTORE_PASS', environment: 'networkless-disposable-postgresql-18', tableCounts: counts };
+    // The dump's MVCC snapshot is the source of truth for which private objects
+    // must be present. Storage may change between pg_dump and S3 enumeration.
+    const hasFiles = await docker(['exec', name, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-At', '-U', 'postgres',
+      '-d', 'alzad_backup_restore_test', '-c', "SELECT to_regclass('public.files') IS NOT NULL"]);
+    const referencedObjects = hasFiles === 't' ? JSON.parse(await docker(['exec', name, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-At', '-U', 'postgres',
+      '-d', 'alzad_backup_restore_test', '-c', "SELECT coalesce(json_agg(json_build_object('bucket',bucket,'key',object_key,'sha256',sha256)),'[]'::json) FROM public.files"])) : [];
+    if (!Array.isArray(referencedObjects) || referencedObjects.some(item => typeof item.bucket !== 'string' || typeof item.key !== 'string')) {
+      throw new Error('Restored file references could not be verified');
+    }
+    return { status: 'RESTORE_PASS', environment: 'networkless-disposable-postgresql-18', tableCounts: counts, referencedObjects };
   } finally {
     if (created) await docker(['rm', '--force', '--volumes', name]);
   }

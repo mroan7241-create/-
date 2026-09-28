@@ -11,6 +11,8 @@ on:
   push:
     branches: [release/applicant-step1-20260921, codex/encrypted-backup-20260928]
     paths: ['operations/backup/**', '.github/workflows/encrypted-backup.yml']
+  pull_request:
+    paths: ['operations/backup/**', '.github/workflows/encrypted-backup.yml']
 permissions:
   contents: read
 concurrency:
