@@ -1,7 +1,7 @@
 .page { min-height: 100vh; background: var(--canvas); padding: 28px 16px 56px; color: var(--ink); }
 .wrap { width: min(1060px, 100%); margin: 0 auto; }
 .hero { padding: 28px; border-radius: 22px; color: #fff; background: linear-gradient(135deg, #64102c, #9b294d 62%, #bf5a49); box-shadow: 0 18px 50px rgba(72, 12, 35, .16); }
-.hero h1 { margin: 0 0 8px; font-size: clamp(24px, 4vw, 38px); }
+.hero h1 { margin: 0 0 8px; font-size: clamp(24px, 4vw, 38px); color: #fff; }
 .hero p { margin: 0; max-width: 700px; line-height: 1.8; color: #fff8f3; }
 .landing { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-top: 22px; }
 .choice { min-height: 170px; text-align: right; padding: 24px; border: 1px solid var(--line); border-radius: 18px; background: #fff; cursor: pointer; box-shadow: 0 10px 30px rgba(72, 12, 35, .07); }

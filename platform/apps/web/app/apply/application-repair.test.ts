@@ -6,7 +6,19 @@ import { readFileSync } from 'node:fs';
 // @ts-ignore -- standalone node --test, not a browser import
 import { createAutosaveQueue } from './autosave-queue.ts';
 // @ts-ignore -- standalone node --test, not a browser import
-import { CONSENT_VERSION, riyadhRecentYears, validateStep } from './application-form-utils.ts';
+import { CONSENT_VERSION, riyadhRecentYears, validateStep, withDisplayedNumericDefaults } from './application-form-utils.ts';
+
+test('displayed zero values are present in new and resumed drafts without changing entered numbers', () => {
+  const original = { team: { fullTime: 4 }, finance: { revenue: 1000000 } };
+  const restored = withDisplayedNumericDefaults(original);
+  assert.equal((restored.team as Record<string, unknown>).fullTime, 4);
+  assert.equal((restored.team as Record<string, unknown>).nonSaudis, 0);
+  assert.equal((restored.finance as Record<string, unknown>).revenue, 1000000);
+  assert.equal((restored.finance as Record<string, unknown>).expenses, 0);
+  assert.equal((original.team as Record<string, unknown>).nonSaudis, undefined);
+  assert.deepEqual(withDisplayedNumericDefaults(restored), restored);
+  assert.equal((withDisplayedNumericDefaults({ team: { nonSaudis: null } }).team as Record<string, unknown>).nonSaudis, 0);
+});
 // @ts-ignore -- standalone node --test, not a browser import
 import { financialSummary } from '../lib/financial-summary.ts';
 // @ts-ignore -- standalone node --test, not a browser import
@@ -23,6 +35,11 @@ test('shared link description identifies the platform without obsolete migration
   const description = layout.match(/description:\s*'([^']+)'/)?.[1];
   assert.equal(description, 'منصة جمعية الزاد لمشروع الأجهزة الكهربائية.');
   assert.doesNotMatch(description!, /Google Apps Script|قيد الهجرة/);
+});
+
+test('public application heading remains readable on the dark hero', () => {
+  const styles = readFileSync(new URL('./application-v2.module.css', import.meta.url), 'utf8');
+  assert.match(styles, /\.hero h1\s*\{[^}]*color:\s*#fff\s*;/);
 });
 
 test('Covenant validation identifies each missing requirement and does not accept an unconfirmed drawing', () => {
@@ -194,6 +211,17 @@ const base: Payload = {
   finance: { hasAccountingSystem: false, hasSpendingPolicy: false, revenue: 0, expenses: 0, currentAssets: 0, currentLiabilities: 0 },
   planning: { hasStrategicPlan: false, hasOperationalPlan: false, hasPostAidFollowUp: false, measuresSatisfaction: false, lastYearProgramsCount: 0, lastYearBeneficiariesCount: 0 },
 };
+
+test('a visually displayed zero no longer blocks application steps', () => {
+  const draft = structuredClone(base);
+  delete (draft.team as Payload).nonSaudis;
+  delete (draft.experience as Payload).ehsanSupportCount2025;
+  assert.notEqual(validateStep(2, draft, []), '');
+  assert.notEqual(validateStep(4, draft, []), '');
+  const normalized = withDisplayedNumericDefaults(draft);
+  assert.equal(validateStep(2, normalized, []), '');
+  assert.equal(validateStep(4, normalized, []), '');
+});
 
 test('conditional fields are enforced in their own step only when enabled', () => {
   const cases: [number, string, unknown, Record<string, unknown>][] = [

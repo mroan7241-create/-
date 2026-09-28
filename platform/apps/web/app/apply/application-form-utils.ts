@@ -33,6 +33,35 @@ export function payloadFingerprint(value: Record<string, unknown>): string {
   return JSON.stringify(value);
 }
 
+// Numeric controls display 0 for an empty draft. Persist the same value so
+// validation and submission agree with what the applicant can actually see.
+const DISPLAYED_ZERO_PATHS = [
+  'executive.experienceYears',
+  'team.fullTime', 'team.partTime', 'team.activeVolunteers', 'team.nonSaudis', 'team.universityOrHigher',
+  'readiness.fieldTeamCount', 'readiness.weeklyDeliveryCapacity',
+  'beneficiaries.registeredFamilies',
+  'experience.projectBeneficiaries', 'experience.recentProjectsCount',
+  'experience.recentBeneficiariesCount', 'experience.ehsanSupportCount2025',
+  'finance.revenue', 'finance.expenses', 'finance.currentAssets', 'finance.currentLiabilities',
+  'planning.lastYearProgramsCount', 'planning.lastYearBeneficiariesCount',
+] as const;
+
+export function withDisplayedNumericDefaults(payload: Record<string, unknown>): Record<string, unknown> {
+  const result = structuredClone(payload);
+  for (const path of DISPLAYED_ZERO_PATHS) {
+    const current = getAt(result, path);
+    if (current !== undefined && current !== null && current !== '') continue;
+    const keys = path.split('.');
+    let parent: Record<string, unknown> = result;
+    for (const key of keys.slice(0, -1)) {
+      if (!parent[key] || typeof parent[key] !== 'object' || Array.isArray(parent[key])) parent[key] = {};
+      parent = parent[key] as Record<string, unknown>;
+    }
+    parent[keys.at(-1)!] = 0;
+  }
+  return result;
+}
+
 export function validateStep(step:number,payload:Record<string, unknown>,attachments:string[]):string {
   const required:Record<number,string[]>={1:['organization.name','organization.licenseNumber','organization.licenseExpiryDate','organization.category','organization.sector','organization.officialEmail','organization.officialPhone','location.regionCode','location.governorateCode','location.districtCustom','location.serviceScope','coordinator.name','coordinator.title','coordinator.phone','coordinator.email','covenantRepresentative.name','covenantRepresentative.title'],2:['executive.name','executive.phone','executive.education','executive.experienceYears','team.fullTime','team.partTime','team.activeVolunteers','team.nonSaudis','team.universityOrHigher','socialResearcher.exists','readiness.fieldTeamCount','readiness.weeklyDeliveryCapacity','readiness.hasReceiptStorage','readiness.canDocumentDigitally'],3:['beneficiaries.registeredFamilies','beneficiaries.databaseUpdatedAt','beneficiaries.hasSystem','beneficiaries.classifiesNeed','beneficiaries.hasCaseStudyMechanism'],4:['experience.hasRecentInKindProject','experience.recentProjectsCount','experience.recentBeneficiariesCount','experience.ehsanSupportCount2025','experience.hasPreviousSimilarSupport'],5:['finance.hasAccountingSystem','finance.hasSpendingPolicy','finance.revenue','finance.expenses','finance.currentAssets','finance.currentLiabilities'],6:['planning.hasStrategicPlan','planning.hasOperationalPlan','planning.hasPostAidFollowUp','planning.measuresSatisfaction','planning.lastYearProgramsCount','planning.lastYearBeneficiariesCount']};
   const conditional:string[]=[];
