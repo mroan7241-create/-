@@ -11,6 +11,7 @@ import {
 import { useRoleGuard } from '../lib/use-role-guard';
 import { cardStyle, errorStyle, inputStyle, labelStyle, modalOverlayStyle, modalStyle, mutedStyle, primaryButtonStyle, secondaryButtonStyle } from '../lib/ui';
 import { buildGoogleMapsSegments, orderStopsNearestNeighbour, type RoutePoint } from './delegate-route';
+import { finishLogout } from '../lib/logout-flow';
 
 type Tab = 'tasks' | 'route' | 'history';
 type MissionPage = { items: DeliveryMissionSummary[]; total: number; page: number; pageSize: number; totalPages: number };
@@ -26,6 +27,7 @@ export default function DelegatePortalPage() {
   const [historyPage, setHistoryPage] = useState(1);
   const [historyTotalPages, setHistoryTotalPages] = useState(1);
   const [error, setError] = useState('');
+  const [logoutBusy, setLogoutBusy] = useState(false);
   const [modal, setModal] = useState<{ type: 'deliver' | 'decline' | 'fail' | 'reschedule' | 'return' | 'location'; mission: DeliveryMissionSummary } | null>(null);
   const [routeStart, setRouteStart] = useState<RoutePoint | undefined>();
   const [locating, setLocating] = useState(false);
@@ -62,7 +64,7 @@ export default function DelegatePortalPage() {
 
   if (loading || !user) return null;
   return <main className="delegate-shell" dir="rtl">
-    <header className="delegate-header"><div><span className="delegate-eyebrow">منصة الزاد الميدانية</span><h1>مرحبًا، {user.name}</h1><p>{activeTotal} مهمة تشغيلية</p></div><button style={secondaryButtonStyle} onClick={async () => { await logout().catch(() => undefined); router.push('/login'); }}>خروج</button></header>
+    <header className="delegate-header"><div><span className="delegate-eyebrow">منصة الزاد الميدانية</span><h1>مرحبًا، {user.name}</h1><p>{activeTotal} مهمة تشغيلية</p></div><button style={secondaryButtonStyle} disabled={logoutBusy} onClick={async () => { setLogoutBusy(true); setError(''); const failure = await finishLogout(logout, () => router.push('/login')); if (failure) setError(failure); setLogoutBusy(false); }}>{logoutBusy ? 'جارٍ الخروج…' : 'خروج'}</button></header>
     <nav className="delegate-tabs" aria-label="أقسام بوابة المندوب">
       <TabButton active={tab === 'tasks'} onClick={() => setTab('tasks')}>مهامي</TabButton>
       <TabButton active={tab === 'route'} onClick={() => setTab('route')}>مسار اليوم</TabButton>

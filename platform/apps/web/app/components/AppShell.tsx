@@ -7,6 +7,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { Menu, X } from 'lucide-react';
 import type { CurrentUser } from '../lib/api';
 import { logout } from '../lib/api';
+import { finishLogout } from '../lib/logout-flow';
 import { navGroupsForRole, ROLE_LABELS } from './nav-config';
 import { mobileMenuButtonStyle, mobileOverlayStyle } from './shell-styles';
 
@@ -20,6 +21,8 @@ import { mobileMenuButtonStyle, mobileOverlayStyle } from './shell-styles';
  */
 export function AppShell({ user, children, restricted = false }: { user: CurrentUser; children: React.ReactNode; restricted?: boolean }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [logoutBusy, setLogoutBusy] = useState(false);
+  const [logoutError, setLogoutError] = useState('');
   const pathname = usePathname();
   const router = useRouter();
   const groups = restricted ? [] : navGroupsForRole(user.role);
@@ -40,8 +43,12 @@ export function AppShell({ user, children, restricted = false }: { user: Current
   }, [mobileOpen]);
 
   async function handleLogout() {
-    await logout().catch(() => undefined);
-    router.push('/login');
+    if (logoutBusy) return;
+    setLogoutBusy(true);
+    setLogoutError('');
+    const failure = await finishLogout(logout, () => router.push('/login'));
+    if (failure) setLogoutError(failure);
+    setLogoutBusy(false);
   }
 
   return (
@@ -112,12 +119,12 @@ export function AppShell({ user, children, restricted = false }: { user: Current
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 14 }}>
             <span style={{ fontWeight: 700 }}>{user.name}</span>
             <span style={{ opacity: 0.65 }}>({ROLE_LABELS[user.role]})</span>
-            <button type="button" className="zad-logout-btn2 zad-focusable" onClick={handleLogout}>
-              تسجيل الخروج
+            <button type="button" className="zad-logout-btn2 zad-focusable" onClick={() => void handleLogout()} disabled={logoutBusy}>
+              {logoutBusy ? 'جارٍ الخروج…' : 'تسجيل الخروج'}
             </button>
           </div>
         </div>
-        <main className="zad-content2">{children}</main>
+        <main className="zad-content2">{logoutError && <p role="alert" style={{ color: '#a60020', marginBlock: '0 12px' }}>{logoutError}</p>}{children}</main>
       </div>
 
       <style>{`
