@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+// Node 24's type-stripping runner needs the explicit TypeScript extension.
+// @ts-ignore -- standalone node --test import
 import { settleSelectedWorkflowJobs, type WorkflowJob } from './workflow-jobs.ts';
 
 test('only the requested portal workflow endpoint is called', async () => {
