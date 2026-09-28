@@ -10,7 +10,7 @@
     "start": "next start",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint \"app/**/*.{js,jsx,ts,tsx}\"",
-    "test": "node --test app/apply/application-repair.test.ts app/apply/information-payload.test.ts app/delegate/delegate-route.test.ts app/components/procurement-route.test.ts app/admin/selection/selection-load.test.ts app/lib/api-network.test.ts"
+    "test": "node --test app/apply/application-repair.test.ts app/apply/information-payload.test.ts app/delegate/delegate-route.test.ts app/components/procurement-route.test.ts app/admin/selection/selection-load.test.ts app/admin/receipts/receipt-labels.test.ts app/lib/api-network.test.ts"
   },
   "dependencies": {
     "@alzad/shared": "*",

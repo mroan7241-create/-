@@ -350,7 +350,7 @@ function ReceiptDetailPanel({ detail, loading, error, batchId }: { detail: Recei
         <tbody>
           {detail.items.map((it) => (
             <tr key={it.id}>
-              <td style={tdStyle}>{it.deviceType}</td>
+              <td style={tdStyle}>{it.deviceType ? DEVICE_TYPE_LABELS[it.deviceType] : '—'}</td>
               <td style={tdStyle}>{it.spec}</td>
               <td style={tdStyle}>{it.sentQty}</td>
               <td style={tdStyle}>{it.receivedQty}</td>

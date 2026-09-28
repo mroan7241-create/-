@@ -7,6 +7,7 @@ import { initialQueryParam } from '../../lib/query';
 import {
   ApiClientError,
   confirmReceiptBatch,
+  DEVICE_TYPE_LABELS,
   getReceiptBatch,
   getReceiptEvidenceUrl,
   listReceiptBatches,
@@ -280,7 +281,7 @@ export default function AssociationReceiptsPage() {
                 return (
                   <div key={it.id} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 10 }}>
                     <div style={mutedStyle}>
-                      {it.deviceType} — {it.spec} — مُرسَل: {it.sentQty}
+                      {it.deviceType ? DEVICE_TYPE_LABELS[it.deviceType] : '—'} — {it.spec} — مُرسَل: {it.sentQty}
                     </div>
                     <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
                       <label style={labelStyle}>
@@ -348,7 +349,7 @@ export default function AssociationReceiptsPage() {
                                   checked={entry.linkedItemIds.includes(l.itemId)}
                                   onChange={(e) => toggleDamagePhotoLink(idx, l.itemId, e.target.checked)}
                                 />
-                                {it.deviceType} — {it.spec}
+                                {it.deviceType ? DEVICE_TYPE_LABELS[it.deviceType] : '—'} — {it.spec}
                               </label>
                             );
                           })}
@@ -411,7 +412,7 @@ export default function AssociationReceiptsPage() {
                 <tbody>
                   {openDetail.items.map((it) => (
                     <tr key={it.id}>
-                      <td style={tdStyle}>{it.deviceType}</td>
+                      <td style={tdStyle}>{it.deviceType ? DEVICE_TYPE_LABELS[it.deviceType] : '—'}</td>
                       <td style={tdStyle}>{it.spec}</td>
                       <td style={tdStyle}>{it.sentQty}</td>
                       <td style={tdStyle}>{it.receivedQty}</td>
