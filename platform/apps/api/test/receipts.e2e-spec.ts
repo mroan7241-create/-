@@ -2,7 +2,7 @@ import request from 'supertest';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import cookieParser from 'cookie-parser';
-import { prisma, AssociationStatus, DeviceStatus, DeviceType, ReceiptBatchStatus } from '@alzad/db';
+import { prisma, AssociationStatus, DeviceStatus, DeviceType, OutboxEventType, ReceiptBatchStatus } from '@alzad/db';
 import { AppModule } from '../src/app.module';
 import { HttpExceptionFilter } from '../src/common/http-exception.filter';
 import { EmailService } from '../src/modules/auth/email/email.service';
@@ -14,8 +14,9 @@ import { cleanAuthState, seedTestFixtures } from './utils/fixtures';
 import { loginAs, JPEG_1X1, PNG_1X1, WEBP_1X1 } from './utils/node2-fixtures';
 import { cleanNode3State, seedNode3Fixtures, type Node3Fixtures } from './utils/node3-fixtures';
 import { RECEIPT_ASSOCIATION_REPORT_REQUIRED_KEY } from '../src/modules/receipts/receipts.service';
+import { StorageService } from '../src/modules/files/storage.service';
 import { cleanNode4State, confirmBatchRequest, createAndSendBatch, createBatchPayload, createBatchRequest, newOpId, PDF_DOC } from './utils/node4-fixtures';
-import { DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { clearLicenseObjects, startTestStorage, stopTestStorage, storageClient, testBucket } from './utils/storage-harness';
 
 async function countObjectsWithPrefix(prefix: string): Promise<number> {
@@ -35,11 +36,14 @@ async function clearReceiptEvidenceObjects(): Promise<void> {
 
 class SpyAllocationTrigger implements AllocationTriggerPort {
   calls: string[] = [];
+  fail = false;
   async triggerForAssociation(associationId: string): Promise<void> {
     this.calls.push(associationId);
+    if (this.fail) throw new Error('injected allocation failure');
   }
   reset() {
     this.calls = [];
+    this.fail = false;
   }
 }
 
@@ -351,6 +355,44 @@ describe('NODE-4 — محاضر الاستلام والمخزون', () => {
     const { batchId } = await createAndSendBatch(app, adminCookie, fx.associationAId);
     await confirmBatchRequest(app, assocACookie, batchId);
     expect(spy.calls).toEqual([fx.associationAId]);
+  });
+
+  it('فشل التخصيص ثم كتابة إعادة المحاولة بعد الالتزام لا يحذف إثباتًا محفوظًا ولا يكرر الأجهزة عند إعادة opId', async () => {
+    const { batchId, itemIds } = await createAndSendBatch(app, adminCookie, fx.associationAId);
+    const opId = newOpId('confirm-post-commit-failure');
+    spy.fail = true;
+    const deleteSpy = jest.spyOn(app.get(StorageService), 'deleteObjectBestEffort');
+    const outboxCreate = jest.spyOn(prisma.outboxEvent, 'create').mockRejectedValueOnce(new Error('injected post-commit outbox failure'));
+    let first!: Awaited<ReturnType<typeof confirmBatchRequest>>;
+    try {
+      first = await confirmBatchRequest(app, assocACookie, batchId, { opId });
+    } finally {
+      outboxCreate.mockRestore();
+      spy.fail = false;
+    }
+
+    expect(first.status).toBe(201);
+    expect(deleteSpy).not.toHaveBeenCalled();
+    deleteSpy.mockRestore();
+
+    const batch = await prisma.receiptBatch.findUnique({
+      where: { id: batchId },
+      include: { quantityPhotoFile: true, signatureFile: true },
+    });
+    expect(batch?.status).toBe(ReceiptBatchStatus.RECEIVED_COMPLETE);
+    for (const file of [batch?.quantityPhotoFile, batch?.signatureFile]) {
+      expect(file?.objectKey).toBeTruthy();
+      const object = await storageClient().send(new GetObjectCommand({ Bucket: testBucket(), Key: file!.objectKey }));
+      expect((await object.Body!.transformToByteArray()).length).toBeGreaterThan(0);
+    }
+    expect(await prisma.deviceUnit.count({ where: { receiptItemId: itemIds[0] } })).toBe(3);
+    const events = await prisma.outboxEvent.findMany({ where: { type: OutboxEventType.ALLOCATION_RETRY_DUE } });
+    expect(events.some((event) => (event.payload as Record<string, unknown>).receiptBatchId === batchId)).toBe(true);
+
+    const replay = await confirmBatchRequest(app, assocACookie, batchId, { opId });
+    expect(replay.status).toBe(201);
+    expect(await prisma.receiptBatch.count({ where: { id: batchId } })).toBe(1);
+    expect(await prisma.deviceUnit.count({ where: { receiptItemId: itemIds[0] } })).toBe(3);
   });
 
   it('لا إشارة تخصيص إن كانت كل الكمية تالفة/ناقصة (goodQty=0)', async () => {
