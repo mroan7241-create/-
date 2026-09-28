@@ -1,11 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppShell } from '../../components/AppShell';
 import { PageHeader } from '../../components/PageHeader';
 import { useRoleGuard } from '../../lib/use-role-guard';
 import { apiFetch, decideApplicationEligibility, decideApplicationSelection, evaluateApplication, getApplicationEligibilityEvidence, getApplicationIntake, requestApplicationInformation, resendApplicationInformation, resendApplicationRejection, resendApplicationSelection, saveSystemSetting, startApplicationProcessing, type ApplicationSummary, type Paginated } from '../../lib/api';
 import { selectionGroup, SELECTION_GROUPS, type SelectionGroup } from './selection-groups';
+import { fetchPagedItems } from './selection-load';
 import { cardStyle, errorStyle, inputStyle, labelStyle, modalOverlayStyle, modalStyle, primaryButtonStyle, secondaryButtonStyle, successStyle } from '../../lib/ui';
 
 type EligibilityDecision = 'PASSED' | 'FAILED' | 'NEEDS_INFO';
@@ -29,9 +30,22 @@ export function SelectionBoard({ showHeader = false }: { showHeader?: boolean })
   const [apps, setApps] = useState<ApplicationSummary[]>([]); const [filter, setFilter] = useState<SelectionGroup>('ACTION');
   const [eligibilityTarget, setEligibilityTarget] = useState<ApplicationSummary | null>(null); const [evaluationTarget, setEvaluationTarget] = useState<ApplicationSummary | null>(null); const [infoTarget, setInfoTarget] = useState<ApplicationSummary | null>(null);
   const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
+  const [listLoading, setListLoading] = useState(true);
+  const loadSequence = useRef(0);
   const [intake, setIntake] = useState<{ open: boolean; closesAt: string | null } | null>(null);
   const [intakeTime, setIntakeTime] = useState('');
-  const load = useCallback(async () => { try { const first = await apiFetch<Paginated<ApplicationSummary>>('/association-applications?page=1&pageSize=100'); const all = [...first.items]; for (let page = 2; page <= first.totalPages; page++) { const result = await apiFetch<Paginated<ApplicationSummary>>(`/association-applications?page=${page}&pageSize=100`); all.push(...result.items); } setApps(all); } catch (reason) { setMessage(readError(reason)); } }, []);
+  const load = useCallback(async () => {
+    const sequence = ++loadSequence.current;
+    setListLoading(true);
+    try {
+      const all = await fetchPagedItems((page) => apiFetch<Paginated<ApplicationSummary>>(`/association-applications?page=${page}&pageSize=100`));
+      if (sequence === loadSequence.current) setApps(all);
+    } catch (reason) {
+      if (sequence === loadSequence.current) setMessage(readError(reason));
+    } finally {
+      if (sequence === loadSequence.current) setListLoading(false);
+    }
+  }, []);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { void getApplicationIntake().then((status) => { setIntake(status); setIntakeTime(status.closesAt ? new Date(Date.parse(status.closesAt) + 3 * 60 * 60_000).toISOString().slice(0, 16) : ''); }).catch((reason) => setMessage(readError(reason))); }, []);
   async function run(action: () => Promise<unknown>, success: string): Promise<boolean> { setBusy(true); setMessage(''); try { await action(); setMessage(success); await load(); return true; } catch (reason) { setMessage(readError(reason)); return false; } finally { setBusy(false); } }
@@ -80,6 +94,7 @@ export function SelectionBoard({ showHeader = false }: { showHeader?: boolean })
   return <>
     {showHeader && <PageHeader title="الأهلية والتقييم والاختيار" subtitle="الأهلية، ثم التقييم، ثم قرار القائمة الأساسية أو الاحتياطية." />}
     {message && <p role="status" style={message.startsWith('تم') ? successStyle : errorStyle}>{message}</p>}
+    {listLoading && <p role="status">جارٍ تحديث قوائم الجمعيات…</p>}
     <section style={cardStyle}><h2>موعد استقبال طلبات الجمعيات</h2><p>{intake === null ? 'جارٍ تحميل حالة التقديم…' : intake.closesAt ? `التقديم ${intake.open ? 'مفتوح' : 'مغلق'} — الموعد بتوقيت الرياض.` : 'التقديم مفتوح دون موعد إغلاق.'}</p><label style={labelStyle}>آخر موعد للتقديم — توقيت الرياض<input type="datetime-local" style={inputStyle} value={intakeTime} onChange={(event) => setIntakeTime(event.target.value)} /></label><div className="button-row"><button style={primaryButtonStyle} disabled={busy || !intakeTime} onClick={() => { const date = new Date(`${intakeTime}:00+03:00`); if (!Number.isNaN(date.getTime())) void saveIntake(date.toISOString()); }}>حفظ الموعد</button><button style={secondaryButtonStyle} disabled={busy || !intake?.closesAt} onClick={() => void saveIntake(null)}>إلغاء موعد الإغلاق</button></div><small>بعد الموعد يُرفض بدء طلب جديد وإرسال المسودات، وتبقى متابعة الطلبات السابقة متاحة.</small></section>
     <section style={cardStyle}><h2>قوائم الطلبات</h2><div className="button-row" role="group" aria-label="قوائم الأهلية والاختيار">{SELECTION_GROUPS.map((group) => <button key={group.key} type="button" style={filter === group.key ? primaryButtonStyle : secondaryButtonStyle} aria-pressed={filter === group.key} onClick={() => setFilter(group.key)}>{group.label} ({counts[group.key]})</button>)}</div></section>
     <section style={cardStyle}><h2>{SELECTION_GROUPS.find((group) => group.key === filter)?.label}</h2>{visible.length === 0 ? <p>لا توجد طلبات في هذه القائمة.</p> : visible.map((application) => <article key={application.id} className="workflow-row"><div><strong>{application.name}</strong><p>{application.publicCode} · {application.city} · الأهلية: {ELIGIBILITY_LABELS[application.eligibilityStatus]} · الاختيار: {selectionLabel(application.selectionList)}</p></div><div className="button-row">{selectionGroup(application) === 'NEW' && <button style={primaryButtonStyle} disabled={busy} onClick={() => void run(() => startApplicationProcessing([application.id]), 'بدأت مراجعة الطلب.')}>بدء المراجعة</button>}<button style={secondaryButtonStyle} disabled={selectionGroup(application) === 'NEW' || application.status !== 'UNDER_REVIEW'} onClick={() => setEligibilityTarget(application)}>الأهلية والأدلة</button><button style={secondaryButtonStyle} disabled={application.schemaVersion !== 2 || application.status !== 'UNDER_REVIEW' || ['FAILED', 'NEEDS_INFO'].includes(application.eligibilityStatus) || selectionGroup(application) === 'NEW'} title={application.schemaVersion !== 2 ? 'الطلبات السابقة لا تدعم رابط الاستكمال الإلكتروني' : undefined} onClick={() => setInfoTarget(application)}>طلب استكمال وإرسال بريد</button>{application.eligibilityStatus === 'NEEDS_INFO' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void run(() => resendApplicationInformation(application.id), 'أُعيد إرسال بريد الاستكمال.')}>إعادة إرسال البريد</button>}{application.eligibilityStatus === 'FAILED' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void retryRejection(application)}>إعادة إرسال عدم الاجتياز</button>}<button style={secondaryButtonStyle} disabled={application.eligibilityStatus !== 'PASSED'} title={application.eligibilityStatus !== 'PASSED' ? 'يجب اجتياز الأهلية أولًا' : undefined} onClick={() => setEvaluationTarget(application)}>التقييم 1–5</button>{application.evaluationScore != null && <span className="status-pill">{application.evaluationScore}/100</span>}</div></article>)}</section>
