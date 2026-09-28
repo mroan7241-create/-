@@ -12,6 +12,7 @@ import {
   FileCategory,
   ReceiptBatchStatus,
   OutboxEventType,
+  OutboxEventStatus,
 } from '@alzad/db';
 import { ApiError, authForbidden } from '../../common/api-error';
 import { PublicCodeService } from '../../common/public-code.service';
@@ -418,6 +419,7 @@ export class ReceiptsService {
 
     // -------- رفع الصور خارج معاملة DB (Object Storage ليست جزءًا من transaction) --------
     const uploadedKeys: string[] = [];
+    let transactionCommitted = false;
     try {
       const quantityKey = await this.uploadEvidence('receipt-quantity', validatedQuantity, uploadedKeys);
       const signatureKey = await this.uploadEvidence('receipt-signature', validatedSignature, uploadedKeys);
@@ -435,7 +437,7 @@ export class ReceiptsService {
           input.opId,
           idempotencyPayload,
         );
-        if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse! };
+        if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse!, allocationEventId: null as string | null };
 
         const rows = await tx.$queryRaw<{ id: string; association_id: string; shipment_id: string | null; status: string }[]>`
           SELECT id, association_id, shipment_id, status FROM receipt_batches WHERE id = ${id}::uuid FOR UPDATE
@@ -516,6 +518,7 @@ export class ReceiptsService {
         // الكمية السليمة عبر كل الأصناف، ثم كتابة جماعية واحدة (`createMany`)
         // بدل حلقة استعلامات منفردة.
         const deviceUnitsCreated = itemPlans.reduce((sum, plan) => sum + Math.max(0, plan.receivedQty), 0);
+        let allocationEventId: string | null = null;
         if (deviceUnitsCreated > 0) {
           const deviceCodes = await this.publicCode.nextPublicCodes(tx, 'DEV', deviceUnitsCreated);
           const deviceRows: Prisma.DeviceUnitCreateManyInput[] = [];
@@ -535,12 +538,20 @@ export class ReceiptsService {
             }
           }
           await tx.deviceUnit.createMany({ data: deviceRows });
+          // تُحفَظ إشارة إعادة المحاولة مع الأجهزة نفسها. فشل كتابتها
+          // يُلغي المعاملة قبل أن تشير قاعدة البيانات إلى أي صورة مرفوعة.
+          const event = await tx.outboxEvent.create({ data: {
+            type: OutboxEventType.ALLOCATION_RETRY_DUE,
+            payload: { associationId: lockedBatch.association_id, source: 'receipt-confirmation', receiptBatchId: id },
+          } });
+          allocationEventId = event.id;
         }
 
         const response = { batchId: id, status: finalStatus, deviceUnitsCreated };
         await this.idempotency.complete(tx, ctx.accountId, 'receipt-batch-confirm', input.opId, response);
-        return { replayed: false as const, response };
+        return { replayed: false as const, response, allocationEventId };
       });
+      transactionCommitted = true;
 
       if (outcome.replayed) {
         // NODE-4.1: هذه المحاولة رفعت كائناتها الخاصة (quantityKey/signatureKey/damageKeys)
@@ -559,22 +570,30 @@ export class ReceiptsService {
         });
         // القسم 4 القديم: محرك التخصيص يُشغَّل بعد commit ناجح فقط، ومعزول تمامًا — فشله لا يُسقط نجاح التأكيد.
         if (outcome.response.deviceUnitsCreated > 0) {
+          let triggered = false;
           try {
             await this.allocationTrigger.triggerForAssociation(batch.associationId);
+            triggered = true;
           } catch (allocationError) {
-            this.logger.warn(`فشل إشارة التخصيص التلقائي بعد تأكيد المحضر ${id} — لا يؤثر في نجاح التأكيد: ${String(allocationError)}`);
-            await prisma.outboxEvent.create({ data: {
-              type: OutboxEventType.ALLOCATION_RETRY_DUE,
-              payload: { associationId: batch.associationId, source: 'receipt-confirmation', receiptBatchId: id, error: String(allocationError) },
-            } });
+            this.logger.warn(`فشل إشارة التخصيص التلقائي بعد تأكيد المحضر ${id}؛ حدث إعادة المحاولة محفوظ مع المحضر: ${String(allocationError)}`);
+          }
+          if (triggered && outcome.allocationEventId) {
+            try {
+              await prisma.outboxEvent.update({ where: { id: outcome.allocationEventId }, data: { status: OutboxEventStatus.PROCESSED, processedAt: new Date() } });
+            } catch (error) {
+              // قد يعيد العامل المحاولة؛ محرك التخصيص متسامح مع التكرار ومحمي بقفل الجمعية.
+              this.logger.warn(`نجح التخصيص بعد تأكيد المحضر ${id} لكن تعذّر إغلاق حدثه؛ سيُعاد فحصه بأمان: ${String(error)}`);
+            }
           }
         }
       }
 
       return { ok: true as const, id, status: outcome.response.status };
     } catch (error) {
-      // فشل بعد رفع ناجح (كليًا أو جزئيًا) — حذف best-effort لكل ما رُفع تجنبًا لكائنات يتيمة.
-      await Promise.all(uploadedKeys.map((key) => this.storage.deleteObjectBestEffort(key)));
+      // لا يُحذف أي ملف بعد التزام المعاملة: قد تكون قاعدة البيانات تشير إليه.
+      if (!transactionCommitted) {
+        await Promise.all(uploadedKeys.map((key) => this.storage.deleteObjectBestEffort(key)));
+      }
       throw error;
     }
   }
