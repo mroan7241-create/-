@@ -18,6 +18,8 @@ test('selection lists separate failed and needs-info applications from actionabl
 // @ts-ignore -- standalone node --test, not a browser import
 import { createAutosaveQueue } from './autosave-queue.ts';
 // @ts-ignore -- standalone node --test, not a browser import
+import { DRAFT_KEY, rememberDraftSession } from './draft-session.ts';
+// @ts-ignore -- standalone node --test, not a browser import
 import { CONSENT_VERSION, riyadhRecentYears, validateStep, withDisplayedNumericDefaults } from './application-form-utils.ts';
 
 test('displayed zero values are present in new and resumed drafts without changing entered numbers', () => {
@@ -30,6 +32,17 @@ test('displayed zero values are present in new and resumed drafts without changi
   assert.equal((original.team as Record<string, unknown>).nonSaudis, undefined);
   assert.deepEqual(withDisplayedNumericDefaults(restored), restored);
   assert.equal((withDisplayedNumericDefaults({ team: { nonSaudis: null } }).team as Record<string, unknown>).nonSaudis, 0);
+});
+
+test('public draft persistence keeps only its code and a session marker, never the long-lived bearer token', () => {
+  let stored = '';
+  const metadata = rememberDraftSession({ setItem: (key: string, value: string) => {
+    assert.equal(key, DRAFT_KEY);
+    stored = value;
+  } }, 'DRF-TEST-001');
+  assert.deepEqual(metadata, { draftCode: 'DRF-TEST-001', viaSession: true });
+  assert.deepEqual(JSON.parse(stored), metadata);
+  assert.doesNotMatch(stored, /resumeToken/);
 });
 // @ts-ignore -- standalone node --test, not a browser import
 import { financialSummary } from '../lib/financial-summary.ts';

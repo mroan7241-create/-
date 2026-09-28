@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useState, type FormEvent } from 'react';
-import { APPLICATION_STATUS_LABELS, ApiClientError, apiFetch, submitApplicationInformation, trackApplicationV2, uploadApplicationAttachment, type ApplicationPublicStatus, type ApplicationTrackView } from '../../lib/api';
+import { APPLICATION_STATUS_LABELS, ApiClientError, apiFetch, submitApplicationInformation, trackApplicationV2, upgradeApplicationDraftSession, uploadApplicationAttachment, type ApplicationPublicStatus, type ApplicationTrackView } from '../../lib/api';
 import { cardStyle, errorStyle, inputStyle, labelStyle, ltrStyle, mutedStyle, narrowPageStyle, primaryButtonStyle, secondaryButtonStyle, statusBadgeStyle, successStyle } from '../../lib/ui';
 import { buildInformationPayload } from '../information-payload';
+import { DRAFT_KEY, rememberDraftSession } from '../draft-session';
 
-const DRAFT_KEY = 'alzad.apply.v2.draft';
 const LAST_SUBMITTED_KEY = 'alzad.apply.lastClientRequestId';
 
 export default function ApplicationStatusPage() {
@@ -16,7 +16,7 @@ export default function ApplicationStatusPage() {
   const [uploaded, setUploaded] = useState<string[]>([]);
 
   useEffect(() => {
-    try { const saved = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null') as { draftCode?: string; resumeToken?: string; viaSession?: boolean } | null; if (saved?.draftCode && (saved.resumeToken || saved.viaSession)) { setDraftCode(saved.draftCode); setResumeToken(saved.resumeToken ?? ''); } } catch { /* browser convenience only */ }
+    try { const raw = localStorage.getItem(DRAFT_KEY); const saved = JSON.parse(raw || 'null') as { draftCode?: string; resumeToken?: string; viaSession?: boolean } | null; if (saved?.draftCode && (saved.resumeToken || saved.viaSession)) { setDraftCode(saved.draftCode); setResumeToken(saved.resumeToken ?? ''); if (saved.resumeToken) void upgradeApplicationDraftSession(saved.draftCode, saved.resumeToken).then(() => { if (localStorage.getItem(DRAFT_KEY) !== raw) return; rememberDraftSession(localStorage, saved.draftCode!); setResumeToken(''); }).catch(() => undefined); } } catch { /* browser convenience only */ }
     setLegacyId(localStorage.getItem(LAST_SUBMITTED_KEY) || '');
   }, []);
 

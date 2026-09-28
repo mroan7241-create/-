@@ -97,6 +97,25 @@ export class ApplicationAccessService {
     return { ok: true as const, ...result, sessionToken, expiresAt };
   }
 
+  async upgradeResumeToken(draftCodeRaw: string, resumeTokenRaw: string) {
+    const draftCode = draftCodeRaw.trim();
+    const resumeToken = resumeTokenRaw.trim();
+    if (!draftCode || resumeToken.length < 32) throw invalidAccess();
+    await this.rateLimit.consume('application-resume-session-upgrade', sha256Hex(resumeToken), { limit: 10, windowSeconds: 3600 });
+    const now = new Date();
+    const draft = await prisma.associationApplicationDraft.findFirst({
+      where: { publicCode: draftCode, resumeTokenHash: sha256Hex(resumeToken), expiresAt: { gt: now } },
+      select: { id: true },
+    });
+    if (!draft) throw invalidAccess();
+    const sessionToken = randomBytes(32).toString('base64url');
+    const expiresAt = new Date(now.getTime() + APPLICANT_SESSION_TTL_SECONDS * 1000);
+    await prisma.applicationApplicantSession.create({
+      data: { draftId: draft.id, tokenHash: sha256Hex(sessionToken), expiresAt },
+    });
+    return { ok: true as const, draftCode, sessionToken, expiresAt };
+  }
+
   async requireSessionDraft(draftCode: string, rawSession: string, includeApplication = false) {
     const sessionToken = rawSession.trim();
     if (!draftCode.trim() || sessionToken.length < 40) throw invalidAccess();

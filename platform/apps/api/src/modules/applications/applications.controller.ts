@@ -34,8 +34,23 @@ export class ApplicationsController {
   @Public()
   @Post('association-applications/drafts')
   @PublicSourceLimit('application-draft-create', 60, 3600)
-  createDraft(@Body() dto: CreateApplicationDraftDto, @Req() req: Request) {
-    return this.applicationV2.createDraft(dto.clientRequestId, dto.website, req.ip || req.socket.remoteAddress || 'unknown');
+  async createDraft(@Body() dto: CreateApplicationDraftDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const result = await this.applicationV2.createDraft(dto.clientRequestId, dto.website, req.ip || req.socket.remoteAddress || 'unknown');
+    if ('sessionToken' in result && result.sessionToken && result.sessionExpiresAt) {
+      this.setApplicantSessionCookie(res, result.sessionToken, result.sessionExpiresAt);
+      return { ok: result.ok, draftCode: result.draftCode, resumeToken: result.resumeToken, revision: result.revision, expiresAt: result.expiresAt };
+    }
+    return result;
+  }
+
+  @Public()
+  @Post('association-applications/drafts/:draftCode/session')
+  @PublicSourceLimit('application-resume-session-upgrade', 30, 3600)
+  @HttpCode(HttpStatus.OK)
+  async upgradeDraftSession(@Param('draftCode') draftCode: string, @Headers('x-application-resume-token') token = '', @Res({ passthrough: true }) res: Response) {
+    const result = await this.applicationAccess.upgradeResumeToken(draftCode, token);
+    this.setApplicantSessionCookie(res, result.sessionToken, result.expiresAt);
+    return { ok: true, draftCode: result.draftCode };
   }
 
   @Public()
@@ -86,14 +101,18 @@ export class ApplicationsController {
   @HttpCode(HttpStatus.OK)
   async exchangeAccess(@Body() dto: ExchangeApplicationAccessDto, @Res({ passthrough: true }) res: Response) {
     const result = await this.applicationAccess.exchange(dto.token);
-    res.cookie(APPLICANT_SESSION_COOKIE, result.sessionToken, {
+    this.setApplicantSessionCookie(res, result.sessionToken, result.expiresAt);
+    return { ok: true, draftCode: result.draftCode, destination: result.destination };
+  }
+
+  private setApplicantSessionCookie(res: Response, token: string, expiresAt: Date) {
+    res.cookie(APPLICANT_SESSION_COOKIE, token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       path: '/',
-      expires: result.expiresAt,
+      expires: expiresAt,
     });
-    return { ok: true, draftCode: result.draftCode, destination: result.destination };
   }
 
   @Public()

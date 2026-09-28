@@ -33,7 +33,7 @@ import type {
   SelectionDecisionDto,
   SubmitInformationResponseDto,
 } from './dto/application-v2.dto';
-import { ApplicationAccessService } from './application-access.service';
+import { APPLICANT_SESSION_TTL_SECONDS, ApplicationAccessService } from './application-access.service';
 import { SettingsService, applicationIntakeStatus } from '../settings/settings.service';
 
 const DRAFT_TTL_DAYS = 45;
@@ -91,14 +91,22 @@ export class ApplicationV2Service {
     }
     await this.rateLimit.consume('association-application-draft-create', rateLimitSubject, { limit: 12, windowSeconds: 3600 });
     const resumeToken = randomBytes(32).toString('base64url');
-    const draft = await prisma.$transaction(async (tx) => tx.associationApplicationDraft.create({ data: {
-      publicCode: await this.codes.nextPublicCode(tx, 'DRF'),
-      resumeTokenHash: sha256Hex(resumeToken),
-      clientRequestId,
-      expiresAt: addDays(new Date(), DRAFT_TTL_DAYS),
-      payload: {},
-    } }));
-    return { ok: true as const, draftCode: draft.publicCode, resumeToken, revision: draft.revision, expiresAt: draft.expiresAt };
+    const sessionToken = randomBytes(32).toString('base64url');
+    const sessionExpiresAt = new Date(Date.now() + APPLICANT_SESSION_TTL_SECONDS * 1000);
+    const draft = await prisma.$transaction(async (tx) => {
+      const created = await tx.associationApplicationDraft.create({ data: {
+        publicCode: await this.codes.nextPublicCode(tx, 'DRF'),
+        resumeTokenHash: sha256Hex(resumeToken),
+        clientRequestId,
+        expiresAt: addDays(new Date(), DRAFT_TTL_DAYS),
+        payload: {},
+      } });
+      await tx.applicationApplicantSession.create({ data: {
+        draftId: created.id, tokenHash: sha256Hex(sessionToken), expiresAt: sessionExpiresAt,
+      } });
+      return created;
+    });
+    return { ok: true as const, draftCode: draft.publicCode, resumeToken, revision: draft.revision, expiresAt: draft.expiresAt, sessionToken, sessionExpiresAt };
   }
 
   async loadDraft(draftCode: string, token: string, applicantSession = '') {

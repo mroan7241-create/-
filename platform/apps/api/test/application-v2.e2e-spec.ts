@@ -45,11 +45,22 @@ describe('Application V2 launch gate', () => {
 
     const created = await http().post('/api/v1/association-applications/drafts').send({ clientRequestId: randomUUID() }).expect(201);
     expect(created.body.resumeToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(created.body.sessionToken).toBeUndefined();
+    const newDraftCookie = created.headers['set-cookie'][0];
+    expect(newDraftCookie).toContain('alzad_applicant_session=');
+    expect(newDraftCookie).toContain('HttpOnly');
+    await http().get(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set('Cookie', newDraftCookie).expect(200);
     const auth = { 'x-application-resume-token': created.body.resumeToken };
+    const applicantAccess = { Cookie: newDraftCookie };
     await http().get(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set('x-application-resume-token', 'x'.repeat(64)).expect(403);
+    await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/session`).set('x-application-resume-token', 'x'.repeat(64)).expect(403);
+    const upgraded = await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/session`).set(auth).expect(200);
+    expect(upgraded.headers['set-cookie'][0]).toContain('HttpOnly');
+    expect(upgraded.body.sessionToken).toBeUndefined();
+    await http().get(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set('Cookie', upgraded.headers['set-cookie'][0]).expect(200);
 
     const payload = validV2Payload();
-    const saved = await http().put(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set(auth).send({ revision: 0, payload }).expect(200);
+    const saved = await http().put(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set(applicantAccess).send({ revision: 0, payload }).expect(200);
     const genericUnknown = await http().post('/api/v1/association-applications/access/request').send({ email: 'nobody@example.org' }).expect(200);
     const accessRequest = await http().post('/api/v1/association-applications/access/request').send({ email: payload.organization.officialEmail }).expect(200);
     expect(accessRequest.body.message).toBe(genericUnknown.body.message);
@@ -62,9 +73,9 @@ describe('Application V2 launch gate', () => {
     await http().post('/api/v1/association-applications/access/exchange').send({ token: accessToken }).expect(403);
     await http().get(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set('Cookie', applicantCookie).expect(200);
     await http().post('/api/v1/association-applications/access/exchange').send({ token: 'x'.repeat(43) }).expect(403);
-    await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/attachments`).set(auth).field('fieldKey', 'licenseFile').attach('file', PDF, { filename: 'license.pdf', contentType: 'application/pdf' }).expect(201);
-    await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/attachments`).set(auth).field('fieldKey', 'financialStatementsFile').attach('file', PDF, { filename: 'statements.pdf', contentType: 'application/pdf' }).expect(201);
-    const submitted = await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/submit`).set(auth).send({ revision: saved.body.revision });
+    await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/attachments`).set(applicantAccess).field('fieldKey', 'licenseFile').attach('file', PDF, { filename: 'license.pdf', contentType: 'application/pdf' }).expect(201);
+    await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/attachments`).set(applicantAccess).field('fieldKey', 'financialStatementsFile').attach('file', PDF, { filename: 'statements.pdf', contentType: 'application/pdf' }).expect(201);
+    const submitted = await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/submit`).set(applicantAccess).send({ revision: saved.body.revision });
     if (submitted.status !== 201) throw new Error(`Application V2 submit failed (${submitted.status}): ${JSON.stringify(submitted.body)}`);
     expect(submitted.body.emailSent).toBe(true);
     const row = await prisma.associationApplication.findUniqueOrThrow({ where: { publicCode: submitted.body.id } });
@@ -77,9 +88,9 @@ describe('Application V2 launch gate', () => {
     expect(requested.body.emailSent).toBe(true);
     expect(fakeEmail.lastApplicationAccess?.subject).toContain('مطلوب استكمال');
     expect(fakeEmail.lastApplicationAccess?.intro).toContain('أضف وصفًا مختصرًا');
-    const tracking = await http().get(`/api/v1/association-applications/track/${created.body.draftCode}`).set(auth).expect(200);
+    const tracking = await http().get(`/api/v1/association-applications/track/${created.body.draftCode}`).set(applicantAccess).expect(200);
     expect(tracking.body.stage).toBe('NEEDS_INFO'); expect(tracking.body.needsInfo.id).toBe(requested.body.requestId);
-    await http().post(`/api/v1/association-applications/track/${created.body.draftCode}/information/${requested.body.requestId}`).set(auth).send({ payload: { organization: { notes: 'تم الاستكمال' }, coordinator: { phone: '512345679' } }, opId: randomUUID() }).expect(201);
+    await http().post(`/api/v1/association-applications/track/${created.body.draftCode}/information/${requested.body.requestId}`).set(applicantAccess).send({ payload: { organization: { notes: 'تم الاستكمال' }, coordinator: { phone: '512345679' } }, opId: randomUUID() }).expect(201);
     const corrected = await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id } });
     expect(corrected.coordinatorPhone).toBe('0512345679');
     expect((corrected.v2Payload as { coordinator: { phone: string } }).coordinator.phone).toBe('512345679');
