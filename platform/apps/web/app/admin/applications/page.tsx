@@ -97,7 +97,7 @@ export default function AdminApplicationsPage() {
           className={`${styles.sectionButton} ${activeSection === section.key ? styles.sectionActive : ''}`}
           aria-current={activeSection === section.key ? 'step' : undefined}
           onClick={() => setActiveSection(section.key)}
-        ><span className={styles.number}>{index + 1}</span><span><strong>{section.title}</strong><small>{section.description}</small></span></button>)}
+        ><span className={styles.number} aria-hidden="true">{index < 3 ? index + 1 : index === 3 ? '⌕' : '⚙'}</span><span><strong>{section.title}</strong><small>{section.description}</small></span></button>)}
       </nav>
       {activeSection === 'review' && <section aria-label="المراجعة والأهلية"><SelectionBoard mode="review" /></section>}
       {activeSection === 'selection' && <section aria-label="التقييم والاختيار"><SelectionBoard mode="selection" /></section>}

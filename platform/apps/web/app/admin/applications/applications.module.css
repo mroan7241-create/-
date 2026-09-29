@@ -9,6 +9,7 @@
 .hero h1 {
   margin: 8px 0;
   font-size: clamp(24px, 2.6vw, 34px);
+  color: #fff;
 }
 
 .hero p {
