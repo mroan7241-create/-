@@ -186,7 +186,6 @@ export class ApplicationAccessService {
     const issued = drafts.map((draft) => ({ draft, raw: randomBytes(32).toString('base64url') }));
     await prisma.$transaction(async (tx) => {
       for (const item of issued) {
-        await tx.applicationAccessToken.updateMany({ where: { draftId: item.draft.id, consumedAt: null }, data: { consumedAt: now } });
         await tx.applicationAccessToken.create({ data: {
           draftId: item.draft.id,
           purpose: item.draft.needsInfo
@@ -212,14 +211,6 @@ export class ApplicationAccessService {
           url: `${base}/apply/access?token=${encodeURIComponent(raw)}`,
         })),
       });
-      await prisma.auditLog.createMany({ data: issued.map((item) => ({
-        actorAccountId: null,
-        actorRole: null,
-        action: 'APPLICATION_ACCESS_EMAIL_SENT',
-        entityType: 'association_application_drafts',
-        entityId: item.draft.id,
-        metadata: { purpose: item.draft.needsInfo ? 'NEEDS_INFO' : item.draft.status === ApplicationDraftStatus.ACTIVE ? 'DRAFT_RESUME' : 'SUBMITTED_STATUS' },
-      })) });
     } catch (error) {
       await prisma.applicationAccessToken.updateMany({ where: { tokenHash: { in: issued.map((item) => sha256Hex(item.raw)) }, consumedAt: null }, data: { consumedAt: new Date() } });
       await prisma.auditLog.createMany({ data: issued.map((item) => ({
@@ -231,6 +222,24 @@ export class ApplicationAccessService {
       })) });
       throw error;
     }
+    // Keep the previous usable link if SMTP fails; revoke it only after the
+    // replacement was accepted by the mail provider.
+    await prisma.$transaction(async (tx) => {
+      for (const item of issued) {
+        await tx.applicationAccessToken.updateMany({
+          where: { draftId: item.draft.id, consumedAt: null, tokenHash: { not: sha256Hex(item.raw) } },
+          data: { consumedAt: new Date() },
+        });
+      }
+    });
+    await prisma.auditLog.createMany({ data: issued.map((item) => ({
+      actorAccountId: null,
+      actorRole: null,
+      action: 'APPLICATION_ACCESS_EMAIL_SENT',
+      entityType: 'association_application_drafts',
+      entityId: item.draft.id,
+      metadata: { purpose: item.draft.needsInfo ? 'NEEDS_INFO' : item.draft.status === ApplicationDraftStatus.ACTIVE ? 'DRAFT_RESUME' : 'SUBMITTED_STATUS' },
+    })) });
   }
 }
 

@@ -162,6 +162,21 @@ describe('Application V2 launch gate', () => {
     await http().get(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set('Cookie', recovered.headers['set-cookie'][0]).expect(200);
   });
 
+  it('keeps an earlier applicant access link usable when sending its replacement fails', async () => {
+    const created = await http().post('/api/v1/association-applications/drafts').send({ clientRequestId: randomUUID() }).expect(201);
+    const email = `access-failure-${randomUUID()}@example.org`;
+    await http().put(`/api/v1/association-applications/drafts/${created.body.draftCode}`)
+      .set('Cookie', created.headers['set-cookie'][0]).send({ revision: 0, payload: { organization: { officialEmail: email } } }).expect(200);
+    await http().post('/api/v1/association-applications/access/request').send({ email }).expect(200);
+    const priorUrl = fakeEmail.lastApplicationAccess?.items[0]?.url;
+    expect(priorUrl).toContain('/apply/access?token=');
+    jest.spyOn(fakeEmail, 'sendApplicationAccess').mockRejectedValueOnce(new Error('synthetic SMTP failure'));
+    await http().post('/api/v1/association-applications/access/request').send({ email }).expect(200);
+    await http().post('/api/v1/association-applications/access/exchange')
+      .send({ token: new URL(priorUrl!).searchParams.get('token') }).expect(200);
+    jest.restoreAllMocks();
+  });
+
   it('enforces the administrator intake deadline before a new draft is created', async () => {
     const key = 'application.intakeClosesAt';
     const previous = await prisma.systemSetting.findUnique({ where: { key } });
@@ -208,6 +223,7 @@ describe('Application V2 launch gate', () => {
     await upload('licenseFile').expect(201);
     await upload('licenseFile', Buffer.from('%PDF-1.7\n%draft-replacement')).expect(201);
     await upload('financialStatementsFile').expect(201);
+    await upload('governanceReportFile').expect(201);
     await upload('licenseFile', PDF, { 'x-application-resume-token': 'x'.repeat(43) }).expect(403);
     await prisma.associationApplicationDraft.update({ where: { publicCode: draft.draftCode }, data: { expiresAt: new Date(0) } });
     await upload('licenseFile').expect(403);
@@ -239,12 +255,12 @@ describe('Application V2 launch gate', () => {
     const path = `/api/v1/association-applications/drafts/${draft.draftCode}`;
     const original = validV2Payload();
     const saved = await http().put(path).set(auth).send({ revision: 0, payload: original }).expect(200);
-    for (const key of ['licenseFile', 'financialStatementsFile']) await http().post(`${path}/attachments`).set(auth).field('fieldKey', key).attach('file', PDF, { filename: 'test.pdf', contentType: 'application/pdf' }).expect(201);
+    for (const key of ['licenseFile', 'financialStatementsFile', 'governanceReportFile']) await http().post(`${path}/attachments`).set(auth).field('fieldKey', key).attach('file', PDF, { filename: 'test.pdf', contentType: 'application/pdf' }).expect(201);
     const submitted = await http().post(`${path}/submit`).set(auth).send({ revision: saved.body.revision }).expect(201);
     const application = await prisma.associationApplication.findUniqueOrThrow({ where: { publicCode: submitted.body.id } });
     const region = await prisma.geographicUnit.findFirstOrThrow({ where: { unitType: 'REGION', active: true, officialCode: { not: '0001' } } });
     const city = await prisma.geographicUnit.findFirstOrThrow({ where: { parentOfficialCode: region.officialCode, active: true, unitType: { in: ['EMIRATE_SEAT', 'GOVERNORATE'] } } });
-    const corrected = { organization: { officialEmail: `corrected-${randomUUID()}@example.org`, name: `${PREFIX}مصححة`, category: 'جمعية خيرية', officialPhone: `5${randomInt(10000000, 100000000)}` }, location: { regionCode: region.officialCode, governorateCode: city.officialCode } };
+    const corrected = { organization: { officialEmail: `corrected-${randomUUID()}@example.org`, name: `${PREFIX}مصححة`, category: 'كبيرة', officialPhone: `5${randomInt(10000000, 100000000)}` }, location: { regionCode: region.officialCode, governorateCode: city.officialCode } };
     const items = ['organization.officialEmail','organization.name','organization.category','organization.officialPhone','location.regionCode','location.governorateCode'].map((key) => ({ type: 'FIELD', key, reason: 'تصحيح بيانات التجهيز' }));
     const info = await http().post(`/api/v1/association-applications/${application.id}/information-request`).set('Cookie', adminCookie).send({ items, opId: randomUUID() }).expect(201);
     const informationPath = `/api/v1/association-applications/track/${draft.draftCode}/information/${info.body.requestId}`;
@@ -274,9 +290,9 @@ describe('Application V2 launch gate', () => {
     const payload = validV2Payload();
     payload.experience = { ...payload.experience, hasRecentInKindProject: true, projectName: 'مشروع سابق', projectYear: riyadhRecentYears()[0], supportType: 'أجهزة', projectBeneficiaries: 12, supporter: 'جهة تجريبية' };
     const saved = await http().put(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set(auth).send({ revision: 0, payload }).expect(200);
-    for (const fieldKey of ['licenseFile', 'financialStatementsFile']) await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/attachments`).set(auth).field('fieldKey', fieldKey).attach('file', PDF, { filename: `${fieldKey}.pdf`, contentType: 'application/pdf' }).expect(201);
+    for (const fieldKey of ['licenseFile', 'financialStatementsFile', 'governanceReportFile']) await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/attachments`).set(auth).field('fieldKey', fieldKey).attach('file', PDF, { filename: `${fieldKey}.pdf`, contentType: 'application/pdf' }).expect(201);
     const loaded = await http().get(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set(auth).expect(200);
-    expect(loaded.body.attachments.sort()).toEqual(['financialStatementsFile', 'licenseFile']);
+    expect(loaded.body.attachments.sort()).toEqual(['financialStatementsFile', 'governanceReportFile', 'licenseFile']);
     await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/submit`).set(auth).send({ revision: saved.body.revision }).expect(201);
   });
 
@@ -284,7 +300,7 @@ describe('Application V2 launch gate', () => {
     const cases: Array<[string, (payload: ReturnType<typeof validV2Payload>) => void, string]> = [
       ['email', (payload) => { payload.organization.officialEmail = 'nameexample.com'; }, 'أدخل بريدًا إلكترونيًا صحيحًا'],
       ['phone', (payload) => { payload.organization.officialPhone = '+966512345678'; }, '9 أرقام تبدأ بالرقم 5'],
-      ['category-other', (payload) => { payload.organization.category = 'أخرى'; }, 'تحديد تصنيف الجمعية'],
+      ['category-other', (payload) => { payload.organization.category = 'أخرى'; }, 'تصنيف الجمعية حسب حجمها المالي'],
       ['year', (payload) => { payload.experience = { ...payload.experience, hasRecentInKindProject: true, projectName: 'سابق', projectYear: 2020, supportType: 'أجهزة', projectBeneficiaries: 2, supporter: 'داعم' }; }, 'آخر سنتين'],
       ['supporter', (payload) => { payload.experience = { ...payload.experience, hasRecentInKindProject: true, projectName: 'سابق', projectYear: riyadhRecentYears()[0], supportType: 'أجهزة', projectBeneficiaries: 2 }; }, 'الجهة الداعمة'],
       ['satisfaction-other', (payload) => { payload.planning = { ...payload.planning, measuresSatisfaction: true, satisfactionTool: 'أخرى' }; }, 'تحديد أداة قياس الرضا'],
@@ -296,6 +312,7 @@ describe('Application V2 launch gate', () => {
       const saved = await http().put(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set(auth).send({ revision: 0, payload }).expect(200);
       await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/attachments`).set(auth).field('fieldKey', 'licenseFile').attach('file', PDF, { filename: `${name}.pdf`, contentType: 'application/pdf' }).expect(201);
       await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/attachments`).set(auth).field('fieldKey', 'financialStatementsFile').attach('file', PDF, { filename: `${name}-statements.pdf`, contentType: 'application/pdf' }).expect(201);
+      await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/attachments`).set(auth).field('fieldKey', 'governanceReportFile').attach('file', PDF, { filename: `${name}-governance.pdf`, contentType: 'application/pdf' }).expect(201);
       const response = await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/submit`).set(auth).send({ revision: saved.body.revision }).expect(400);
       expect(response.body.error.message).toContain(expected);
     }
