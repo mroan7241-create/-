@@ -320,6 +320,7 @@ describe('Application V2 launch gate', () => {
     const auth = { 'x-application-resume-token': created.body.resumeToken };
     const saved = await http().put(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set(auth).send({ revision: 0, payload: validV2Payload() }).expect(200);
     await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/attachments`).set(auth).field('fieldKey', 'licenseFile').attach('file', PDF, { filename: 'license.pdf', contentType: 'application/pdf' }).expect(201);
+    await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/attachments`).set(auth).field('fieldKey', 'governanceReportFile').attach('file', PDF, { filename: 'governance.pdf', contentType: 'application/pdf' }).expect(201);
     const missingStatements = await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/submit`).set(auth).send({ revision: saved.body.revision }).expect(400);
     expect(missingStatements.body.error.message).toContain('القوائم المالية');
   });
