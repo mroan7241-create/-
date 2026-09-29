@@ -369,11 +369,11 @@ function selectionLabel(value: ApplicationSummary['selectionList']) {
 }
 
 const DOSSIER_SECTIONS: Array<{ title: string; fields: Array<[string, string]> }> = [
-  { title: 'الجمعية والموقع', fields: [['organization.name','اسم الجمعية'],['organization.category','التصنيف'],['organization.sector','المجال'],['location.serviceScope','نطاق الخدمة'],['coordinator.name','منسق المشروع'],['covenantRepresentative.name','ممثل الميثاق']] },
+  { title: 'الجمعية والموقع', fields: [['organization.name','اسم الجمعية'],['organization.category','التصنيف حسب الحجم المالي'],['organization.sectors','مجالات العمل'],['organization.sectorOther','مجال آخر'],['organization.hasWebsite','لديها موقع إلكتروني'],['organization.websiteUrl','رابط الموقع'],['location.serviceScope','نطاق الخدمة'],['coordinator.name','منسق المشروع'],['covenantRepresentative.name','ممثل الميثاق']] },
   { title: 'القيادة والجاهزية', fields: [['executive.name','المدير التنفيذي'],['executive.education','المؤهل'],['executive.experienceYears','سنوات الخبرة'],['team.fullTime','الموظفون المتفرغون'],['readiness.fieldTeamCount','الفريق الميداني'],['readiness.weeklyDeliveryCapacity','القدرة الأسبوعية']] },
   { title: 'المستفيدون والبيانات', fields: [['beneficiaries.registeredFamilies','الأسر المسجلة'],['beneficiaries.databaseUpdatedAt','آخر تحديث للقاعدة'],['beneficiaries.systemName','نظام المستفيدين'],['beneficiaries.classifications','تصنيفات الحاجة']] },
   { title: 'الخبرة السابقة', fields: [['experience.hasRecentInKindProject','مشروع دعم عيني حديث'],['experience.projectName','اسم المشروع'],['experience.recentProjectsCount','عدد المشاريع الحديثة'],['experience.recentBeneficiariesCount','مستفيدو المشاريع الحديثة']] },
-  { title: 'الحوكمة والمالية', fields: [['finance.hasAccountingSystem','نظام محاسبي'],['finance.accountingSystemName','اسم النظام'],['finance.hasSpendingPolicy','لائحة صرف'],['finance.revenue','الإيرادات'],['finance.expenses','المصروفات'],['finance.currentAssets','الأصول المتداولة'],['finance.currentLiabilities','الخصوم المتداولة']] },
+  { title: 'الحوكمة والمالية', fields: [['finance.governanceScore','درجة الحوكمة (%)'],['finance.hasAccountingSystem','نظام محاسبي'],['finance.accountingSystemName','اسم النظام'],['finance.hasSpendingPolicy','لائحة صرف'],['finance.revenue','الإيرادات'],['finance.expenses','المصروفات'],['finance.currentAssets','الأصول المتداولة'],['finance.currentLiabilities','الخصوم المتداولة']] },
   { title: 'التخطيط والاستدامة', fields: [['planning.hasStrategicPlan','خطة استراتيجية'],['planning.hasOperationalPlan','خطة تشغيلية'],['planning.hasPostAidFollowUp','متابعة ما بعد المساعدة'],['planning.measuresSatisfaction','قياس الرضا'],['planning.lastYearProgramsCount','برامج العام الماضي'],['planning.lastYearBeneficiariesCount','مستفيدو العام الماضي']] },
 ];
 
@@ -382,4 +382,4 @@ function V2Dossier({ application }: { application: ApplicationSummary }) {
 }
 
 function valueAt(root: Record<string, unknown> | null, path: string): unknown { let current: unknown = root; for (const key of path.split('.')) { if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined; current = (current as Record<string, unknown>)[key]; } return current; }
-function displayValue(value: unknown): string { if (value === true) return 'نعم'; if (value === false) return 'لا'; if (value == null || value === '') return '—'; if (typeof value === 'number') return new Intl.NumberFormat('ar-SA').format(value); return String(value); }
+function displayValue(value: unknown): string { if (value === true) return 'نعم'; if (value === false) return 'لا'; if (value == null || value === '') return '—'; if (Array.isArray(value)) return value.map(String).join('، ') || '—'; if (typeof value === 'number') return new Intl.NumberFormat('ar-SA').format(value); return String(value); }

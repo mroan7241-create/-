@@ -57,12 +57,12 @@ export function WorkflowHub({ user, sectionKeys }: { user: CurrentUser; sectionK
   async function act(action: () => Promise<unknown>, success = 'تم تنفيذ العملية وتحديث البيانات.', credentialEmail = '') {
     setBusy(true); setMessage('');
     try {
-      const result = await action() as { temporaryPassword?: string | null; accountId?: string; path?: string } | undefined;
+      const result = await action() as { temporaryPassword?: string | null; accountId?: string; path?: string; emailSent?: boolean | null } | undefined;
       if (result?.temporaryPassword) {
         setCredential({ email: credentialEmail, password: result.temporaryPassword });
       }
       if (result?.path) setSigningLink(`${window.location.origin}${result.path}`);
-      setMessage(success); setForm(null); await load();
+      setMessage(result?.emailSent === false ? 'أُنشئ الحساب، لكن تعذّر إرسال بيانات الدخول بالبريد. لا تُعدّها مستلمة؛ تحقق من خدمة البريد قبل متابعة تفعيل الجمعية.' : success); setForm(null); await load();
     } catch (error) { setMessage(readError(error)); }
     finally { setBusy(false); }
   }

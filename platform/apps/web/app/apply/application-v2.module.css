@@ -38,6 +38,15 @@
 .comboList button:hover, .comboActive { background: var(--zad-100) !important; }
 .comboEmpty { padding: 10px; color: var(--muted); font-weight: 400; }
 .wide { grid-column: 1 / -1; }
+.optionFieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.optionFieldset legend { margin-bottom: 8px; font-size: 14px; font-weight: 700; }
+.sizeOptions { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
+.sectorOptions { display: flex; flex-wrap: wrap; gap: 8px; }
+.optionCard { display: flex; align-items: flex-start; gap: 9px; min-width: 0; padding: 11px 13px; border: 1px solid var(--line); border-radius: 11px; background: #fff; cursor: pointer; }
+.optionCard:has(input:checked) { border-color: var(--zad-700); background: var(--zad-100); }
+.optionCard input { margin-top: 3px; accent-color: var(--zad-700); }
+.optionCard strong, .optionCard small { display: block; }
+.optionCard small { margin-top: 2px; color: var(--muted); line-height: 1.5; }
 .yesNo { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .yesNo button { min-height: 46px; border: 1px solid var(--line); border-radius: 10px; background: #fff; font: inherit; cursor: pointer; }
 .yesNo .selected { color: #fff; border-color: var(--zad-700); background: var(--zad-700); }

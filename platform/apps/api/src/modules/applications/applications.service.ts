@@ -538,7 +538,7 @@ export class ApplicationsService {
       { associationId: outcome.response.associationId, associationName: outcome.applicationName },
     );
 
-    await this.onboardingEmail.sendCredentials(outcome.response.accountId, outcome.temporaryPassword);
+    const emailSent = await this.onboardingEmail.sendCredentials(outcome.response.accountId, outcome.temporaryPassword);
     return {
       ok: true as const,
       alreadyProcessed: false as const,
@@ -546,6 +546,7 @@ export class ApplicationsService {
       associationPublicCode: outcome.response.associationPublicCode,
       temporaryPassword: outcome.temporaryPassword,
       temporaryPasswordPreviouslyIssued: false as const,
+      emailSent,
     };
   }
 

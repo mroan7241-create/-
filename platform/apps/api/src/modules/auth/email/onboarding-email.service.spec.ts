@@ -90,7 +90,7 @@ describe('Onboarding notification privacy and delivery', () => {
     const email = new FakeEmailService();
     jest.spyOn(prisma.account, 'findUniqueOrThrow').mockResolvedValue({ id: 'test-account', name: 'جمعية تجريبية', email: 'test@example.org', mustChangePassword: true } as never);
     const audit = jest.spyOn(prisma.auditLog, 'create').mockResolvedValue({} as never);
-    await new OnboardingEmailService(email).sendCredentials('test-account', 'Synthetic!Temp2026');
+    await expect(new OnboardingEmailService(email).sendCredentials('test-account', 'Synthetic!Temp2026')).resolves.toBe(true);
     expect(email.lastSecurityAlert?.body).toContain('Synthetic!Temp2026');
     expect(email.lastSecurityAlert?.body).toContain('تغيير كلمة المرور');
     expect(audit).toHaveBeenCalledWith({ data: { action: 'ASSOCIATION_CREDENTIALS_EMAIL_SENT', entityType: 'accounts', entityId: 'test-account' } });
@@ -103,7 +103,7 @@ describe('Onboarding notification privacy and delivery', () => {
     jest.spyOn(prisma.account, 'findUniqueOrThrow').mockResolvedValue({ id: 'test-account', name: 'جمعية تجريبية', email: 'test@example.org', mustChangePassword: true } as never);
     jest.spyOn(email, 'sendSecurityAlert').mockRejectedValue(new Error('sensitive-provider-error'));
     const audit = jest.spyOn(prisma.auditLog, 'create').mockResolvedValue({} as never);
-    await expect(new OnboardingEmailService(email).sendCredentials('test-account', 'Synthetic!Temp2026')).resolves.toBeUndefined();
+    await expect(new OnboardingEmailService(email).sendCredentials('test-account', 'Synthetic!Temp2026')).resolves.toBe(false);
     expect(audit).toHaveBeenCalledWith({ data: { action: 'ASSOCIATION_CREDENTIALS_EMAIL_FAILED', entityType: 'accounts', entityId: 'test-account' } });
     expect(JSON.stringify(audit.mock.calls)).not.toContain('sensitive-provider-error');
   });

@@ -76,11 +76,16 @@ describe('Application V2 launch gate', () => {
     await http().post('/api/v1/association-applications/access/exchange').send({ token: 'x'.repeat(43) }).expect(403);
     await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/attachments`).set(applicantAccess).field('fieldKey', 'licenseFile').attach('file', PDF, { filename: 'license.pdf', contentType: 'application/pdf' }).expect(201);
     await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/attachments`).set(applicantAccess).field('fieldKey', 'financialStatementsFile').attach('file', PDF, { filename: 'statements.pdf', contentType: 'application/pdf' }).expect(201);
+    await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/submit`).set(applicantAccess).send({ revision: saved.body.revision }).expect(400).expect(({ body }) => expect(body.error.code).toBe('APPLICATION_ATTACHMENT_REQUIRED'));
+    await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/attachments`).set(applicantAccess).field('fieldKey', 'governanceReportFile').attach('file', PDF, { filename: 'governance.pdf', contentType: 'application/pdf' }).expect(201);
     const submitted = await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/submit`).set(applicantAccess).send({ revision: saved.body.revision });
     if (submitted.status !== 201) throw new Error(`Application V2 submit failed (${submitted.status}): ${JSON.stringify(submitted.body)}`);
     expect(submitted.body.emailSent).toBe(true);
     const row = await prisma.associationApplication.findUniqueOrThrow({ where: { publicCode: submitted.body.id } });
     expect(row.schemaVersion).toBe(2); expect(row.currentAssets?.toNumber()).toBe(11_000_000);
+    expect(row.category).toBe('متوسطة');
+    expect(row.sector).toBe('رعاية الأيتام، التنمية المجتمعية');
+    expect(row.v2Payload).toMatchObject({ organization: { sectors: ['رعاية الأيتام', 'التنمية المجتمعية'], websiteUrl: 'https://example.org' }, finance: { governanceScore: 87.5 } });
     expect(fakeEmail.lastApplicationAccess?.subject).toContain('متابعة طلب المشاركة');
     expect(fakeEmail.lastApplicationAccess?.items[0]?.code).toBe(submitted.body.id);
 
@@ -115,6 +120,30 @@ describe('Application V2 launch gate', () => {
     expect(fakeEmail.lastApplicationAccess?.intro).toContain('القائمة الأساسية');
     expect(fakeEmail.lastApplicationAccess?.items[0]?.url).not.toBe(previousSelectionUrl);
     await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(409);
+  });
+
+  it('rejects unknown financial sizes/sectors, unsafe website URLs and invalid governance scores before submission', async () => {
+    const created = await http().post('/api/v1/association-applications/drafts').send({ clientRequestId: randomUUID() }).expect(201);
+    const auth = { Cookie: created.headers['set-cookie'][0] };
+    const route = `/api/v1/association-applications/drafts/${created.body.draftCode}`;
+    const payload = validV2Payload();
+    let revision = 0;
+    async function rejected(code: string) {
+      const saved = await http().put(route).set(auth).send({ revision, payload }).expect(200);
+      revision = saved.body.revision;
+      await http().post(`${route}/submit`).set(auth).send({ revision }).expect(400).expect(({ body }) => expect(body.error.code).toBe(code));
+    }
+    payload.organization.category = 'تصنيف غير معروف';
+    await rejected('APPLICATION_INVALID_REFERENCE');
+    payload.organization.category = 'متوسطة';
+    payload.organization.sectors = ['رعاية الأيتام', 'قطاع غير معروف'];
+    await rejected('APPLICATION_INVALID_REFERENCE');
+    payload.organization.sectors = ['رعاية الأيتام', 'التنمية المجتمعية'];
+    payload.organization.websiteUrl = 'javascript:alert(1)';
+    await rejected('APPLICATION_WEBSITE_INVALID');
+    payload.organization.websiteUrl = 'https://example.org';
+    payload.finance.governanceScore = 101;
+    await rejected('APPLICATION_VALIDATION_FAILED');
   });
 
   it('expires the short applicant session and recovers the same draft through its official email', async () => {
@@ -288,14 +317,14 @@ describe('Application V2 launch gate', () => {
 
 function validV2Payload() {
   return {
-    organization: { name: `${PREFIX}جمعية`, licenseNumber: `${PREFIX}LICENSE-${randomUUID()}`, licenseExpiryDate: '2030-12-31', category: 'جمعية أهلية', sector: 'خدمات اجتماعية', officialEmail: `${PREFIX.toLowerCase()}${randomUUID()}@example.org`, officialPhone: `5${randomInt(10000000, 100000000)}` },
+    organization: { name: `${PREFIX}جمعية`, licenseNumber: `${PREFIX}LICENSE-${randomUUID()}`, licenseExpiryDate: '2030-12-31', category: 'متوسطة', sector: 'رعاية الأيتام، التنمية المجتمعية', sectors: ['رعاية الأيتام', 'التنمية المجتمعية'], hasWebsite: true, websiteUrl: 'https://example.org', officialEmail: `${PREFIX.toLowerCase()}${randomUUID()}@example.org`, officialPhone: `5${randomInt(10000000, 100000000)}` },
     location: { regionCode: '0001', governorateCode: '0100', districtCustom: 'حي تجريبي', serviceScope: 'المدينة أو المحافظة المختارة' },
     coordinator: { name: 'منسق تجريبي', title: 'منسق مشروع', phone: '512345679', email: `coordinator-${Date.now()}@example.org` }, covenantRepresentative: { name: 'ممثل تجريبي', title: 'رئيس مجلس الإدارة' },
     executive: { name: 'مدير تجريبي', phone: '512345670', education: 'بكالوريوس', experienceYears: 8 }, team: { fullTime: 5, partTime: 2, activeVolunteers: 10, nonSaudis: 0, universityOrHigher: 4 },
     socialResearcher: { exists: false }, readiness: { fieldTeamCount: 3, weeklyDeliveryCapacity: 20, hasReceiptStorage: false, canDocumentDigitally: true },
     beneficiaries: { registeredFamilies: 100, databaseUpdatedAt: '2026-09-01', hasSystem: false, classifiesNeed: false, hasCaseStudyMechanism: false },
     experience: { hasRecentInKindProject: false, projectName: undefined as string | undefined, projectYear: undefined as number | undefined, supportType: undefined as string | undefined, projectBeneficiaries: undefined as number | undefined, supporter: undefined as string | undefined, recentProjectsCount: 0, recentBeneficiariesCount: 0, ehsanSupportCount2025: 0, hasPreviousSimilarSupport: false },
-    finance: { hasAccountingSystem: false, hasSpendingPolicy: false, revenue: 12_000_000, expenses: 10_000_000, currentAssets: 11_000_000, currentLiabilities: 2_000_000 },
+    finance: { hasAccountingSystem: false, hasSpendingPolicy: false, governanceScore: 87.5, revenue: 12_000_000, expenses: 10_000_000, currentAssets: 11_000_000, currentLiabilities: 2_000_000 },
     planning: { hasStrategicPlan: false, hasOperationalPlan: false, hasPostAidFollowUp: false, measuresSatisfaction: false, satisfactionTool: undefined as string | undefined, lastYearProgramsCount: 4, lastYearBeneficiariesCount: 300 },
     acknowledgements: { allAccepted: true, acceptedAt: new Date().toISOString(), consentVersion: 'application-declarations-v1' },
   };

@@ -27,7 +27,9 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   const res = await fetchWithNetworkFeedback(`${API_BASE}${path}`, {
     ...init,
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    // A cross-origin GET with Content-Type: application/json triggers an unnecessary
+    // CORS preflight before every read. Only JSON request bodies need that header.
+    headers: { ...(init?.body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(init?.headers ?? {}) },
   });
   const body = await res.json().catch(() => null);
   if (!res.ok) {
@@ -874,7 +876,7 @@ export function createAgreement(participationId: string, version: number, templa
 export function transitionAgreement(id: string, status: string, signerName?: string) { return apiFetch(`/participations/agreements/${id}/transition`, { method: 'POST', body: JSON.stringify({ status, signerName, opId: newOpId() }) }); }
 export function completeParticipationSetup(id: string) { return apiFetch(`/participations/${id}/setup-complete`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) }); }
 export function activateParticipation(id: string) { return apiFetch(`/participations/${id}/activate`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) }); }
-export function prepareCovenantSigningAccount(id: string) { return apiFetch<{ ok: true; accountId: string; associationId: string; temporaryPassword: string | null }>(`/participations/${id}/signing-account`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) }); }
+export function prepareCovenantSigningAccount(id: string) { return apiFetch<{ ok: true; accountId: string; associationId: string; temporaryPassword: string | null; emailSent: boolean | null }>(`/participations/${id}/signing-account`, { method: 'POST', body: JSON.stringify({ opId: newOpId() }) }); }
 export interface CovenantView {
   id: string; participationId: string; participationStatus: string; associationName: string; status: string; reference: string;
   version: string; sourceSha256: string; representativeName: string | null; representativeTitle: string | null;

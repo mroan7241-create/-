@@ -99,8 +99,8 @@ export class ParticipationsService {
       await this.idempotency.complete(tx, ctx.accountId, scope, opId, response);
       return { replayed: false as const, response, temporaryPassword };
     });
-    if (!outcome.replayed) await this.onboardingEmail.sendCredentials(outcome.response.accountId, outcome.temporaryPassword);
-    return { ok: true as const, ...outcome.response, temporaryPassword: outcome.replayed ? null : outcome.temporaryPassword, temporaryPasswordPreviouslyIssued: outcome.replayed };
+    const emailSent = outcome.replayed ? null : await this.onboardingEmail.sendCredentials(outcome.response.accountId, outcome.temporaryPassword);
+    return { ok: true as const, ...outcome.response, temporaryPassword: outcome.replayed ? null : outcome.temporaryPassword, temporaryPasswordPreviouslyIssued: outcome.replayed, emailSent };
   }
 
   async getOwnCovenant(ctx: AuthContext) {
@@ -297,8 +297,8 @@ export class ParticipationsService {
       await audit(tx, ctx, 'ASSOCIATION_ACTIVATED', 'project_participations', id, { associationId: association.id, accountId: account.id });
       const response = { associationId: association.id, accountId: account.id }; await this.idempotency.complete(tx, ctx.accountId, scope, opId, response); return { replayed: false as const, response, temporaryPassword };
     });
-    if (!outcome.replayed) await this.onboardingEmail.sendCredentials(outcome.response.accountId, outcome.temporaryPassword);
-    return { ok: true as const, ...outcome.response, temporaryPassword: outcome.replayed ? null : outcome.temporaryPassword, temporaryPasswordPreviouslyIssued: outcome.replayed };
+    const emailSent = outcome.replayed ? null : await this.onboardingEmail.sendCredentials(outcome.response.accountId, outcome.temporaryPassword);
+    return { ok: true as const, ...outcome.response, temporaryPassword: outcome.replayed ? null : outcome.temporaryPassword, temporaryPasswordPreviouslyIssued: outcome.replayed, emailSent };
   }
 
   requestCoordinatorChange(ctx: AuthContext, participationId: string, dto: CoordinatorChangeDto) {

@@ -51,10 +51,10 @@ export class OnboardingEmailService {
     }
   }
 
-  async sendCredentials(accountId: string, temporaryPassword: string): Promise<void> {
+  async sendCredentials(accountId: string, temporaryPassword: string): Promise<boolean> {
     const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
     if (!account.email || !account.mustChangePassword) throw new Error('Onboarding account is not ready');
-    await this.deliver('ASSOCIATION_CREDENTIALS_EMAIL', 'accounts', accountId, () => this.email.sendSecurityAlert({
+    return this.deliver('ASSOCIATION_CREDENTIALS_EMAIL', 'accounts', accountId, () => this.email.sendSecurityAlert({
       to: account.email!, name: account.name,
       subject: 'بيانات دخول الجمعية — مشروع الأجهزة الكهربائية',
       body: `تم تجهيز حساب جمعيتكم.\nالبريد الإلكتروني: ${account.email}\nكلمة المرور المؤقتة: ${temporaryPassword}\nتسجيل الدخول: ${publicWebUrl()}/login\nيجب تغيير كلمة المرور عند أول دخول، ثم مراجعة الميثاق وتوقيعه. تبقى الخدمات التشغيلية مقيدة حتى اكتمال متطلبات التفعيل.\nيرجى الحفاظ على سرية بيانات الدخول.`,

@@ -7,11 +7,8 @@ import type { AuthContext } from '../auth/auth.types';
 export class DashboardService {
   async admin() {
     const [
-      pendingApplications, associations, activeAssociations, inactiveAssociations,
-      totalBeneficiaries, approvedBeneficiaries, beneficiariesPendingReview, rejectedBeneficiaries,
-      warehouseDevices, allocatedDevices, damagedDevices, receiptsAwaitingConfirmation,
-      delegates, devicesWithDelegate, devicesDelivered, deliveriesPreparing,
-      deliveriesOutWithDelegate, deliveriesFailed, activities, recentOperations,
+      pendingApplications, associationGroups, beneficiaryGroups, deviceGroups,
+      receiptsAwaitingConfirmation, delegates, deliveryGroups, activities, recentOperations,
     ] = await prisma.$transaction([
       prisma.associationApplication.count({ where: {
         status: 'UNDER_REVIEW',
@@ -20,26 +17,30 @@ export class DashboardService {
           { eligibilityStatus: 'PASSED', selectionList: 'NONE' },
         ],
       } }),
-      prisma.association.count({ where: { archivedAt: null } }),
-      prisma.association.count({ where: { archivedAt: null, status: 'ACTIVE' } }),
-      prisma.association.count({ where: { archivedAt: null, status: 'INACTIVE' } }),
-      prisma.beneficiary.count({ where: { archivedAt: null } }),
-      prisma.beneficiary.count({ where: { archivedAt: null, reviewStatus: 'APPROVED' } }),
-      prisma.beneficiary.count({ where: { archivedAt: null, reviewStatus: 'UNDER_REVIEW' } }),
-      prisma.beneficiary.count({ where: { archivedAt: null, reviewStatus: 'REJECTED' } }),
-      prisma.deviceUnit.count({ where: { status: 'WAREHOUSE' } }),
-      prisma.deviceUnit.count({ where: { status: 'ALLOCATED' } }),
-      prisma.deviceUnit.count({ where: { status: 'DAMAGED' } }),
+      prisma.association.groupBy({ by: ['status'], orderBy: { status: 'asc' }, where: { archivedAt: null }, _count: { _all: true as const } }),
+      prisma.beneficiary.groupBy({ by: ['reviewStatus'], orderBy: { reviewStatus: 'asc' }, where: { archivedAt: null }, _count: { _all: true as const } }),
+      prisma.deviceUnit.groupBy({ by: ['status'], orderBy: { status: 'asc' }, _count: { _all: true as const } }),
       prisma.receiptBatch.count({ where: { status: 'AWAITING_ASSOCIATION_CONFIRMATION' } }),
       prisma.account.count({ where: { role: 'DELEGATE', archivedAt: null } }),
-      prisma.deviceUnit.count({ where: { status: 'WITH_DELEGATE' } }),
-      prisma.deviceUnit.count({ where: { status: 'DELIVERED' } }),
-      prisma.deliveryMission.count({ where: { status: 'PREPARING' } }),
-      prisma.deliveryMission.count({ where: { status: 'OUT_WITH_DELEGATE' } }),
-      prisma.deliveryMission.count({ where: { status: 'DELIVERY_FAILED' } }),
+      prisma.deliveryMission.groupBy({ by: ['status'], orderBy: { status: 'asc' }, _count: { _all: true as const } }),
       prisma.activity.findMany({ orderBy: [{ phaseOrder: 'asc' }, { mainActivityOrder: 'asc' }, { createdAt: 'asc' }], include: { evidence: { select: { id: true, approvalStatus: true, notes: true, uploadedAt: true } } } }),
       prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 8, include: { actorAccount: { select: { name: true, role: true, publicCode: true } } } }),
     ]);
+    const associations = associationGroups.reduce((sum, group) => sum + groupedCount(group), 0);
+    const activeAssociations = groupedCount(associationGroups.find((group) => group.status === 'ACTIVE'));
+    const inactiveAssociations = groupedCount(associationGroups.find((group) => group.status === 'INACTIVE'));
+    const totalBeneficiaries = beneficiaryGroups.reduce((sum, group) => sum + groupedCount(group), 0);
+    const approvedBeneficiaries = groupedCount(beneficiaryGroups.find((group) => group.reviewStatus === 'APPROVED'));
+    const beneficiariesPendingReview = groupedCount(beneficiaryGroups.find((group) => group.reviewStatus === 'UNDER_REVIEW'));
+    const rejectedBeneficiaries = groupedCount(beneficiaryGroups.find((group) => group.reviewStatus === 'REJECTED'));
+    const warehouseDevices = groupedCount(deviceGroups.find((group) => group.status === 'WAREHOUSE'));
+    const allocatedDevices = groupedCount(deviceGroups.find((group) => group.status === 'ALLOCATED'));
+    const damagedDevices = groupedCount(deviceGroups.find((group) => group.status === 'DAMAGED'));
+    const devicesWithDelegate = groupedCount(deviceGroups.find((group) => group.status === 'WITH_DELEGATE'));
+    const devicesDelivered = groupedCount(deviceGroups.find((group) => group.status === 'DELIVERED'));
+    const deliveriesPreparing = groupedCount(deliveryGroups.find((group) => group.status === 'PREPARING'));
+    const deliveriesOutWithDelegate = groupedCount(deliveryGroups.find((group) => group.status === 'OUT_WITH_DELEGATE'));
+    const deliveriesFailed = groupedCount(deliveryGroups.find((group) => group.status === 'DELIVERY_FAILED'));
     return {
       counts: { pendingApplications, associations, activeAssociations, inactiveAssociations, totalBeneficiaries, approvedBeneficiaries, beneficiariesPendingReview, rejectedBeneficiaries, warehouseDevices, allocatedDevices, damagedDevices, receiptsAwaitingConfirmation, delegates, devicesWithDelegate, devicesDelivered, deliveriesPreparing, deliveriesOutWithDelegate, deliveriesFailed },
       activities,
@@ -68,4 +69,8 @@ export class DashboardService {
       recentOperations,
     };
   }
+}
+
+function groupedCount(group: { _count?: true | { _all?: number } } | undefined): number {
+  return group && typeof group._count === 'object' ? group._count._all ?? 0 : 0;
 }

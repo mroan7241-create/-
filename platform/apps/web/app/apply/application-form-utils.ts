@@ -1,3 +1,5 @@
+import { ASSOCIATION_SIZE_OPTIONS } from '@alzad/shared';
+
 export const EMAIL_ERROR = 'أدخل بريدًا إلكترونيًا صحيحًا، مثل name@example.com';
 export const PHONE_ERROR = 'تحقق من أرقام الجوال: يجب إدخال 9 أرقام تبدأ بالرقم 5.';
 export const CONSENT_VERSION = 'application-declarations-v1';
@@ -9,6 +11,13 @@ export function isValidEmail(value: string): boolean {
 
 export function isValidSaudiMobile(value: string): boolean {
   return /^5\d{8}$/.test(value);
+}
+
+export function isPublicWebsiteUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) && url.hostname.includes('.') && !url.username && !url.password;
+  } catch { return false; }
 }
 
 export function normalizeArabicSearch(value: string): string {
@@ -63,10 +72,10 @@ export function withDisplayedNumericDefaults(payload: Record<string, unknown>): 
 }
 
 export function validateStep(step:number,payload:Record<string, unknown>,attachments:string[]):string {
-  const required:Record<number,string[]>={1:['organization.name','organization.licenseNumber','organization.licenseExpiryDate','organization.category','organization.sector','organization.officialEmail','organization.officialPhone','location.regionCode','location.governorateCode','location.districtCustom','location.serviceScope','coordinator.name','coordinator.title','coordinator.phone','coordinator.email','covenantRepresentative.name','covenantRepresentative.title'],2:['executive.name','executive.phone','executive.education','executive.experienceYears','team.fullTime','team.partTime','team.activeVolunteers','team.nonSaudis','team.universityOrHigher','socialResearcher.exists','readiness.fieldTeamCount','readiness.weeklyDeliveryCapacity','readiness.hasReceiptStorage','readiness.canDocumentDigitally'],3:['beneficiaries.registeredFamilies','beneficiaries.databaseUpdatedAt','beneficiaries.hasSystem','beneficiaries.classifiesNeed','beneficiaries.hasCaseStudyMechanism'],4:['experience.hasRecentInKindProject','experience.recentProjectsCount','experience.recentBeneficiariesCount','experience.ehsanSupportCount2025','experience.hasPreviousSimilarSupport'],5:['finance.hasAccountingSystem','finance.hasSpendingPolicy','finance.revenue','finance.expenses','finance.currentAssets','finance.currentLiabilities'],6:['planning.hasStrategicPlan','planning.hasOperationalPlan','planning.hasPostAidFollowUp','planning.measuresSatisfaction','planning.lastYearProgramsCount','planning.lastYearBeneficiariesCount']};
+  const required:Record<number,string[]>={1:['organization.name','organization.licenseNumber','organization.licenseExpiryDate','organization.category','organization.sectors','organization.hasWebsite','organization.officialEmail','organization.officialPhone','location.regionCode','location.governorateCode','location.districtCustom','location.serviceScope','coordinator.name','coordinator.title','coordinator.phone','coordinator.email','covenantRepresentative.name','covenantRepresentative.title'],2:['executive.name','executive.phone','executive.education','executive.experienceYears','team.fullTime','team.partTime','team.activeVolunteers','team.nonSaudis','team.universityOrHigher','socialResearcher.exists','readiness.fieldTeamCount','readiness.weeklyDeliveryCapacity','readiness.hasReceiptStorage','readiness.canDocumentDigitally'],3:['beneficiaries.registeredFamilies','beneficiaries.databaseUpdatedAt','beneficiaries.hasSystem','beneficiaries.classifiesNeed','beneficiaries.hasCaseStudyMechanism'],4:['experience.hasRecentInKindProject','experience.recentProjectsCount','experience.recentBeneficiariesCount','experience.ehsanSupportCount2025','experience.hasPreviousSimilarSupport'],5:['finance.hasAccountingSystem','finance.hasSpendingPolicy','finance.governanceScore','finance.revenue','finance.expenses','finance.currentAssets','finance.currentLiabilities'],6:['planning.hasStrategicPlan','planning.hasOperationalPlan','planning.hasPostAidFollowUp','planning.measuresSatisfaction','planning.lastYearProgramsCount','planning.lastYearBeneficiariesCount']};
   const conditional:string[]=[];
-  if(step===1&&textAt(payload,'organization.category')==='أخرى') conditional.push('organization.categoryOther');
-  if(step===1&&textAt(payload,'organization.sector')==='أخرى') conditional.push('organization.sectorOther');
+  if(step===1&&Array.isArray(getAt(payload,'organization.sectors'))&&(getAt(payload,'organization.sectors') as unknown[]).includes('أخرى')) conditional.push('organization.sectorOther');
+  if(step===1&&boolAt(payload,'organization.hasWebsite')===true) conditional.push('organization.websiteUrl');
   if(step===2&&boolAt(payload,'socialResearcher.exists')===true) conditional.push('socialResearcher.name','socialResearcher.phone');
   if(step===2&&boolAt(payload,'readiness.hasReceiptStorage')===true) conditional.push('readiness.receiptStorageDescription');
   if(step===3&&boolAt(payload,'beneficiaries.hasSystem')===true) conditional.push('beneficiaries.systemName','beneficiaries.capabilities.search','beneficiaries.capabilities.update','beneficiaries.capabilities.reports','beneficiaries.capabilities.organizedCases');
@@ -81,6 +90,12 @@ export function validateStep(step:number,payload:Record<string, unknown>,attachm
   if(step===6&&boolAt(payload,'planning.measuresSatisfaction')===true&&textAt(payload,'planning.satisfactionTool')==='أخرى') conditional.push('planning.satisfactionOther');
   const missing=[...(required[step]??[]),...conditional].find((path)=>{const value=getAt(payload,path);return value===undefined||value===null||(typeof value==='string'&&value.trim()==='')});
   if(missing)return 'أكمل جميع الحقول المطلوبة في هذه الخطوة قبل المتابعة.';
+  if(step===1){
+    const sectors=getAt(payload,'organization.sectors');
+    if(!ASSOCIATION_SIZE_OPTIONS.some((option)=>option.value===textAt(payload,'organization.category')))return 'اختر تصنيف الجمعية حسب حجمها المالي.';
+    if(!Array.isArray(sectors)||sectors.length===0||sectors.some((item)=>typeof item!=='string'||!item.trim()))return 'اختر مجال عمل واحدًا على الأقل.';
+    if(boolAt(payload,'organization.hasWebsite')===true&&!isPublicWebsiteUrl(textAt(payload,'organization.websiteUrl')))return 'أدخل رابط موقع صحيحًا يبدأ بـ http أو https.';
+  }
   if(step===1&&['organization.officialEmail','coordinator.email'].some((path)=>!isValidEmail(textAt(payload,path))))return EMAIL_ERROR;
   const phonePaths=step===1?['organization.officialPhone','coordinator.phone']:step===2?['executive.phone',...(boolAt(payload,'socialResearcher.exists')===true?['socialResearcher.phone']:[])]:[];
   if(phonePaths.some((path)=>!isValidSaudiMobile(textAt(payload,path))))return PHONE_ERROR;
@@ -89,10 +104,11 @@ export function validateStep(step:number,payload:Record<string, unknown>,attachm
   if(step===4&&boolAt(payload,'experience.hasPreviousSimilarSupport')===true){const year=numberAt(payload,'experience.previousSupportYear');if(!Number.isInteger(year)||year<2000||year>new Date().getUTCFullYear())return 'أدخل سنة صالحة للدعم السابق.';}
   if(step===4&&boolAt(payload,'experience.hasRecentInKindProject')===true){const count=numberAt(payload,'experience.projectBeneficiaries');if(!Number.isInteger(count)||count<0||count>10000000)return 'أدخل عددًا صحيحًا صالحًا لمستفيدي المشروع السابق.';}
   if(step===5&&!attachments.includes('financialStatementsFile'))return 'القوائم المالية المعتمدة/المراجعة مطلوبة قبل المتابعة.';
+  if(step===5){const score=getAt(payload,'finance.governanceScore');if(typeof score!=='number'||!Number.isFinite(score)||score<0||score>100)return 'أدخل درجة الحوكمة كنسبة من 0 إلى 100.';if(!attachments.includes('governanceReportFile'))return 'أرفق تقرير درجة الحوكمة لآخر إصدار معتمد.';}
   if((step===5||step===7)&&boolAt(payload,'finance.hasSpendingPolicy')===true&&!attachments.includes('spendingPolicyFile'))return 'لائحة الصرف المعتمدة مطلوبة.';
   if((step===6||step===7)&&boolAt(payload,'planning.hasStrategicPlan')===true&&!attachments.includes('strategicPlanFile'))return 'الخطة الاستراتيجية مطلوبة.';
   if((step===6||step===7)&&boolAt(payload,'planning.hasOperationalPlan')===true&&!attachments.includes('operationalPlanFile'))return 'الخطة التشغيلية مطلوبة.';
-  if(step===7){if(!attachments.includes('licenseFile'))return 'ملف الترخيص مطلوب قبل الإرسال.';if(!attachments.includes('financialStatementsFile'))return 'القوائم المالية المعتمدة/المراجعة مطلوبة قبل الإرسال.';if(boolAt(payload,'acknowledgements.allAccepted')!==true||textAt(payload,'acknowledgements.consentVersion')!==CONSENT_VERSION||!validIsoTimestamp(getAt(payload,'acknowledgements.acceptedAt')))return 'يجب الموافقة على جميع الإقرارات قبل إرسال الطلب.';}
+  if(step===7){if(!attachments.includes('licenseFile'))return 'ملف الترخيص مطلوب قبل الإرسال.';if(!attachments.includes('financialStatementsFile'))return 'القوائم المالية المعتمدة/المراجعة مطلوبة قبل الإرسال.';if(!attachments.includes('governanceReportFile'))return 'تقرير درجة الحوكمة مطلوب قبل الإرسال.';if(boolAt(payload,'acknowledgements.allAccepted')!==true||textAt(payload,'acknowledgements.consentVersion')!==CONSENT_VERSION||!validIsoTimestamp(getAt(payload,'acknowledgements.acceptedAt')))return 'يجب الموافقة على جميع الإقرارات قبل إرسال الطلب.';}
   return '';
 }
 

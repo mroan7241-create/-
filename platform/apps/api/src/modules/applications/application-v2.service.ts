@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { ASSOCIATION_SIZE_OPTIONS } from '@alzad/shared';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
   ApplicationDraftStatus,
@@ -40,6 +41,7 @@ const DRAFT_TTL_DAYS = 45;
 const ALLOWED_ATTACHMENT_KEYS = new Set([
   'licenseFile', 'previousProjectEvidence', 'spendingPolicyFile', 'strategicPlanFile',
   'operationalPlanFile', 'initialBeneficiaryFile', 'financialStatementsFile',
+  'governanceReportFile',
 ]);
 const APPLICATION_CONSENT_VERSION = 'application-declarations-v1';
 const FINANCIAL_PRIORITY_THRESHOLD = 10_000_000;
@@ -436,9 +438,10 @@ async function validateV2Payload(payload: JsonMap, attachments: Set<string>) {
   const licenseExpiryDate = parseDate(requiredPathText(payload, 'organization.licenseExpiryDate', 'تاريخ انتهاء الترخيص', 10), 'تاريخ انتهاء الترخيص');
   if (licenseExpiryDate < todayRiyadh()) throw new ApiError('APPLICATION_LICENSE_EXPIRED', 'ترخيص الجمعية منتهٍ', 400);
   const category = requiredPathText(payload, 'organization.category', 'تصنيف الجمعية', 120);
-  const sector = requiredPathText(payload, 'organization.sector', 'مجال عمل الجمعية', 120);
-  if (category === 'أخرى') requiredPathText(payload, 'organization.categoryOther', 'تحديد تصنيف الجمعية', 200);
-  if (sector === 'أخرى') requiredPathText(payload, 'organization.sectorOther', 'تحديد مجال عمل الجمعية', 200);
+  if (!ASSOCIATION_SIZE_OPTIONS.some((option) => option.value === category)) throw new ApiError('APPLICATION_INVALID_REFERENCE', 'اختر تصنيف الجمعية حسب حجمها المالي', 400);
+  const sector = await applicationSectors(payload);
+  const hasWebsite = requiredBoolean(payload, 'organization.hasWebsite', 'وجود موقع إلكتروني للجمعية');
+  if (hasWebsite) validateWebsiteUrl(requiredPathText(payload, 'organization.websiteUrl', 'رابط الموقع الإلكتروني', 500));
   const officialEmail = requiredEmail(requiredPathText(payload, 'organization.officialEmail', 'البريد الرسمي', 254));
   const officialPhone = requiredApplicantPhone(payload, 'organization.officialPhone', 'رقم التواصل الرسمي');
   const coordinatorName = requiredPathText(payload, 'coordinator.name', 'اسم منسق المشروع', 150);
@@ -493,6 +496,8 @@ async function validateV2Payload(payload: JsonMap, attachments: Set<string>) {
   if (pathValue(payload, 'finance.hasAccountingSystem') === true) requiredPathText(payload, 'finance.accountingSystemName', 'اسم النظام المحاسبي', 150);
   requiredBoolean(payload, 'finance.hasSpendingPolicy', 'وجود لائحة صرف');
   if (pathValue(payload, 'finance.hasSpendingPolicy') === true && !attachments.has('spendingPolicyFile')) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'لائحة الصرف المعتمدة مطلوبة', 400);
+  requiredPercentage(payload, 'finance.governanceScore', 'درجة الحوكمة لآخر إصدار معتمد');
+  if (!attachments.has('governanceReportFile')) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'تقرير درجة الحوكمة لآخر إصدار معتمد مطلوب', 400);
   const revenue = requiredMoney(payload, 'finance.revenue', 'الإيرادات');
   const expenses = requiredMoney(payload, 'finance.expenses', 'المصروفات');
   const currentAssets = requiredMoney(payload, 'finance.currentAssets', 'الأصول المتداولة');
@@ -587,7 +592,7 @@ async function correctedAccountIdentity(tx: Prisma.TransactionClient, payload: J
   if (changed.includes('organization.officialPhone')) data.phone = requiredApplicantPhone(payload, 'organization.officialPhone', 'رقم التواصل الرسمي');
   if (changed.includes('organization.licenseNumber')) data.licenseNumber = requiredPathText(payload, 'organization.licenseNumber', 'رقم الترخيص', 60);
   if (changed.includes('organization.licenseExpiryDate')) data.licenseExpiryDate = parseDate(requiredPathText(payload, 'organization.licenseExpiryDate', 'تاريخ انتهاء الترخيص', 10), 'تاريخ انتهاء الترخيص');
-  if (changed.includes('organization.sector')) data.sector = requiredPathText(payload, 'organization.sector', 'مجال عمل الجمعية', 120);
+  if (changed.includes('organization.sector') || changed.includes('organization.sectors')) data.sector = await applicationSectors(payload);
   if (changed.includes('organization.notes')) data.notes = readOptionalString(pathValue(payload, 'organization.notes')) || null;
   if (changed.includes('coordinator.name')) data.contactName = requiredPathText(payload, 'coordinator.name', 'اسم منسق المشروع', 150);
   if (changed.includes('coordinator.title')) data.coordinatorTitle = requiredPathText(payload, 'coordinator.title', 'المسمى الوظيفي للمنسق', 120);
@@ -628,6 +633,9 @@ function readOptionalString(value: unknown): string { return typeof value === 's
 function applicantAccessSubject(draftCode:string,token:string,session:string):string { return sha256Hex(`${draftCode.trim()}:${token.trim()||session.trim()||'anonymous'}`); }
 function requiredBoolean(root: JsonMap, path: string, label: string): boolean { const value = pathValue(root,path); if (typeof value !== 'boolean') throw new ApiError('APPLICATION_VALIDATION_FAILED', `${label}: اختر نعم أو لا`, 400); return value; }
 function requiredInteger(root: JsonMap, path: string, label: string, min: number, max: number): number { const value=Number(pathValue(root,path)); if (!Number.isInteger(value)||value<min||value>max) throw new ApiError('APPLICATION_VALIDATION_FAILED', `${label}: أدخل رقمًا صحيحًا صالحًا`, 400); return value; }
+function requiredPercentage(root: JsonMap, path: string, label: string): number { const raw=pathValue(root,path); const value=typeof raw==='number'?raw:NaN; if(!Number.isFinite(value)||value<0||value>100||Math.abs(Math.round(value*100)-value*100)>1e-6) throw new ApiError('APPLICATION_VALIDATION_FAILED', `${label}: أدخل نسبة من 0 إلى 100 بمنزلتين عشريتين كحد أقصى`,400); return value; }
+function validateWebsiteUrl(value: string): void { try { const url=new URL(value); if(!['http:','https:'].includes(url.protocol)||!url.hostname.includes('.')||url.username||url.password) throw new Error('invalid'); } catch { throw new ApiError('APPLICATION_WEBSITE_INVALID', 'أدخل رابط موقع صحيحًا يبدأ بـ http أو https', 400); } }
+async function applicationSectors(payload: JsonMap): Promise<string> { const selected=pathValue(payload,'organization.sectors'); if(!Array.isArray(selected)) return requiredPathText(payload,'organization.sector','مجال عمل الجمعية',120); if(selected.length===0||selected.length>10||selected.some((item)=>typeof item!=='string'||!item.trim()||item.length>120)||new Set(selected).size!==selected.length) throw new ApiError('APPLICATION_INVALID_REFERENCE','اختر مجال عمل واحدًا أو أكثر دون تكرار',400); const values=selected as string[]; const active=await prisma.referenceValue.count({where:{type:'ASSOCIATION_SECTOR',value:{in:values},active:true}}); if(active!==values.length) throw new ApiError('APPLICATION_INVALID_REFERENCE','مجال عمل الجمعية غير معروف',400); const other=values.includes('أخرى')?requiredPathText(payload,'organization.sectorOther','تحديد مجال عمل الجمعية',200):''; return values.map((value)=>value==='أخرى'?`أخرى: ${other}`:value).join('، '); }
 function requiredMoney(root: JsonMap, path: string, label: string): number { const raw=pathValue(root,path); const value=typeof raw==='string'?Number(raw.replace(/,/g,'')):Number(raw); if(!Number.isFinite(value)||value<0||value>999_999_999_999_999) throw new ApiError('APPLICATION_VALIDATION_FAILED', `${label}: أدخل مبلغًا صالحًا غير سالب`,400); return Math.round(value*100)/100; }
 function requiredApplicantPhone(root: JsonMap, path: string, label: string): string { const value=requiredPathText(root,path,label,30); if(!/^5\d{8}$/.test(value)) throw new ApiError('APPLICATION_PHONE_INVALID','تحقق من أرقام الجوال: يجب إدخال 9 أرقام تبدأ بالرقم 5.',400); return `0${value}`; }
 function riyadhRecentYears(now=new Date()):number[]{ const year=Number(new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Riyadh',year:'numeric'}).format(now)); return [year,year-1]; }

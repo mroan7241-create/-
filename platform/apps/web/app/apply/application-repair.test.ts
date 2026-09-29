@@ -241,7 +241,7 @@ function set(payload: Payload, path: string, value: unknown) {
   cursor[keys[keys.length - 1]] = value;
 }
 const base: Payload = {
-  organization: { name: 'جمعية تجريبية', licenseNumber: 'TEST', licenseExpiryDate: '2030-12-31', category: 'جمعية', sector: 'اجتماعي', officialEmail: 'synthetic@example.org', officialPhone: '512345678' },
+  organization: { name: 'جمعية تجريبية', licenseNumber: 'TEST', licenseExpiryDate: '2030-12-31', category: 'متوسطة', sector: 'رعاية الأيتام', sectors: ['رعاية الأيتام'], hasWebsite: false, officialEmail: 'synthetic@example.org', officialPhone: '512345678' },
   location: { regionCode: '0001', governorateCode: '0100', districtCustom: 'حي تجريبي', serviceScope: 'المدينة' },
   coordinator: { name: 'منسق', title: 'منسق', phone: '512345678', email: 'coordinator@example.org' }, covenantRepresentative: { name: 'ممثل', title: 'رئيس' },
   executive: { name: 'تجريبي', phone: '512345678', education: 'بكالوريوس', experienceYears: 1 },
@@ -249,7 +249,7 @@ const base: Payload = {
   socialResearcher: { exists: false }, readiness: { fieldTeamCount: 1, weeklyDeliveryCapacity: 1, hasReceiptStorage: false, canDocumentDigitally: false },
   beneficiaries: { registeredFamilies: 1, databaseUpdatedAt: '2026-09-01', hasSystem: false, classifiesNeed: false, hasCaseStudyMechanism: false },
   experience: { hasRecentInKindProject: false, recentProjectsCount: 0, recentBeneficiariesCount: 0, ehsanSupportCount2025: 0, hasPreviousSimilarSupport: false },
-  finance: { hasAccountingSystem: false, hasSpendingPolicy: false, revenue: 0, expenses: 0, currentAssets: 0, currentLiabilities: 0 },
+  finance: { hasAccountingSystem: false, hasSpendingPolicy: false, governanceScore: 87.5, revenue: 0, expenses: 0, currentAssets: 0, currentLiabilities: 0 },
   planning: { hasStrategicPlan: false, hasOperationalPlan: false, hasPostAidFollowUp: false, measuresSatisfaction: false, lastYearProgramsCount: 0, lastYearBeneficiariesCount: 0 },
 };
 
@@ -266,8 +266,8 @@ test('a visually displayed zero no longer blocks application steps', () => {
 
 test('conditional fields are enforced in their own step only when enabled', () => {
   const cases: [number, string, unknown, Record<string, unknown>][] = [
-    [1, 'organization.category', 'أخرى', { 'organization.categoryOther': 'تصنيف' }],
-    [1, 'organization.sector', 'أخرى', { 'organization.sectorOther': 'مجال' }],
+    [1, 'organization.hasWebsite', true, { 'organization.websiteUrl': 'https://example.org' }],
+    [1, 'organization.sectors', ['رعاية الأيتام', 'أخرى'], { 'organization.sectorOther': 'مجال' }],
     [2, 'socialResearcher.exists', true, { 'socialResearcher.name': 'باحث', 'socialResearcher.phone': '512345678' }],
     [2, 'readiness.hasReceiptStorage', true, { 'readiness.receiptStorageDescription': 'مكان تجريبي' }],
     [3, 'beneficiaries.hasSystem', true, { 'beneficiaries.systemName': 'نظام', 'beneficiaries.capabilities.search': false, 'beneficiaries.capabilities.update': false, 'beneficiaries.capabilities.reports': false, 'beneficiaries.capabilities.organizedCases': false }],
@@ -282,14 +282,14 @@ test('conditional fields are enforced in their own step only when enabled', () =
   ];
   for (const [step, condition, enabled, dependencies] of cases) {
     const payload = structuredClone(base);
-    assert.equal(validateStep(step, payload, ['financialStatementsFile']), '', condition);
+    assert.equal(validateStep(step, payload, ['financialStatementsFile', 'governanceReportFile']), '', condition);
     set(payload, condition, enabled);
-    assert.notEqual(validateStep(step, payload, ['financialStatementsFile']), '', condition);
+    assert.notEqual(validateStep(step, payload, ['financialStatementsFile', 'governanceReportFile']), '', condition);
     for (const [path, value] of Object.entries(dependencies)) set(payload, path, value);
-    assert.equal(validateStep(step, payload, ['financialStatementsFile']), '', condition);
+    assert.equal(validateStep(step, payload, ['financialStatementsFile', 'governanceReportFile']), '', condition);
     for (const path of Object.keys(dependencies)) {
       const missing = structuredClone(payload); set(missing, path, undefined);
-      assert.notEqual(validateStep(step, missing, ['financialStatementsFile']), '', path);
+      assert.notEqual(validateStep(step, missing, ['financialStatementsFile', 'governanceReportFile']), '', path);
     }
   }
   const staleOther = structuredClone(base); set(staleOther, 'planning.satisfactionTool', 'أخرى');
@@ -304,16 +304,37 @@ test('conditional fields are enforced in their own step only when enabled', () =
 test('conditional files block the owning step and consent requires the current version and timestamp', () => {
   for (const [step, condition, file] of [[5, 'finance.hasSpendingPolicy', 'spendingPolicyFile'], [6, 'planning.hasStrategicPlan', 'strategicPlanFile'], [6, 'planning.hasOperationalPlan', 'operationalPlanFile']] as const) {
     const payload = structuredClone(base);
-    assert.equal(validateStep(step, payload, ['financialStatementsFile']), '');
+    assert.equal(validateStep(step, payload, ['financialStatementsFile', 'governanceReportFile']), '');
     set(payload, condition, true);
-    assert.notEqual(validateStep(step, payload, ['financialStatementsFile']), '');
-    assert.equal(validateStep(step, payload, ['financialStatementsFile', file]), '');
+    assert.notEqual(validateStep(step, payload, ['financialStatementsFile', 'governanceReportFile']), '');
+    assert.equal(validateStep(step, payload, ['financialStatementsFile', 'governanceReportFile', file]), '');
   }
   assert.notEqual(validateStep(5, base, []), '');
   const payload = { acknowledgements: { allAccepted: true, consentVersion: CONSENT_VERSION, acceptedAt: new Date().toISOString() } };
-  assert.equal(validateStep(7, payload, ['licenseFile', 'financialStatementsFile']), '');
+  assert.equal(validateStep(7, payload, ['licenseFile', 'financialStatementsFile', 'governanceReportFile']), '');
   for (const [path, value] of [['acknowledgements.allAccepted', false], ['acknowledgements.consentVersion', 'old'], ['acknowledgements.acceptedAt', '2026-09-01']] as const) {
     const invalid = structuredClone(payload); set(invalid, path, value);
-    assert.notEqual(validateStep(7, invalid, ['licenseFile', 'financialStatementsFile']), '');
+    assert.notEqual(validateStep(7, invalid, ['licenseFile', 'financialStatementsFile', 'governanceReportFile']), '');
   }
+});
+
+test('financial size, multiple sectors, website URL and governance evidence are validated before progression', () => {
+  const payload = structuredClone(base);
+  assert.equal(validateStep(1, payload, []), '');
+  set(payload, 'organization.category', 'جمعية خيرية');
+  assert.match(validateStep(1, payload, []), /تصنيف/);
+  set(payload, 'organization.category', 'متوسطة');
+  set(payload, 'organization.sectors', []);
+  assert.match(validateStep(1, payload, []), /مجال/);
+  set(payload, 'organization.sectors', ['رعاية الأيتام', 'التنمية المجتمعية']);
+  set(payload, 'organization.hasWebsite', true);
+  set(payload, 'organization.websiteUrl', 'javascript:alert(1)');
+  assert.match(validateStep(1, payload, []), /رابط/);
+  set(payload, 'organization.websiteUrl', 'https://example.org');
+  assert.equal(validateStep(1, payload, []), '');
+  set(payload, 'finance.governanceScore', 101);
+  assert.match(validateStep(5, payload, ['financialStatementsFile', 'governanceReportFile']), /الحوكمة/);
+  set(payload, 'finance.governanceScore', 87.5);
+  assert.match(validateStep(5, payload, ['financialStatementsFile']), /تقرير درجة الحوكمة/);
+  assert.equal(validateStep(5, payload, ['financialStatementsFile', 'governanceReportFile']), '');
 });

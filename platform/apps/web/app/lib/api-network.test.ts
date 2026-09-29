@@ -18,6 +18,21 @@ test('JSON actions and uploads report a clear network error instead of failing s
   }
 });
 
+test('GET reads avoid JSON preflight while JSON writes retain their content type', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: RequestInit[] = [];
+  globalThis.fetch = async (_input, init) => {
+    calls.push(init ?? {});
+    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  try {
+    await apiFetch('/health');
+    await apiFetch('/example', { method: 'POST', body: JSON.stringify({ value: 1 }) });
+    assert.equal(new Headers(calls[0]?.headers).has('Content-Type'), false);
+    assert.equal(new Headers(calls[1]?.headers).get('Content-Type'), 'application/json');
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test('failed logout remains on the authenticated page and explains the failure', async () => {
   let navigations = 0;
   const navigate = () => { navigations++; };
