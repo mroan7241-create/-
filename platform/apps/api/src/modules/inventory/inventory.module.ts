@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { InventoryController } from './inventory.controller';
+import { DamageCasesController, InventoryController } from './inventory.controller';
 import { InventoryService } from './inventory.service';
 
 /**
@@ -7,7 +7,7 @@ import { InventoryService } from './inventory.service';
  * الإنشاء عبر `ReceiptsModule` حصرًا بعد تأكيد محضر استلام ناجح.
  */
 @Module({
-  controllers: [InventoryController],
+  controllers: [InventoryController, DamageCasesController],
   providers: [InventoryService],
 })
 export class InventoryModule {}

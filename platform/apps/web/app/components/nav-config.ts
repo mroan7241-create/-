@@ -38,6 +38,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/admin/delegates', label: 'المناديب', icon: Bike, roles: ['ADMIN'], available: true, group: 'الكيانات' },
   { href: '/admin/abanmi', label: 'حسابات أبانمي', icon: Users, roles: ['ADMIN'], available: true, group: 'الكيانات' },
   { href: '/admin/inventory', label: 'المخزون', icon: Package, roles: ['ADMIN'], available: true, group: 'العمليات' },
+  { href: '/admin/central-stock', label: 'مخزون الزاد المركزي', icon: Boxes, roles: ['ADMIN'], available: true, group: 'العمليات' },
   { href: '/admin/allocation', label: 'التخصيص', icon: Boxes, roles: ['ADMIN'], available: true, group: 'العمليات' },
   { href: '/admin/receipts', label: 'محاضر الاستلام', icon: ClipboardList, roles: ['ADMIN'], available: true, group: 'العمليات' },
   { href: '/admin/deliveries', label: 'عمليات التسليم', icon: Truck, roles: ['ADMIN'], available: true, group: 'العمليات' },

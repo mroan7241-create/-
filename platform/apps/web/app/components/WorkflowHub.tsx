@@ -226,6 +226,7 @@ function notificationHref(row: WorkflowRecord, role: CurrentUser['role']): strin
   if (!entityId) return null;
   if (entityType === 'delivery_missions') return role === 'ADMIN' ? `/admin/deliveries/${entityId}` : role === 'ASSOCIATION' ? `/association/deliveries/${entityId}` : null;
   if (entityType === 'escalation_cases') return role === 'ADMIN' ? '/admin/escalations' : role === 'ASSOCIATION' ? '/association/escalations' : null;
+  if (entityType === 'receipt_batches') return role === 'ASSOCIATION' ? '/association/receipts' : role === 'ADMIN' ? '/admin/receipts' : null;
   return null;
 }
 function readError(error: unknown) { return error instanceof Error ? error.message : 'تعذر تنفيذ العملية.'; }

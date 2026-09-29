@@ -13,6 +13,7 @@ import {
   getReceiptBatch,
   getReceiptEvidenceUrl,
   listReceiptBatches,
+  listProcurement,
   RECEIPT_BATCH_STATUS_LABELS,
   sendReceiptBatch,
   type CreateReceiptItemInput,
@@ -21,6 +22,7 @@ import {
   type ReceiptBatchDetail,
   type ReceiptBatchListItem,
   type ReceiptBatchStatus,
+  type WorkflowRecord,
 } from '../../lib/api';
 import { cardStyle, errorStyle, inputStyle, labelStyle, mutedStyle, pageStyle, primaryButtonStyle, secondaryButtonStyle, statusBadgeStyle, successStyle, tableStyle, tdStyle, thStyle } from '../../lib/ui';
 
@@ -46,6 +48,9 @@ export default function AdminReceiptsPage() {
   const [showCreate, setShowCreate] = useState(false);
 
   const [associationId, setAssociationId] = useState('');
+  const [shipmentId, setShipmentId] = useState('');
+  const [orders, setOrders] = useState<WorkflowRecord[]>([]);
+  const [shipmentsError, setShipmentsError] = useState('');
   const [supplierName, setSupplierName] = useState('');
   const [sentDate, setSentDate] = useState('');
   const [notes, setNotes] = useState('');
@@ -73,6 +78,18 @@ export default function AdminReceiptsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, page, statusFilter]);
 
+  useEffect(() => {
+    if (!user || !showCreate || !associationId) return;
+    setShipmentsError('');
+    listProcurement().then(setOrders).catch((e) => setShipmentsError(e instanceof ApiClientError ? e.message : 'تعذّر تحميل الشحنات'));
+  }, [user, showCreate, associationId]);
+
+  const availableShipments = orders.filter((order) => order.associationId === associationId).flatMap((order) =>
+    ((order.shipments as WorkflowRecord[] | undefined) ?? [])
+      .filter((shipment) => ['DISPATCHED', 'PARTIALLY_RECEIVED', 'RECONCILIATION_REQUIRED'].includes(String(shipment.status)))
+      .map((shipment) => ({ order, shipment })),
+  );
+
   if (loading || !user) return <p style={pageStyle}>...جارٍ التحميل</p>;
 
   function updateItem(index: number, patch: Partial<DraftItem>) {
@@ -85,6 +102,7 @@ export default function AdminReceiptsPage() {
     try {
       const res = await createReceiptBatch({
         associationId,
+        shipmentId: shipmentId && shipmentId !== 'standalone' ? shipmentId : undefined,
         supplierName,
         sentDate,
         notes: notes || undefined,
@@ -95,6 +113,7 @@ export default function AdminReceiptsPage() {
       setNotice(`أُنشئ المحضر ${res.id} بنجاح — أرسله للجمعية عند الجاهزية`);
       setShowCreate(false);
       setAssociationId('');
+      setShipmentId('');
       setSupplierName('');
       setSentDate('');
       setNotes('');
@@ -169,8 +188,30 @@ export default function AdminReceiptsPage() {
         <section style={{ ...cardStyle, marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
           <label style={labelStyle}>
             الجمعية المستلمة
-            <AssociationSelect value={associationId} onChange={(id) => setAssociationId(id)} placeholder="ابحث عن جمعية..." />
+            <AssociationSelect value={associationId} onChange={(id) => { setAssociationId(id); setShipmentId(''); }} placeholder="ابحث عن جمعية..." />
           </label>
+          {associationId && <label style={labelStyle}>
+            الشحنة المرتبطة — اخترها لتوثيق الاستلام وربط المخزون بها
+            <select style={inputStyle} value={shipmentId} onChange={(event) => {
+              const id = event.target.value;
+              setShipmentId(id);
+              const selected = availableShipments.find(({ shipment }) => shipment.id === id);
+              if (selected) {
+                setSupplierName(String(selected.order.supplierName ?? ''));
+                const orderItems = (selected.order.items as WorkflowRecord[] | undefined) ?? [];
+                const shipmentItems = (selected.shipment.items as WorkflowRecord[] | undefined) ?? [];
+                setItems(shipmentItems.map((item) => {
+                  const source = orderItems.find((line) => line.id === item.purchaseOrderItemId);
+                  return { deviceType: source?.deviceType as DeviceType, spec: String(source?.spec ?? ''), sentQty: Number(item.shippedQty) };
+                }));
+              }
+            }}>
+              <option value="">اختر الشحنة أو حدّد محضرًا مستقلًا</option>
+              <option value="standalone">محضر مستقل بلا شحنة — لا يغيّر حالة أي شحنة</option>
+              {availableShipments.map(({ shipment }) => <option key={shipment.id} value={shipment.id}>{String(shipment.publicCode ?? shipment.id)}</option>)}
+            </select>
+            {shipmentsError && <span style={errorStyle}>{shipmentsError}</span>}
+          </label>}
           <label style={labelStyle}>
             اسم المورد
             <input style={inputStyle} value={supplierName} onChange={(e) => setSupplierName(e.target.value)} />
@@ -215,7 +256,7 @@ export default function AdminReceiptsPage() {
             </button>
           </div>
 
-          <button style={primaryButtonStyle} disabled={saving || !associationId || !supplierName || !sentDate} onClick={submitCreate}>
+          <button style={primaryButtonStyle} disabled={saving || !associationId || !shipmentId || !supplierName || !sentDate} onClick={submitCreate}>
             {saving ? '...جارٍ الحفظ' : 'حفظ كمسودة'}
           </button>
         </section>

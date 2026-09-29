@@ -8,12 +8,14 @@ import { AssociationSelect } from '../../lib/association-select';
 import { initialQueryParam } from '../../lib/query';
 import {
   ApiClientError,
+  apiFetch,
   DEVICE_STATUS_LABELS,
   DEVICE_TYPE_LABELS,
   DEVICE_TYPES,
   getDeviceUnit,
   listDeviceUnits,
   markDeviceDamaged,
+  newOpId,
   updateDeviceUnit,
   type DeviceStatus,
   type DeviceType,
@@ -21,6 +23,30 @@ import {
   type Paginated,
 } from '../../lib/api';
 import { cardStyle, errorStyle, inputStyle, labelStyle, modalOverlayStyle, modalStyle, mutedStyle, pageStyle, primaryButtonStyle, secondaryButtonStyle, statusBadgeStyle, tableStyle, tdStyle, thStyle } from '../../lib/ui';
+
+type DamageCase = {
+  id: string;
+  associationId: string;
+  association: { name: string };
+  receiptItem: { publicCode: string; receiptBatch: { publicCode: string } } | null;
+  device: { publicCode: string } | null;
+  quantity: number;
+  description: string;
+  status: 'OPEN' | 'UNDER_REVIEW' | 'AWAITING_RETURN' | 'RETURNED' | 'AWAITING_REPLACEMENT' | 'REPLACED' | 'SETTLED' | 'CLOSED';
+  returnRequired: boolean;
+  returnedAt: string | null;
+  replacementExpected: boolean;
+  replacementReceivedAt: string | null;
+  resolution: string | null;
+  createdAt: string;
+  closedAt: string | null;
+};
+
+const damageStatusLabels: Record<DamageCase['status'], string> = {
+  OPEN: 'جديدة', UNDER_REVIEW: 'قيد المراجعة', AWAITING_RETURN: 'بانتظار الإرجاع',
+  RETURNED: 'أُعيدت', AWAITING_REPLACEMENT: 'بانتظار البديل', REPLACED: 'استُبدلت',
+  SETTLED: 'سُوِّيت', CLOSED: 'مغلقة',
+};
 
 /** ADMIN — مخزون الأجهزة: قائمة مُرقَّمة خادميًا (تكافؤ getDeviceDetail/جزء القراءة من saveDevice القديمتين). الإنشاء حصرًا عبر تأكيد محضر استلام. */
 export default function AdminInventoryPage() {
@@ -38,6 +64,15 @@ export default function AdminInventoryPage() {
   const [editBusy, setEditBusy] = useState(false);
   const [editNotice, setEditNotice] = useState('');
   const [confirmDamage, setConfirmDamage] = useState(false);
+  const [showDamageCases, setShowDamageCases] = useState(false);
+  const [damageCases, setDamageCases] = useState<Paginated<DamageCase> | null>(null);
+  const [damagePage, setDamagePage] = useState(1);
+  const [damageError, setDamageError] = useState('');
+  const [damageNotice, setDamageNotice] = useState('');
+  const [damageLoading, setDamageLoading] = useState(false);
+  const [damageBusy, setDamageBusy] = useState(false);
+  const [damageResolution, setDamageResolution] = useState<Record<string, string>>({});
+  const [confirmCloseDamageId, setConfirmCloseDamageId] = useState<string | null>(null);
 
   function reload() {
     listDeviceUnits({ page, pageSize: 25, associationId: associationId || undefined, deviceType: deviceType || undefined, status: status || undefined })
@@ -50,6 +85,43 @@ export default function AdminInventoryPage() {
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, page, associationId, deviceType, status]);
+
+  function reloadDamageCases() {
+    if (!showDamageCases) return;
+    setDamageLoading(true);
+    const query = new URLSearchParams({ page: String(damagePage), pageSize: '25' });
+    if (associationId) query.set('associationId', associationId);
+    apiFetch<Paginated<DamageCase>>(`/inventory/damage-cases?${query}`)
+      .then((result) => { setDamageCases(result); setDamageError(''); })
+      .catch((e) => setDamageError(e instanceof ApiClientError ? e.message : 'تعذّر تحميل حالات التلف'))
+      .finally(() => setDamageLoading(false));
+  }
+
+  useEffect(() => {
+    if (!user || !showDamageCases) return;
+    reloadDamageCases();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, showDamageCases, damagePage, associationId]);
+
+  async function decideDamageCase(id: string, nextStatus: 'UNDER_REVIEW' | 'SETTLED' | 'CLOSED') {
+    setDamageBusy(true);
+    setDamageError('');
+    setDamageNotice('');
+    try {
+      await apiFetch(`/inventory/damage-cases/${id}/decision`, {
+        method: 'POST',
+        body: JSON.stringify({ status: nextStatus, resolution: nextStatus === 'SETTLED' ? damageResolution[id]?.trim() : undefined, opId: newOpId() }),
+      });
+      setDamageResolution((current) => ({ ...current, [id]: '' }));
+      setDamageNotice(nextStatus === 'UNDER_REVIEW' ? 'بدأت مراجعة حالة التلف.' : nextStatus === 'SETTLED' ? 'حُفظ قرار معالجة التلف.' : 'أُغلقت حالة التلف.');
+      reloadDamageCases();
+    } catch (e) {
+      setDamageError(e instanceof ApiClientError ? e.message : 'تعذّر حفظ قرار حالة التلف');
+    } finally {
+      setDamageBusy(false);
+      setConfirmCloseDamageId(null);
+    }
+  }
 
   function openDetail(id: string) {
     setDetailError('');
@@ -206,6 +278,52 @@ export default function AdminInventoryPage() {
         </section>
         </div>
       )}
+
+      <section style={{ ...cardStyle, marginTop: 24 }}>
+        <h2>مراجعة حالات التلف</h2>
+        <p style={mutedStyle}>تظهر حالات التلف الموثقة عند استلام الشحنات أو وَسم جهاز في المخزون. إغلاق الحالة قرار إداري مستقل بعد تسجيل المعالجة.</p>
+        <button type="button" style={secondaryButtonStyle} onClick={() => { setShowDamageCases((value) => !value); setDamagePage(1); }}>
+          {showDamageCases ? 'إخفاء حالات التلف' : 'عرض حالات التلف'}
+        </button>
+        {showDamageCases && <>
+          {damageError && <p role="alert" style={errorStyle}>{damageError}</p>}
+          {damageNotice && <p role="status" style={mutedStyle}>{damageNotice}</p>}
+          {damageLoading && <p style={mutedStyle}>جارٍ تحميل حالات التلف...</p>}
+          <div style={{ overflowX: 'auto', marginTop: 14 }}>
+            <table style={tableStyle}>
+              <thead><tr>
+                <th style={thStyle}>الجمعية</th><th style={thStyle}>المرجع</th><th style={thStyle}>الكمية</th>
+                <th style={thStyle}>التلف</th><th style={thStyle}>الحالة</th><th style={thStyle}>القرار</th>
+              </tr></thead>
+              <tbody>{(damageCases?.items ?? []).map((item) => <tr key={item.id}>
+                <td style={tdStyle}>{item.association.name}</td>
+                <td style={tdStyle}>{item.receiptItem?.receiptBatch.publicCode ?? item.device?.publicCode ?? '—'}</td>
+                <td style={tdStyle}>{item.quantity}</td>
+                <td style={tdStyle}>{item.description}</td>
+                <td style={tdStyle}>{damageStatusLabels[item.status]}{item.resolution && <div style={mutedStyle}>{item.resolution}</div>}</td>
+                <td style={tdStyle}>
+                  {item.status === 'OPEN' && <button type="button" disabled={damageBusy} style={secondaryButtonStyle} onClick={() => decideDamageCase(item.id, 'UNDER_REVIEW')}>بدء المراجعة</button>}
+                  {item.status === 'UNDER_REVIEW' && <div style={{ minWidth: 220 }}>
+                    <label style={labelStyle}>قرار المعالجة
+                      <textarea style={inputStyle} maxLength={2000} rows={2} value={damageResolution[item.id] ?? ''} onChange={(e) => setDamageResolution((current) => ({ ...current, [item.id]: e.target.value }))} />
+                    </label>
+                    <button type="button" disabled={damageBusy || !damageResolution[item.id]?.trim()} style={primaryButtonStyle} onClick={() => decideDamageCase(item.id, 'SETTLED')}>حفظ التسوية</button>
+                  </div>}
+                  {item.status === 'SETTLED' && <button type="button" disabled={damageBusy} style={secondaryButtonStyle} onClick={() => setConfirmCloseDamageId(item.id)}>إغلاق الحالة</button>}
+                  {item.status !== 'OPEN' && item.status !== 'UNDER_REVIEW' && item.status !== 'SETTLED' && item.status !== 'CLOSED' && <span style={mutedStyle}>يتطلب توثيق الإرجاع أو البديل</span>}
+                  {item.status === 'CLOSED' && <span style={mutedStyle}>لا إجراء</span>}
+                </td>
+              </tr>)}</tbody>
+            </table>
+          </div>
+          {damageCases && damageCases.items.length === 0 && <p style={mutedStyle}>لا توجد حالات تلف مطابقة.</p>}
+          {damageCases && damageCases.totalPages > 1 && <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+            <button type="button" disabled={damagePage <= 1} onClick={() => setDamagePage((value) => value - 1)}>السابق</button>
+            <span style={mutedStyle}>{damagePage} / {damageCases.totalPages}</span>
+            <button type="button" disabled={damagePage >= damageCases.totalPages} onClick={() => setDamagePage((value) => value + 1)}>التالي</button>
+          </div>}
+        </>}
+      </section>
       {confirmDamage && <ConfirmDialog
         title="تأكيد وسم الجهاز تالفًا"
         message="وَسم هذا الجهاز تالفًا؟ لا يمكن التراجع عن هذا من هنا."
@@ -213,6 +331,13 @@ export default function AdminInventoryPage() {
         tone="danger"
         onCancel={() => setConfirmDamage(false)}
         onConfirm={async () => { await damage(); setConfirmDamage(false); }}
+      />}
+      {confirmCloseDamageId && <ConfirmDialog
+        title="تأكيد إغلاق حالة التلف"
+        message="هل اكتملت معالجة التلف وتوثيق القرار؟ لا يمكن إعادة فتح الحالة من هنا."
+        confirmLabel="إغلاق الحالة"
+        onCancel={() => setConfirmCloseDamageId(null)}
+        onConfirm={() => decideDamageCase(confirmCloseDamageId, 'CLOSED')}
       />}
     </AppShell>
   );

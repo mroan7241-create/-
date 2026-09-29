@@ -343,7 +343,16 @@ export class ApplicationV2Service {
         applicationId, requestedById: ctx.accountId, note: dto.note?.trim() || null, deadline,
         items: { create: dto.items.map((item) => ({ type: item.type, key: requiredText(item.key, 'الحقل المطلوب', 120), reason: requiredText(item.reason, 'سبب الاستكمال', 500) })) },
       } });
-      await tx.associationApplication.update({ where: { id: applicationId }, data: { eligibilityStatus: EligibilityStatus.NEEDS_INFO, eligibilityNotes: dto.note?.trim() || 'مطلوب استكمال بيانات محددة' } });
+      await tx.associationApplication.update({ where: { id: applicationId }, data: {
+        eligibilityStatus: EligibilityStatus.NEEDS_INFO,
+        eligibilityNotes: dto.note?.trim() || 'مطلوب استكمال بيانات محددة',
+        evaluationBreakdown: Prisma.DbNull,
+        evaluationEvidence: Prisma.DbNull,
+        evaluationScore: null,
+        evaluationRank: null,
+        evaluatedAt: null,
+        evaluatedById: null,
+      } });
       await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_INFORMATION_REQUESTED', entityType: 'association_applications', entityId: applicationId, metadata: { requestId: request.id, items: dto.items.map((item) => ({ type: item.type, key: item.key, reason: item.reason })) } as Prisma.InputJsonValue } });
       const response = { ok: true as const, requestId: request.id };
       await this.idempotency.complete(tx, ctx.accountId, 'application-information-request', dto.opId, response);
@@ -588,7 +597,11 @@ async function correctedAccountIdentity(tx: Prisma.TransactionClient, payload: J
   const data: Prisma.AssociationApplicationUpdateInput = {};
   if (changed.includes('organization.officialEmail')) data.email = requiredEmail(requiredPathText(payload, 'organization.officialEmail', 'البريد الرسمي', 254));
   if (changed.includes('organization.name')) data.name = requiredPathText(payload, 'organization.name', 'اسم الجمعية', 150);
-  if (changed.includes('organization.category')) data.category = requiredPathText(payload, 'organization.category', 'تصنيف الجمعية', 120);
+  if (changed.includes('organization.category')) {
+    const category = requiredPathText(payload, 'organization.category', 'تصنيف الجمعية', 120);
+    if (!ASSOCIATION_SIZE_OPTIONS.some((option) => option.value === category)) throw new ApiError('APPLICATION_INVALID_REFERENCE', 'اختر تصنيف الجمعية حسب حجمها المالي', 400);
+    data.category = category;
+  }
   if (changed.includes('organization.officialPhone')) data.phone = requiredApplicantPhone(payload, 'organization.officialPhone', 'رقم التواصل الرسمي');
   if (changed.includes('organization.licenseNumber')) data.licenseNumber = requiredPathText(payload, 'organization.licenseNumber', 'رقم الترخيص', 60);
   if (changed.includes('organization.licenseExpiryDate')) data.licenseExpiryDate = parseDate(requiredPathText(payload, 'organization.licenseExpiryDate', 'تاريخ انتهاء الترخيص', 10), 'تاريخ انتهاء الترخيص');

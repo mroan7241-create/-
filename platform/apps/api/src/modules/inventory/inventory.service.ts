@@ -1,12 +1,12 @@
 import { Injectable } from '@nestjs/common';
-import { prisma, Prisma, AccountRole, DeviceStatus, DeviceType, DeviceMovementLocationType } from '@alzad/db';
+import { prisma, Prisma, AccountRole, DamageCaseStatus, DeviceStatus, DeviceType, DeviceMovementLocationType } from '@alzad/db';
 import { ApiError, authForbidden } from '../../common/api-error';
 import { normalizePagination, toPaginatedResult, type PaginatedResult, type PaginationParams } from '../../common/pagination.util';
 import { IdempotencyService } from '../../common/idempotency.service';
 import { AuditService } from '../audit/audit.service';
 import { validateDeviceSpec } from '../receipts/receipt-reference.util';
 import type { AuthContext } from '../auth/auth.types';
-import type { UpdateDeviceUnitDto, MarkDeviceDamagedDto } from './dto/inventory.dto';
+import type { DecideDamageCaseDto, ListDamageCasesQueryDto, UpdateDeviceUnitDto, MarkDeviceDamagedDto } from './dto/inventory.dto';
 
 /**
  * مخزون الأجهزة — NODE-4 (قراءة) + DEV-003..011 (نطاق مصغَّر متعمَّد، راجع
@@ -101,10 +101,14 @@ export class InventoryService {
 
   /** وَسم جهاز "تالف" — WAREHOUSE فقط (أجهزة العهدة/التسليم تُدار حصرًا عبر مسار فشل التسليم في NODE-6). */
   async markDeviceDamaged(ctx: AuthContext, id: string, dto: MarkDeviceDamagedDto) {
+    if (ctx.role !== AccountRole.ADMIN) throw authForbidden();
     const outcome = await prisma.$transaction(async (tx) => {
-      const claim = await this.idempotency.claim<{ ok: true; id: string }>(tx, ctx.accountId, 'device-mark-damaged', dto.opId, { id });
+      const claim = await this.idempotency.claim<{ ok: true; id: string }>(tx, ctx.accountId, 'device-mark-damaged', dto.opId, { id, notes: dto.notes?.trim() || null });
       if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse! };
 
+      // Different opIds still serialize on the same device, so only the first
+      // request can observe WAREHOUSE and create a DamageCase.
+      await tx.$queryRaw`SELECT id FROM device_units WHERE id=${id}::uuid FOR UPDATE`;
       const device = await tx.deviceUnit.findUnique({ where: { id } });
       if (!device) throw new ApiError('DEVICE_NOT_FOUND', 'الجهاز غير موجود', 404);
       if (device.status !== DeviceStatus.WAREHOUSE) {
@@ -116,6 +120,10 @@ export class InventoryService {
         data: { status: DeviceStatus.DAMAGED, currentLocationType: DeviceMovementLocationType.DAMAGED_HOLDING, currentLocationRef: null },
       });
 
+      await tx.damageCase.create({
+        data: { deviceId: id, associationId: device.associationId, quantity: 1, description: dto.notes?.trim() || 'تلف جهاز في المخزون' },
+      });
+
       const response = { ok: true as const, id };
       await this.idempotency.complete(tx, ctx.accountId, 'device-mark-damaged', dto.opId, response);
       return { replayed: false as const, response };
@@ -125,6 +133,83 @@ export class InventoryService {
       await this.audit.log({ id: ctx.accountId, role: ctx.role, associationId: ctx.associationId }, 'DEVICE_MARKED_DAMAGED', 'device_units', id, { notes: dto.notes ?? null });
     }
     return outcome.response;
+  }
+
+  async listDamageCases(ctx: AuthContext, params: ListDamageCasesQueryDto) {
+    if (ctx.role !== AccountRole.ADMIN && ctx.role !== AccountRole.ASSOCIATION) throw authForbidden();
+    if (ctx.role === AccountRole.ASSOCIATION && !ctx.associationId) throw authForbidden();
+    const { page, pageSize, skip, take } = normalizePagination(params);
+    const where: Prisma.DamageCaseWhereInput = {
+      ...(ctx.role === AccountRole.ASSOCIATION
+        ? { associationId: ctx.associationId! }
+        : params.associationId ? { associationId: params.associationId } : {}),
+      ...(params.status ? { status: params.status } : {}),
+    };
+    const [rows, total] = await Promise.all([
+      prisma.damageCase.findMany({
+        where, orderBy: { createdAt: 'desc' }, skip, take,
+        select: {
+          id: true, associationId: true, quantity: true, description: true, status: true,
+          returnRequired: true, returnedAt: true, replacementExpected: true, replacementReceivedAt: true,
+          resolution: true, createdAt: true, closedAt: true,
+          association: { select: { name: true } },
+          receiptItem: { select: { publicCode: true, receiptBatch: { select: { publicCode: true } } } },
+          device: { select: { publicCode: true } },
+        },
+      }),
+      prisma.damageCase.count({ where }),
+    ]);
+    return toPaginatedResult(rows, total, page, pageSize);
+  }
+
+  async decideDamageCase(ctx: AuthContext, id: string, dto: DecideDamageCaseDto) {
+    if (ctx.role !== AccountRole.ADMIN) throw authForbidden();
+    if (dto.status !== DamageCaseStatus.UNDER_REVIEW && dto.status !== DamageCaseStatus.SETTLED && dto.status !== DamageCaseStatus.CLOSED) {
+      throw new ApiError('DAMAGE_DECISION_INVALID', 'قرار حالة التلف غير صالح', 400);
+    }
+    const resolution = dto.resolution?.trim() || '';
+    if (dto.status === DamageCaseStatus.SETTLED && !resolution) {
+      throw new ApiError('DAMAGE_RESOLUTION_REQUIRED', 'يجب تسجيل قرار معالجة التلف قبل التسوية', 400);
+    }
+    return prisma.$transaction(async (tx) => {
+      const claim = await this.idempotency.claim<{ ok: true; status: DamageCaseStatus }>(
+        tx, ctx.accountId, 'damage-case-decision', dto.opId, { id, status: dto.status, resolution },
+      );
+      if (!claim.claimed) return claim.existingResponse!;
+      await tx.$queryRaw`SELECT id FROM damage_cases WHERE id=${id}::uuid FOR UPDATE`;
+      const damage = await tx.damageCase.findUnique({ where: { id } });
+      if (!damage) throw new ApiError('DAMAGE_CASE_NOT_FOUND', 'حالة التلف غير موجودة', 404);
+      const allowed =
+        (damage.status === DamageCaseStatus.OPEN && dto.status === DamageCaseStatus.UNDER_REVIEW) ||
+        (damage.status === DamageCaseStatus.UNDER_REVIEW && dto.status === DamageCaseStatus.SETTLED) ||
+        (damage.status === DamageCaseStatus.SETTLED && dto.status === DamageCaseStatus.CLOSED);
+      if (!allowed) throw new ApiError('DAMAGE_TRANSITION_INVALID', 'يجب مراجعة التلف وتسويته قبل إغلاقه، ولا يمكن تجاوز ترتيب القرارات', 409);
+      if (dto.status === DamageCaseStatus.SETTLED || dto.status === DamageCaseStatus.CLOSED) {
+        if (damage.returnRequired && !damage.returnedAt) {
+          throw new ApiError('DAMAGE_RETURN_REQUIRED', 'لا يمكن تسوية التلف قبل توثيق الإرجاع المطلوب', 409);
+        }
+        if (damage.replacementExpected && !damage.replacementReceivedAt) {
+          throw new ApiError('DAMAGE_REPLACEMENT_REQUIRED', 'لا يمكن تسوية التلف قبل توثيق البديل المطلوب', 409);
+        }
+      }
+      const now = new Date();
+      await tx.damageCase.update({
+        where: { id },
+        data: {
+          status: dto.status,
+          ...(dto.status === DamageCaseStatus.SETTLED ? { resolution } : {}),
+          ...(dto.status === DamageCaseStatus.CLOSED ? { closedAt: now, closedById: ctx.accountId } : {}),
+        },
+      });
+      await tx.auditLog.create({ data: {
+        actorAccountId: ctx.accountId, actorRole: ctx.role, associationId: damage.associationId,
+        action: 'DAMAGE_CASE_DECIDED', entityType: 'damage_cases', entityId: id,
+        metadata: { from: damage.status, to: dto.status, ...(resolution ? { resolution } : {}) },
+      } });
+      const response = { ok: true as const, status: dto.status };
+      await this.idempotency.complete(tx, ctx.accountId, 'damage-case-decision', dto.opId, response);
+      return response;
+    });
   }
 }
 

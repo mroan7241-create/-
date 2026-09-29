@@ -106,6 +106,15 @@ describe('Application V2 launch gate', () => {
     await http().post(`/api/v1/association-applications/${row.id}/eligibility`).set('Cookie', adminCookie).send({ decision: 'PASSED', opId: randomUUID() }).expect(201);
     const evaluation = await http().post(`/api/v1/association-applications/${row.id}/evaluation`).set('Cookie', adminCookie).send({ operationalReadiness: 5, technicalCapability: 4, previousExperience: 3, integrityTransparency: 5, participationCommitment: 4, sustainabilityImpact: 5, opId: randomUUID() }).expect(201);
     expect(evaluation.body.score).toBe(86);
+    const reevaluationRequest = await http().post(`/api/v1/association-applications/${row.id}/information-request`).set('Cookie', adminCookie).send({ items: [{ type: 'FIELD', key: 'organization.notes', reason: 'صحح وصف الجمعية قبل الاختيار' }], opId: randomUUID() }).expect(201);
+    const invalidated = await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id } });
+    expect(invalidated).toMatchObject({ eligibilityStatus: 'NEEDS_INFO', evaluationScore: null, evaluationRank: null, evaluatedAt: null, evaluatedById: null });
+    expect(invalidated.evaluationBreakdown).toBeNull();
+    expect(invalidated.evaluationEvidence).toBeNull();
+    await http().post(`/api/v1/association-applications/track/${created.body.draftCode}/information/${reevaluationRequest.body.requestId}`).set(applicantAccess).send({ payload: { organization: { notes: 'وصف مصحح بعد التقييم' } }, opId: randomUUID() }).expect(201);
+    await http().post(`/api/v1/association-applications/${row.id}/eligibility`).set('Cookie', adminCookie).send({ decision: 'PASSED', opId: randomUUID() }).expect(201);
+    await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(409).expect(({ body }) => expect(body.error.code).toBe('APPLICATION_SELECTION_NOT_READY'));
+    await http().post(`/api/v1/association-applications/${row.id}/evaluation`).set('Cookie', adminCookie).send({ operationalReadiness: 5, technicalCapability: 4, previousExperience: 3, integrityTransparency: 5, participationCommitment: 4, sustainabilityImpact: 5, opId: randomUUID() }).expect(201);
     await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(201);
     expect(fakeEmail.lastApplicationAccess?.subject).toContain('قرار اختيار الجمعية');
     expect(fakeEmail.lastApplicationAccess?.intro).toContain('قائمة الاحتياط');
@@ -266,6 +275,8 @@ describe('Application V2 launch gate', () => {
     const informationPath = `/api/v1/association-applications/track/${draft.draftCode}/information/${info.body.requestId}`;
     await http().post(informationPath).set(auth).send({ payload: { organization: { officialEmail: 'invalid' } }, opId: randomUUID() }).expect(400);
     expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: application.id } })).email).toBe(original.organization.officialEmail);
+    await http().post(informationPath).set(auth).send({ payload: { ...corrected, organization: { ...corrected.organization, category: 'غير مصنف' } }, opId: randomUUID() }).expect(400).expect(({ body }) => expect(body.error.code).toBe('APPLICATION_INVALID_REFERENCE'));
+    expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: application.id } })).category).toBe(original.organization.category);
     const collision = await prisma.associationApplication.create({ data: { publicCode: `${PREFIX}${randomUUID()}`, name: `${PREFIX}تعارض تجريبي`, region: 'الرياض', city: 'الرياض', phone: `05${randomInt(10000000, 100000000)}`, email: `collision-${randomUUID()}@example.org`, contactName: 'تجريبي', pledgeAccepted: true, pledgeAcceptedAt: new Date() } });
     await http().post(informationPath).set(auth).send({ payload: { ...corrected, organization: { ...corrected.organization, officialEmail: collision.email } }, opId: randomUUID() }).expect(409);
     expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: application.id } })).email).toBe(original.organization.officialEmail);

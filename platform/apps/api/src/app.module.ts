@@ -25,6 +25,7 @@ import { EscalationsModule } from './modules/escalations/escalations.module';
 import { ProcurementModule } from './modules/procurement/procurement.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { CentralStockModule } from './modules/central-stock/central-stock.module';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
     ProcurementModule,
     NotificationsModule,
     DashboardModule,
+    CentralStockModule,
   ],
 })
 export class AppModule implements NestModule {

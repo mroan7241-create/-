@@ -1,5 +1,5 @@
 import { IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
-import { DeviceStatus, DeviceType } from '@alzad/db';
+import { DamageCaseStatus, DeviceStatus, DeviceType } from '@alzad/db';
 import { PaginationQueryDto } from '../../../common/validation/pagination-query.dto';
 
 /** `GET /inventory/devices` — نطاق ADMIN مقابل ASSOCIATION يُحسم من AuthContext حصرًا داخل الخدمة، لا من associationId المُرسَل. */
@@ -43,5 +43,29 @@ export class MarkDeviceDamagedDto {
   notes?: string;
 
   @IsString()
+  opId!: string;
+}
+
+export class ListDamageCasesQueryDto extends PaginationQueryDto {
+  @IsOptional()
+  @IsUUID()
+  associationId?: string;
+
+  @IsOptional()
+  @IsIn(Object.values(DamageCaseStatus))
+  status?: DamageCaseStatus;
+}
+
+/** Only the supported simple administrative path; physical return/replacement needs its own evidence-backed workflow. */
+export class DecideDamageCaseDto {
+  @IsIn([DamageCaseStatus.UNDER_REVIEW, DamageCaseStatus.SETTLED, DamageCaseStatus.CLOSED])
+  status!: DamageCaseStatus;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  resolution?: string;
+
+  @IsUUID()
   opId!: string;
 }

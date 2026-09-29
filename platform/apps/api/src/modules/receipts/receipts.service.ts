@@ -13,6 +13,8 @@ import {
   ReceiptBatchStatus,
   OutboxEventType,
   OutboxEventStatus,
+  NotificationSeverity,
+  ShipmentStatus,
 } from '@alzad/db';
 import { ApiError, authForbidden } from '../../common/api-error';
 import { PublicCodeService } from '../../common/public-code.service';
@@ -26,6 +28,7 @@ import { StorageService } from '../files/storage.service';
 import { storageConfig } from '../../config/storage.config';
 import { ALLOCATION_TRIGGER_PORT, type AllocationTriggerPort } from '../allocation/allocation-trigger.port';
 import type { AuthContext } from '../auth/auth.types';
+import { shipmentReceiptVerified } from '../procurement/shipment-receipt.util';
 
 const NOTES_MAX = 1000;
 const DIFFERENCE_NOTES_MAX = 500;
@@ -180,9 +183,23 @@ export class ReceiptsService {
 
         await assertActiveAssociation(tx, input.associationId);
         if (input.shipmentId) {
-          const shipment = await tx.shipment.findUnique({ where: { id: input.shipmentId } });
-          if (!shipment || shipment.associationId !== input.associationId || shipment.status === 'CANCELLED') {
+          await tx.$queryRaw`SELECT id FROM shipments WHERE id = ${input.shipmentId}::uuid FOR UPDATE`;
+          const shipment = await tx.shipment.findUnique({ where: { id: input.shipmentId }, include: {
+            items: { include: { purchaseOrderItem: { select: { deviceType: true } } } },
+            receiptBatches: { select: { items: { select: { deviceType: true, sentQty: true } } } },
+          } });
+          if (!shipment || shipment.associationId !== input.associationId || !['DISPATCHED', 'PARTIALLY_RECEIVED', 'RECONCILIATION_REQUIRED'].includes(shipment.status)) {
             throw new ApiError('RECEIPT_SHIPMENT_INVALID', 'يجب ربط محضر الاستلام بشحنة صالحة للجمعية نفسها', 409);
+          }
+          const shipped = new Map<string, number>();
+          for (const item of shipment.items) shipped.set(item.purchaseOrderItem.deviceType, (shipped.get(item.purchaseOrderItem.deviceType) ?? 0) + item.shippedQty);
+          const received = new Map<string, number>();
+          for (const batch of shipment.receiptBatches) for (const item of batch.items) {
+            if (item.deviceType) received.set(item.deviceType, (received.get(item.deviceType) ?? 0) + item.sentQty);
+          }
+          for (const item of items) received.set(item.deviceType, (received.get(item.deviceType) ?? 0) + item.sentQty);
+          if ([...received].some(([type, count]) => !shipped.has(type) || count > shipped.get(type)!)) {
+            throw new ApiError('RECEIPT_SHIPMENT_QUANTITY_INVALID', 'بنود المحضر تتجاوز الأصناف أو الكميات المتبقية في الشحنة', 409);
           }
         }
 
@@ -265,6 +282,17 @@ export class ReceiptsService {
       assertTransition(batch.status as ReceiptBatchStatus, ReceiptBatchStatus.AWAITING_ASSOCIATION_CONFIRMATION);
 
       await tx.receiptBatch.update({ where: { id }, data: { status: ReceiptBatchStatus.AWAITING_ASSOCIATION_CONFIRMATION } });
+      await tx.notification.upsert({ where: { dedupeKey: `receipt-batch-sent:${id}` }, create: {
+        associationId: batch.association_id,
+        audienceRole: AccountRole.ASSOCIATION,
+        type: 'RECEIPT_BATCH_SENT',
+        title: 'شحنة جديدة بانتظار تأكيد الاستلام',
+        body: 'راجع محضر الشحنة وسجّل الكميات المستلمة وأرفق إثبات الاستلام.',
+        severity: NotificationSeverity.INFO,
+        entityType: 'receipt_batches',
+        entityId: id,
+        dedupeKey: `receipt-batch-sent:${id}`,
+      }, update: {} });
       await this.idempotency.complete(tx, ctx.accountId, 'receipt-batch-send', opId, { ok: true });
       return { replayed: false as const };
     });
@@ -510,6 +538,26 @@ export class ReceiptsService {
             associationReportFileId: associationReportFileId ?? null,
           },
         });
+
+        if (lockedBatch.shipment_id) {
+          await tx.$queryRaw`SELECT id FROM shipments WHERE id = ${lockedBatch.shipment_id}::uuid FOR UPDATE`;
+          const shipment = await tx.shipment.findUniqueOrThrow({ where: { id: lockedBatch.shipment_id }, include: {
+            items: { include: { purchaseOrderItem: { select: { deviceType: true } } } },
+            receiptBatches: { select: { status: true, confirmedAt: true, quantityPhotoFileId: true, signatureFileId: true, items: { select: { deviceType: true, sentQty: true, goodQty: true, damagedQty: true, missingQty: true } } } },
+          } });
+          const shipped = shipment.items.map((item) => ({ deviceType: item.purchaseOrderItem.deviceType, shippedQty: item.shippedQty }));
+          const nextStatus = shipmentReceiptVerified(ShipmentStatus.RECONCILIATION_REQUIRED, shipped, shipment.receiptBatches)
+            ? ShipmentStatus.RECONCILIATION_REQUIRED
+            : shipmentReceiptVerified(ShipmentStatus.RECEIVED, shipped, shipment.receiptBatches)
+              ? ShipmentStatus.RECEIVED
+              : ShipmentStatus.PARTIALLY_RECEIVED;
+          await tx.shipment.update({ where: { id: shipment.id }, data: { status: nextStatus } });
+          await tx.auditLog.create({ data: {
+            actorAccountId: ctx.accountId, actorRole: ctx.role, associationId: lockedBatch.association_id,
+            action: 'SHIPMENT_RECEIPT_SYNCED', entityType: 'shipments', entityId: shipment.id,
+            metadata: { receiptBatchId: id, status: nextStatus },
+          } });
+        }
 
         // الأجهزة آخر كتابة — للكمية السليمة فقط، وحدة واحدة لكل جهاز.
         // NODE-4.1: كانت هذه الحلقة تنفّذ استعلامَي DB (nextPublicCode +

@@ -14,6 +14,7 @@ export function newOpId(prefix = 'op4'): string {
 /** ينظّف كل ما تُنشئه اختبارات NODE-4 لجمعيتَي NODE-3 المشتركتين، بلا مساس ببذور seed. */
 export async function cleanNode4State(fx: Node3Fixtures): Promise<void> {
   const associationIds = [fx.associationAId, fx.associationBId];
+  await prisma.notification.deleteMany({ where: { associationId: { in: associationIds }, dedupeKey: { startsWith: 'receipt-batch-sent:' } } });
   await prisma.deviceMovement.deleteMany({ where: { associationId: { in: associationIds } } });
   // NODE-5: device_allocations قد تشير إلى device_units (محرّك التخصيص التلقائي) — يجب حذفها أولًا وإلا فشل حذف device_units بقيد FK.
   await prisma.deviceAllocation.deleteMany({ where: { associationId: { in: associationIds } } });
@@ -63,6 +64,7 @@ function detectFixtureAttachment(buffer: Buffer): { filename: string; contentTyp
 
 export interface CreateBatchOverrides {
   associationId?: string;
+  shipmentId?: string;
   supplierName?: string;
   sentDate?: string;
   notes?: string;
@@ -104,6 +106,7 @@ export function createBatchRequest(
   const payload = createBatchPayload(associationId, options);
   const req = request(app.getHttpServer()).post('/api/v1/receipts').set('Cookie', adminCookie);
   req.field('associationId', payload.associationId);
+  if (payload.shipmentId) req.field('shipmentId', payload.shipmentId);
   req.field('supplierName', payload.supplierName);
   req.field('sentDate', payload.sentDate);
   if (payload.notes) req.field('notes', payload.notes);

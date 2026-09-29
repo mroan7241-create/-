@@ -5,7 +5,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthContext } from '../auth/auth.types';
 import { InventoryService } from './inventory.service';
-import { ListDeviceUnitsQueryDto, MarkDeviceDamagedDto, UpdateDeviceUnitDto } from './dto/inventory.dto';
+import { DecideDamageCaseDto, ListDamageCasesQueryDto, ListDeviceUnitsQueryDto, MarkDeviceDamagedDto, UpdateDeviceUnitDto } from './dto/inventory.dto';
 
 @ApiTags('inventory')
 @Controller('inventory/devices')
@@ -44,5 +44,23 @@ export class InventoryController {
   @ApiOperation({ summary: 'وَسم جهاز بالمستودع تالفًا — ADMIN فقط' })
   async markDamaged(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: MarkDeviceDamagedDto) {
     return this.inventory.markDeviceDamaged(ctx, id, dto);
+  }
+}
+
+@ApiTags('inventory')
+@Controller('inventory/damage-cases')
+export class DamageCasesController {
+  constructor(private readonly inventory: InventoryService) {}
+
+  @Get()
+  @Roles(AccountRole.ADMIN, AccountRole.ASSOCIATION)
+  async list(@CurrentUser() ctx: AuthContext, @Query() query: ListDamageCasesQueryDto) {
+    return this.inventory.listDamageCases(ctx, query);
+  }
+
+  @Post(':id/decision')
+  @Roles(AccountRole.ADMIN)
+  async decide(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: DecideDamageCaseDto) {
+    return this.inventory.decideDamageCase(ctx, id, dto);
   }
 }

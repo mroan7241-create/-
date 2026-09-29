@@ -1659,9 +1659,48 @@ model Shipment {
   items              ShipmentItem[]
   receiptBatches     ReceiptBatch[]
   reconciliationIssues ShipmentReconciliationIssue[]
+  centralStockDispatches CentralStockDispatch[]
 
   @@index([associationId, status])
   @@map("shipments")
+}
+
+/// Zaad-wide quantities are separate from association-owned device units. Existing
+/// shipments have no dispatch rows and remain historical; no balance is backfilled.
+model CentralStockBalance {
+  deviceType      DeviceType @id @map("device_type")
+  contractedQty   Int        @default(0) @map("contracted_qty")
+  receivedQty     Int        @default(0) @map("received_qty")
+  distributedQty  Int        @default(0) @map("distributed_qty")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  @@map("central_stock_balances")
+}
+
+model CentralStockReceipt {
+  id                String     @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  deviceType        DeviceType @map("device_type")
+  quantity          Int
+  reference         String
+  recordedById      String     @map("recorded_by") @db.Uuid
+  createdAt         DateTime   @default(now()) @map("created_at")
+
+  @@index([deviceType, createdAt])
+  @@map("central_stock_receipts")
+}
+
+model CentralStockDispatch {
+  id                String     @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  shipmentId        String     @map("shipment_id") @db.Uuid
+  deviceType        DeviceType @map("device_type")
+  quantity          Int
+  releasedAt        DateTime?  @map("released_at")
+  createdAt         DateTime   @default(now()) @map("created_at")
+  shipment          Shipment   @relation(fields: [shipmentId], references: [id])
+
+  @@unique([shipmentId, deviceType])
+  @@index([deviceType, releasedAt])
+  @@map("central_stock_dispatches")
 }
 
 model ShipmentItem {

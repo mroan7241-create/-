@@ -101,6 +101,97 @@ describe('NODE-4 — محاضر الاستلام والمخزون', () => {
 
   const http = () => request(app.getHttpServer());
 
+  it('إرسال المحضر ينشئ تنبيهًا واحدًا للجمعية ويمكن فتحه، حتى مع إعادة الطلب', async () => {
+    const created = await http().post('/api/v1/receipts').set('Cookie', adminCookie).send(createBatchPayload(fx.associationAId));
+    expect(created.status).toBe(201);
+    const id = created.body.id as string;
+    const payload = { opId: newOpId('send') };
+    const send = () => http().post(`/api/v1/receipts/${id}/send`).set('Cookie', adminCookie).send(payload);
+    expect((await send()).status).toBe(201);
+    expect((await send()).status).toBe(201);
+    expect(await prisma.notification.count({ where: { dedupeKey: `receipt-batch-sent:${id}`, associationId: fx.associationAId, audienceRole: 'ASSOCIATION' } })).toBe(1);
+    const inbox = await http().get('/api/v1/notifications').set('Cookie', assocACookie);
+    expect(inbox.status).toBe(200);
+    expect(inbox.body.some((notice: { entityId: string }) => notice.entityId === id)).toBe(true);
+  });
+
+  it('يربط الشحنة بمحاضر إثبات جزئية ولا يسمح باستلامها أو إغلاقها قبل اكتمال التوثيق', async () => {
+    const priorStock = await prisma.centralStockBalance.findUnique({ where: { deviceType: DeviceType.REFRIGERATOR } });
+    const centralReference = newOpId('receipt-central');
+    const contractedQty = Math.max(priorStock?.contractedQty ?? 0, (priorStock?.receivedQty ?? 0) + 3);
+    expect((await http().post('/api/v1/central-stock/contract').set('Cookie', adminCookie).send({
+      deviceType: DeviceType.REFRIGERATOR, contractedQty, opId: newOpId(),
+    })).status).toBe(201);
+    expect((await http().post('/api/v1/central-stock/receipts').set('Cookie', adminCookie).send({
+      deviceType: DeviceType.REFRIGERATOR, quantity: 3, reference: centralReference, opId: newOpId(),
+    })).status).toBe(201);
+    const order = await http().post('/api/v1/procurement/orders').set('Cookie', adminCookie).send({
+      associationId: fx.associationAId, orderNumber: newOpId('po'), supplierName: 'مورد اختباري',
+      items: [{ deviceType: DeviceType.REFRIGERATOR, approvedQty: 3 }], opId: newOpId(),
+    });
+    expect(order.status).toBe(201);
+    const orderId = order.body.id as string;
+    let shipmentId: string | undefined;
+    try {
+      const approved = await http().post(`/api/v1/procurement/orders/${orderId}/transition`).set('Cookie', adminCookie).send({ status: 'APPROVED', opId: newOpId() });
+      expect(approved.status).toBe(201);
+      const orderItem = await prisma.purchaseOrderItem.findFirstOrThrow({ where: { purchaseOrderId: orderId } });
+      const shipment = await http().post('/api/v1/procurement/shipments').set('Cookie', adminCookie).send({
+        purchaseOrderId: orderId, route: 'SUPPLIER_TO_ORGANIZATION',
+        items: [{ purchaseOrderItemId: orderItem.id, shippedQty: 3 }], opId: newOpId(),
+      });
+      expect(shipment.status).toBe(201);
+      shipmentId = shipment.body.id as string;
+      const transition = (status: string, cookie = assocACookie) => http().post(`/api/v1/procurement/shipments/${shipmentId}/transition`).set('Cookie', cookie).send({ status, opId: newOpId() });
+      expect((await transition('DISPATCHED', adminCookie)).status).toBe(201);
+      const premature = await transition('RECEIVED');
+      expect(premature.status).toBe(409);
+      expect(premature.body.error.code).toBe('SHIPMENT_RECEIPT_REQUIRED');
+
+      // A standalone receipt must not satisfy a linked shipment.
+      const standalone = await createAndSendBatch(app, adminCookie, fx.associationAId);
+      expect((await confirmBatchRequest(app, assocACookie, standalone.batchId)).status).toBe(201);
+      expect((await transition('RECEIVED')).status).toBe(409);
+
+      const excessive = await http().post('/api/v1/receipts').set('Cookie', adminCookie).send(createBatchPayload(fx.associationAId, {
+        shipmentId, items: [{ deviceType: DeviceType.REFRIGERATOR, spec: '18 قدم', sentQty: 4 }],
+      }));
+      expect(excessive.status).toBe(409);
+      expect(excessive.body.error.code).toBe('RECEIPT_SHIPMENT_QUANTITY_INVALID');
+
+      const first = await createAndSendBatch(app, adminCookie, fx.associationAId, {
+        shipmentId, items: [{ deviceType: DeviceType.REFRIGERATOR, spec: '18 قدم', sentQty: 2 }],
+      });
+      expect((await confirmBatchRequest(app, assocACookie, first.batchId)).status).toBe(201);
+      expect((await prisma.shipment.findUniqueOrThrow({ where: { id: shipmentId } })).status).toBe('PARTIALLY_RECEIVED');
+      expect((await transition('RECEIVED')).status).toBe(409);
+
+      const second = await createAndSendBatch(app, adminCookie, fx.associationAId, {
+        shipmentId, items: [{ deviceType: DeviceType.REFRIGERATOR, spec: '18 قدم', sentQty: 1 }],
+      });
+      expect((await confirmBatchRequest(app, assocACookie, second.batchId)).status).toBe(201);
+      expect((await prisma.shipment.findUniqueOrThrow({ where: { id: shipmentId } })).status).toBe('RECEIVED');
+      expect((await transition('CLOSED', adminCookie)).status).toBe(201);
+    } finally {
+      await cleanNode4State(fx);
+      if (shipmentId) {
+        await prisma.centralStockDispatch.deleteMany({ where: { shipmentId } });
+        await prisma.shipmentItem.deleteMany({ where: { shipmentId } });
+        await prisma.shipment.delete({ where: { id: shipmentId } });
+      }
+      await prisma.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: orderId } });
+      await prisma.purchaseOrder.delete({ where: { id: orderId } });
+      await prisma.centralStockReceipt.deleteMany({ where: { reference: centralReference } });
+      if (priorStock) {
+        await prisma.centralStockBalance.update({ where: { deviceType: DeviceType.REFRIGERATOR }, data: {
+          contractedQty: priorStock.contractedQty, receivedQty: priorStock.receivedQty, distributedQty: priorStock.distributedQty,
+        } });
+      } else {
+        await prisma.centralStockBalance.delete({ where: { deviceType: DeviceType.REFRIGERATOR } });
+      }
+    }
+  });
+
   // -------------------- الأدوار والعزل --------------------
   it('ASSOCIATION لا يمكنها إنشاء/إرسال محضر — ADMIN فقط', async () => {
     const res = await http().post('/api/v1/receipts').set('Cookie', assocACookie).send(createBatchPayload(fx.associationAId));

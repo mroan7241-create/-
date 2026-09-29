@@ -600,6 +600,7 @@ export interface CreateReceiptItemInput {
 
 export interface CreateReceiptBatchInput {
   associationId: string;
+  shipmentId?: string;
   supplierName: string;
   sentDate: string;
   notes?: string;
@@ -613,6 +614,7 @@ export interface CreateReceiptBatchInput {
 export function createReceiptBatch(input: CreateReceiptBatchInput): Promise<{ ok: true; id: string }> {
   const form = new FormData();
   form.set('associationId', input.associationId);
+  if (input.shipmentId) form.set('shipmentId', input.shipmentId);
   form.set('supplierName', input.supplierName);
   form.set('sentDate', input.sentDate);
   if (input.notes) form.set('notes', input.notes);
