@@ -1,3 +1,5 @@
+import { APPLICATION_UPLOAD_MAX_BYTES, APPLICATION_UPLOAD_SIZE_MESSAGE } from '@alzad/shared';
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001/api/v1';
 
 export interface ApiErrorBody {
@@ -58,7 +60,7 @@ async function apiUploadWithHeaders<T>(path: string, form: FormData, headers: Re
   const body = await res.json().catch(() => null);
   if (!res.ok) {
     const err = body as ApiErrorBody | null;
-    throw new ApiClientError(err?.error?.code ?? 'UNKNOWN_ERROR', err?.error?.message ?? 'حدث خطأ غير متوقع');
+    throw new ApiClientError(err?.error?.code ?? 'UNKNOWN_ERROR', res.status === 413 ? APPLICATION_UPLOAD_SIZE_MESSAGE : err?.error?.message ?? 'تعذّر رفع الملف. حاول مرة أخرى.');
   }
   return body as T;
 }
@@ -238,7 +240,7 @@ export function createApplicationDraft(clientRequestId: string): Promise<{ ok: t
 export function upgradeApplicationDraftSession(draftCode: string, resumeToken: string): Promise<{ ok: true; draftCode: string }> { return apiFetch(`/association-applications/drafts/${encodeURIComponent(draftCode)}/session`, { method: 'POST', headers: resumeHeaders(resumeToken) }); }
 export function loadApplicationDraft(draftCode: string, resumeToken: string): Promise<ApplicationDraftView> { return apiFetch(`/association-applications/drafts/${encodeURIComponent(draftCode)}`, { headers: resumeHeaders(resumeToken) }); }
 export function saveApplicationDraft(draftCode: string, resumeToken: string, revision: number, payload: Record<string, unknown>): Promise<ApplicationDraftView> { return apiFetch(`/association-applications/drafts/${encodeURIComponent(draftCode)}`, { method: 'PUT', headers: resumeHeaders(resumeToken), body: JSON.stringify({ revision, payload }) }); }
-export function uploadApplicationAttachment(draftCode: string, resumeToken: string, fieldKey: string, file: File) { const form = new FormData(); form.set('fieldKey', fieldKey); form.set('file', file); return apiUploadWithHeaders<{ ok: true; fieldKey: string; size: number }>(`/association-applications/drafts/${encodeURIComponent(draftCode)}/attachments`, form, resumeHeaders(resumeToken)); }
+export function uploadApplicationAttachment(draftCode: string, resumeToken: string, fieldKey: string, file: File) { if (file.size > APPLICATION_UPLOAD_MAX_BYTES) return Promise.reject(new ApiClientError('APPLICATION_ATTACHMENT_TOO_LARGE', APPLICATION_UPLOAD_SIZE_MESSAGE)); const form = new FormData(); form.set('fieldKey', fieldKey); form.set('file', file); return apiUploadWithHeaders<{ ok: true; fieldKey: string; size: number }>(`/association-applications/drafts/${encodeURIComponent(draftCode)}/attachments`, form, resumeHeaders(resumeToken)); }
 export function submitApplicationDraft(draftCode: string, resumeToken: string, revision: number): Promise<{ ok: true; id: string; message: string; duplicate?: boolean; emailSent?: boolean }> { return apiFetch(`/association-applications/drafts/${encodeURIComponent(draftCode)}/submit`, { method: 'POST', headers: resumeHeaders(resumeToken), body: JSON.stringify({ revision }) }); }
 export function trackApplicationV2(draftCode: string, resumeToken: string): Promise<ApplicationTrackView> { return apiFetch(`/association-applications/track/${encodeURIComponent(draftCode)}`, { headers: resumeHeaders(resumeToken) }); }
 export function submitApplicationInformation(draftCode: string, resumeToken: string, requestId: string, payload: Record<string, unknown>) { return apiFetch(`/association-applications/track/${encodeURIComponent(draftCode)}/information/${encodeURIComponent(requestId)}`, { method: 'POST', headers: resumeHeaders(resumeToken), body: JSON.stringify({ payload, opId: newOpId() }) }); }

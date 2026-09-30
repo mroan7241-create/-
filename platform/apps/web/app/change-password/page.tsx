@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch, ApiClientError } from '../lib/api';
+import { PasswordField } from '../components/PasswordField';
 
 /**
  * شاشة تغيير كلمة المرور الإلزامي — تُعرض عندما mustChangePassword=true
@@ -41,31 +42,8 @@ export default function ChangePasswordPage() {
         استخدم آخر كلمة مرور مؤقتة صادرة للحساب؛ أي كلمة مرور مؤقتة سابقة تُلغى عند إعادة التعيين.
       </p>
       <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <label style={labelStyle}>
-          كلمة المرور الحالية
-          <input
-            type="password"
-            name="current-password"
-            autoComplete="current-password"
-            required
-            value={currentPassword}
-            onChange={(e) => setCurrentPassword(e.target.value)}
-            style={inputStyle}
-          />
-        </label>
-        <label style={labelStyle}>
-          كلمة المرور الجديدة
-          <input
-            type="password"
-            name="new-password"
-            autoComplete="new-password"
-            required
-            minLength={10}
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            style={inputStyle}
-          />
-        </label>
+        <PasswordField label="كلمة المرور الحالية" name="current-password" autoComplete="current-password" required value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} style={inputStyle} />
+        <PasswordField label="كلمة المرور الجديدة" name="new-password" autoComplete="new-password" required minLength={10} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={inputStyle} />
         {error && (
           <p role="alert" style={{ color: '#a32b2b', margin: 0, fontSize: 14 }}>
             {error}
@@ -79,7 +57,6 @@ export default function ChangePasswordPage() {
   );
 }
 
-const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 6, fontSize: 14 };
 const inputStyle: React.CSSProperties = {
   padding: '10px 12px',
   borderRadius: 'var(--r-sm)',

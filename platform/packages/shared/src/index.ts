@@ -7,3 +7,4 @@ export * from './credential-lookup';
 export * from './beneficiary-import-headers';
 export * from './official-geography';
 export * from './association-size';
+export * from './application-fields';

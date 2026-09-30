@@ -10,6 +10,7 @@ import { ApiError } from '../../common/api-error';
 import { sha256Hex } from '../../common/crypto.util';
 import { RateLimitService } from '../../common/rate-limit.service';
 import { EmailService } from '../auth/email/email.service';
+import { applicationRequirementDescription } from '@alzad/shared';
 
 export const APPLICANT_SESSION_COOKIE = 'alzad_applicant_session';
 export const APPLICANT_SESSION_TTL_SECONDS = 30 * 60;
@@ -169,7 +170,7 @@ export class ApplicationAccessService {
     const email = normalizeEmail(application?.email ?? draft?.contactEmail ?? '');
     if (!application || !draft || !email || !application.informationRequests.length) throw new ApiError('APPLICATION_EMAIL_UNAVAILABLE', 'لا يوجد بريد رسمي صالح أو مسودة مرتبطة لإرسال رابط الاستكمال', 409);
     const request = application.informationRequests[0]!;
-    const details = request.items.map((item, index) => `${index + 1}. ${item.reason.trim()}`).join('\n');
+    const details = request.items.map((item, index) => `${index + 1}. ${applicationRequirementDescription(item.type, item.key, item.reason)}`).join('\n');
     const note = request.note?.trim();
     await this.issueAndSend(email, [{ id: draft.id, publicCode: draft.publicCode, status: draft.status, name: application.name, needsInfo: true }],
       'مطلوب استكمال بيانات الطلب — مشروع الأجهزة الكهربائية', `يرجى استكمال المتطلبات التالية عبر رابط طلبكم الآمن:\n${details}${note ? `\nملاحظة: ${note}` : ''}`);

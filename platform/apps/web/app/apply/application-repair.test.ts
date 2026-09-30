@@ -4,6 +4,9 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 // @ts-ignore -- standalone node --test, not a browser import
 import { selectionGroup } from '../admin/selection/selection-groups.ts';
+// @ts-ignore -- standalone node --test, not a browser import
+import { evaluationFacts } from '../admin/selection/evaluation-evidence.ts';
+import { applicationRequirementDescription, applicationRequirementLabel } from '@alzad/shared';
 
 test('selection lists separate failed and needs-info applications from actionable and selected lists', () => {
   assert.equal(selectionGroup({ eligibilityStatus: 'FAILED', selectionList: 'NONE', processingStartedAt: null }), 'FAILED');
@@ -13,6 +16,20 @@ test('selection lists separate failed and needs-info applications from actionabl
   assert.equal(selectionGroup({ eligibilityStatus: 'PASSED', selectionList: 'NONE', processingStartedAt: null }), 'PASSED_UNSELECTED');
   assert.equal(selectionGroup({ eligibilityStatus: 'PASSED', selectionList: 'MAIN', processingStartedAt: null }), 'MAIN');
   assert.equal(selectionGroup({ eligibilityStatus: 'PASSED', selectionList: 'RESERVE', processingStartedAt: null }), 'RESERVE');
+  assert.equal(selectionGroup({ eligibilityStatus: 'PENDING', selectionList: 'NONE', processingStartedAt: null, latestInformationRequest: { id: 'synthetic-request', status: 'SUBMITTED', note: null, deadline: null, items: [] } }), 'RETURNED');
+});
+
+test('assessment facts come from the applicant dossier and missing facts are explicit', () => {
+  const facts = evaluationFacts({ v2Payload: { finance: { governanceScore: 83 } } }, 'integrityTransparency');
+  assert.ok(facts.some((fact) => fact.value.includes(new Intl.NumberFormat('ar-SA').format(83))));
+  assert.ok(evaluationFacts({ v2Payload: {} }, 'integrityTransparency').some((fact) => fact.value === 'لم يُقدّم'));
+});
+
+test('completion item labels retain both the chosen field and the written reason', () => {
+  assert.equal(applicationRequirementLabel('ATTACHMENT', 'governanceReportFile'), 'تقرير درجة الحوكمة');
+  assert.equal(applicationRequirementLabel('ATTACHMENT', 'previousProjectEvidence'), 'شاهد مشروع سابق');
+  assert.equal(applicationRequirementLabel('FIELD', 'finance.governanceScore'), 'درجة الحوكمة (%)');
+  assert.equal(applicationRequirementDescription('ATTACHMENT', 'previousProjectEvidence', '  الشاهد خاطئ  '), 'شاهد مشروع سابق — الشاهد خاطئ');
 });
 // Node's type-stripping runner needs explicit TypeScript extensions.
 // @ts-ignore -- standalone node --test, not a browser import
@@ -49,7 +66,16 @@ import { financialSummary } from '../lib/financial-summary.ts';
 // @ts-ignore -- standalone node --test, not a browser import
 import { workflowLabel } from '../lib/workflow-label.ts';
 // @ts-ignore -- standalone node --test, not a browser import
-import { createAgreement, sendOwnCovenantCompletionEmail, signAssociationCovenant } from '../lib/api.ts';
+import { createAgreement, sendOwnCovenantCompletionEmail, signAssociationCovenant, uploadApplicationAttachment, ApiClientError } from '../lib/api.ts';
+
+test('oversize applicant upload is rejected in Arabic before any network request', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => { throw new Error('unexpected network request'); };
+    const file = new File([new Uint8Array(8 * 1024 * 1024 + 1)], 'too-big.pdf');
+    await assert.rejects(uploadApplicationAttachment('DRF-TEST', 'synthetic', 'governanceReportFile', file), (error: unknown) => error instanceof ApiClientError && error.code === 'APPLICATION_ATTACHMENT_TOO_LARGE' && /8 ميجابايت/.test(error.message));
+  } finally { globalThis.fetch = originalFetch; }
+});
 // @ts-ignore -- standalone node --test, not a browser import
 import { licensePreviewKind } from '../lib/license-preview.ts';
 // @ts-ignore -- standalone node --test, not a browser import

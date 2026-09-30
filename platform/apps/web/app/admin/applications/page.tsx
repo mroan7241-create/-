@@ -51,8 +51,8 @@ export default function AdminApplicationsPage() {
 
   const [data, setData] = useState<Paginated<ApplicationSummary> | null>(null);
   const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState(() => initialQueryParam('search') || '');
+  const [searchInput, setSearchInput] = useState(() => initialQueryParam('search') || '');
   const [status, setStatus] = useState<'' | ApplicationStatus>(() => (initialQueryParam('status') as ApplicationStatus) || '');
   const [listError, setListError] = useState<string | null>(null);
   const [selected, setSelected] = useState<ApplicationSummary | null>(null);
@@ -80,6 +80,12 @@ export default function AdminApplicationsPage() {
   useEffect(() => {
     if (user && activeSection === 'files') void load();
   }, [user, load, activeSection]);
+
+  useEffect(() => {
+    if (!initialQueryParam('search') || !data?.items.length) return;
+    const match = data.items.find((item) => item.publicCode === search);
+    if (match) setSelected(match);
+  }, [data, search]);
 
   if (guardLoading || !user) return null;
 

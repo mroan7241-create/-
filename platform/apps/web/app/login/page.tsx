@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch, ApiClientError } from '../lib/api';
+import { PasswordField } from '../components/PasswordField';
 
 type Tab = 'user' | 'delegate';
 
@@ -109,19 +110,7 @@ export default function LoginPage() {
                   autoComplete="username"
                 />
               </label>
-              <label style={labelStyle}>
-                كلمة المرور
-                <input
-                  type="password"
-                  name="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="control"
-                  style={inputStyle}
-                  autoComplete="current-password"
-                />
-              </label>
+              <PasswordField label="كلمة المرور" name="password" required value={password} onChange={(e) => setPassword(e.target.value)} className="control" style={inputStyle} autoComplete="current-password" />
             </>
           ) : (
             <label style={labelStyle}>

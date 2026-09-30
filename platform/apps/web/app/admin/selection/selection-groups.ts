@@ -1,10 +1,11 @@
 import type { ApplicationSummary } from '../../lib/api';
 
-export type SelectionGroup = 'ACTION' | 'NEW' | 'PROCESSING' | 'PASSED_UNSELECTED' | 'MAIN' | 'RESERVE' | 'NEEDS_INFO' | 'FAILED' | 'ALL';
+export type SelectionGroup = 'ACTION' | 'NEW' | 'RETURNED' | 'PROCESSING' | 'PASSED_UNSELECTED' | 'MAIN' | 'RESERVE' | 'NEEDS_INFO' | 'FAILED' | 'ALL';
 
 export const SELECTION_GROUPS: Array<{ key: SelectionGroup; label: string }> = [
   { key: 'ACTION', label: 'بانتظار إجراء' },
   { key: 'NEW', label: 'طلبات جديدة' },
+  { key: 'RETURNED', label: 'استكمال وارد للمراجعة' },
   { key: 'PROCESSING', label: 'قيد المراجعة' },
   { key: 'PASSED_UNSELECTED', label: 'مجتازة بانتظار الاختيار' },
   { key: 'MAIN', label: 'المجتازة الأساسية' },
@@ -14,10 +15,13 @@ export const SELECTION_GROUPS: Array<{ key: SelectionGroup; label: string }> = [
   { key: 'ALL', label: 'جميع الطلبات' },
 ];
 
-export function selectionGroup(application: Pick<ApplicationSummary, 'eligibilityStatus' | 'selectionList' | 'processingStartedAt'>): Exclude<SelectionGroup, 'ACTION' | 'ALL'> {
+export function selectionGroup(application: Pick<ApplicationSummary, 'eligibilityStatus' | 'selectionList' | 'processingStartedAt'> & { latestInformationRequest?: ApplicationSummary['latestInformationRequest'] }): Exclude<SelectionGroup, 'ACTION' | 'ALL'> {
   if (application.eligibilityStatus === 'FAILED') return 'FAILED';
   if (application.eligibilityStatus === 'NEEDS_INFO') return 'NEEDS_INFO';
-  if (application.eligibilityStatus === 'PENDING') return application.processingStartedAt ? 'PROCESSING' : 'NEW';
+  if (application.eligibilityStatus === 'PENDING') {
+    if (application.latestInformationRequest?.status === 'SUBMITTED') return 'RETURNED';
+    return application.processingStartedAt ? 'PROCESSING' : 'NEW';
+  }
   if (application.selectionList === 'MAIN') return 'MAIN';
   if (application.selectionList === 'RESERVE') return 'RESERVE';
   return 'PASSED_UNSELECTED';

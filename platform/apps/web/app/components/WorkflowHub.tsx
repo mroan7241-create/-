@@ -55,7 +55,7 @@ export function WorkflowHub({ user, sectionKeys }: { user: CurrentUser; sectionK
   useEffect(() => { void load(); }, [load]);
 
   async function act(action: () => Promise<unknown>, success = 'تم تنفيذ العملية وتحديث البيانات.', credentialEmail = '') {
-    setBusy(true); setMessage('');
+    setBusy(true); setMessage('جارٍ تنفيذ العملية وحفظ نتيجتها، يرجى الانتظار…');
     try {
       const result = await action() as { temporaryPassword?: string | null; accountId?: string; path?: string; emailSent?: boolean | null } | undefined;
       if (result?.temporaryPassword) {
@@ -73,7 +73,7 @@ export function WorkflowHub({ user, sectionKeys }: { user: CurrentUser; sectionK
   }), [sections]);
 
   return <div className="workflow-hub">
-    {message && <p role="status" style={message.startsWith('تم') ? successStyle : errorStyle}>{message}</p>}
+    {message && <p role={busy || message.startsWith('تم') ? 'status' : 'alert'} style={busy ? { color: 'var(--zad-800)' } : message.startsWith('تم') ? successStyle : errorStyle}>{message}</p>}
     {credential && <section style={{ ...cardStyle, border: '2px solid #d46a2e' }}><h2>بيانات الدخول المؤقتة — تُعرض مرة واحدة</h2><p>البريد: <b dir="ltr">{credential.email}</b></p><p>كلمة المرور المؤقتة: <b dir="ltr">{credential.password}</b></p><button style={secondaryButtonStyle} onClick={() => setCredential(null)}>فهمت وحفظت البيانات بأمان</button></section>}
     {signingLink && <section style={{ ...cardStyle, border: '2px solid #d46a2e' }}><h2>رابط توقيع الطرف الأول — أحادي الاستخدام</h2><p>لا يفتح صلاحيات الإدارة وينتهي تلقائيًا. سلّمه للممثل المخول فقط.</p><code dir="ltr" style={{ overflowWrap: 'anywhere' }}>{signingLink}</code><div className="button-row"><button style={secondaryButtonStyle} onClick={() => navigator.clipboard.writeText(signingLink)}>نسخ الرابط</button><a style={{ ...primaryButtonStyle, textDecoration: 'none' }} href={signingLink} target="_blank" rel="noopener noreferrer">فتح جلسة التوقيع</a><button style={secondaryButtonStyle} onClick={() => setSigningLink(null)}>إخفاء</button></div></section>}
     <div className="workflow-toolbar">
@@ -83,7 +83,7 @@ export function WorkflowHub({ user, sectionKeys }: { user: CurrentUser; sectionK
     </div>
     {user.role === 'ADMIN' && sectionKeys?.includes('escalations') && <BusinessCalendarSettings busy={busy} act={act} />}
     {form && <OperationalForm form={form} user={user} associations={associationOptions} busy={busy} close={() => setForm(null)} act={act} />}
-    {sections.map((section) => <section key={section.key} style={cardStyle}><h2>{section.title}</h2>{section.error ? <p style={errorStyle}>{section.error}</p> : section.rows.length === 0 ? <p>لا توجد عناصر تحتاج إجراء.</p> : section.rows.map((row) => <OperationalRow key={row.id} user={user} section={section.key} row={row} busy={busy} setForm={setForm} act={act} />)}</section>)}
+    {sections.map((section) => <section key={section.key} style={cardStyle}><h2>{section.title}</h2>{section.key === 'participations' && user.role === 'ADMIN' && <p>التسلسل: إنشاء الاتفاقية ← إرسالها للنظام ← تأكيد جاهزية بيانات الجمعية ← إنشاء حساب دخول مقيّد وإرسال بياناته ← توقيع الجمعية ← توقيع الطرف الأول. لا تُفتح العمليات إلا بعد التوقيعين.</p>}{section.error ? <p style={errorStyle}>{section.error}</p> : section.rows.length === 0 ? <p>لا توجد عناصر تحتاج إجراء.</p> : section.rows.map((row) => <OperationalRow key={row.id} user={user} section={section.key} row={row} busy={busy} setForm={setForm} act={act} />)}</section>)}
   </div>;
 }
 
@@ -116,7 +116,7 @@ function OperationalRow({ user, section, row, busy, setForm, act }: { user: Curr
     associationId: row.associationId,
   };
   const buttons: React.ReactNode[] = [];
-  const button = (label: string, action: () => Promise<unknown>) => buttons.push(<button key={label} style={secondaryButtonStyle} disabled={busy} onClick={() => void act(action)}>{label}</button>);
+  const button = (label: string, action: () => Promise<unknown>, success?: string) => buttons.push(<button key={label} style={secondaryButtonStyle} disabled={busy} onClick={() => void act(action, success)}>{label}</button>);
   const formButton = (label: string, kind: FormKind) => buttons.push(<button key={label} style={secondaryButtonStyle} disabled={busy} onClick={() => setForm({ kind, row })}>{label}</button>);
 
   if (section === 'participations') {
@@ -126,12 +126,12 @@ function OperationalRow({ user, section, row, busy, setForm, act }: { user: Curr
     if (user.role === 'ADMIN') {
       if (canPrepareCovenant(selectionList, agreement?.status)) {
         if (!agreement) formButton('إنشاء اتفاقية', 'agreement');
-        if (agreement?.status === 'DRAFT') button('إرسال الاتفاقية', () => transitionAgreement(agreement.id, 'SENT'));
+        if (agreement?.status === 'DRAFT') button('إرسال الاتفاقية للنظام', () => transitionAgreement(agreement.id, 'SENT'), 'تم تجهيز الاتفاقية داخل النظام. الخطوة التالية تأكيد جاهزية البيانات، ثم إرسال حساب الدخول للجمعية.');
       }
       if (canCreateCovenantSigningAccount(participationStage)) buttons.push(<button key="signing-account" style={secondaryButtonStyle} disabled={busy} onClick={() => void act(() => prepareCovenantSigningAccount(row.id), 'تم إنشاء حساب توقيع مقيّد؛ لن تفتح العمليات قبل اكتمال الميثاق.', String((row.application as WorkflowRecord | undefined)?.email ?? ''))}>إنشاء حساب توقيع مقيّد</button>);
       if (agreement?.status === 'SIGNED_BY_ORG') button('إنشاء رابط توقيع الطرف الأول', () => issuePartyOneSigningSession(agreement.id));
       if (agreement?.status === 'SIGNED') button('تنزيل النسخة النهائية', () => getFinalCovenantUrl(agreement.id).then(({ url }) => { window.open(url, '_blank', 'noopener,noreferrer'); }));
-      if (canCompleteParticipationSetup(participationStage)) button('إكمال التجهيز', () => completeParticipationSetup(row.id));
+      if (canCompleteParticipationSetup(participationStage)) button('تأكيد جاهزية بيانات الجمعية', () => completeParticipationSetup(row.id), 'تم تأكيد جاهزية بيانات الجمعية. لم يُرسل حساب الدخول بعد؛ أنشئ حساب التوقيع المقيّد في الخطوة التالية.');
       if (closure?.status === 'SUBMITTED') button('بدء مراجعة الإغلاق', () => transitionOrganizationClosure(closure.id, 'UNDER_REVIEW'));
       if (closure?.status === 'UNDER_REVIEW') button('اعتماد تقرير الجمعية', () => transitionOrganizationClosure(closure.id, 'APPROVED'));
       if (closure?.status === 'APPROVED') button('إغلاق المشاركة', () => transitionOrganizationClosure(closure.id, 'CLOSED'));
