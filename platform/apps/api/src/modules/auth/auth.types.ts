@@ -1,4 +1,4 @@
-import { AccountRole } from '@alzad/db';
+import { AccountRole, AgreementStatus } from '@alzad/db';
 
 /**
  * سياق المصادقة الموحَّد المُرفَق على كل طلب موثَّق (request.authContext)
@@ -12,4 +12,11 @@ export interface AuthContext {
   associationId: string | null;
   sessionId: string;
   mustChangePassword: boolean;
+  /** بيانات سبق أن تحقق منها حارس الجلسة في الطلب نفسه؛ لا تُخزَّن بين الطلبات. */
+  meSnapshot?: {
+    publicCode: string;
+    name: string;
+    covenantRequired: boolean;
+    covenantStatus: AgreementStatus | null;
+  };
 }

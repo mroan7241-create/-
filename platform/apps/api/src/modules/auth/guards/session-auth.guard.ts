@@ -92,12 +92,17 @@ export class SessionAuthGuard implements CanActivate {
       throw authPasswordChangeRequired();
     }
 
+    let covenantStatus: AgreementStatus | null = null;
+    let covenantRequired = false;
+    let covenantStateChecked = account.role !== AccountRole.ASSOCIATION;
     if (account.role === AccountRole.ASSOCIATION && account.associationId && !account.mustChangePassword) {
       const participation = await prisma.projectParticipation.findUnique({
         where: { associationId: account.associationId },
         select: { status: true, agreements: { orderBy: { version: 'desc' }, take: 1, select: { status: true } } },
       });
-      const covenantRequired = Boolean(participation) && (participation!.status !== ParticipationStatus.ACTIVE || participation!.agreements[0]?.status !== AgreementStatus.SIGNED);
+      covenantStatus = participation?.agreements[0]?.status ?? null;
+      covenantRequired = Boolean(participation) && (participation!.status !== ParticipationStatus.ACTIVE || covenantStatus !== AgreementStatus.SIGNED);
+      covenantStateChecked = true;
       if (covenantRequired) {
         const path = request.originalUrl.split('?')[0];
         const allowed =
@@ -119,6 +124,12 @@ export class SessionAuthGuard implements CanActivate {
       associationId: account.associationId,
       sessionId: session.id,
       mustChangePassword: account.mustChangePassword,
+      ...(covenantStateChecked ? { meSnapshot: {
+        publicCode: account.publicCode,
+        name: account.name,
+        covenantRequired,
+        covenantStatus,
+      } } : {}),
     };
     return true;
   }

@@ -185,6 +185,16 @@ export class AuthService {
   // GET /auth/me
   // ================================================================
   async getMe(ctx: AuthContext) {
+    if (ctx.meSnapshot) return {
+      id: ctx.accountId,
+      publicCode: ctx.meSnapshot.publicCode,
+      name: ctx.meSnapshot.name,
+      role: ctx.role,
+      associationId: ctx.associationId,
+      mustChangePassword: ctx.mustChangePassword,
+      covenantRequired: ctx.meSnapshot.covenantRequired,
+      covenantStatus: ctx.meSnapshot.covenantStatus,
+    };
     const account = await prisma.account.findUniqueOrThrow({ where: { id: ctx.accountId } });
     const covenant = await this.covenantState(account.role, account.associationId);
     return {

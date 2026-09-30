@@ -1,6 +1,7 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { HealthModule } from './health/health.module';
 import { CorrelationIdMiddleware } from './common/correlation-id.middleware';
+import { SlowRequestMiddleware } from './common/slow-request.middleware';
 import { CommonModule } from './common/common.module';
 
 import { AuthModule } from './modules/auth/auth.module';
@@ -58,6 +59,6 @@ import { CentralStockModule } from './modules/central-stock/central-stock.module
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(CorrelationIdMiddleware).forRoutes('*');
+    consumer.apply(CorrelationIdMiddleware, SlowRequestMiddleware).forRoutes('*');
   }
 }
