@@ -39,9 +39,13 @@ describe('Application V2 launch gate', () => {
 
   it('supports secure draft, Needs Info on the same application, eligibility, 1–5 evaluation and manual reserve selection', async () => {
     const geography = await http().get('/api/v1/association-applications/geography').expect(200);
-    expect(geography.body.items).toHaveLength(11);
+    expect(geography.body.items).toHaveLength(12);
     expect(geography.body.items.map((item: { officialCode: string }) => item.officialCode)).toContain('0001');
-    expect(geography.body.items.map((item: { nameAr: string }) => item.nameAr).join(' ')).not.toMatch(/الشرقية|الجوف/);
+    expect(geography.body.items.map((item: { nameAr: string }) => item.nameAr).join(' ')).not.toMatch(/الشرقية/);
+    expect(geography.body.items).toEqual(expect.arrayContaining([expect.objectContaining({ officialCode: '0013', nameAr: 'منطقة الجوف' })]));
+    const jouf = await http().get('/api/v1/association-applications/geography?parent=0013').expect(200);
+    expect(jouf.body.items.map((item: { officialCode: string }) => item.officialCode)).toEqual(['0247', '0248', '0249', '0250', '0252']);
+    expect(jouf.body.items.every((item: { parentOfficialCode: string }) => item.parentOfficialCode === '0013')).toBe(true);
 
     const created = await http().post('/api/v1/association-applications/drafts').send({ clientRequestId: randomUUID() }).expect(201);
     expect(created.body.resumeToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -61,6 +65,8 @@ describe('Application V2 launch gate', () => {
     await http().get(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set('Cookie', upgraded.headers['set-cookie'][0]).expect(200);
 
     const payload = validV2Payload();
+    payload.location.regionCode = '0013';
+    payload.location.governorateCode = '0247';
     const saved = await http().put(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set(applicantAccess).send({ revision: 0, payload }).expect(200);
     const genericUnknown = await http().post('/api/v1/association-applications/access/request').send({ email: 'nobody@example.org' }).expect(200);
     const accessRequest = await http().post('/api/v1/association-applications/access/request').send({ email: payload.organization.officialEmail }).expect(200);
@@ -82,6 +88,8 @@ describe('Application V2 launch gate', () => {
     if (submitted.status !== 201) throw new Error(`Application V2 submit failed (${submitted.status}): ${JSON.stringify(submitted.body)}`);
     expect(submitted.body.emailSent).toBe(true);
     const row = await prisma.associationApplication.findUniqueOrThrow({ where: { publicCode: submitted.body.id } });
+    expect(row.region).toBe('الجوف');
+    expect(row.city).toBe('سكاكا');
     expect(row.schemaVersion).toBe(2); expect(row.currentAssets?.toNumber()).toBe(11_000_000);
     expect(row.category).toBe('متوسطة');
     expect(row.sector).toBe('رعاية الأيتام، التنمية المجتمعية');
