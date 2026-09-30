@@ -24,6 +24,10 @@ export const APPLICATION_STAGE_LABELS: Record<ApplicationStage, string> = {
 
 /** All interpretations use the same aggregated, PII-free report returned by the API. */
 export function analyzeAbanmi(report: AbanmiReport) {
+  // A period filters need creation dates, while device counts are a current snapshot.
+  // Do not compare these different cohorts as an achievement percentage.
+  const coverageComparable = !report.filters?.from && !report.filters?.to;
+  const coverage = (delivered: number, approved: number) => coverageComparable ? percent(delivered, approved) : null;
   const applications = report.applications ?? [];
   const stages = { new: 0, processing: 0, needsInfo: 0, evaluation: 0, main: 0, reserve: 0, unclassified: 0, rejected: 0 };
   for (const application of applications) stages[applicationStage(application)] += 1;
@@ -62,7 +66,7 @@ export function analyzeAbanmi(report: AbanmiReport) {
       approvedNeeds: approved,
       devices: count(devices, (row) => row.associationId === associationId),
       delivered,
-      progressPercent: percent(delivered, approved),
+      progressPercent: coverage(delivered, approved),
       failedDeliveries: count(deliveries, (row) => row.associationId === associationId && row.status === 'DELIVERY_FAILED'),
     };
   });
@@ -71,13 +75,13 @@ export function analyzeAbanmi(report: AbanmiReport) {
     const approved = count(needs, (row) => ids.has(row.associationId) && row.decisionStatus === 'APPROVED');
     const delivered = count(devices, (row) => ids.has(row.associationId) && row.status === 'DELIVERED');
     return { ...region, beneficiaries: count(beneficiaries, (row) => ids.has(row.associationId)), approvedNeeds: approved,
-      devices: count(devices, (row) => ids.has(row.associationId)), delivered, progressPercent: percent(delivered, approved) };
+      devices: count(devices, (row) => ids.has(row.associationId)), delivered, progressPercent: coverage(delivered, approved) };
   });
   const currentActivity = report.activities.find((activity) => activity.status !== 'COMPLETED') ?? report.activities.at(-1);
-  const progressPercent = percent(deliveredDevices, approvedNeeds);
+  const progressPercent = coverage(deliveredDevices, approvedNeeds);
   const insights = [
     applications.length ? `استُقبل ${applications.length} طلب انضمام؛ ${stages.new + stages.processing} منها بانتظار بدء المراجعة أو إكمالها، و${stages.needsInfo} بانتظار استكمال البيانات.` : 'لم تُسجّل طلبات انضمام ضمن النطاق المختار.',
-    approvedNeeds ? `اعتُمد ${approvedNeeds} احتياجًا، وسُجّل تسليم ${deliveredDevices} جهازًا؛ تغطية الاحتياجات المعتمدة ${progressPercent}٪.` : 'لم تُعتمد احتياجات ضمن النطاق؛ لا يمكن احتساب نسبة إنجاز التسليم بعد.',
+    !coverageComparable ? `اعتُمد ${approvedNeeds} احتياجًا ضمن الفترة. الأجهزة المسلّمة (${deliveredDevices}) لقطة حالية؛ لا تُحسب نسبة التغطية عند تحديد فترة لاختلاف النطاق الزمني.` : approvedNeeds ? `اعتُمد ${approvedNeeds} احتياجًا، وسُجّل تسليم ${deliveredDevices} جهازًا؛ تغطية الاحتياجات المعتمدة ${progressPercent}٪.` : 'لم تُعتمد احتياجات ضمن النطاق؛ لا يمكن احتساب نسبة إنجاز التسليم بعد.',
     alerts.length ? `توجد ${alerts.reduce((sum, alert) => sum + alert.count, 0)} حالة متابعة موزعة على ${alerts.length} مؤشرات تشغيلية؛ راجع تفاصيلها أدناه.` : 'لا تظهر حالات متابعة تشغيلية في المؤشرات المتاحة.',
   ];
 

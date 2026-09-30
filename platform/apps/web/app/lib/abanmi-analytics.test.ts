@@ -58,3 +58,23 @@ test('no approved needs means no fabricated completion percentage', () => {
   assert.equal(result.progressPercent, null);
   assert.match(result.insights[1], /لا يمكن احتساب/);
 });
+
+test('date-filtered needs are not compared with all-time delivered devices', () => {
+  for (const period of [{ from: '2026-09-01', to: null }, { from: null, to: '2026-09-30' }]) {
+    const report = fixture();
+    report.filters = { ...period, associationId: null, region: null };
+    report.devicesAndInventory[0]._count._all = 10;
+    const result = analyzeAbanmi(report);
+    assert.equal(result.progressPercent, null);
+    assert.ok(result.associations.every((row) => row.progressPercent === null));
+    assert.ok(result.regions.every((row) => row.progressPercent === null));
+    assert.match(result.insights[1], /لا تُحسب نسبة التغطية/);
+    assert.doesNotMatch(result.insights[1], /100٪|null/);
+  }
+});
+
+test('region-only filters preserve comparable coverage', () => {
+  const report = fixture();
+  report.filters = { from: null, to: null, associationId: null, region: 'القصيم' };
+  assert.equal(analyzeAbanmi(report).progressPercent, 33);
+});

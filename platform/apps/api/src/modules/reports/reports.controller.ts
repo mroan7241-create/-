@@ -9,6 +9,7 @@ import { ReportsService } from './reports.service';
 import { ApiError } from '../../common/api-error';
 import { ReconciliationService } from './reconciliation.service'; import { ClosureReadinessService } from './closure-readiness.service'; import { ClosureService } from './closure.service'; import { OrganizationTransitionDto, ParticipationOperationDto, ProjectTransitionDto, QualitativeReportDto, ReopenDto } from './dto/closure.dto';
 import { AbanmiReportQueryDto } from './dto/abanmi-report-query.dto';
+import { abanmiCoverage } from './abanmi-coverage.util';
 import type { Response } from 'express';
 import ExcelJS from 'exceljs';
 
@@ -41,7 +42,7 @@ export class ReportsController {
       ['الأجهزة', report.overall.devices], ['عمليات التسليم', report.overall.deliveries],
     ]);
     const deliveredDevices = report.devicesAndInventory.filter((row) => row.status === 'DELIVERED').reduce((sum, row) => sum + groupedCount(row), 0);
-    const coverage = report.overall.approvedNeeds ? Math.min(100, Math.round(deliveredDevices / report.overall.approvedNeeds * 100)) : null;
+    const coverage = abanmiCoverage(deliveredDevices, report.overall.approvedNeeds, query);
     summary.addRows([
       [], ['قراءة تنفيذية', ''], ['طلبات الانضمام', report.applications.length],
       ['طلبات جديدة', report.applications.filter((row) => row.status === 'UNDER_REVIEW' && row.eligibilityStatus === 'PENDING' && !row.processingStarted).length],
@@ -50,8 +51,8 @@ export class ReportsController {
       ['القائمة الاحتياطية', report.applications.filter((row) => row.selectionList === 'RESERVE').length],
       ['مقبولة دون تصنيف', report.applications.filter((row) => row.status === 'ACCEPTED' && row.selectionList === 'NONE').length],
       ['غير مجتازة أو مرفوضة', report.applications.filter((row) => row.status === 'REJECTED' || row.eligibilityStatus === 'FAILED').length],
-      ['الأجهزة المسلّمة', deliveredDevices], ['تغطية الاحتياجات المعتمدة', coverage === null ? 'غير متاحة' : `${coverage}%`],
-      ['منهجية التغطية', 'الأجهزة المسلّمة ÷ الاحتياجات المعتمدة؛ لا تقيس سرعة التنفيذ الزمنية'],
+      ['الأجهزة المسلّمة', deliveredDevices], ['تغطية الاحتياجات المعتمدة', coverage.label],
+      ['منهجية التغطية', coverage.methodology],
     ]);
     summary.getRow(1).font = { bold: true };
     summary.columns = [{ width: 28 }, { width: 18 }];
