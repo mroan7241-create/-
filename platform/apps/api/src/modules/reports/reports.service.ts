@@ -44,7 +44,7 @@ export class ReportsService {
     const associationIds = associations.map((association) => association.id);
     const createdAt = from || to ? { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } : undefined;
     const scope = { associationId: { in: associationIds } };
-    const [beneficiaries, needs, inventory, deliveries, participations, closures, activities, projectClosure, purchaseOrders, shipments, receipts, allocations, applications] = await prisma.$transaction([
+    const reportReads = [
       prisma.beneficiary.groupBy({ by: ['associationId', 'reviewStatus'], where: { ...scope, archivedAt: null, ...(createdAt ? { createdAt } : {}) }, orderBy: { associationId: 'asc' }, _count: { _all: true } }),
       prisma.beneficiaryNeed.groupBy({ by: ['associationId', 'deviceType', 'decisionStatus', 'fulfillmentStatus'], where: { ...scope, ...(createdAt ? { createdAt } : {}) }, orderBy: { associationId: 'asc' }, _count: { _all: true } }),
       prisma.deviceUnit.groupBy({ by: ['associationId', 'deviceType', 'status'], where: scope, orderBy: { associationId: 'asc' }, _count: { _all: true } }),
@@ -67,7 +67,16 @@ export class ReportsService {
         select: { id: true, publicCode: true, name: true, region: true, status: true, eligibilityStatus: true, selectionList: true, processingStartedAt: true, submittedAt: true },
         orderBy: { submittedAt: 'desc' },
       }),
-    ]);
+    ] as const;
+    // Prisma promises are lazy: an empty association scope cannot have tenant
+    // aggregates, but applications and project-wide sections can still exist.
+    const reportResults = associationIds.length
+      ? await prisma.$transaction([...reportReads])
+      : await (async () => {
+        const [activities, projectClosure, applications] = await prisma.$transaction([reportReads[6], reportReads[7], reportReads[12]]);
+        return [[], [], [], [], [], [], activities, projectClosure, [], [], [], [], applications] as const;
+      })();
+    const [beneficiaries, needs, inventory, deliveries, participations, closures, activities, projectClosure, purchaseOrders, shipments, receipts, allocations, applications] = reportResults;
     const byRegion = Object.values(associations.reduce<Record<string, { region: string; associations: number }>>((acc, association) => {
       acc[association.region] ??= { region: association.region, associations: 0 };
       acc[association.region].associations += 1;
