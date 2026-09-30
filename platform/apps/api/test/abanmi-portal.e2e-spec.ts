@@ -64,6 +64,17 @@ describe('ABANMI — read-only portal and privacy boundary', () => {
     const report = await request(app.getHttpServer()).get('/api/v1/reports/abanmi').set('Cookie', cookie);
     expect(report.status).toBe(200);
     expect(report.body.privacy).toEqual({ beneficiaryPiiIncluded: false });
+    expect(Array.isArray(report.body.applications)).toBe(true);
+    for (const application of report.body.applications) {
+      expect(Object.keys(application).sort()).toEqual(['eligibilityStatus', 'id', 'name', 'processingStarted', 'publicCode', 'region', 'selectionList', 'status', 'submittedAt']);
+    }
+    const region = report.body.applications[0]?.region ?? report.body.associations[0]?.region;
+    if (region) {
+      const filtered = await request(app.getHttpServer()).get(`/api/v1/reports/abanmi?region=${encodeURIComponent(region)}`).set('Cookie', cookie);
+      expect(filtered.status).toBe(200);
+      expect(filtered.body.applications.every((row: { region: string }) => row.region === region)).toBe(true);
+      expect(filtered.body.associations.every((row: { region: string }) => row.region === region)).toBe(true);
+    }
     const serialized = JSON.stringify(report.body);
     expect(serialized).not.toContain('secondaryPhone');
     expect(serialized).not.toContain('address');
@@ -129,6 +140,8 @@ describe('ABANMI — read-only portal and privacy boundary', () => {
     await workbook.xlsx.load(exportResult.body as unknown as ExcelJS.Buffer);
     const associationSheet = workbook.getWorksheet('حسب الجمعية');
     expect(associationSheet).toBeDefined();
+    expect(workbook.getWorksheet('طلبات الانضمام')).toBeDefined();
+    expect(workbook.getWorksheet('ملخص المشروع')?.getCell('A8').value).toBe('قراءة تنفيذية');
     const exportedStatuses: string[] = [];
     associationSheet?.eachRow((row, rowNumber) => { if (rowNumber > 1) exportedStatuses.push(String(row.getCell(5).value)); });
     expect(exportedStatuses).toContain('نشط');

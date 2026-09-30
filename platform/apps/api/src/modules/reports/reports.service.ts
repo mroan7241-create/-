@@ -44,7 +44,7 @@ export class ReportsService {
     const associationIds = associations.map((association) => association.id);
     const createdAt = from || to ? { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } : undefined;
     const scope = { associationId: { in: associationIds } };
-    const [beneficiaries, needs, inventory, deliveries, participations, closures, activities, projectClosure, purchaseOrders, shipments, receipts, allocations] = await prisma.$transaction([
+    const [beneficiaries, needs, inventory, deliveries, participations, closures, activities, projectClosure, purchaseOrders, shipments, receipts, allocations, applications] = await prisma.$transaction([
       prisma.beneficiary.groupBy({ by: ['associationId', 'reviewStatus'], where: { ...scope, archivedAt: null, ...(createdAt ? { createdAt } : {}) }, orderBy: { associationId: 'asc' }, _count: { _all: true } }),
       prisma.beneficiaryNeed.groupBy({ by: ['associationId', 'deviceType', 'decisionStatus', 'fulfillmentStatus'], where: { ...scope, ...(createdAt ? { createdAt } : {}) }, orderBy: { associationId: 'asc' }, _count: { _all: true } }),
       prisma.deviceUnit.groupBy({ by: ['associationId', 'deviceType', 'status'], where: scope, orderBy: { associationId: 'asc' }, _count: { _all: true } }),
@@ -57,6 +57,16 @@ export class ReportsService {
       prisma.shipment.groupBy({ by: ['associationId', 'status'], where: { ...scope, ...(createdAt ? { createdAt } : {}) }, orderBy: { associationId: 'asc' }, _count: { _all: true } }),
       prisma.receiptBatch.groupBy({ by: ['associationId', 'status'], where: { ...scope, ...(createdAt ? { createdAt } : {}) }, orderBy: { associationId: 'asc' }, _count: { _all: true } }),
       prisma.deviceAllocation.groupBy({ by: ['associationId', 'status'], where: { ...scope, ...(createdAt ? { allocatedAt: createdAt } : {}) }, orderBy: { associationId: 'asc' }, _count: { _all: true } }),
+      // Organization-level review facts only: no contact details, answers, or attachments.
+      prisma.associationApplication.findMany({
+        where: {
+          ...(query.associationId ? { resultingAssociationId: query.associationId } : {}),
+          ...(query.region ? { region: query.region } : {}),
+          ...(createdAt ? { submittedAt: createdAt } : {}),
+        },
+        select: { id: true, publicCode: true, name: true, region: true, status: true, eligibilityStatus: true, selectionList: true, processingStartedAt: true, submittedAt: true },
+        orderBy: { submittedAt: 'desc' },
+      }),
     ]);
     const byRegion = Object.values(associations.reduce<Record<string, { region: string; associations: number }>>((acc, association) => {
       acc[association.region] ??= { region: association.region, associations: 0 };
@@ -74,6 +84,7 @@ export class ReportsService {
         deliveries: deliveries.reduce((sum, row) => sum + aggregateCount(row), 0),
       },
       associations, byRegion,
+      applications: applications.map(({ processingStartedAt, submittedAt, ...row }) => ({ ...row, processingStarted: Boolean(processingStartedAt), submittedAt: submittedAt.toISOString() })),
       beneficiariesAndNeeds: { beneficiaries, needs },
       devicesAndInventory: inventory,
       deliveryAndExecution: deliveries,

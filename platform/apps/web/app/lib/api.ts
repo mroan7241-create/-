@@ -311,6 +311,7 @@ export function logout(): Promise<{ ok: true }> {
 
 export interface AbanmiReport {
   generatedAt: string;
+  applications: Array<{ id: string; publicCode: string; name: string; region: string; status: string; eligibilityStatus: string; selectionList: string; processingStarted: boolean; submittedAt: string }>;
   overall: { associations: number; beneficiaries: number; approvedNeeds: number; devices: number; deliveries: number };
   associations: Array<{ id: string; publicCode: string; name: string; region: string; city: string; status: string }>;
   byRegion: Array<{ region: string; associations: number }>;
