@@ -35,7 +35,7 @@ function runCleanup(args, env) {
 }
 
 function main() {
-  const mode = process.argv[2];
+  const mode = process.env.ALZAD_CLEANUP_MODE;
   if (!['preview', 'apply'].includes(mode)) throw new Error('Mode must be preview or apply.');
   const config = requiredConfig(process.env.ALZAD_BACKUP_CONFIG);
   const env = {

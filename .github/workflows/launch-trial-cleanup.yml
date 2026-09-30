@@ -42,8 +42,9 @@ jobs:
         working-directory: platform
         run: npm run prisma:generate --workspace packages/db
       - name: Preview or apply the exact approved snapshot
-        run: node operations/cleanup/run-protected.cjs '${{ inputs.mode }}'
+        run: node operations/cleanup/run-protected.cjs
         env:
+          ALZAD_CLEANUP_MODE: ${{ inputs.mode }}
           ALZAD_BACKUP_CONFIG: ${{ secrets.ALZAD_BACKUP_CONFIG }}
           ALZAD_CLEANUP_APPROVED_SHA256: ${{ inputs.approved_sha256 }}
           ALZAD_CLEANUP_PRODUCTION_CONFIRM: ${{ inputs.production_confirm }}

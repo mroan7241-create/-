@@ -1,10 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { readFileSync } = require('node:fs');
+const { join } = require('node:path');
 const {
   assertTarget, assertApplyPermission, assertSchema, deletionOrder, manifestFingerprint,
   targetPredicate, PRODUCTION_REF, PRESERVED, TARGETS,
 } = require('./cleanup-trial-data.cjs');
 const { requiredConfig } = require('./run-protected.cjs');
+
+test('manual workflow never interpolates dispatch input into a shell command', () => {
+  const workflow = readFileSync(join(__dirname, '../../.github/workflows/launch-trial-cleanup.yml'), 'utf8');
+  assert.match(workflow, /ALZAD_CLEANUP_MODE: \$\{\{ inputs\.mode \}\}/);
+  assert.doesNotMatch(workflow, /run:[^\n]*\$\{\{\s*inputs\./);
+});
 
 test('protected runner refuses a mismatched backup database identity', () => {
   const config = {
