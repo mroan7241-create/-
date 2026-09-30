@@ -10,8 +10,9 @@ import { analyzeAbanmi, applicationStage, APPLICATION_STAGE_LABELS, type Applica
 import { reportValueLabel } from '../../lib/report-labels';
 import { useRoleGuard } from '../../lib/use-role-guard';
 import { cardStyle, inputStyle, labelStyle, primaryButtonStyle, secondaryButtonStyle } from '../../lib/ui';
+import { fetchScopedReport, type ReportFilters } from './report-scope';
 
-type Filters = { from: string; to: string; associationId: string; region: string };
+type Filters = ReportFilters;
 const emptyFilters: Filters = { from: '', to: '', associationId: '', region: '' };
 const stages = Object.keys(APPLICATION_STAGE_LABELS) as ApplicationStage[];
 const total = (rows: Array<{ _count: { _all: number } }>) => rows.reduce((sum, row) => sum + row._count._all, 0);
@@ -24,6 +25,7 @@ export default function AbanmiReportsPage() {
   const [applied, setApplied] = useState<Filters>(emptyFilters);
   const [selectedStage, setSelectedStage] = useState<ApplicationStage | ''>('');
   const [busy, setBusy] = useState(false);
+  const [printRequested, setPrintRequested] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -36,7 +38,7 @@ export default function AbanmiReportsPage() {
     setApplied(initial);
     setSelectedStage(stages.includes(stage as ApplicationStage) ? stage as ApplicationStage : '');
     const baseRequest = getAbanmiReport();
-    const filteredRequest = Object.values(initial).some(Boolean) ? getAbanmiReport(initial) : baseRequest;
+    const filteredRequest = Object.values(initial).some(Boolean) ? fetchScopedReport(initial, getAbanmiReport) : baseRequest;
     Promise.all([baseRequest, filteredRequest]).then(([base, filtered]) => {
       if (!cancelled) { setCatalog(base); setReport(filtered); }
     }).catch(() => { if (!cancelled) setError('تعذّر تحميل التقرير.'); });
@@ -50,6 +52,17 @@ export default function AbanmiReportsPage() {
     return () => cancelAnimationFrame(frame);
   }, [report]);
 
+  useEffect(() => {
+    if (!printRequested || !report) return;
+    // Printing after commit ensures the PDF contains the newly filtered report.
+    const frame = requestAnimationFrame(() => {
+      window.print();
+      setPrintRequested(false);
+      setBusy(false);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [printRequested, report]);
+
   const analysis = useMemo(() => report ? analyzeAbanmi(report) : null, [report]);
   if (loading || !user) return null;
 
@@ -57,10 +70,24 @@ export default function AbanmiReportsPage() {
     if (busy) return;
     setBusy(true); setError('');
     try {
-      const next = await getAbanmiReport(nextFilters);
+      const next = await fetchScopedReport(nextFilters, getAbanmiReport);
       setReport(next); setApplied(nextFilters); setSelectedStage('');
     } catch { setError('تعذّر تطبيق المرشحات؛ بقي التقرير السابق دون تغيير.'); }
     finally { setBusy(false); }
+  }
+
+  async function printCurrentSelection() {
+    if (busy) return;
+    const selected = { ...filters };
+    setBusy(true); setError('');
+    try {
+      const next = await fetchScopedReport(selected, getAbanmiReport);
+      setFilters(selected); setApplied(selected); setReport(next);
+      setPrintRequested(true);
+    } catch {
+      setError('تعذّر تجهيز PDF بالنطاق المختار؛ لم تُطبع بيانات من منطقة أخرى.');
+      setBusy(false);
+    }
   }
 
   const selectedAssociation = catalog?.associations.find((row) => row.id === applied.associationId);
@@ -77,8 +104,8 @@ export default function AbanmiReportsPage() {
         <label style={labelStyle}>الجمعية<select style={inputStyle} value={filters.associationId} onChange={(event) => setFilters({ ...filters, associationId: event.target.value, region: '' })}><option value="">كل الجمعيات</option>{catalog?.associations.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></label>
         <label style={labelStyle}>المنطقة<select style={inputStyle} value={filters.region} onChange={(event) => setFilters({ ...filters, region: event.target.value, associationId: '' })}><option value="">كل المناطق</option>{regionOptions.map((region) => <option key={region} value={region}>{region}</option>)}</select></label>
       </div>
-      <div className="button-row"><button style={primaryButtonStyle} disabled={busy} onClick={() => void load()}>{busy ? 'جارٍ إعداد التقرير…' : 'تطبيق المرشحات'}</button><button style={secondaryButtonStyle} onClick={() => void downloadAbanmiReport(applied).catch(() => setError('تعذّر تصدير التقرير.'))}>تصدير XLSX</button><button style={secondaryButtonStyle} onClick={() => window.print()}>حفظ PDF / طباعة</button></div>
-      <small>التصدير والطباعة يستخدمان المرشحات المطبقة. اختيار مرحلة الطلب يصفّي الجدول على الشاشة والطباعة فقط.</small>
+      <div className="button-row"><button style={primaryButtonStyle} disabled={busy} onClick={() => void load()}>{busy ? 'جارٍ إعداد التقرير…' : 'تطبيق المرشحات'}</button><button style={secondaryButtonStyle} disabled={busy} onClick={() => void downloadAbanmiReport(filters).catch(() => setError('تعذّر تصدير التقرير.'))}>تصدير XLSX</button><button style={secondaryButtonStyle} disabled={busy} onClick={() => void printCurrentSelection()}>حفظ PDF / طباعة</button></div>
+      <small>التصدير والطباعة يستخدمان الاختيار الحالي للمنطقة والجمعية. اختيار مرحلة الطلب يصفّي الجدول على الشاشة والطباعة فقط.</small>
     </section>
     {error && <ErrorState message={error} />}{!report && !error && <LoadingState />}
     {report && analysis && <div className="abanmi-report-print" dir="rtl">

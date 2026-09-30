@@ -9,6 +9,7 @@ import { EmailService } from '../src/modules/auth/email/email.service';
 import { FakeEmailService } from '../src/modules/auth/email/fake-email.service';
 import { cleanAuthState, seedTestFixtures } from './utils/fixtures';
 import { loginAs } from './utils/node2-fixtures';
+import { PROJECT_ACTIVITY_PHASE } from '../src/modules/activities/project-activities.catalog';
 
 jest.setTimeout(60000);
 
@@ -128,5 +129,34 @@ describe('NODE-7 — الأنشطة وسجل العمليات (تكامل حقي
     const res = await http().get('/api/v1/audit').set('Cookie', delegateCookie);
     expect(res.status).toBe(200);
     expect(res.body.items.every((e: { action: string }) => e.action !== 'ACTIVITY_CREATED')).toBe(true);
+  });
+
+  it('استيراد الخطة ADMIN فقط، 65 صفًا، لا يكرر ولا يغيّر الشواهد أو حالة صف موجود', async () => {
+    const before = await prisma.activity.findMany({ where: { phaseName: PROJECT_ACTIVITY_PHASE }, select: { id: true } });
+    const beforeIds = new Set(before.map((row) => row.id));
+    try {
+      const forbidden = await http().post('/api/v1/activities/catalog/import').set('Cookie', assocCookie).send({});
+      expect(forbidden.status).toBe(403);
+      const first = await http().post('/api/v1/activities/catalog/import').set('Cookie', adminCookie).send({});
+      expect(first.status).toBe(201);
+      expect(first.body.total).toBe(65);
+      expect(first.body.created + first.body.existing).toBe(65);
+      const firstRow = await prisma.activity.findFirstOrThrow({ where: { phaseName: PROJECT_ACTIVITY_PHASE, mainActivityOrder: 1, subActivityName: null } });
+      if (!beforeIds.has(firstRow.id)) {
+        expect(firstRow.status).toBe('NOT_STARTED');
+        expect(firstRow.evidenceUrl).toBeNull();
+        await prisma.activity.update({ where: { id: firstRow.id }, data: { status: 'COMPLETED', completionPercent: 100, evidenceUrl: 'https://example.org/manual-proof' } });
+      }
+      const second = await http().post('/api/v1/activities/catalog/import').set('Cookie', adminCookie).send({});
+      expect(second.status).toBe(201);
+      expect(second.body).toMatchObject({ created: 0, existing: 65, total: 65 });
+      expect(await prisma.activity.count({ where: { phaseName: PROJECT_ACTIVITY_PHASE } })).toBeGreaterThanOrEqual(65);
+      if (!beforeIds.has(firstRow.id)) {
+        expect(await prisma.activity.findUniqueOrThrow({ where: { id: firstRow.id } })).toMatchObject({ status: 'COMPLETED', evidenceUrl: 'https://example.org/manual-proof' });
+      }
+    } finally {
+      const after = await prisma.activity.findMany({ where: { phaseName: PROJECT_ACTIVITY_PHASE }, select: { id: true } });
+      await prisma.activity.deleteMany({ where: { id: { in: after.filter((row) => !beforeIds.has(row.id)).map((row) => row.id) } } });
+    }
   });
 });

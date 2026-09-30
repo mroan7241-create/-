@@ -4,6 +4,7 @@ import { ApiError, authForbidden } from '../../common/api-error';
 import { AuditService } from '../audit/audit.service';
 import type { AuthContext } from '../auth/auth.types';
 import type { SaveActivityDto } from './dto/activity.dto';
+import { PROJECT_ACTIVITY_PHASE, projectActivityRows } from './project-activities.catalog';
 
 /**
  * ActivitiesService — NODE-7 (يوازي getActivitiesBundle/saveActivity القديمتين).
@@ -23,6 +24,27 @@ export class ActivitiesService {
       orderBy: [{ phaseOrder: 'asc' }, { mainActivityOrder: 'asc' }, { createdAt: 'asc' }],
       include: { evidence: { select: { id: true, approvalStatus: true, notes: true, uploadedAt: true } } },
     });
+  }
+
+  /** استيراد يدوي من الأدمن؛ يضيف المفقود فقط ولا يغيّر حالة أو شاهد أي صف موجود. */
+  async importProjectCatalog(ctx: AuthContext) {
+    if (ctx.role !== AccountRole.ADMIN) throw authForbidden();
+    const rows = projectActivityRows();
+    const result = await prisma.$transaction(async (tx) => {
+      // يمنع طلبَي استيراد متزامنين من إنشاء نسختين من الصف نفسه.
+      await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(91302251)`;
+      const existing = await tx.activity.findMany({
+        where: { phaseOrder: 1, phaseName: PROJECT_ACTIVITY_PHASE },
+        select: { mainActivityOrder: true, subActivityName: true },
+      });
+      const key = (order: number, sub: string | null) => `${order}:${sub ?? ''}`;
+      const known = new Set(existing.map((row) => key(row.mainActivityOrder, row.subActivityName)));
+      const missing = rows.filter((row) => !known.has(key(row.mainActivityOrder, row.subActivityName)));
+      if (missing.length) await tx.activity.createMany({ data: missing });
+      return { ok: true as const, created: missing.length, existing: rows.length - missing.length, total: rows.length };
+    });
+    await this.audit.log({ id: ctx.accountId, role: ctx.role, associationId: ctx.associationId }, 'ACTIVITY_CATALOG_IMPORTED', 'activities', null, result);
+    return result;
   }
 
   async saveActivity(ctx: AuthContext, input: SaveActivityDto) {

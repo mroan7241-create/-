@@ -5,6 +5,7 @@ import {
   ACTIVITY_STATUS_LABELS,
   ApiClientError,
   listActivities,
+  importProjectActivities,
   saveActivity,
   type Activity,
   type ActivityStatus,
@@ -38,6 +39,7 @@ export default function AdminActivitiesPage() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [editing, setEditing] = useState<Activity | 'new' | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -46,6 +48,21 @@ export default function AdminActivitiesPage() {
       setError(err instanceof ApiClientError ? err.message : 'تعذّر تحميل الأنشطة.');
     }
   }, []);
+
+  async function importCatalog() {
+    setError('');
+    setNotice('');
+    setImportBusy(true);
+    try {
+      const result = await importProjectActivities();
+      await load();
+      setNotice(result.created ? `أُضيف ${result.created} نشاطًا من أصل ${result.total}. الشواهد والحالة تُحدَّث يدويًا.` : 'أنشطة الخطة موجودة بالفعل؛ لم تُغيَّر بياناتها.');
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : 'تعذّر استيراد خطة الأنشطة.');
+    } finally {
+      setImportBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (user) void load();
@@ -65,7 +82,10 @@ export default function AdminActivitiesPage() {
     <AppShell user={user}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
         <h1 style={{ fontSize: 22 }}>متابعة المشروع</h1>
-        <button type="button" style={primaryButtonStyle} onClick={() => setEditing('new')}>إضافة نشاط</button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button type="button" disabled={importBusy} style={secondaryButtonStyle} onClick={() => void importCatalog()}>{importBusy ? 'جارٍ الاستيراد…' : 'استيراد خطة المشروع (13 نشاطًا)'}</button>
+          <button type="button" style={primaryButtonStyle} onClick={() => setEditing('new')}>إضافة نشاط</button>
+        </div>
       </div>
 
       {error && <p role="alert" style={errorStyle}>{error}</p>}

@@ -3,9 +3,9 @@ name: platform-ci
 on:
   push:
     branches: [platform/node-migration, release/applicant-step1-20260921]
-    paths: ['platform/**', '.github/workflows/platform-ci.yml']
+    paths: ['platform/**', 'operations/cleanup/**', '.github/workflows/platform-ci.yml']
   pull_request:
-    paths: ['platform/**', '.github/workflows/platform-ci.yml']
+    paths: ['platform/**', 'operations/cleanup/**', '.github/workflows/platform-ci.yml']
 
 # لا Deploy في هذا الـworkflow إطلاقًا — build/lint/test فقط.
 jobs:
@@ -111,6 +111,13 @@ jobs:
       # حقيقية واحدة عبر HTTP حقيقي (supertest + Nest app كامل)، لا mocks.
       - name: API e2e / integration tests (NODE-1 + NODE-2)
         run: npm run test:e2e --workspace apps/api
+
+      # Runs only after every other DB test, against the explicit CI database
+      # with its canary. This never connects to or changes Production.
+      - name: trial-data cleanup guard and isolated database rehearsal
+        run: node --test ../operations/cleanup/cleanup-trial-data.test.cjs ../operations/cleanup/cleanup-trial-data.integration.test.cjs
+        env:
+          ALZAD_CLEANUP_INTEGRATION: 'true'
 
       - name: build all workspaces
         run: npm run build

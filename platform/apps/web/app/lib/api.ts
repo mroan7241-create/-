@@ -1014,6 +1014,10 @@ export function listActivities(): Promise<Activity[]> {
   return apiFetch(`/activities`);
 }
 
+export function importProjectActivities(): Promise<{ ok: true; created: number; existing: number; total: number }> {
+  return apiFetch('/activities/catalog/import', { method: 'POST' });
+}
+
 export interface SaveActivityInput {
   id?: string;
   phaseOrder: number;

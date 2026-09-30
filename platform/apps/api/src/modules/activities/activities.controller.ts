@@ -20,6 +20,13 @@ export class ActivitiesController {
     return this.activities.listActivities();
   }
 
+  @Post('catalog/import')
+  @Roles(AccountRole.ADMIN)
+  @ApiOperation({ summary: 'استيراد أنشطة خطة المشروع المفقودة دون تعديل الموجود — ADMIN فقط' })
+  async importCatalog(@CurrentUser() ctx: AuthContext) {
+    return this.activities.importProjectCatalog(ctx);
+  }
+
   @Post()
   @Roles(AccountRole.ADMIN)
   @ApiOperation({ summary: 'إنشاء/تعديل نشاط — ADMIN فقط' })
