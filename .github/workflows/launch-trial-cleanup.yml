@@ -1,0 +1,50 @@
+name: launch-trial-cleanup-manual
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Preview only, or apply the exact approved preview SHA'
+        required: true
+        type: choice
+        options: [preview, apply]
+      approved_sha256:
+        description: 'Required only for apply: SHA-256 from the reviewed preview'
+        required: false
+        type: string
+      production_confirm:
+        description: 'Required only for apply: CLEAN_ALZAD_PRODUCTION_TRIAL_DATA'
+        required: false
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: launch-trial-cleanup-manual
+  cancel-in-progress: false
+jobs:
+  cleanup:
+    if: >-
+      github.repository == 'mroan7241-create/-' &&
+      github.ref == 'refs/heads/platform/node-migration'
+    environment: production-backup
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Install locked dependencies without lifecycle scripts
+        working-directory: platform
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Generate Prisma Client without database access
+        working-directory: platform
+        run: npm run prisma:generate --workspace packages/db
+      - name: Preview or apply the exact approved snapshot
+        run: node operations/cleanup/run-protected.cjs '${{ inputs.mode }}'
+        env:
+          ALZAD_BACKUP_CONFIG: ${{ secrets.ALZAD_BACKUP_CONFIG }}
+          ALZAD_CLEANUP_APPROVED_SHA256: ${{ inputs.approved_sha256 }}
+          ALZAD_CLEANUP_PRODUCTION_CONFIRM: ${{ inputs.production_confirm }}
+      # No artifact, manifest upload, migration, seed, automatic trigger or storage deletion.

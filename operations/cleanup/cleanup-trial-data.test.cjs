@@ -4,6 +4,18 @@ const {
   assertTarget, assertApplyPermission, assertSchema, deletionOrder, manifestFingerprint,
   targetPredicate, PRODUCTION_REF, PRESERVED, TARGETS,
 } = require('./cleanup-trial-data.cjs');
+const { requiredConfig } = require('./run-protected.cjs');
+
+test('protected runner refuses a mismatched backup database identity', () => {
+  const config = {
+    DATABASE_URL: `postgresql://postgres.${PRODUCTION_REF}:secret@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres`,
+    EXPECTED_DB_NAME: 'postgres', EXPECTED_DB_HOST: 'aws-0-ap-southeast-1.pooler.supabase.com',
+  };
+  assert.equal(requiredConfig(JSON.stringify(config)).EXPECTED_DB_NAME, 'postgres');
+  assert.throws(() => requiredConfig(JSON.stringify({ ...config, EXPECTED_DB_NAME: 'other' })), /SAFETY STOP/);
+  assert.throws(() => requiredConfig(JSON.stringify({ ...config, EXPECTED_DB_HOST: 'other' })), /SAFETY STOP/);
+  assert.throws(() => requiredConfig('{'), /SAFETY STOP/);
+});
 
 test('fails closed without positive test target and explicit allowlist', () => {
   const base = { NODE_ENV: 'test', DATABASE_URL: 'postgresql://u:p@localhost:5432/alzad_platform_ci',
