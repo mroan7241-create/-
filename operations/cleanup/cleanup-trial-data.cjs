@@ -98,6 +98,11 @@ function deletionOrder(edges) {
   const parents = new Map([...nodes].map((n) => [n, new Set()]));
   for (const edge of edges) {
     if (!nodes.has(edge.parent)) continue;
+    // A FK from another schema can cascade outside the reviewed snapshot.
+    // Refuse it regardless of its ON DELETE action.
+    if (edge.childSchema && edge.childSchema !== 'public') {
+      throw new Error(`SAFETY STOP: external FK child ${edge.childSchema}.${edge.child} references ${edge.parent}.`);
+    }
     if (PRESERVED.includes(edge.child)) {
       if (!(edge.child === 'audit_logs' &&
             ['accounts', 'associations'].includes(edge.parent) && edge.action === 'n')) {
@@ -140,12 +145,14 @@ async function assertSchema(tx, target) {
     if (rows.length !== 1) throw new Error('SAFETY STOP: test database canary missing.');
   }
   const edges = await tx.$queryRawUnsafe(`
-    SELECT child.relname AS child, parent.relname AS parent, c.confdeltype AS action
+    SELECT child.relname AS child, child_ns.nspname AS "childSchema",
+      parent.relname AS parent, c.confdeltype AS action
     FROM pg_constraint c
     JOIN pg_class child ON child.oid=c.conrelid
     JOIN pg_class parent ON parent.oid=c.confrelid
-    JOIN pg_namespace ns ON ns.oid=child.relnamespace
-    WHERE c.contype='f' AND ns.nspname='public'`);
+    JOIN pg_namespace child_ns ON child_ns.oid=child.relnamespace
+    JOIN pg_namespace parent_ns ON parent_ns.oid=parent.relnamespace
+    WHERE c.contype='f' AND parent_ns.nspname='public'`);
   return deletionOrder(edges);
 }
 
@@ -163,7 +170,7 @@ async function assertAdmin(tx) {
 
 function targetPredicate(table) {
   if (table === 'accounts') return ` WHERE t.role <> 'ADMIN'`;
-  if (table === 'auth_credentials') return ` WHERE NOT EXISTS (
+  if (table === 'auth_credentials' || table === 'auth_sessions') return ` WHERE NOT EXISTS (
     SELECT 1 FROM public.accounts a WHERE a.id=t.account_id AND a.role='ADMIN')`;
   return '';
 }
@@ -189,6 +196,8 @@ async function snapshot(tx) {
   }
   protectedRows.admin = await fingerprint(tx, 'accounts', ` WHERE t.role='ADMIN'`);
   protectedRows.adminCredentials = await fingerprint(tx, 'auth_credentials', ` WHERE EXISTS (
+    SELECT 1 FROM public.accounts a WHERE a.id=t.account_id AND a.role='ADMIN')`);
+  protectedRows.adminSessions = await fingerprint(tx, 'auth_sessions', ` WHERE EXISTS (
     SELECT 1 FROM public.accounts a WHERE a.id=t.account_id AND a.role='ADMIN')`);
   const files = await tx.$queryRawUnsafe(`SELECT bucket, object_key AS "objectKey" FROM public.files ORDER BY bucket, object_key`);
   const codes = {};
@@ -236,6 +245,8 @@ async function runApply(client, target, manifest, env = process.env) {
     const order = await assertSchema(tx, target);
     const lockTables = [...EXPECTED].sort().map((n) => `public.${quoteIdentifier(n)}`).join(', ');
     await tx.$executeRawUnsafe(`LOCK TABLE ${lockTables} IN SHARE ROW EXCLUSIVE MODE`);
+    // Catch a FK added between the first catalog read and acquiring table locks.
+    await assertSchema(tx, target);
     const before = await snapshot(tx);
     if (manifestFingerprint(before) !== manifest.sha256) {
       throw new Error('SAFETY STOP: data changed after preview, including new applications.');
@@ -297,4 +308,4 @@ if (require.main === module) {
 }
 
 module.exports = { assertTarget, assertApplyPermission, deletionOrder, manifestFingerprint,
-  runPreview, runApply, writeManifest, PRODUCTION_REF, PRESERVED, WIPED, TARGETS };
+  assertSchema, runPreview, runApply, writeManifest, targetPredicate, PRODUCTION_REF, PRESERVED, WIPED, TARGETS };

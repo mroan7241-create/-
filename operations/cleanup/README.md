@@ -33,7 +33,7 @@ canary, or a failed preservation check stop execution before commit.
    every row fingerprint under table locks and aborts if anything changed since
    preview (including a newly submitted application). A failed transaction
    rolls back; do not retry by force.
-7. Verify zero operational rows and the original ADMIN login/credentials,
+7. Verify zero trial operational rows and the original ADMIN login/credentials/sessions,
    settings, reference data, geography, public-code counters, migrations,
    activities, and audit events. Audit actor/association foreign keys for deleted
    records become `NULL` under the existing database constraints; audit event

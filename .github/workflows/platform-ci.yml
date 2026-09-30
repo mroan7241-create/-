@@ -112,11 +112,34 @@ jobs:
       - name: API e2e / integration tests (NODE-1 + NODE-2)
         run: npm run test:e2e --workspace apps/api
 
-      # Runs only after every other DB test, against the explicit CI database
-      # with its canary. This never connects to or changes Production.
+      # E2E suites intentionally mutate their shared database, including the
+      # seeded ADMIN. Rehearse cleanup on a fresh, separate, explicitly
+      # allowlisted CI database so the preservation assertion is meaningful.
+      - name: create isolated cleanup rehearsal database
+        run: PGPASSWORD=alzad_ci_password psql -h localhost -U alzad_ci -d alzad_platform_ci -v ON_ERROR_STOP=1 -c 'CREATE DATABASE alzad_cleanup_ci'
+
+      - name: migrate isolated cleanup rehearsal database
+        run: npm run migrate:deploy --workspace packages/db
+        env:
+          DATABASE_URL: postgresql://alzad_ci:alzad_ci_password@localhost:5432/alzad_cleanup_ci?schema=public
+
+      - name: provision cleanup rehearsal canary
+        run: npx ts-node --transpile-only apps/api/test/utils/create-test-canary.ts
+        env:
+          DATABASE_URL: postgresql://alzad_ci:alzad_ci_password@localhost:5432/alzad_cleanup_ci?schema=public
+          E2E_ALLOWED_DATABASE_NAMES: alzad_cleanup_ci
+          E2E_INIT_CANARY: 'true'
+
+      - name: seed isolated cleanup rehearsal database
+        run: npm run db:seed
+        env:
+          DATABASE_URL: postgresql://alzad_ci:alzad_ci_password@localhost:5432/alzad_cleanup_ci?schema=public
+
       - name: trial-data cleanup guard and isolated database rehearsal
         run: node --test ../operations/cleanup/cleanup-trial-data.test.cjs ../operations/cleanup/cleanup-trial-data.integration.test.cjs
         env:
+          DATABASE_URL: postgresql://alzad_ci:alzad_ci_password@localhost:5432/alzad_cleanup_ci?schema=public
+          E2E_ALLOWED_DATABASE_NAMES: alzad_cleanup_ci
           ALZAD_CLEANUP_INTEGRATION: 'true'
 
       - name: build all workspaces

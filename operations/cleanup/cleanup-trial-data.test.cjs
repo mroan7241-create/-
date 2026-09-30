@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  assertTarget, assertApplyPermission, deletionOrder, manifestFingerprint,
-  PRODUCTION_REF,
+  assertTarget, assertApplyPermission, assertSchema, deletionOrder, manifestFingerprint,
+  targetPredicate, PRODUCTION_REF, PRESERVED, TARGETS,
 } = require('./cleanup-trial-data.cjs');
 
 test('fails closed without positive test target and explicit allowlist', () => {
@@ -44,6 +44,32 @@ test('FK order is child-first and refuses protected or cyclic dependencies', () 
     { child: 'accounts', parent: 'associations', action: 'r' },
     { child: 'associations', parent: 'accounts', action: 'r' },
   ]), /cycle/);
+  for (const action of ['c', 'n', 'r']) {
+    assert.throws(() => deletionOrder([
+      { childSchema: 'storage', child: 'foreign_objects', parent: 'accounts', action },
+    ]), /external FK child storage\.foreign_objects/);
+  }
+});
+
+test('ADMIN sessions and credentials are excluded from deletion targets', () => {
+  for (const table of ['auth_credentials', 'auth_sessions']) {
+    assert.match(targetPredicate(table), /NOT EXISTS/);
+    assert.match(targetPredicate(table), /a\.id=t\.account_id AND a\.role='ADMIN'/);
+  }
+  assert.match(targetPredicate('accounts'), /role <> 'ADMIN'/);
+  assert.equal(targetPredicate('application_answers'), '');
+});
+
+test('schema inspection reads inbound FKs from every child schema', async () => {
+  const tx = { $queryRawUnsafe: async (sql) => {
+    if (sql.includes('FROM pg_tables')) {
+      return [...PRESERVED, ...TARGETS].map((tablename) => ({ tablename }));
+    }
+    assert.match(sql, /parent_ns\.nspname='public'/);
+    assert.doesNotMatch(sql, /child_ns\.nspname='public'/);
+    return [{ childSchema: 'storage', child: 'objects', parent: 'accounts', action: 'c' }];
+  } };
+  await assert.rejects(assertSchema(tx, { kind: 'production' }), /external FK child storage\.objects/);
 });
 
 test('manifest fingerprint is exact and independent of timestamp outside data', () => {
