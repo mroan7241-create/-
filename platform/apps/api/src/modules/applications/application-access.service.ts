@@ -106,11 +106,11 @@ export class ApplicationAccessService {
     const now = new Date();
     const draft = await prisma.associationApplicationDraft.findFirst({
       where: { publicCode: draftCode, resumeTokenHash: sha256Hex(resumeToken), expiresAt: { gt: now } },
-      select: { id: true },
+      select: { id: true, expiresAt: true },
     });
     if (!draft) throw invalidAccess();
     const sessionToken = randomBytes(32).toString('base64url');
-    const expiresAt = new Date(now.getTime() + APPLICANT_SESSION_TTL_SECONDS * 1000);
+    const expiresAt = draft.expiresAt;
     await prisma.applicationApplicantSession.create({
       data: { draftId: draft.id, tokenHash: sha256Hex(sessionToken), expiresAt },
     });

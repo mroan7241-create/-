@@ -1,7 +1,7 @@
 export type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 
 // One writer; changes made during a PUT are coalesced to the latest UI snapshot.
-export function createAutosaveQueue<T>(initial: T, initialRevision: number, save: (snapshot: T) => Promise<number>, notify: (state: SaveState) => void) {
+export function createAutosaveQueue<T>(initial: T, initialRevision: number, save: (snapshot: T, revision: number) => Promise<number>, notify: (state: SaveState) => void) {
   let current = initial;
   let persisted = JSON.stringify(initial);
   let revision = initialRevision;
@@ -18,7 +18,7 @@ export function createAutosaveQueue<T>(initial: T, initialRevision: number, save
         while (JSON.stringify(current) !== persisted) {
           const snapshot = current;
           const fingerprint = JSON.stringify(snapshot);
-          revision = await save(snapshot);
+          revision = await save(snapshot, revision);
           persisted = fingerprint;
         }
         return revision;

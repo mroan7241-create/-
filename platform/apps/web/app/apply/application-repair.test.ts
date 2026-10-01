@@ -35,7 +35,7 @@ test('completion item labels retain both the chosen field and the written reason
 // @ts-ignore -- standalone node --test, not a browser import
 import { createAutosaveQueue } from './autosave-queue.ts';
 // @ts-ignore -- standalone node --test, not a browser import
-import { DRAFT_KEY, rememberDraftSession } from './draft-session.ts';
+import { DRAFT_KEY, isInvalidDraftAccess, readDraftSession, rememberDraftSession, restoreDraftSession } from './draft-session.ts';
 // @ts-ignore -- standalone node --test, not a browser import
 import { CONSENT_VERSION, riyadhRecentYears, validateStep, withDisplayedNumericDefaults } from './application-form-utils.ts';
 
@@ -60,6 +60,99 @@ test('public draft persistence keeps only its code and a session marker, never t
   assert.deepEqual(metadata, { draftCode: 'DRF-TEST-001', viaSession: true });
   assert.deepEqual(JSON.parse(stored), metadata);
   assert.doesNotMatch(stored, /resumeToken/);
+});
+
+test('blocked browser storage does not prevent opening a newly created or restored server draft', async () => {
+  const storage = {
+    setItem: () => { throw new Error('synthetic blocked storage'); },
+    getItem: () => { throw new Error('synthetic blocked storage'); },
+    removeItem: () => { throw new Error('synthetic blocked storage'); },
+  };
+  const credentials = rememberDraftSession(storage, 'DRF-NEW');
+  assert.deepEqual(credentials, { draftCode: 'DRF-NEW', viaSession: true });
+  const restored = await restoreDraftSession(storage, credentials, async () => assert.fail('unexpected token upgrade'), async () => ({ payload: { organization: { name: 'جمعية تجريبية' } }, revision: 1 }));
+  assert.deepEqual(restored.metadata, credentials);
+  assert.equal(restored.draft.revision, 1);
+  const access = readFileSync(new URL('./access/page.tsx', import.meta.url), 'utf8');
+  assert.match(access, /rememberDraftSession\(localStorage, result\.draftCode\)/);
+});
+
+function draftStorage(initial: string | null) {
+  let value = initial;
+  return {
+    getItem: (key: string) => { assert.equal(key, DRAFT_KEY); return value; },
+    setItem: (key: string, next: string) => { assert.equal(key, DRAFT_KEY); value = next; },
+    removeItem: (key: string) => { assert.equal(key, DRAFT_KEY); value = null; },
+  };
+}
+
+test('a new session draft resumes the saved three fields after reopening without a bearer token', async () => {
+  const storage = draftStorage(null);
+  rememberDraftSession(storage, 'DRF-NEW');
+  const existing = readDraftSession(storage)!;
+  const payload = { organization: { name: 'جمعية تجريبية', licenseNumber: 'TEST-001', licenseExpiryDate: '2027-01-01' } };
+  const restored = await restoreDraftSession(storage, existing, async () => assert.fail('session drafts do not upgrade'), async (code, token) => {
+    assert.equal(code, 'DRF-NEW'); assert.equal(token, '');
+    return { payload, revision: 3, attachments: [] };
+  });
+  assert.deepEqual(restored.draft.payload, payload);
+  assert.deepEqual(restored.metadata, existing);
+});
+
+test('legacy token migration is awaited only when restoring the selected draft', async () => {
+  const token = 'synthetic-token-'.repeat(3);
+  const storage = draftStorage(JSON.stringify({ draftCode: 'DRF-LEGACY', resumeToken: token }));
+  const existing = readDraftSession(storage)!;
+  const calls: string[] = [];
+  await restoreDraftSession(storage, existing, async (code, bearer) => {
+    assert.equal(code, existing.draftCode); assert.equal(bearer, token);
+    await Promise.resolve(); calls.push('upgrade');
+  }, async (_code, bearer) => { assert.deepEqual(calls, ['upgrade']); assert.equal(bearer, ''); calls.push('load'); return {}; });
+  assert.deepEqual(calls, ['upgrade', 'load']);
+  assert.deepEqual(readDraftSession(storage), { draftCode: existing.draftCode, viaSession: true });
+});
+
+test('expired or deleted drafts clear only the matching browser shortcut and allow email recovery', async () => {
+  for (const code of ['APPLICATION_RESUME_INVALID', 'APPLICATION_ACCESS_INVALID']) {
+    const storage = draftStorage(null);
+    const existing = rememberDraftSession(storage, 'DRF-OLD');
+    const reason = new ApiClientError(code, 'synthetic invalid session');
+    await assert.rejects(restoreDraftSession(storage, existing, async () => undefined, async () => { throw reason; }), reason);
+    assert.equal(readDraftSession(storage), null);
+    assert.equal(isInvalidDraftAccess(reason), true);
+  }
+  const page = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /if \(isInvalidDraftAccess\(reason\)\) \{[\s\S]*?setMode\('resume'\)/);
+});
+
+test('a transient restore failure retains the shortcut and a stale failure preserves a newer draft', async () => {
+  const storage = draftStorage(null);
+  const existing = rememberDraftSession(storage, 'DRF-OLD');
+  await assert.rejects(restoreDraftSession(storage, existing, async () => undefined, async () => { throw new ApiClientError('NETWORK_ERROR', 'synthetic'); }));
+  assert.deepEqual(readDraftSession(storage), existing);
+  await assert.rejects(restoreDraftSession(storage, existing, async () => undefined, async () => {
+    rememberDraftSession(storage, 'DRF-NEW');
+    throw new ApiClientError('APPLICATION_RESUME_INVALID', 'synthetic');
+  }));
+  assert.equal(readDraftSession(storage)?.draftCode, 'DRF-NEW');
+});
+
+test('malformed browser metadata is not presented as a saved draft', () => {
+  for (const raw of ['{', 'null', '[]', '{}', '{"draftCode":"DRF-TEST"}', '{"draftCode":4,"viaSession":true}', '{"draftCode":"DRF-TEST","resumeToken":42}']) {
+    const storage = draftStorage(raw);
+    assert.equal(readDraftSession(storage), null);
+    assert.equal(storage.getItem(DRAFT_KEY), null);
+  }
+});
+
+test('status and expired access pages provide a path to request a fresh email link', () => {
+  const status = readFileSync(new URL('./status/page.tsx', import.meta.url), 'utf8');
+  const access = readFileSync(new URL('./access/page.tsx', import.meta.url), 'utf8');
+  assert.match(status, /readDraftSession\(localStorage\)/);
+  assert.match(status, /restoreDraftSession\(localStorage,[\s\S]*?upgradeApplicationDraftSession, trackApplicationV2\)/);
+  assert.match(status, /isInvalidDraftAccess\(reason\)[\s\S]*?setDraftCode\(''\)/);
+  assert.match(status, /!draftCode && <Link href="\/apply"/);
+  assert.match(access, /\(error \|\| !token\) && <Link[^>]*href="\/apply"/);
 });
 // @ts-ignore -- standalone node --test, not a browser import
 import { financialSummary } from '../lib/financial-summary.ts';
@@ -258,6 +351,31 @@ test('autosave failure is not saved, does not retry itself, and can be explicitl
   queue.setCurrent('B');
   await assert.rejects(queue.flush()); assert.equal(attempts, 1); assert.equal(queue.isSaved(), false);
   await queue.flush(); assert.equal(attempts, 2); assert.equal(queue.isSaved(), true);
+});
+
+test('switching drafts while an old save completes keeps each queue on its own revision', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const writes: { draft: string; revision: number; payload: string }[] = [];
+  const old = createAutosaveQueue('old-initial', 6, async (payload, revision) => {
+    writes.push({ draft: 'old', revision, payload });
+    if (payload === 'old-first') await gate;
+    return revision + 1;
+  }, () => undefined);
+  old.setCurrent('old-first'); const pending = old.flush();
+  await Promise.resolve(); old.setCurrent('old-last');
+  const fresh = createAutosaveQueue('new-initial', 0, async (payload, revision) => {
+    writes.push({ draft: 'new', revision, payload }); return revision + 1;
+  }, () => undefined);
+  fresh.setCurrent('new-first'); assert.equal(await fresh.flush(), 1);
+  release(); assert.equal(await pending, 8);
+  fresh.setCurrent('new-last'); assert.equal(await fresh.flush(), 2);
+  assert.deepEqual(writes, [
+    { draft: 'old', revision: 6, payload: 'old-first' },
+    { draft: 'new', revision: 0, payload: 'new-first' },
+    { draft: 'old', revision: 7, payload: 'old-last' },
+    { draft: 'new', revision: 1, payload: 'new-last' },
+  ]);
 });
 
 type Payload = Record<string, unknown>;

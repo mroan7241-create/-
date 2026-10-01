@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ApiClientError, exchangeApplicationAccess } from '../../lib/api';
+import { rememberDraftSession } from '../draft-session';
 import styles from '../application-v2.module.css';
-
-const DRAFT_KEY = 'alzad.apply.v2.draft';
 
 export default function ApplicationAccessPage() {
   const router = useRouter();
@@ -20,7 +20,7 @@ export default function ApplicationAccessPage() {
     setLoading(true); setError('');
     try {
       const result = await exchangeApplicationAccess(token);
-      localStorage.setItem(DRAFT_KEY, JSON.stringify({ draftCode: result.draftCode, viaSession: true }));
+      rememberDraftSession(localStorage, result.draftCode);
       router.replace(result.destination);
     } catch (reason) {
       setError(reason instanceof ApiClientError || reason instanceof Error ? reason.message : 'تعذّر فتح الطلب. اطلب رابطًا جديدًا.');
@@ -33,6 +33,7 @@ export default function ApplicationAccessPage() {
       <p>لن يُفتح الطلب بمجرد زيارة هذه الصفحة. اضغط الزر للمتابعة وإنشاء جلسة آمنة على هذا الجهاز.</p>
       {error && <p role="alert" className={styles.error}>{error}</p>}
       <button className={styles.button} disabled={loading || !token} onClick={() => void openRequest()}>{loading ? 'جارٍ التحقق…' : 'فتح الطلب بأمان'}</button>
+      {(error || !token) && <Link className={styles.buttonSecondary} href="/apply">طلب رابط وصول جديد</Link>}
     </section>
   </div></main>;
 }

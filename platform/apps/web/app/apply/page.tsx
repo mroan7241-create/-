@@ -8,27 +8,27 @@ import { ApiClientError, createApplicationDraft, getApplicationGeography, getApp
 import { CONSENT_VERSION, EMAIL_ERROR, PHONE_ERROR, isValidEmail, isValidSaudiMobile, normalizeArabicSearch, payloadFingerprint, riyadhRecentYears, validateStep, withDisplayedNumericDefaults } from './application-form-utils';
 import styles from './application-v2.module.css';
 import { createAutosaveQueue } from './autosave-queue';
-import { DRAFT_KEY, rememberDraftSession } from './draft-session';
+import { isInvalidDraftAccess, readDraftSession, rememberDraftSession, restoreDraftSession, type DraftCredentials } from './draft-session';
 
 const STEP_LABELS = ['الجمعية والموقع', 'القيادة والجاهزية', 'المستفيدون والبيانات', 'الخبرة السابقة', 'الحوكمة والمالية', 'التخطيط والاستدامة', 'المرفقات والإقرار'];
 const EDUCATION_OPTIONS = ['ثانوي فأقل', 'دبلوم', 'بكالوريوس', 'دراسات عليا'];
 const SATISFACTION_OPTIONS = ['استبانة', 'اتصال', 'زيارة', 'نظام إلكتروني', 'أخرى'];
 const ATTACHMENT_LABELS: Record<string, string> = { licenseFile: 'الترخيص', previousProjectEvidence: 'شاهد تنفيذ المشروع السابق — اختياري', spendingPolicyFile: 'لائحة الصرف المعتمدة', strategicPlanFile: 'الخطة الاستراتيجية', operationalPlanFile: 'الخطة التشغيلية', initialBeneficiaryFile: 'القائمة الأولية للمستفيدين (اختياري)', financialStatementsFile: 'القوائم المالية المعتمدة/المراجعة', governanceReportFile: 'تقرير درجة الحوكمة لآخر إصدار معتمد' };
 type Payload = Record<string, unknown>;
-type Credentials = { draftCode: string; resumeToken?: string; viaSession?: boolean };
+type Credentials = DraftCredentials;
 
 export default function ApplyPage() {
   const router = useRouter();
   const [mode, setMode] = useState<'landing' | 'resume' | 'form'>('landing');
   const [step, setStep] = useState(1); const [payload, setPayload] = useState<Payload>({});
   const [credentials, setCredentials] = useState<Credentials | null>(null); const [recoveryEmail, setRecoveryEmail] = useState(''); const [recoveryMessage, setRecoveryMessage] = useState('');
-  const revisionRef = useRef(0); const saveQueue = useRef<ReturnType<typeof createAutosaveQueue<Payload>> | null>(null); const lastSavedFingerprint = useRef('');
+  const saveQueue = useRef<ReturnType<typeof createAutosaveQueue<Payload>> | null>(null); const lastSavedFingerprint = useRef('');
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle'); const [attachments, setAttachments] = useState<string[]>([]); const [uploading, setUploading] = useState(''); const [uploadFailures, setUploadFailures] = useState<string[]>([]);
   const [regions, setRegions] = useState<GeographicUnit[]>([]); const [governorates, setGovernorates] = useState<GeographicUnit[]>([]); const [reference, setReference] = useState<ReferenceData | null>(null);
   const [error, setError] = useState(''); const [success, setSuccess] = useState<{ id: string; message: string; emailSent?: boolean } | null>(null); const [busy, setBusy] = useState(false); const [storedDraft, setStoredDraft] = useState<Credentials | null>(null);
   const [intake, setIntake] = useState<{ open: boolean; closesAt: string | null } | null>(null);
 
-  useEffect(() => { try { const raw = localStorage.getItem(DRAFT_KEY); if (raw) { const saved = JSON.parse(raw) as Credentials; setStoredDraft(saved); if (saved.draftCode && saved.resumeToken) void upgradeApplicationDraftSession(saved.draftCode, saved.resumeToken).then(() => { if (localStorage.getItem(DRAFT_KEY) !== raw) return; setStoredDraft(rememberDraftSession(localStorage, saved.draftCode)); }).catch(() => undefined); } } catch { /* ignore invalid browser metadata */ } void Promise.all([getApplicationGeography(), getReferenceData()]).then(([geo, refs]) => { setRegions(geo.items); setReference(refs); }).catch(() => setError('تعذّر تحميل القوائم المرجعية. أعد تحميل الصفحة.')); }, []);
+  useEffect(() => { try { setStoredDraft(readDraftSession(localStorage)); } catch { /* browser convenience only */ } void Promise.all([getApplicationGeography(), getReferenceData()]).then(([geo, refs]) => { setRegions(geo.items); setReference(refs); }).catch(() => setError('تعذّر تحميل القوائم المرجعية. أعد تحميل الصفحة.')); }, []);
   useEffect(() => { void getApplicationIntake().then(setIntake).catch(() => setError('تعذّر التحقق من فترة التقديم. أعد تحميل الصفحة.')); }, []);
   const regionCode = textAt(payload, 'location.regionCode'); const governorateCode = textAt(payload, 'location.governorateCode');
   useEffect(() => { if (!regionCode) return setGovernorates([]); void getApplicationGeography(regionCode).then((r) => setGovernorates(r.items)).catch(() => setError('تعذّر تحميل المحافظات التابعة للمنطقة.')); }, [regionCode]);
@@ -36,30 +36,31 @@ export default function ApplyPage() {
   useEffect(() => { if (mode !== 'form' || !credentials || success || !saveQueue.current) return; saveQueue.current.setCurrent(payload); if (saveQueue.current.isSaved()) return; const timer = window.setTimeout(() => { void enqueueSave(payload).catch(() => undefined); }, 1200); return () => window.clearTimeout(timer); }, [payload, credentials, mode, success]);
 
   function initializeSaveQueue(initial: Payload, access: Credentials, revision: number) {
-    revisionRef.current = revision;
     lastSavedFingerprint.current = payloadFingerprint(initial);
     setSaveState('idle');
-    saveQueue.current = createAutosaveQueue(initial, revision, async (snapshot) => {
+    const queue: ReturnType<typeof createAutosaveQueue<Payload>> = createAutosaveQueue(initial, revision, async (snapshot, currentRevision) => {
       let attempt = 0;
       while (true) {
         try {
-          const result = await saveApplicationDraft(access.draftCode, access.resumeToken ?? '', revisionRef.current, snapshot);
-          revisionRef.current = result.revision;
-          lastSavedFingerprint.current = payloadFingerprint(snapshot);
-          setError((current) => current === 'تعذر الحفظ مؤقتًا، سنحاول مرة أخرى تلقائيًا' ? '' : current);
+          const result = await saveApplicationDraft(access.draftCode, access.resumeToken ?? '', currentRevision, snapshot);
+          if (saveQueue.current === queue) {
+            lastSavedFingerprint.current = payloadFingerprint(snapshot);
+            setError((current) => current === 'تعذر الحفظ مؤقتًا، سنحاول مرة أخرى تلقائيًا' ? '' : current);
+          }
           return result.revision;
         } catch (reason) {
           if (reason instanceof ApiClientError && reason.code === 'AUTH_RATE_LIMITED' && attempt === 0) {
             attempt += 1;
-            setError('تعذر الحفظ مؤقتًا، سنحاول مرة أخرى تلقائيًا');
+            if (saveQueue.current === queue) setError('تعذر الحفظ مؤقتًا، سنحاول مرة أخرى تلقائيًا');
             await new Promise((resolve) => window.setTimeout(resolve, 1500));
             continue;
           }
-          if (reason instanceof ApiClientError && reason.code === 'APPLICATION_DRAFT_REVISION_CONFLICT') setError(reason.message);
+          if (saveQueue.current === queue && reason instanceof ApiClientError && reason.code === 'APPLICATION_DRAFT_REVISION_CONFLICT') setError(reason.message);
           throw reason;
         }
       }
-    }, setSaveState);
+    }, (state) => { if (saveQueue.current === queue) setSaveState(state); });
+    saveQueue.current = queue;
   }
   function enqueueSave(snapshot: Payload): Promise<number> {
     if (!saveQueue.current) return Promise.reject(new Error('تعذّر التحقق من بيانات المسودة.'));
@@ -67,7 +68,7 @@ export default function ApplyPage() {
     return saveQueue.current.flush();
   }
   async function startNew() { setBusy(true); setError(''); try { const result = await createApplicationDraft(crypto.randomUUID()); const next = rememberDraftSession(localStorage, result.draftCode); const initial = withDisplayedNumericDefaults({}); setStoredDraft(next); setCredentials(next); initializeSaveQueue({}, next, result.revision); setPayload(initial); setAttachments([]); setUploadFailures([]); setStep(1); setMode('form'); } catch (reason) { setError(readError(reason)); } finally { setBusy(false); } }
-  async function resume(existing: Credentials) { if (!existing.draftCode || (!existing.resumeToken && !existing.viaSession)) return setError('تعذّر العثور على صلاحية استكمال محفوظة. اطلب رابطًا جديدًا بالبريد.'); setBusy(true); setError(''); try { if (existing.resumeToken) await upgradeApplicationDraftSession(existing.draftCode, existing.resumeToken); const result = await loadApplicationDraft(existing.draftCode, ''); const next = rememberDraftSession(localStorage, existing.draftCode); const restored = withDisplayedNumericDefaults(result.payload); setStoredDraft(next); setCredentials(next); setPayload(restored); initializeSaveQueue(result.payload, next, result.revision); setAttachments(result.attachments); setUploadFailures([]); revisionRef.current = result.revision; if (result.submitted) router.push('/apply/status'); else setMode('form'); } catch (reason) { setError(readError(reason)); } finally { setBusy(false); } }
+  async function resume(existing: Credentials) { if (!existing.draftCode || (!existing.resumeToken && !existing.viaSession)) return setError('تعذّر العثور على صلاحية استكمال محفوظة. اطلب رابطًا جديدًا بالبريد.'); setBusy(true); setError(''); try { const { draft: result, metadata: next } = await restoreDraftSession(localStorage, existing, upgradeApplicationDraftSession, loadApplicationDraft); const restored = withDisplayedNumericDefaults(result.payload); setStoredDraft(next); setCredentials(next); setPayload(restored); initializeSaveQueue(result.payload, next, result.revision); setAttachments(result.attachments); setUploadFailures([]); if (result.submitted) router.push('/apply/status'); else setMode('form'); } catch (reason) { if (isInvalidDraftAccess(reason)) { setStoredDraft((current) => current?.draftCode === existing.draftCode ? null : current); setRecoveryMessage(''); setMode('resume'); setError('تعذّر الوصول إلى المسودة المحفوظة. أدخل البريد الرسمي للجمعية لطلب رابط جديد، أو ارجع للبداية لتقديم طلب جديد.'); } else setError(readError(reason)); } finally { setBusy(false); } }
   async function sendRecovery() { setBusy(true); setError(''); setRecoveryMessage(''); try { const result = await requestApplicationAccess(recoveryEmail.trim()); setRecoveryMessage(result.message); } catch (reason) { setError(readError(reason)); } finally { setBusy(false); } }
   function setValue(path: string, value: unknown, clearPaths: string[] = []) { const otherLinks:Record<string,string>={'organization.category':'organization.categoryOther','planning.satisfactionTool':'planning.satisfactionOther'}; const linked=otherLinks[path]; const effectiveClears = linked && value !== 'أخرى' ? [...clearPaths, linked] : clearPaths; setPayload((current) => { let next = setAt(current, path, value); for (const clearPath of effectiveClears) next = removeAt(next, clearPath); return next; }); }
   async function upload(fieldKey: string, file: File | null) { if (!file || !credentials) return; setUploading(fieldKey); setUploadFailures((current) => current.filter((key) => key !== fieldKey)); setError(''); try { await uploadApplicationAttachment(credentials.draftCode, credentials.resumeToken ?? '', fieldKey, file); setAttachments((current) => [...new Set([...current, fieldKey])]); } catch (reason) { setAttachments((current) => current.filter((key) => key !== fieldKey)); setUploadFailures((current) => [...new Set([...current, fieldKey])]); setError(readError(reason)); throw reason; } finally { setUploading(''); } }

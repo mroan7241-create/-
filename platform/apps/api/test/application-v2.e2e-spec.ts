@@ -53,8 +53,18 @@ describe('Application V2 launch gate', () => {
     const newDraftCookie = created.headers['set-cookie'][0];
     expect(newDraftCookie).toContain('alzad_applicant_session=');
     expect(newDraftCookie).toContain('HttpOnly');
-    expect(newDraftCookie).not.toMatch(/Expires=|Max-Age=/i);
+    expect(newDraftCookie).toMatch(/Expires=/i);
+    const initialDraft = await prisma.associationApplicationDraft.findUniqueOrThrow({ where: { publicCode: created.body.draftCode }, include: { applicantSessions: true } });
+    expect(initialDraft.applicantSessions[0]!.expiresAt).toEqual(initialDraft.expiresAt);
+    expect(new Date(/Expires=([^;]+)/i.exec(newDraftCookie)![1]).getTime()).toBe(Math.floor(initialDraft.expiresAt.getTime() / 1000) * 1000);
     await http().get(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set('Cookie', newDraftCookie).expect(200);
+    const partialPayload = { organization: { name: 'ثلاثة حقول محفوظة', licenseNumber: 'partial-license', category: 'متوسطة' } };
+    const partialSave = await http().put(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set('Cookie', newDraftCookie)
+      .send({ revision: 0, payload: partialPayload }).expect(200);
+    const restoredPartial = await request(app.getHttpServer()).get(`/api/v1/association-applications/drafts/${created.body.draftCode}`)
+      .set('Cookie', newDraftCookie.split(';')[0]).expect(200);
+    expect(restoredPartial.body.payload).toEqual(partialPayload);
+    expect(restoredPartial.body.revision).toBe(partialSave.body.revision);
     const auth = { 'x-application-resume-token': created.body.resumeToken };
     const applicantAccess = { Cookie: newDraftCookie };
     await http().get(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set('x-application-resume-token', 'x'.repeat(64)).expect(403);
@@ -67,7 +77,7 @@ describe('Application V2 launch gate', () => {
     const payload = validV2Payload();
     payload.location.regionCode = '0013';
     payload.location.governorateCode = '0247';
-    const saved = await http().put(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set(applicantAccess).send({ revision: 0, payload }).expect(200);
+    const saved = await http().put(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set(applicantAccess).send({ revision: partialSave.body.revision, payload }).expect(200);
     const genericUnknown = await http().post('/api/v1/association-applications/access/request').send({ email: 'nobody@example.org' }).expect(200);
     const accessRequest = await http().post('/api/v1/association-applications/access/request').send({ email: payload.organization.officialEmail }).expect(200);
     expect(accessRequest.body.message).toBe(genericUnknown.body.message);
@@ -163,7 +173,7 @@ describe('Application V2 launch gate', () => {
     await rejected('APPLICATION_VALIDATION_FAILED');
   });
 
-  it('expires the short applicant session and recovers the same draft through its official email', async () => {
+  it('rejects an expired applicant session and recovers the same draft through its official email', async () => {
     const created = await http().post('/api/v1/association-applications/drafts').send({ clientRequestId: randomUUID() }).expect(201);
     const oldCookie = created.headers['set-cookie'][0];
     const email = `recovery-${randomUUID()}@example.org`;
@@ -177,6 +187,8 @@ describe('Application V2 launch gate', () => {
     const recovered = await http().post('/api/v1/association-applications/access/exchange').send({ token: new URL(accessUrl!).searchParams.get('token') }).expect(200);
     expect(recovered.body.draftCode).toBe(created.body.draftCode);
     await http().get(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set('Cookie', recovered.headers['set-cookie'][0]).expect(200);
+    await prisma.applicationApplicantSession.updateMany({ where: { draftId: draft.id, expiresAt: { gt: new Date() } }, data: { revokedAt: new Date() } });
+    await http().get(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set('Cookie', recovered.headers['set-cookie'][0]).expect(403);
   });
 
   it('keeps an earlier applicant access link usable when sending its replacement fails', async () => {

@@ -37,7 +37,7 @@ export class ApplicationsController {
   async createDraft(@Body() dto: CreateApplicationDraftDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const result = await this.applicationV2.createDraft(dto.clientRequestId, dto.website, req.ip || req.socket.remoteAddress || 'unknown');
     if ('sessionToken' in result && result.sessionToken && result.sessionExpiresAt) {
-      this.setApplicantSessionCookie(res, result.sessionToken);
+      this.setApplicantSessionCookie(res, result.sessionToken, result.sessionExpiresAt);
       return { ok: result.ok, draftCode: result.draftCode, resumeToken: result.resumeToken, revision: result.revision, expiresAt: result.expiresAt };
     }
     return result;
@@ -49,7 +49,7 @@ export class ApplicationsController {
   @HttpCode(HttpStatus.OK)
   async upgradeDraftSession(@Param('draftCode') draftCode: string, @Headers('x-application-resume-token') token = '', @Res({ passthrough: true }) res: Response) {
     const result = await this.applicationAccess.upgradeResumeToken(draftCode, token);
-    this.setApplicantSessionCookie(res, result.sessionToken);
+    this.setApplicantSessionCookie(res, result.sessionToken, result.expiresAt);
     return { ok: true, draftCode: result.draftCode };
   }
 
@@ -101,16 +101,18 @@ export class ApplicationsController {
   @HttpCode(HttpStatus.OK)
   async exchangeAccess(@Body() dto: ExchangeApplicationAccessDto, @Res({ passthrough: true }) res: Response) {
     const result = await this.applicationAccess.exchange(dto.token);
-    this.setApplicantSessionCookie(res, result.sessionToken);
+    this.setApplicantSessionCookie(res, result.sessionToken, result.expiresAt);
     return { ok: true, draftCode: result.draftCode, destination: result.destination };
   }
 
-  private setApplicantSessionCookie(res: Response, token: string) {
+  private setApplicantSessionCookie(res: Response, token: string, expiresAt: Date) {
     res.cookie(APPLICANT_SESSION_COOKIE, token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       path: '/',
+      // Persist across browser restarts only until the server session expires.
+      expires: expiresAt,
     });
   }
 

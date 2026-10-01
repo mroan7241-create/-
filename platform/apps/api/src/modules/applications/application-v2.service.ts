@@ -34,7 +34,7 @@ import type {
   SelectionDecisionDto,
   SubmitInformationResponseDto,
 } from './dto/application-v2.dto';
-import { APPLICANT_SESSION_TTL_SECONDS, ApplicationAccessService } from './application-access.service';
+import { ApplicationAccessService } from './application-access.service';
 import { SettingsService, applicationIntakeStatus } from '../settings/settings.service';
 
 const DRAFT_TTL_DAYS = 45;
@@ -94,7 +94,6 @@ export class ApplicationV2Service {
     await this.rateLimit.consume('association-application-draft-create', rateLimitSubject, { limit: 12, windowSeconds: 3600 });
     const resumeToken = randomBytes(32).toString('base64url');
     const sessionToken = randomBytes(32).toString('base64url');
-    const sessionExpiresAt = new Date(Date.now() + APPLICANT_SESSION_TTL_SECONDS * 1000);
     const draft = await prisma.$transaction(async (tx) => {
       const created = await tx.associationApplicationDraft.create({ data: {
         publicCode: await this.codes.nextPublicCode(tx, 'DRF'),
@@ -104,11 +103,11 @@ export class ApplicationV2Service {
         payload: {},
       } });
       await tx.applicationApplicantSession.create({ data: {
-        draftId: created.id, tokenHash: sha256Hex(sessionToken), expiresAt: sessionExpiresAt,
+        draftId: created.id, tokenHash: sha256Hex(sessionToken), expiresAt: created.expiresAt,
       } });
       return created;
     });
-    return { ok: true as const, draftCode: draft.publicCode, resumeToken, revision: draft.revision, expiresAt: draft.expiresAt, sessionToken, sessionExpiresAt };
+    return { ok: true as const, draftCode: draft.publicCode, resumeToken, revision: draft.revision, expiresAt: draft.expiresAt, sessionToken, sessionExpiresAt: draft.expiresAt };
   }
 
   async loadDraft(draftCode: string, token: string, applicantSession = '') {
@@ -125,7 +124,7 @@ export class ApplicationV2Service {
     const contactEmailRaw = readOptionalString(pathValue(payload, 'organization.officialEmail'));
     const contactEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmailRaw) ? contactEmailRaw.toLowerCase() : '';
     const updated = await prisma.associationApplicationDraft.updateMany({
-      where: { id: draft.id, revision },
+      where: { id: draft.id, revision, status: ApplicationDraftStatus.ACTIVE, submittedApplicationId: null, expiresAt: { gt: new Date() } },
       data: { payload: payload as Prisma.InputJsonValue, contactEmail: contactEmail || null, revision: { increment: 1 }, expiresAt: addDays(new Date(), DRAFT_TTL_DAYS) },
     });
     if (updated.count !== 1) throw new ApiError('APPLICATION_DRAFT_REVISION_CONFLICT', 'حُفظت نسخة أحدث من الطلب؛ أعد تحميل المسودة قبل المتابعة', 409);
