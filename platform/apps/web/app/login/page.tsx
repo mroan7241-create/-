@@ -64,24 +64,24 @@ export default function LoginPage() {
       <section className="login-panel">
         <div className="lockup-duo">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/brand/zadLogo.png" alt="جمعية الزاد" className="lockup-logo" />
+          <img src="/brand/zadLogo.png" alt="جمعية الزاد" className="lockup-logo" width={426} height={260} />
           <span className="lockup-duo-divider" aria-hidden="true" />
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/brand/partnerLogo.png" alt="مؤسسة سليمان أبانمي الأهلية" className="lockup-partner-logo" />
+          <img src="/brand/partnerLogo.png" alt="مؤسسة سليمان أبانمي الأهلية" className="lockup-partner-logo" width={411} height={220} />
         </div>
         <div className="login-divider" aria-hidden="true" />
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/brand/loginCalligraphy.png" alt="أهلًا وسهلًا" className="login-calligraphy" loading="lazy" />
+        <img src="/brand/loginCalligraphy.png" alt="أهلًا وسهلًا" className="login-calligraphy" width={360} height={290} loading="lazy" />
 
         {tab === 'user' && <>
-          <div className="login-application-entry" style={{ display: 'flex', flexDirection: 'column', gap: 8, textAlign: 'center', marginBottom: 20 }}>
-            <a href="/apply" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 60, padding: '14px 12px', borderRadius: 'var(--r-sm)', background: 'var(--zad-800)', color: '#fff', fontSize: 17, fontWeight: 700, lineHeight: 1.6, textDecoration: 'none' }}>
+          <div className="login-application-entry">
+            <a href="/apply" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 'var(--r-sm)', background: 'var(--zad-800)', color: '#fff', fontSize: 17, fontWeight: 700, lineHeight: 1.4, textDecoration: 'none' }}>
               تقديم طلب جديد للجمعية
             </a>
-            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.7 }}>للمشاركة في مشروع الأجهزة الكهربائية<br />لا تحتاج إلى حساب لبدء التقديم</p>
-            <p style={{ margin: 0, fontSize: 11.5, lineHeight: 1.6, color: '#614651' }}>يخضع الطلب للمراجعة والتقييم، والتقديم لا يعني القبول.</p>
+            <p style={{ margin: 0, fontSize: 13 }}>للمشاركة في مشروع الأجهزة الكهربائية<br />لا تحتاج إلى حساب لبدء التقديم</p>
+            <p style={{ margin: 0, fontSize: 11.5, color: '#614651' }}>يخضع الطلب للمراجعة والتقييم، والتقديم لا يعني القبول.</p>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', color: 'var(--zad-900)' }}>
+          <div className="login-account-separator" style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, fontWeight: 600, color: 'var(--zad-900)' }}>
             <span aria-hidden="true" style={{ flex: 1, height: 1, background: 'rgba(58,8,27,.2)' }} />
             لديك حساب مُفعّل؟ سجّل الدخول
             <span aria-hidden="true" style={{ flex: 1, height: 1, background: 'rgba(58,8,27,.2)' }} />
@@ -109,7 +109,7 @@ export default function LoginPage() {
           </button>
         </div>
 
-        <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <form onSubmit={submit} className="login-form" style={{ display: 'flex', flexDirection: 'column' }}>
           {tab === 'user' ? (
             <>
               <label style={labelStyle}>
@@ -162,7 +162,7 @@ export default function LoginPage() {
             </p>
           )}
 
-          <button type="submit" disabled={loading} style={submitStyle}>
+          <button type="submit" disabled={loading} style={{ ...submitStyle, minHeight: 44, padding: '8px 16px' }}>
             {loading ? 'جارٍ الدخول…' : tab === 'delegate' ? 'دخول المندوب' : 'تسجيل الدخول'}
           </button>
         </form>
@@ -217,15 +217,15 @@ export default function LoginPage() {
 const segmentedStyle: React.CSSProperties = {
   display: 'flex',
   gap: 6,
-  padding: 4,
+  padding: 2,
   borderRadius: 'var(--r-sm)',
-  marginBottom: 18,
 };
 
 function tabStyle(active: boolean): React.CSSProperties {
   return {
     flex: 1,
-    padding: '9px 10px',
+    padding: '6px 10px',
+    minHeight: 44,
     borderRadius: 'var(--r-sm)',
     border: 'none',
     background: active ? 'rgba(255,255,255,0.8)' : 'transparent',
@@ -237,9 +237,11 @@ function tabStyle(active: boolean): React.CSSProperties {
   };
 }
 
-const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 6, fontSize: 14 };
+const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 14 };
 const inputStyle: React.CSSProperties = {
-  padding: '10px 12px',
+  padding: '8px 12px',
+  minHeight: 44,
+  lineHeight: 1.5,
   borderRadius: 'var(--r-sm)',
   border: '1px solid var(--line)',
   fontSize: 16,

@@ -240,7 +240,7 @@ code {
   min-height: 100svh;
   display: grid;
   place-items: center;
-  padding: 16px;
+  padding: 12px;
   background: var(--canvas);
   overflow: hidden;
 }
@@ -283,10 +283,10 @@ code {
   isolation: isolate;
   overflow: hidden;
   z-index: 1;
-  max-width: 440px;
+  max-width: 400px;
   width: 100%;
   margin: 0;
-  padding: clamp(24px, 4.6vh, 44px) clamp(22px, 4vw, 40px);
+  padding: 20px 28px;
   display: flex;
   flex-direction: column;
   background: linear-gradient(155deg, rgba(255, 255, 255, 0.6) 0%, rgba(255, 255, 255, 0.34) 45%, rgba(255, 255, 255, 0.46) 100%);
@@ -314,29 +314,29 @@ code {
     display: none;
   }
 }
-.lockup-duo {
+.login-panel .lockup-duo {
   display: flex;
   flex-direction: row;
   align-items: center;
   gap: 14px;
-  margin-bottom: clamp(18px, 3vh, 30px);
+  margin-bottom: 8px;
 }
-.lockup-logo {
-  height: clamp(48px, 6.5vh, 72px);
+.login-panel .lockup-logo {
+  height: 42px;
   width: auto;
   object-fit: contain;
   display: block;
 }
-.lockup-partner-logo {
-  height: clamp(40px, 5.5vh, 60px);
+.login-panel .lockup-partner-logo {
+  height: 36px;
   width: auto;
   object-fit: contain;
   display: block;
 }
-.lockup-duo-divider {
+.login-panel .lockup-duo-divider {
   width: 1px;
   align-self: stretch;
-  min-height: 44px;
+  min-height: 36px;
   background: rgba(58, 8, 27, 0.18);
   flex: none;
 }
@@ -344,18 +344,19 @@ code {
   width: 56px;
   height: 3px;
   border-radius: 2px;
-  margin: 0 0 clamp(18px, 3vh, 28px);
+  margin: 0 0 10px;
   background: linear-gradient(90deg, var(--gold-600), var(--gold-400));
 }
 .login-calligraphy {
   display: block;
-  margin: 0 auto 16px;
-  max-width: 150px;
-  width: 38%;
+  margin: 0 auto 10px;
+  max-width: 30%;
+  width: 90px;
   height: auto;
   opacity: 0.92;
 }
 .login-panel .segmented {
+  margin-bottom: 10px;
   background: rgba(255, 255, 255, 0.22);
   border: 1px solid rgba(255, 255, 255, 0.4);
 }
@@ -518,6 +519,56 @@ code {
   .official-report-header { border-radius: 0; padding: 10px 0 14px; }
   .official-report-footer { display: flex; position: fixed; bottom: -12mm; left: 0; right: 0; justify-content: space-between; padding-top: 4mm; border-top: 1px solid #c8b8bf; font-size: 8pt; color: #67565d; }
   .official-report-page::after { content: ' · صفحة ' counter(page); }
+}
+
+/* Dimensions only: every selector is confined to the login page. Keep natural
+   page growth for validation messages, text zoom and the on-screen keyboard. */
+.login-panel .login-application-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: center;
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+.login-panel .login-application-entry > a {
+  min-height: 48px;
+  padding: 8px 12px;
+}
+.login-panel .login-account-separator {
+  margin-bottom: 10px;
+  line-height: 1.4;
+  text-align: center;
+}
+.login-panel .login-form {
+  gap: 8px;
+  line-height: 1.4;
+}
+@media (max-height: 740px) {
+  .login-panel { padding: 16px 24px; }
+  .login-panel .lockup-duo { margin-bottom: 6px; }
+  .login-panel .lockup-logo { height: 40px; }
+  .login-panel .lockup-partner-logo { height: 34px; }
+  .login-panel .login-divider { margin-bottom: 6px; }
+  .login-panel .login-calligraphy { width: 76px; margin-bottom: 8px; }
+  .login-panel .login-application-entry { margin-bottom: 8px; line-height: 1.4; }
+  .login-panel .login-application-entry > a { min-height: 44px; }
+  .login-panel .login-account-separator,
+  .login-panel .segmented { margin-bottom: 8px; }
+}
+@media (max-height: 680px) {
+  .login-solo { padding: 8px; }
+  .login-panel { padding: 10px 22px; }
+  .login-panel .lockup-duo { margin-bottom: 4px; }
+  .login-panel .lockup-logo { height: 36px; }
+  .login-panel .lockup-partner-logo { height: 30px; }
+  .login-panel .lockup-duo-divider { min-height: 30px; }
+  .login-panel .login-divider { margin-bottom: 4px; }
+  .login-panel .login-calligraphy { width: 48px; margin-bottom: 6px; }
+  .login-panel .login-application-entry { gap: 2px; margin-bottom: 6px; }
+  .login-panel .login-account-separator,
+  .login-panel .segmented { margin-bottom: 6px; }
+  .login-panel .login-form { gap: 6px; }
 }
 .zad-nav-item2 .zad-badge-dot { margin-inline-start: auto; width: 7px; height: 7px; border-radius: 50%; background: var(--gold-500); box-shadow: 0 0 0 3px rgba(226, 166, 46, 0.18); flex-shrink: 0; }
 .zad-sidebar2-foot { padding: 12px 20px 18px; border-top: 1px solid rgba(255, 255, 255, 0.1); }
