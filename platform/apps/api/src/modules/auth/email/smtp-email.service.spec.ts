@@ -1,10 +1,13 @@
 import { jest } from '@jest/globals';
 import nodemailer from 'nodemailer';
 import { SmtpEmailService } from './smtp-email.service';
+import { Logger } from '@nestjs/common';
 
 describe('SMTP Arabic layout and completed Covenant attachment', () => {
   const previous = { ...process.env };
   beforeEach(() => {
+    jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     Object.assign(process.env, { NODE_ENV: 'test', SMTP_HOST: 'smtp.test.invalid', SMTP_PORT: '587', SMTP_SECURE: 'false', SMTP_USER: 'synthetic', SMTP_PASSWORD: 'synthetic-only', SMTP_FROM_EMAIL: 'sender@example.org', SMTP_FROM_NAME: 'جمعية الزاد', PUBLIC_WEB_URL: 'https://web.example.org' });
   });
   afterEach(() => { process.env = { ...previous }; jest.restoreAllMocks(); });
@@ -39,5 +42,51 @@ describe('SMTP Arabic layout and completed Covenant attachment', () => {
       expect(sent.html).toContain('align="right"'); expect(sent.html).toContain('cid:alzad-approved-logo');
       expect(sent.attachments).toHaveLength(1);
     }
+  });
+
+  it('records SMTP acceptance and correlation without recipients, codes, links, bodies or provider response', async () => {
+    const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ messageId: '<synthetic-123@mail.test.invalid>', accepted: ['private@example.org'], rejected: [], response: 'private-provider-response' });
+    jest.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail } as never);
+    await new SmtpEmailService().sendPasswordResetCode({ to: 'private@example.org', name: 'private-name', code: 'private-code' });
+    const log = jest.mocked(Logger.prototype.log);
+    const raw = String(log.mock.calls[0][0]);
+    expect(JSON.parse(raw)).toMatchObject({ event: 'SMTP_ACCEPTED', kind: 'PASSWORD_RESET', messageId: '<synthetic-123@mail.test.invalid>', acceptedCount: 1, rejectedCount: 0, durationMs: expect.any(Number), traceId: expect.any(String) });
+    for (const secret of ['private@example.org', 'private-name', 'private-code', 'private-provider-response', 'synthetic-only']) expect(raw).not.toContain(secret);
+    expect(sendMail).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['EAUTH', 'ETIMEDOUT'])('logs safe %s diagnostics and propagates the original failure without retrying', async (code) => {
+    const failure = Object.assign(new Error('private-provider-response'), { code, response: 'private-server-response' });
+    const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockRejectedValue(failure);
+    jest.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail } as never);
+    await expect(new SmtpEmailService().sendOperationalDigest({ to: 'private@example.org', subject: 'private-subject', text: 'private-body' })).rejects.toBe(failure);
+    const raw = String(jest.mocked(Logger.prototype.warn).mock.calls[0][0]);
+    expect(JSON.parse(raw)).toMatchObject({ event: 'SMTP_FAILED', code, kind: 'OPERATIONAL_DIGEST' });
+    expect(raw).not.toContain('private');
+    expect(sendMail).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not turn an accepted message into a failed send when logging throws', async () => {
+    const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ messageId: '<test@mail.test.invalid>', accepted: ['private@example.org'] });
+    jest.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail } as never);
+    jest.mocked(Logger.prototype.log).mockImplementation(() => { throw new Error('logger unavailable'); });
+    await expect(new SmtpEmailService().sendApplicationAccess({ to: 'private@example.org', name: 'test', subject: 'test', intro: 'test', items: [] })).resolves.toBeUndefined();
+    expect(sendMail).toHaveBeenCalledTimes(1);
+    expect(Logger.prototype.warn).not.toHaveBeenCalled();
+  });
+
+  it('does not leak unrecognized error codes or unsafe message IDs and preserves failures if logging is unavailable', async () => {
+    const failure = Object.assign(new Error('private-detail'), { code: 'private-error-code' });
+    const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValueOnce({ messageId: 'private-id\nprivate-header' }).mockRejectedValue(failure);
+    jest.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail } as never);
+    const service = new SmtpEmailService();
+    const params = { to: 'private@example.org', subject: 'private-subject', text: 'private-body' };
+    await service.sendOperationalDigest(params);
+    expect(JSON.parse(String(jest.mocked(Logger.prototype.log).mock.calls[0][0]))).not.toHaveProperty('messageId');
+    await expect(service.sendOperationalDigest(params)).rejects.toBe(failure);
+    expect(JSON.parse(String(jest.mocked(Logger.prototype.warn).mock.calls[0][0]))).toMatchObject({ code: 'UNSPECIFIED' });
+    jest.mocked(Logger.prototype.warn).mockImplementation(() => { throw new Error('logger unavailable'); });
+    await expect(service.sendOperationalDigest(params)).rejects.toBe(failure);
+    expect(sendMail).toHaveBeenCalledTimes(3);
   });
 });

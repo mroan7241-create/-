@@ -29,8 +29,21 @@ export class OperationsDigestService implements OnModuleInit, OnModuleDestroy {
   onModuleDestroy() { if (this.timer) clearInterval(this.timer); }
 
   async runScheduled(now = new Date()) {
-    const completion = await this.runCompletionDue(now);
-    const daily = await this.runDue(now);
+    // Keep the existing sequential order, but always attempt the daily branch
+    // even if the completion scan fails. Existing claims/retry limits remain.
+    let completion: Awaited<ReturnType<OperationsDigestService['runCompletionDue']>> | undefined;
+    let completionError: unknown;
+    let completionFailed = false;
+    try { completion = await this.runCompletionDue(now); } catch (error) {
+      completionFailed = true;
+      completionError = error;
+    }
+    let daily: Awaited<ReturnType<OperationsDigestService['runDue']>> | undefined;
+    try { daily = await this.runDue(now); } catch (error) {
+      if (completionFailed) throw new AggregateError([completionError, error], 'Both operational digest branches failed');
+      throw error;
+    }
+    if (completionFailed) throw completionError;
     return { completion, daily };
   }
 

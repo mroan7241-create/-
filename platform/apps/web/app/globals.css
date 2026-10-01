@@ -235,8 +235,9 @@ code {
    سعودية + مخطوطة "أهلًا وسهلًا" + بطاقة زجاجية حقيقية. راجع
    platform/docs/audit/05-legacy-ui-and-docs.md UI-001. */
 .login-solo {
-  position: fixed;
+  position: relative;
   inset: 0;
+  min-height: 100svh;
   display: grid;
   place-items: center;
   padding: 16px;

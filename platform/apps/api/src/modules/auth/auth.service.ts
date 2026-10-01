@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { setTimeout as delay } from 'node:timers/promises';
 import { timingSafeEqual } from 'node:crypto';
 import { prisma, AccountRole, AccountStatus, AgreementStatus, AssociationStatus, AuthCredentialType, ParticipationStatus } from '@alzad/db';
@@ -39,6 +39,7 @@ export interface RequestMeta {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   constructor(
     private readonly rateLimit: RateLimitService,
     private readonly audit: AuditService,
@@ -390,7 +391,16 @@ export class AuthService {
         body: `تم تغيير كلمة مرور حسابك للتو. إن لم يكن هذا أنت فتواصل فورًا مع إدارة المشروع.`,
       });
     } catch {
-      /* إشعار تحسيني بعد نجاح العملية الفعلية — لا يُفشل الاستجابة */
+      // The password transaction already committed. Neither notification nor
+      // failure-audit errors may report a failed password change to the user.
+      try {
+        await this.audit.log(
+          { id: accountForAlert.id, role: accountForAlert.role, associationId: accountForAlert.associationId },
+          'PASSWORD_RESET_SECURITY_ALERT_EMAIL_FAILED', 'accounts', accountForAlert.id,
+        );
+      } catch {
+        try { this.logger.warn('PASSWORD_RESET_SECURITY_ALERT_EMAIL_FAILED: failure audit unavailable'); } catch { /* best-effort diagnostics */ }
+      }
     }
 
     return { ok: true };

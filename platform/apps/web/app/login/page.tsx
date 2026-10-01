@@ -73,6 +73,21 @@ export default function LoginPage() {
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/brand/loginCalligraphy.png" alt="أهلًا وسهلًا" className="login-calligraphy" loading="lazy" />
 
+        {tab === 'user' && <>
+          <div className="login-application-entry" style={{ display: 'flex', flexDirection: 'column', gap: 8, textAlign: 'center', marginBottom: 20 }}>
+            <a href="/apply" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 60, padding: '14px 12px', borderRadius: 'var(--r-sm)', background: 'var(--zad-800)', color: '#fff', fontSize: 17, fontWeight: 700, lineHeight: 1.6, textDecoration: 'none' }}>
+              تقديم طلب جديد للجمعية
+            </a>
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.7 }}>للمشاركة في مشروع الأجهزة الكهربائية<br />لا تحتاج إلى حساب لبدء التقديم</p>
+            <p style={{ margin: 0, fontSize: 11.5, lineHeight: 1.6, color: '#614651' }}>يخضع الطلب للمراجعة والتقييم، والتقديم لا يعني القبول.</p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', color: 'var(--zad-900)' }}>
+            <span aria-hidden="true" style={{ flex: 1, height: 1, background: 'rgba(58,8,27,.2)' }} />
+            لديك حساب مُفعّل؟ سجّل الدخول
+            <span aria-hidden="true" style={{ flex: 1, height: 1, background: 'rgba(58,8,27,.2)' }} />
+          </div>
+        </>}
+
         <div className="segmented" role="tablist" aria-label="نوع الدخول" style={segmentedStyle}>
           <button
             type="button"
@@ -152,14 +167,6 @@ export default function LoginPage() {
           </button>
         </form>
 
-        {tab === 'user' && (
-          <div className="login-secondary-act" style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <a href="/apply" className="btn-ghost" style={ghostButtonStyle}>
-              التقديم على فرصة المشاركة في مشروع الأجهزة الكهربائية
-            </a>
-            <p style={{ margin: 0, fontSize: 12, lineHeight: 1.6, textAlign: 'center' }}>يخضع الطلب للمراجعة والتقييم، والتقديم لا يعني القبول.</p>
-          </div>
-        )}
       </section>
 
       {showForgotCode && (
@@ -247,18 +254,4 @@ const submitStyle: React.CSSProperties = {
   fontWeight: 700,
   fontSize: 15,
   cursor: 'pointer',
-};
-const ghostButtonStyle: React.CSSProperties = {
-  padding: '18px 16px',
-  minHeight: 64,
-  lineHeight: 1.7,
-  borderRadius: 'var(--r-sm)',
-  border: '1px solid rgba(58,8,27,.2)',
-  background: 'rgba(255,255,255,0.4)',
-  color: 'var(--zad-800)',
-  fontWeight: 600,
-  fontSize: 14,
-  textAlign: 'center',
-  textDecoration: 'none',
-  display: 'block',
 };

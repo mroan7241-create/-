@@ -11,6 +11,37 @@ class DigestEmailStub implements Pick<EmailService, 'sendOperationalDigest'> {
 describe('OperationsDigestService', () => {
   afterEach(() => jest.restoreAllMocks());
 
+  it('still attempts the daily branch after a failed completion scan, then reports the original failure', async () => {
+    const service = new OperationsDigestService({} as EmailService);
+    const failure = new Error('completion scan unavailable');
+    const order: string[] = [];
+    jest.spyOn(service, 'runCompletionDue').mockImplementation(async () => { order.push('completion'); throw failure; });
+    jest.spyOn(service, 'runDue').mockImplementation(async () => { order.push('daily'); return { skipped: 'outside daily digest window' }; });
+    await expect(service.runScheduled()).rejects.toBe(failure);
+    expect(order).toEqual(['completion', 'daily']);
+  });
+
+  it('reports both failures without retrying either branch in the same pass', async () => {
+    const service = new OperationsDigestService({} as EmailService);
+    const completionError = new Error('completion failed');
+    const dailyError = new Error('daily failed');
+    const completion = jest.spyOn(service, 'runCompletionDue').mockRejectedValue(completionError);
+    const daily = jest.spyOn(service, 'runDue').mockRejectedValue(dailyError);
+    await expect(service.runScheduled()).rejects.toMatchObject({ errors: [completionError, dailyError] });
+    expect(completion).toHaveBeenCalledTimes(1);
+    expect(daily).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves successful results and passes the same timestamp to both branches', async () => {
+    const service = new OperationsDigestService({} as EmailService);
+    const now = new Date('2026-09-20T03:15:00Z');
+    const completion = jest.spyOn(service, 'runCompletionDue').mockResolvedValue({ scanned: 0, sent: 0 });
+    const daily = jest.spyOn(service, 'runDue').mockResolvedValue({ skipped: 'already sent or in progress' });
+    await expect(service.runScheduled(now)).resolves.toEqual({ completion: { scanned: 0, sent: 0 }, daily: { skipped: 'already sent or in progress' } });
+    expect(completion).toHaveBeenCalledWith(now);
+    expect(daily).toHaveBeenCalledWith(now);
+  });
+
   it('does nothing outside 06:00 Asia/Riyadh', async () => {
     const email = new DigestEmailStub();
     const service = new OperationsDigestService(email as unknown as EmailService);
