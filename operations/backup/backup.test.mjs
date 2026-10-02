@@ -4,7 +4,7 @@ import {generateKeyPairSync} from 'node:crypto';
 import {mkdtemp,writeFile,readFile,rm,open} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {configuration,envelope,decryptBuffer,encryptFile,collectObjects,assertSnapshotReferences,sendParts} from './backup.mjs';
+import {configuration,envelope,decryptBuffer,encryptFile,collectObjects,assertSnapshotReferences,sendParts,safeBackupFailure} from './backup.mjs';
 import {verifyRestore} from './verify-restore.mjs';
 const keys=generateKeyPairSync('rsa',{modulusLength:3072,publicKeyEncoding:{type:'spki',format:'pem'},privateKeyEncoding:{type:'pkcs8',format:'pem'}});
 const config={DATABASE_URL:'postgresql://backup:synthetic-secret@db.example.org:5432/postgres',EXPECTED_DB_HOST:'db.example.org',EXPECTED_DB_NAME:'postgres',OBJECT_STORAGE_ENDPOINT:'https://storage.example.org',OBJECT_STORAGE_REGION:'test',OBJECT_STORAGE_ACCESS_KEY:'synthetic',OBJECT_STORAGE_SECRET_KEY:'synthetic',OBJECT_STORAGE_BUCKET:'test',SMTP_HOST:'smtp.example.org',SMTP_USER:'test',SMTP_PASSWORD:'synthetic',SMTP_FROM_EMAIL:'test@example.org',SMTP_FROM_NAME:'test',SMTP_PORT:'465',SMTP_SECURE:'true'};
@@ -57,8 +57,18 @@ test('multipart delivery preserves every byte and refuses oversized backups befo
     const nearLimit=await sendParts({sendMail:async message=>{if(message.text.includes('تنبيه سعة')) warnings++;return {accepted:['marwanalsawi@alzaad.org.sa']};}},path,{},'near-limit-test');
     assert.equal(nearLimit.capacityWarning,true);assert.equal(warnings,nearLimit.parts);
     const file=await open(path,'w');try {await file.truncate(64*1024*1024+1);} finally {await file.close();}
-    let attempts=0;await assert.rejects(sendParts({sendMail:async()=>{attempts++;}},path,{},'oversized-test'));assert.equal(attempts,0);
+    let attempts=0;await assert.rejects(sendParts({sendMail:async()=>{attempts++;}},path,{},'oversized-test'),error=>error.code==='BACKUP_EMAIL_SIZE_LIMIT'&&error.bytes===64*1024*1024+1&&error.limitBytes===64*1024*1024);assert.equal(attempts,0);
   } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('backup diagnostics whitelist only safe error metadata and never reveal arbitrary error text',()=>{
+  const secret='synthetic-secret@example.org postgres://user:password@private-host/object-key';
+  for(const code of ['EAUTH','ETIMEDOUT','ESOCKET','BACKUP_EMAIL_SIZE_LIMIT']) {
+    const result=safeBackupFailure({code,responseCode:535,command:'AUTH PLAIN',bytes:123,limitBytes:456,message:secret,stack:secret,response:secret});
+    assert.equal(result.code,code);assert.equal(result.responseCode,535);assert.equal(result.command,'AUTH PLAIN');assert.equal(JSON.stringify(result).includes(secret),false);
+  }
+  assert.deepEqual(safeBackupFailure({code:secret,command:secret,responseCode:secret,bytes:-1,limitBytes:Infinity,message:secret}),{status:'BACKUP_FAILED',code:'UNKNOWN'});
+  assert.deepEqual(safeBackupFailure(null),{status:'BACKUP_FAILED',code:'UNKNOWN'});
 });
 
 test('restore verification is networkless, never receives Production settings, and cleans only its own container',async()=>{

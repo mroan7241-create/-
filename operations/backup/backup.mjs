@@ -109,7 +109,7 @@ export function assertSnapshotReferences(references, manifest, bucket) {
 }
 export async function sendParts(transport,encryptedPath,from,id) {
   const size=(await stat(encryptedPath)).size,parts=Math.ceil(size/PART_SIZE),sha256=await hashFile(encryptedPath);
-  if(size===0||size>MAX_EMAIL_BYTES) throw new Error('Backup exceeds safe email size limit; no parts sent');
+  if(size===0||size>MAX_EMAIL_BYTES) throw Object.assign(new Error('Backup exceeds safe email size limit; no parts sent'),{code:'BACKUP_EMAIL_SIZE_LIMIT',bytes:size,limitBytes:MAX_EMAIL_BYTES});
   const capacityWarning=size>=CAPACITY_WARNING_BYTES;
   let index=0;
   while(index<parts) {
@@ -125,6 +125,17 @@ export async function sendParts(transport,encryptedPath,from,id) {
   }
   if(index!==parts) throw new Error('Incomplete backup part delivery');
   return {id,parts,bytes:size,sha256,capacityWarning};
+}
+// SMTP/provider error messages can contain credentials, addresses and object keys.
+// Emit only explicitly allowlisted codes and bounded numerical metadata.
+export function safeBackupFailure(error) {
+  const source=error&&typeof error==='object'?error:{};
+  const codes=['BACKUP_EMAIL_SIZE_LIMIT','EAUTH','ETIMEDOUT','ESOCKET','ECONNECTION','ECONNREFUSED','ECONNRESET','EDNS','EENVELOPE','EMESSAGE','ENOENT','EACCES','ENOSPC'];
+  const result={status:'BACKUP_FAILED',code:codes.includes(source.code)?source.code:'UNKNOWN'};
+  if(Number.isInteger(source.responseCode)&&source.responseCode>=100&&source.responseCode<=599) result.responseCode=source.responseCode;
+  if(['CONN','EHLO','STARTTLS','AUTH','AUTH PLAIN','AUTH LOGIN','MAIL FROM','RCPT TO','DATA'].includes(source.command)) result.command=source.command;
+  for(const field of ['bytes','limitBytes']) if(Number.isSafeInteger(source[field])&&source[field]>=0) result[field]=source[field];
+  return result;
 }
 export async function backup() {
   const config=configuration(process.env.ALZAD_BACKUP_CONFIG);
@@ -158,6 +169,8 @@ export async function backup() {
     const secure=String(config.SMTP_SECURE)==='true';
     const transport=nodemailer.createTransport({host:config.SMTP_HOST,port:Number(config.SMTP_PORT),secure,requireTLS:!secure,auth:{user:config.SMTP_USER,pass:config.SMTP_PASSWORD},connectionTimeout:10000,greetingTimeout:10000,socketTimeout:60000,logger:false,debug:false});
     console.log('BACKUP_STAGE: ENCRYPTED_EMAIL_DELIVERY');
+    const encryptedBytes=(await stat(encrypted)).size;
+    console.log(JSON.stringify({status:'ENCRYPTED_ARCHIVE_SIZE',bytes:encryptedBytes,parts:Math.ceil(encryptedBytes/PART_SIZE),limitBytes:MAX_EMAIL_BYTES}));
     try { const result=await sendParts(transport,encrypted,{name:config.SMTP_FROM_NAME,address:config.SMTP_FROM_EMAIL},id); console.log(JSON.stringify({status:'SMTP_ACCEPTED',...result,objects:manifest.length})); } finally { transport.close(); }
   } finally {
     // Only this invocation's freshly created, known child directory is removed.
@@ -165,5 +178,5 @@ export async function backup() {
   }
 }
 if(process.argv[1] && import.meta.url===pathToFileURL(resolve(process.argv[1])).href) {
-  backup().catch(()=>{console.error('Encrypted backup failed; inspect configuration, permissions and provider state. No backup success claimed.');process.exitCode=1;});
+  backup().catch(error=>{console.error(JSON.stringify(safeBackupFailure(error)));process.exitCode=1;});
 }
