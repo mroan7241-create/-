@@ -80,6 +80,8 @@ test('restore verification is networkless, never receives Production settings, a
   assert.equal(calls[0].args.some(arg=>arg.endsWith('target=/backup.dump,readonly')),true);
   assert.equal(calls[0].options.env.ALZAD_BACKUP_CONFIG,undefined);
   assert.equal(calls[0].options.env.BACKUP_PUBLIC_KEY,undefined);
+  assert.equal(calls.some(call=>call.args.includes('pg_isready')),false);
+  assert.equal(calls.some(call=>call.args.includes('127.0.0.1')&&call.args.includes('alzad_backup_restore_test')&&call.args.at(-1)==='SELECT 1'),true);
   const container=calls[0].args[calls[0].args.indexOf('--name')+1];
   assert.deepEqual(calls.at(-1).args,['rm','--force','--volumes',container]);
 });

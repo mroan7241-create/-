@@ -41,7 +41,10 @@ export async function verifyRestore(dump, execute = capture) {
     let ready = false;
     const readinessDeadline = Date.now() + 45000;
     while (Date.now() < readinessDeadline) {
-      try { await docker(['exec', name, 'pg_isready', '-U', 'postgres', '-d', 'alzad_backup_restore_test'], 3000); ready = true; break; }
+      // initdb's temporary Unix-socket server can pass pg_isready before the
+      // requested database exists. TCP opens only on the final server; a real
+      // query also proves that this exact disposable database is available.
+      try { await docker(['exec', name, 'psql', '-h', '127.0.0.1', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-d', 'alzad_backup_restore_test', '-At', '-c', 'SELECT 1'], 3000); ready = true; break; }
       catch { await new Promise(resolveWait => setTimeout(resolveWait, 1000)); }
     }
     if (!ready) throw new Error('Isolated restore database did not become ready');

@@ -13,7 +13,7 @@ test('real PostgreSQL dump restores exact synthetic row counts in a separate net
   const name='alzad-backup-fixture-'+randomBytes(8).toString('hex');let created=false;
   try {
     await capture('docker',['run','--detach','--rm','--network','none','--name',name,'--env','POSTGRES_HOST_AUTH_METHOD=trust',POSTGRES_IMAGE]);created=true;
-    let ready=false;for(let attempt=0;attempt<30;attempt++){try{await capture('docker',['exec',name,'pg_isready','-U','postgres']);ready=true;break;}catch{await new Promise(r=>setTimeout(r,1000));}}
+    let ready=false;for(let attempt=0;attempt<30;attempt++){try{await capture('docker',['exec',name,'psql','-h','127.0.0.1','-X','-v','ON_ERROR_STOP=1','-U','postgres','-d','postgres','-At','-c','SELECT 1']);ready=true;break;}catch{await new Promise(r=>setTimeout(r,1000));}}
     assert.equal(ready,true);
     await capture('docker',['exec',name,'psql','-X','-v','ON_ERROR_STOP=1','-U','postgres','-c',"CREATE TABLE public._prisma_migrations(id text PRIMARY KEY); INSERT INTO public._prisma_migrations VALUES ('synthetic-migration'); CREATE TABLE public.synthetic_backup_records(id integer PRIMARY KEY,label text NOT NULL); INSERT INTO public.synthetic_backup_records VALUES (1,'synthetic-one'),(2,'synthetic-two'); CREATE TABLE public.files(bucket text NOT NULL, object_key text NOT NULL, sha256 text); INSERT INTO public.files VALUES ('synthetic-private','test/photo.jpg','abc123');"]);
     await capture('docker',['exec',name,'pg_dump','-U','postgres','--format=custom','--schema=public','--no-owner','--no-acl','--file=/tmp/synthetic.dump','postgres']);
