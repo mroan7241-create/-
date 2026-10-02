@@ -76,7 +76,7 @@ export default function LoginPage() {
         {tab === 'user' && <>
           <div className="login-application-entry">
             <a href="/apply" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 'var(--r-sm)', background: 'var(--zad-800)', color: '#fff', fontSize: 17, fontWeight: 700, lineHeight: 1.4, textDecoration: 'none' }}>
-              تقديم طلب جديد للجمعية
+              تقديم طلب انضمام
             </a>
             <p style={{ margin: 0, fontSize: 13 }}>للمشاركة في مشروع الأجهزة الكهربائية<br />لا تحتاج إلى حساب لبدء التقديم</p>
             <p style={{ margin: 0, fontSize: 11.5, color: '#614651' }}>يخضع الطلب للمراجعة والتقييم، والتقديم لا يعني القبول.</p>
