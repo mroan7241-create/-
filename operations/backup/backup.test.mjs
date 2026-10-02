@@ -1,10 +1,13 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {generateKeyPairSync} from 'node:crypto';
+import {generateKeyPairSync,createHash} from 'node:crypto';
+import {createReadStream} from 'node:fs';
+import {Readable} from 'node:stream';
 import {mkdtemp,writeFile,readFile,rm,open} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {configuration,envelope,decryptBuffer,encryptFile,collectObjects,assertSnapshotReferences,sendParts,safeBackupFailure} from './backup.mjs';
+import * as backupModule from './backup.mjs';
 import {verifyRestore} from './verify-restore.mjs';
 const keys=generateKeyPairSync('rsa',{modulusLength:3072,publicKeyEncoding:{type:'spki',format:'pem'},privateKeyEncoding:{type:'pkcs8',format:'pem'}});
 const config={DATABASE_URL:'postgresql://backup:synthetic-secret@db.example.org:5432/postgres',EXPECTED_DB_HOST:'db.example.org',EXPECTED_DB_NAME:'postgres',OBJECT_STORAGE_ENDPOINT:'https://storage.example.org',OBJECT_STORAGE_REGION:'test',OBJECT_STORAGE_ACCESS_KEY:'synthetic',OBJECT_STORAGE_SECRET_KEY:'synthetic',OBJECT_STORAGE_BUCKET:'test',SMTP_HOST:'smtp.example.org',SMTP_USER:'test',SMTP_PASSWORD:'synthetic',SMTP_FROM_EMAIL:'test@example.org',SMTP_FROM_NAME:'test',SMTP_PORT:'465',SMTP_SECURE:'true'};
@@ -35,6 +38,105 @@ test('backup SMTP requires accepted owner recipient and contains encrypted bytes
 test('storage rejects incomplete pagination before downloading any object',async()=>{
   class List{};class Get{};let calls=0;const client={send:async()=>{calls++;return{IsTruncated:true,Contents:[]};}};
   await assert.rejects(collectObjects(client,{ListObjectsV2Command:List,GetObjectCommand:Get},'test',tmpdir()));assert.equal(calls,1);
+});
+
+class ListCommand { constructor(input) { this.input=input; } }
+class GetCommand { constructor(input) { this.input=input; } }
+class PutCommand { constructor(input) { this.input=input; } }
+const storageCommands={ListObjectsV2Command:ListCommand,GetObjectCommand:GetCommand,PutObjectCommand:PutCommand};
+
+test('encrypted storage upload and exact readback precede owner notification without attachments or URLs',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  try {
+    const path=join(dir,'encrypted'),payload=Buffer.from('already encrypted synthetic fixture'),events=[];
+    await writeFile(path,payload);
+    const client={send:async command=>{
+      assert.equal(command.input.Bucket,'test');assert.equal(command.input.Key,'alzad-encrypted-backups/test-unique.enc');
+      if(command instanceof PutCommand) {
+        events.push('upload');assert.equal(command.input.IfNoneMatch,'*');assert.equal(command.input.ACL,undefined);
+        assert.equal(command.input.ContentLength,payload.length);assert.equal(command.input.Body instanceof Buffer,false);
+        const chunks=[];for await(const chunk of command.input.Body)chunks.push(chunk);
+        assert.deepEqual(Buffer.concat(chunks),payload);return {};
+      }
+      assert.equal(command instanceof GetCommand,true);events.push('readback');return{Body:Readable.from([payload.subarray(0,5),payload.subarray(5)]),ContentLength:payload.length};
+    }};
+    const transport={sendMail:async message=>{events.push('notification');assert.equal(message.to,'marwanalsawi@alzaad.org.sa');assert.equal(message.attachments,undefined);assert.doesNotMatch(JSON.stringify(message),/https?:\/\//);return{accepted:['marwanalsawi@alzaad.org.sa']};}};
+    const result=await backupModule.deliverStoredBackup(client,storageCommands,'test',path,transport,{address:'test@example.org'},'test-unique');
+    assert.deepEqual(events,['upload','readback','notification']);assert.equal(result.bytes,payload.length);
+    assert.equal(result.sha256,createHash('sha256').update(payload).digest('hex'));assert.equal(result.storageVerified,true);
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('upload, readback and exact byte/hash failures prevent every success notification',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  try {
+    const path=join(dir,'encrypted'),payload=Buffer.from('encrypted fixture');await writeFile(path,payload);
+    for(const failure of ['upload','readback','hash','truncated','extra','metadata','missing-body','body-error']) {
+      let notifications=0;
+      const client={send:async command=>{
+        if(command instanceof PutCommand){if(failure==='upload')throw new Error('synthetic failure');for await(const chunk of command.input.Body){}return{};}
+        if(failure==='readback')throw new Error('synthetic failure');
+        if(failure==='missing-body')return{};
+        if(failure==='body-error')return{Body:Readable.from((async function*(){yield payload.subarray(0,1);throw new Error('synthetic failure');})())};
+        const body=failure==='hash'?Buffer.alloc(payload.length,42):failure==='truncated'?payload.subarray(1):failure==='extra'?Buffer.concat([payload,Buffer.from('!')]):payload;
+        return{Body:Readable.from([body]),ContentLength:failure==='metadata'?payload.length+1:body.length};
+      }};
+      await assert.rejects(backupModule.deliverStoredBackup(client,storageCommands,'test',path,{sendMail:async()=>{notifications++;return{accepted:['marwanalsawi@alzaad.org.sa']};}}, {},'failure-test'));
+      assert.equal(notifications,0,failure);
+    }
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('stored backup requires the exact owner SMTP acceptance and never overwrites on a key collision',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  try {
+    const path=join(dir,'encrypted'),payload=Buffer.from('encrypted fixture');await writeFile(path,payload);
+    const client={send:async command=>{if(command instanceof PutCommand){for await(const chunk of command.input.Body){}return{};}return{Body:Readable.from([payload]),ContentLength:payload.length};}};
+    for(const accepted of [[],['other@example.org'],['marwanalsawi@alzaad.org.sa.attacker.invalid']]) await assert.rejects(backupModule.deliverStoredBackup(client,storageCommands,'test',path,{sendMail:async message=>{assert.equal(message.to,'marwanalsawi@alzaad.org.sa');return{accepted};}}, {},'recipient-test'));
+    let readbacks=0,notifications=0;
+    await assert.rejects(backupModule.deliverStoredBackup({send:async command=>{if(command instanceof PutCommand){assert.equal(command.input.IfNoneMatch,'*');throw new Error('already exists');}readbacks++;}},storageCommands,'test',path,{sendMail:async()=>{notifications++;}}, {},'collision-test'));
+    assert.equal(readbacks,0);assert.equal(notifications,0);
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('stored delivery streams an archive over the historical email limit',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  try {
+    const path=join(dir,'large-encrypted'),bytes=64*1024*1024+1,file=await open(path,'w');try{await file.truncate(bytes);}finally{await file.close();}
+    const client={send:async command=>{if(command instanceof PutCommand){let uploaded=0;for await(const chunk of command.input.Body)uploaded+=chunk.length;assert.equal(uploaded,bytes);return{};}return{Body:createReadStream(path),ContentLength:bytes};}};
+    const result=await backupModule.deliverStoredBackup(client,storageCommands,'test',path,{sendMail:async message=>{assert.equal(message.attachments,undefined);return{accepted:['marwanalsawi@alzaad.org.sa']};}}, {},'large-test');
+    assert.equal(result.bytes,bytes);
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('notification failure leaves the verified stored archive intact without any deletion command',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  try {
+    const path=join(dir,'encrypted'),payload=Buffer.from('encrypted fixture'),calls=[];await writeFile(path,payload);
+    const client={send:async command=>{calls.push(command.constructor);if(command instanceof PutCommand){for await(const chunk of command.input.Body){}return{};}assert.equal(command instanceof GetCommand,true);return{Body:Readable.from([payload]),ContentLength:payload.length};}};
+    await assert.rejects(backupModule.deliverStoredBackup(client,storageCommands,'test',path,{sendMail:async()=>{throw new Error('SMTP unavailable');}}, {},'notification-failure'),/SMTP unavailable/);
+    assert.deepEqual(calls,[PutCommand,GetCommand]);
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('only the fixed backup prefix is excluded consistently from both storage listings',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  try {
+    const objects=[{Key:'private/document',ETag:'one',Size:1},{Key:'alzad-encrypted-backups-other/file',ETag:'two',Size:1}],downloaded=[];let listings=0;
+    const client={send:async command=>{if(command instanceof ListCommand){listings++;return{Contents:[...objects,{Key:`alzad-encrypted-backups/${listings}.enc`,ETag:String(listings),Size:2*1024**3}]};}downloaded.push(command.input.Key);return{Body:Readable.from([Buffer.from('x')])};}};
+    const manifest=await collectObjects(client,storageCommands,'test',dir,10);
+    assert.deepEqual(downloaded,objects.map(object=>object.Key).sort());assert.equal(manifest.length,2);assert.equal(listings,2);
+    assert.throws(()=>assertSnapshotReferences([{bucket:'test',key:'alzad-encrypted-backups/misused-app-file'}],manifest,'test'));
+    assert.throws(()=>assertSnapshotReferences([{bucket:'test',key:'private/missing-app-file'}],manifest,'test'));
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('non-backup object changes between listings still fail the snapshot',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  try {
+    let listings=0;const client={send:async command=>{if(command instanceof ListCommand)return{Contents:[{Key:'private/document',ETag:String(++listings),Size:1}]};return{Body:Readable.from([Buffer.from('x')])};}};
+    await assert.rejects(collectObjects(client,storageCommands,'test',dir),/Storage changed during backup/);
+  } finally {await rm(dir,{recursive:true,force:true});}
 });
 
 test('backup rejects a database snapshot whose referenced private file vanished or changed before S3 capture',()=>{

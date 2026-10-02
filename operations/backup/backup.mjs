@@ -11,6 +11,7 @@ import { verifyRestore } from './verify-restore.mjs';
 
 const MAGIC = Buffer.from('ALZADBK1');
 const RECIPIENT = 'marwanalsawi@alzaad.org.sa';
+const BACKUP_PREFIX = 'alzad-encrypted-backups/';
 const PART_SIZE = 8 * 1024 * 1024;
 const MAX_EMAIL_BYTES = 64 * 1024 * 1024;
 const CAPACITY_WARNING_BYTES = 48 * 1024 * 1024;
@@ -77,7 +78,7 @@ export async function collectObjects(client,commands,bucket,directory,maxBytes=2
   async function listing() {
     const items=[]; let token;
     do { const page=await client.send(new ListObjectsV2Command({Bucket:bucket,ContinuationToken:token})); items.push(...(page.Contents||[])); if(page.IsTruncated&&!page.NextContinuationToken) throw new Error('Incomplete storage listing'); token=page.IsTruncated?page.NextContinuationToken:undefined; } while(token);
-    return items.sort((a,b)=>a.Key.localeCompare(b.Key));
+    return items.filter(item=>!item.Key?.startsWith(BACKUP_PREFIX)).sort((a,b)=>a.Key.localeCompare(b.Key));
   }
   const before=await listing(); let total=0; const manifest=[];
   for(const item of before) {
@@ -106,6 +107,31 @@ export function assertSnapshotReferences(references, manifest, bucket) {
     }
   }
   return references.length;
+}
+export async function deliverStoredBackup(client,commands,bucket,encryptedPath,transport,from,id) {
+  if(typeof id!=='string'||! /^[A-Za-z0-9][A-Za-z0-9_-]{0,119}$/.test(id)) throw new Error('Invalid backup identifier');
+  const bytes=(await stat(encryptedPath)).size;
+  if(!Number.isSafeInteger(bytes)||bytes===0) throw new Error('Invalid encrypted backup size');
+  const sha256=await hashFile(encryptedPath),key=`${BACKUP_PREFIX}${id}.enc`;
+  const body=createReadStream(encryptedPath);
+  try {
+    await client.send(new commands.PutObjectCommand({Bucket:bucket,Key:key,Body:body,ContentLength:bytes,ContentType:'application/octet-stream',IfNoneMatch:'*'}));
+  } finally { body.destroy(); }
+  const response=await client.send(new commands.GetObjectCommand({Bucket:bucket,Key:key}));
+  if(!response.Body) throw new Error('Missing encrypted backup readback');
+  const hash=createHash('sha256');let receivedBytes=0;
+  try {
+    for await(const chunk of response.Body) {
+      receivedBytes+=chunk.length;
+      if(receivedBytes>bytes) throw new Error('Encrypted backup readback size mismatch');
+      hash.update(chunk);
+    }
+  } finally { response.Body.destroy?.(); }
+  if(receivedBytes!==bytes||(response.ContentLength!==undefined&&response.ContentLength!==bytes)||hash.digest('hex')!==sha256) throw new Error('Encrypted backup readback size or checksum mismatch');
+  const text=`تم حفظ نسخة احتياطية مشفّرة والتحقق من حجمها وبصمتها في مساحة التخزين الخاصة الحالية.\nمعرّف النسخة: ${id}\nالحجم بالبايت: ${bytes}\nSHA256 للملف المشفّر الكامل: ${sha256}\nيشمل مخطط public وبياناته وملفات التخزين الخاص. لا يشمل أسرار التشغيل أو كلمات مرور أدوار PostgreSQL. يلزم مفتاح الاستعادة المنفصل لفكها.\nهذا إشعار فقط، بلا مرفقات أو روابط تنزيل.`;
+  const result=await transport.sendMail({from,to:RECIPIENT,subject:`إشعار حفظ النسخة الاحتياطية المشفّرة — ${id}`,text,html:`<div dir="rtl" style="text-align:right;font-family:Tahoma,Arial">${text.replaceAll('\n','<br>')}</div>`});
+  if(!result.accepted?.some(address=>String(address).toLowerCase()===RECIPIENT)) throw new Error('Backup recipient was not accepted by SMTP');
+  return {id,bytes,sha256,storageVerified:true};
 }
 export async function sendParts(transport,encryptedPath,from,id) {
   const size=(await stat(encryptedPath)).size,parts=Math.ceil(size/PART_SIZE),sha256=await hashFile(encryptedPath);
@@ -143,6 +169,7 @@ export async function backup() {
   envelope(publicKey); // Validate before reading any Production data.
   const directory=await mkdtemp(join(tmpdir(),'alzad-backup-'));
   const id=new Date().toISOString().replace(/[:.]/g,'-')+'-'+randomBytes(4).toString('hex');
+  let client;
   try {
     const snapshot=join(directory,'snapshot'); await mkdir(snapshot,{mode:0o700});
     const objects=join(snapshot,'objects'); await mkdir(objects,{mode:0o700});
@@ -155,9 +182,8 @@ export async function backup() {
     const restoreVerification=await verifyRestore(dump);
     console.log('BACKUP_STAGE: PRIVATE_OBJECTS');
     const s3=require('@aws-sdk/client-s3');
-    const client=new s3.S3Client({endpoint:config.OBJECT_STORAGE_ENDPOINT,region:config.OBJECT_STORAGE_REGION,forcePathStyle:String(config.OBJECT_STORAGE_FORCE_PATH_STYLE||'true')==='true',credentials:{accessKeyId:config.OBJECT_STORAGE_ACCESS_KEY,secretAccessKey:config.OBJECT_STORAGE_SECRET_KEY},maxAttempts:3});
-    let manifest;
-    try { manifest=await collectObjects(client,s3,config.OBJECT_STORAGE_BUCKET,objects); } finally { client.destroy(); }
+    client=new s3.S3Client({endpoint:config.OBJECT_STORAGE_ENDPOINT,region:config.OBJECT_STORAGE_REGION,forcePathStyle:String(config.OBJECT_STORAGE_FORCE_PATH_STYLE||'true')==='true',credentials:{accessKeyId:config.OBJECT_STORAGE_ACCESS_KEY,secretAccessKey:config.OBJECT_STORAGE_SECRET_KEY},maxAttempts:3});
+    const manifest=await collectObjects(client,s3,config.OBJECT_STORAGE_BUCKET,objects);
     const { referencedObjects, ...restoreSummary } = restoreVerification;
     const verifiedFileReferences = assertSnapshotReferences(referencedObjects,manifest,config.OBJECT_STORAGE_BUCKET);
     await writeFile(join(snapshot,'manifest.json'),JSON.stringify({format:1,id,createdAt:new Date().toISOString(),database:{file:'database.dump',sha256:await hashFile(dump),schema:'public'},restoreVerification:{...restoreSummary,verifiedFileReferences},objects:manifest,limitations:['Database-referenced objects verified against the dump, but no global atomic snapshot across database and object storage','Server roles, passwords and deployment secrets are not included']},null,2),{flag:'wx',mode:0o600});
@@ -168,11 +194,12 @@ export async function backup() {
     const nodemailer=require('nodemailer');
     const secure=String(config.SMTP_SECURE)==='true';
     const transport=nodemailer.createTransport({host:config.SMTP_HOST,port:Number(config.SMTP_PORT),secure,requireTLS:!secure,auth:{user:config.SMTP_USER,pass:config.SMTP_PASSWORD},connectionTimeout:10000,greetingTimeout:10000,socketTimeout:60000,logger:false,debug:false});
-    console.log('BACKUP_STAGE: ENCRYPTED_EMAIL_DELIVERY');
+    console.log('BACKUP_STAGE: ENCRYPTED_PRIVATE_STORAGE_AND_NOTIFICATION');
     const encryptedBytes=(await stat(encrypted)).size;
-    console.log(JSON.stringify({status:'ENCRYPTED_ARCHIVE_SIZE',bytes:encryptedBytes,parts:Math.ceil(encryptedBytes/PART_SIZE),limitBytes:MAX_EMAIL_BYTES}));
-    try { const result=await sendParts(transport,encrypted,{name:config.SMTP_FROM_NAME,address:config.SMTP_FROM_EMAIL},id); console.log(JSON.stringify({status:'SMTP_ACCEPTED',...result,objects:manifest.length})); } finally { transport.close(); }
+    console.log(JSON.stringify({status:'ENCRYPTED_ARCHIVE_SIZE',bytes:encryptedBytes}));
+    try { const result=await deliverStoredBackup(client,s3,config.OBJECT_STORAGE_BUCKET,encrypted,transport,{name:config.SMTP_FROM_NAME,address:config.SMTP_FROM_EMAIL},id); console.log(JSON.stringify({status:'SMTP_ACCEPTED',...result,objects:manifest.length})); } finally { transport.close(); }
   } finally {
+    client?.destroy();
     // Only this invocation's freshly created, known child directory is removed.
     if(directory.startsWith(join(tmpdir(),'alzad-backup-'))) await rm(directory,{recursive:true,force:true});
   }
