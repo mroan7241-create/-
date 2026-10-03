@@ -99,13 +99,71 @@ test('stored backup requires the exact owner SMTP acceptance and never overwrite
   } finally {await rm(dir,{recursive:true,force:true});}
 });
 
-test('stored delivery streams an archive over the historical email limit',async()=>{
+for(const bytes of [8*1024*1024,8*1024*1024+1,133770175]) test(`stored delivery streams ${bytes} bytes in verified objects no larger than 8 MiB`,async()=>{
   const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
   try {
-    const path=join(dir,'large-encrypted'),bytes=64*1024*1024+1,file=await open(path,'w');try{await file.truncate(bytes);}finally{await file.close();}
-    const client={send:async command=>{if(command instanceof PutCommand){let uploaded=0;for await(const chunk of command.input.Body)uploaded+=chunk.length;assert.equal(uploaded,bytes);return{};}return{Body:createReadStream(path),ContentLength:bytes};}};
-    const result=await backupModule.deliverStoredBackup(client,storageCommands,'test',path,{sendMail:async message=>{assert.equal(message.attachments,undefined);return{accepted:['marwanalsawi@alzaad.org.sa']};}}, {},'large-test');
-    assert.equal(result.bytes,bytes);
+    const path=join(dir,'large-encrypted'),file=await open(path,'w');try{await file.truncate(bytes);}finally{await file.close();}
+    const stored=new Map(),receivedHash=createHash('sha256');let puts=0,gets=0,notifications=0,totalUploaded=0;
+    const client={send:async command=>{
+      assert.equal(command.input.Bucket,'test');
+      if(command instanceof PutCommand){
+        puts++;assert.equal(command.input.IfNoneMatch,'*');assert.equal(command.input.ACL,undefined);
+        assert.ok(command.input.ContentLength<=8*1024*1024);assert.ok(command.input.ContentLength>0);
+        assert.equal(Buffer.isBuffer(command.input.Body),false);assert.equal(command.input.Body.start,(puts-1)*8*1024*1024);
+        assert.equal(command.input.Key,`alzad-encrypted-backups/large-test.enc${bytes>8*1024*1024?`.part-${String(puts).padStart(4,'0')}`:''}`);
+        let uploaded=0;for await(const chunk of command.input.Body){assert.ok(chunk.length<=65536);uploaded+=chunk.length;receivedHash.update(chunk);}
+        assert.equal(uploaded,command.input.ContentLength);totalUploaded+=uploaded;stored.set(command.input.Key,{start:command.input.Body.start,end:command.input.Body.end,bytes:uploaded});return{};
+      }
+      assert.equal(command instanceof GetCommand,true);gets++;const part=stored.get(command.input.Key);assert.ok(part);
+      return{Body:createReadStream(path,{start:part.start,end:part.end}),ContentLength:part.bytes};
+    }};
+    const result=await backupModule.deliverStoredBackup(client,storageCommands,'test',path,{sendMail:async message=>{
+      notifications++;assert.equal(gets,Math.ceil(bytes/(8*1024*1024)));assert.equal(message.attachments,undefined);assert.doesNotMatch(JSON.stringify(message),/https?:\/\//);
+      assert.ok(message.text.includes(String(bytes)));assert.ok(message.text.includes(String(gets)));return{accepted:['marwanalsawi@alzaad.org.sa']};
+    }}, {},'large-test');
+    assert.equal(result.bytes,bytes);assert.equal(result.parts,Math.ceil(bytes/(8*1024*1024)));assert.equal(result.sha256,receivedHash.digest('hex'));
+    assert.equal(puts,result.parts);assert.equal(gets,result.parts);assert.equal(totalUploaded,bytes);assert.equal(notifications,1);
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('stored encrypted parts reconstruct exactly and authenticate only in correct order without tampering',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  try {
+    const source=join(dir,'source'),encrypted=join(dir,'encrypted'),plaintext=Buffer.alloc(8*1024*1024+123,42),stored=new Map();
+    await writeFile(source,plaintext);await encryptFile(source,encrypted,keys.publicKey);
+    const client={send:async command=>{
+      if(command instanceof PutCommand){assert.ok(command.input.ContentLength<=8*1024*1024);const chunks=[];for await(const chunk of command.input.Body)chunks.push(chunk);stored.set(command.input.Key,Buffer.concat(chunks));return{};}
+      assert.equal(command instanceof GetCommand,true);const part=stored.get(command.input.Key);return{Body:Readable.from([part]),ContentLength:part.length};
+    }};
+    const result=await backupModule.deliverStoredBackup(client,storageCommands,'test',encrypted,{sendMail:async()=>({accepted:['marwanalsawi@alzaad.org.sa']})}, {},'encrypted-roundtrip');
+    const ordered=[...stored.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([,part])=>part),joined=Buffer.concat(ordered);
+    assert.equal(result.parts,2);assert.deepEqual(joined,await readFile(encrypted));assert.equal(result.sha256,createHash('sha256').update(joined).digest('hex'));
+    assert.deepEqual(decryptBuffer(joined,keys.privateKey),plaintext);
+    assert.throws(()=>decryptBuffer(Buffer.concat([...ordered].reverse()),keys.privateKey));assert.throws(()=>decryptBuffer(ordered[0],keys.privateKey));
+    joined[joined.length-20]^=1;assert.throws(()=>decryptBuffer(joined,keys.privateKey));
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('second-part upload/collision/readback failures leave existing private parts and send no success email',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  try {
+    const path=join(dir,'encrypted'),bytes=8*1024*1024+123,file=await open(path,'w');try{await file.truncate(bytes);}finally{await file.close();}
+    for(const failure of ['upload','collision','missing','truncated','tampered']) {
+      let puts=0,gets=0,notifications=0;const stored=new Map();
+      const client={send:async command=>{
+        if(command instanceof PutCommand){
+          puts++;assert.ok(command.input.ContentLength<=8*1024*1024);assert.equal(command.input.IfNoneMatch,'*');assert.equal(command.input.ACL,undefined);
+          if(puts===2&&['upload','collision'].includes(failure))throw new Error('synthetic second-part failure');
+          for await(const chunk of command.input.Body){}stored.set(command.input.Key,{start:command.input.Body.start,end:command.input.Body.end,bytes:command.input.ContentLength});return{};
+        }
+        assert.equal(command instanceof GetCommand,true,'no delete or other storage command is allowed');gets++;const part=stored.get(command.input.Key);assert.ok(part);
+        if(gets===2&&failure==='missing')return{};
+        if(gets===2&&failure==='tampered')return{Body:Readable.from([Buffer.alloc(part.bytes,42)]),ContentLength:part.bytes};
+        return{Body:createReadStream(path,{start:part.start,end:part.end-(gets===2&&failure==='truncated'?1:0)}),ContentLength:part.bytes};
+      }};
+      await assert.rejects(backupModule.deliverStoredBackup(client,storageCommands,'test',path,{sendMail:async()=>{notifications++;return{accepted:['marwanalsawi@alzaad.org.sa']};}}, {},`second-${failure}`));
+      assert.equal(puts,2,failure);assert.equal(notifications,0,failure);assert.equal(stored.size,['upload','collision'].includes(failure)?1:2,failure);
+    }
   } finally {await rm(dir,{recursive:true,force:true});}
 });
 
