@@ -140,13 +140,33 @@ describe('Application V2 launch gate', () => {
     expect(fakeEmail.lastApplicationAccess?.items[0]?.url).toContain('/apply/access?token=');
     const final = await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id }, include: { participation: true, sourceDraft: true } });
     expect(final.selectionList).toBe('RESERVE'); expect(final.participation).toBeNull(); expect(final.sourceDraft?.resumeTokenHash).not.toBe(created.body.resumeToken);
-    await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'MAIN', opId: randomUUID() }).expect(201);
-    expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id }, include: { participation: true } })).participation).not.toBeNull();
-    const previousSelectionUrl = fakeEmail.lastApplicationAccess?.items[0]?.url;
-    await http().post(`/api/v1/association-applications/${row.id}/selection-decision/resend`).set('Cookie', adminCookie).expect(201);
-    expect(fakeEmail.lastApplicationAccess?.intro).toContain('القائمة الأساسية');
-    expect(fakeEmail.lastApplicationAccess?.items[0]?.url).not.toBe(previousSelectionUrl);
-    await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(409);
+    const capacityKey = 'selection.mainTargetCount';
+    const previousCapacity = await prisma.systemSetting.findUnique({ where: { key: capacityKey } });
+    try {
+      await prisma.systemSetting.deleteMany({ where: { key: capacityKey } });
+      const reserveEmail = fakeEmail.lastApplicationAccess;
+      await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'MAIN', opId: randomUUID() }).expect(409)
+        .expect(({ body }) => expect(body.error.code).toBe('REQUIRED_SETTING_MISSING'));
+      const unchanged = await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id }, include: { participation: true, sourceDraft: true } });
+      expect(unchanged).toEqual(final);
+      expect(fakeEmail.lastApplicationAccess).toEqual(reserveEmail);
+      const capacity = await prisma.associationApplication.count({ where: { selectionList: 'MAIN' } }) + 1;
+      await prisma.systemSetting.create({ data: { key: capacityKey, value: capacity } });
+      await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'MAIN', opId: randomUUID() }).expect(201);
+      expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id }, include: { participation: true } })).participation).not.toBeNull();
+      const previousSelectionUrl = fakeEmail.lastApplicationAccess?.items[0]?.url;
+      await http().post(`/api/v1/association-applications/${row.id}/selection-decision/resend`).set('Cookie', adminCookie).expect(201);
+      expect(fakeEmail.lastApplicationAccess?.intro).toContain('القائمة الأساسية');
+      expect(fakeEmail.lastApplicationAccess?.items[0]?.url).not.toBe(previousSelectionUrl);
+      await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(409);
+    } finally {
+      if (previousCapacity) {
+        const value = previousCapacity.value === null ? Prisma.JsonNull : previousCapacity.value as Prisma.InputJsonValue;
+        await prisma.systemSetting.upsert({ where: { key: capacityKey }, create: { key: capacityKey, value }, update: { value } });
+      } else {
+        await prisma.systemSetting.deleteMany({ where: { key: capacityKey } });
+      }
+    }
   });
 
   it('rejects unknown financial sizes/sectors, unsafe website URLs and invalid governance scores before submission', async () => {
