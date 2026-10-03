@@ -184,6 +184,7 @@ export class ApplicationV2Service {
     const payload = asMap(draft.payload);
     const attachmentKeys = new Set(draft.attachments.map((item) => item.fieldKey));
     const value = await validateV2Payload(payload, attachmentKeys);
+    if (!value) throw new ApiError('APPLICATION_VALIDATION_FAILED', 'تعذر التحقق من بيانات الطلب', 400);
     await this.rateLimit.consume('association-application-submit', value.officialEmail, applicationConfig.rateLimitSubmit);
 
     const existingCredential = await prisma.authCredential.findFirst({ where: { identifier: value.officialEmail } });
@@ -258,7 +259,8 @@ export class ApplicationV2Service {
     const draft = await this.requireDraft(draftCode, token, true, applicantSession);
     const application = draft.submittedApplication;
     if (!application) return { ok: true as const, draft: true as const, draftCode, revision: draft.revision, stage: 'DRAFT', timeline: timeline('DRAFT') };
-    const request = await prisma.applicationInformationRequest.findFirst({ where: { applicationId: application.id, status: ApplicationInformationRequestStatus.OPEN }, include: { items: true }, orderBy: { requestedAt: 'desc' } });
+    const latestRequest = await prisma.applicationInformationRequest.findFirst({ where: { applicationId: application.id }, include: { items: true }, orderBy: { requestedAt: 'desc' } });
+    const request = latestRequest?.status === ApplicationInformationRequestStatus.OPEN ? latestRequest : null;
     const stage = publicApplicationStage(application, Boolean(request));
     return {
       ok: true as const,
@@ -267,8 +269,8 @@ export class ApplicationV2Service {
       id: application.publicCode,
       stage,
       submittedAt: application.submittedAt,
-      timeline: timeline(stage),
-      needsInfo: request ? { id: request.id, note: request.note, deadline: request.deadline, items: request.items.map((item) => ({ type: item.type, key: item.key, reason: item.reason, kind: item.type === ApplicationInformationItemType.FIELD ? typeof pathValue(asMap(application.v2Payload), item.key) : undefined })) } : null,
+      timeline: timeline(stage, latestRequest, application.evaluatedAt != null || application.evaluationScore != null),
+      needsInfo: request ? { id: request.id, note: request.note, deadline: request.deadline, items: request.items.map((item) => ({ type: item.type, key: item.key, reason: item.reason, kind: item.type === ApplicationInformationItemType.FIELD ? (Array.isArray(pathValue(asMap(application.v2Payload), item.key)) ? 'array' : typeof pathValue(asMap(application.v2Payload), item.key)) : undefined })) } : null,
     };
   }
 
@@ -293,9 +295,10 @@ export class ApplicationV2Service {
         return !responseKeys.includes(key) || value == null || (typeof value === 'string' && !value.trim());
       })) throw new ApiError('APPLICATION_INFORMATION_FIELDS_MISSING', 'أكمل جميع البيانات المطلوبة قبل إرسال الاستكمال', 400);
       const requiredFiles = request.items.filter((item) => item.type === ApplicationInformationItemType.ATTACHMENT).map((item) => item.key);
-      const existingFiles = await tx.applicationAttachment.findMany({ where: { applicationId: request.applicationId, fieldKey: { in: requiredFiles } } });
-      if (existingFiles.length !== requiredFiles.length) throw new ApiError('APPLICATION_INFORMATION_ATTACHMENTS_MISSING', 'أرفق جميع الملفات المطلوبة قبل إرسال الاستكمال', 400);
+      const existingFiles = await tx.applicationAttachment.findMany({ where: { applicationId: request.applicationId }, include: { file: { select: { createdAt: true } } } });
+      if (requiredFiles.some((key) => !existingFiles.some((item) => item.fieldKey === key && item.file.createdAt >= request.requestedAt))) throw new ApiError('APPLICATION_INFORMATION_ATTACHMENTS_MISSING', 'أرفق ملفات جديدة للمتطلبات المطلوب استبدالها قبل إرسال الاستكمال', 400);
       const merged = deepMerge(asMap(request.application.v2Payload), dto.payload);
+      await validateV2Payload(merged, new Set(existingFiles.map((item) => item.fieldKey)), new Set(responseKeys), tx);
       const identity = await correctedAccountIdentity(tx, merged, responseKeys);
       try {
         await tx.associationApplication.update({ where: { id: request.applicationId }, data: { ...identity, v2Payload: merged as Prisma.InputJsonValue, eligibilityStatus: EligibilityStatus.PENDING, eligibilityNotes: null } });
@@ -303,8 +306,9 @@ export class ApplicationV2Service {
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ApiError('APPLICATION_DUPLICATE_PENDING', 'يوجد طلب سابق بنفس البريد أو الجوال أو رقم الترخيص', 409);
         throw error;
       }
-      await tx.applicationInformationRequest.update({ where: { id: request.id }, data: { status: ApplicationInformationRequestStatus.SUBMITTED, responsePayload: dto.payload as Prisma.InputJsonValue, responseOpId: dto.opId, submittedAt: new Date() } });
-      await tx.auditLog.create({ data: { actorAccountId: null, actorRole: null, action: 'APPLICATION_INFORMATION_SUBMITTED', entityType: 'association_applications', entityId: request.applicationId, metadata: { requestId } } });
+      const submittedAt = new Date();
+      await tx.applicationInformationRequest.update({ where: { id: request.id }, data: { status: ApplicationInformationRequestStatus.SUBMITTED, responsePayload: dto.payload as Prisma.InputJsonValue, responseOpId: dto.opId, submittedAt } });
+      await tx.auditLog.create({ data: { actorAccountId: null, actorRole: null, action: 'APPLICATION_INFORMATION_SUBMITTED', entityType: 'association_applications', entityId: request.applicationId, metadata: { requestId, submittedAt: submittedAt.toISOString(), isLate: isInformationResponseLate(request.deadline, submittedAt) } } });
       const response = { ok: true as const };
       return response;
     });
@@ -331,8 +335,10 @@ export class ApplicationV2Service {
     if (dto.items.some((item) => item.type === ApplicationInformationItemType.ATTACHMENT && !ALLOWED_ATTACHMENT_KEYS.has(item.key.trim()))) throw new ApiError('APPLICATION_ATTACHMENT_FIELD_INVALID', 'نوع المرفق المطلوب غير صالح', 400);
     const deadline = dto.deadline ? parseDate(dto.deadline, 'المهلة') : null;
     const response = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
       const claim = await this.idempotency.claim<{ ok: true; requestId: string }>(tx, ctx.accountId, 'application-information-request', dto.opId, { applicationId, items: dto.items, note: dto.note ?? null, deadline });
       if (!claim.claimed) return claim.existingResponse!;
+      await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${applicationId}::uuid FOR UPDATE`;
       const application = await tx.associationApplication.findUnique({ where: { id: applicationId }, include: { sourceDraft: { select: { id: true } } } });
       if (!application || application.status !== ApplicationStatus.UNDER_REVIEW) throw new ApiError('APPLICATION_NOT_REVIEWABLE', 'الطلب غير متاح للاستكمال', 409);
       if (application.schemaVersion !== 2 || !application.sourceDraft) throw new ApiError('APPLICATION_INFORMATION_UNSUPPORTED', 'هذا الطلب السابق لا يدعم الاستكمال الإلكتروني؛ لا يمكن إرسال رابط لا يعمل', 409);
@@ -372,10 +378,13 @@ export class ApplicationV2Service {
     const ratings: EvaluationInput = pickRatings(dto);
     const scored = scoreApplication(ratings);
     return prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
       const claim = await this.idempotency.claim<{ ok: true; score: number }>(tx, ctx.accountId, 'application-evaluation', dto.opId, { applicationId, ratings, overrideReason: dto.overrideReason ?? null });
       if (!claim.claimed) return claim.existingResponse!;
+      await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${applicationId}::uuid FOR UPDATE`;
       const application = await tx.associationApplication.findUnique({ where: { id: applicationId }, include: { attachments: true, informationRequests: true } });
       if (!application || application.eligibilityStatus !== EligibilityStatus.PASSED) throw new ApiError('APPLICATION_NOT_ELIGIBLE', 'لا يمكن تقييم طلب قبل اجتياز الأهلية', 409);
+      if (application.status !== ApplicationStatus.UNDER_REVIEW || application.selectionList !== AssociationSelectionList.NONE) throw new ApiError('APPLICATION_EVALUATION_FINALIZED', 'لا يمكن تعديل التقييم بعد اعتماد قرار الاختيار', 409);
       const evidence = application.schemaVersion === 2 ? buildEvaluationEvidence(asMap(application.v2Payload), new Set(application.attachments.map((item) => item.fieldKey)), application.informationRequests) : { legacy: true };
       await tx.associationApplication.update({ where: { id: applicationId }, data: { evaluationBreakdown: { ...scored.breakdown, overrideReason: dto.overrideReason?.trim() || null }, evaluationEvidence: evidence, evaluationScore: scored.total, evaluatedAt: new Date(), evaluatedById: ctx.accountId } });
       await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_EVALUATED', entityType: 'association_applications', entityId: applicationId, metadata: { ratings, score: scored.total, overrideReason: dto.overrideReason ?? null } } });
@@ -388,12 +397,25 @@ export class ApplicationV2Service {
   async decideSelection(ctx: AuthContext, applicationId: string, dto: SelectionDecisionDto) {
     let newlyDecided = false;
     const result = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
       const claim = await this.idempotency.claim<{ ok: true; decision: AssociationSelectionList }>(tx, ctx.accountId, 'application-selection-decision', dto.opId, { applicationId, decision: dto.decision, reason: dto.reason ?? null });
       if (!claim.claimed) return claim.existingResponse!;
       await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${applicationId}::uuid FOR UPDATE`;
       const application = await tx.associationApplication.findUnique({ where: { id: applicationId } });
       if (!application || application.eligibilityStatus !== EligibilityStatus.PASSED || application.evaluationScore == null) throw new ApiError('APPLICATION_SELECTION_NOT_READY', 'يجب اجتياز الأهلية وإكمال التقييم أولًا', 409);
+      if (application.selectionList === dto.decision) {
+        const response = { ok: true as const, decision: dto.decision };
+        await this.idempotency.complete(tx, ctx.accountId, 'application-selection-decision', dto.opId, response);
+        return response;
+      }
+      if (application.selectionList === AssociationSelectionList.NONE && application.status !== ApplicationStatus.UNDER_REVIEW) throw new ApiError('APPLICATION_SELECTION_NOT_READY', 'لا يمكن اعتماد اختيار جديد لطلب لم يعد قيد المراجعة', 409);
       if (application.selectionList === AssociationSelectionList.MAIN && dto.decision === AssociationSelectionList.RESERVE) throw new ApiError('APPLICATION_MAIN_ALREADY_STARTED', 'لا يمكن نقل جمعية أساسية بدأت تهيئتها إلى الاحتياط من هذه الصفحة', 409);
+      if (dto.decision === AssociationSelectionList.MAIN) {
+        const capacity = await this.settings.requireNumber('selection.mainTargetCount');
+        if (!Number.isInteger(capacity) || capacity < 1) throw new ApiError('APPLICATION_SELECTION_TARGET_INVALID', 'السعة المعتمدة للجمعيات الأساسية غير صالحة', 409);
+        const existingMain = await tx.associationApplication.count({ where: { selectionList: AssociationSelectionList.MAIN } });
+        if (existingMain >= capacity) throw new ApiError('APPLICATION_SELECTION_CAPACITY_FULL', 'اكتملت السعة المعتمدة للجمعيات الأساسية', 409);
+      }
       const now = new Date();
       await tx.associationApplication.update({ where: { id: applicationId }, data: { selectionList: dto.decision, selectionReason: dto.reason?.trim() || null, status: ApplicationStatus.ACCEPTED, selectionApprovedAt: now, selectionApprovedById: ctx.accountId } });
       if (dto.decision === AssociationSelectionList.MAIN) {
@@ -440,106 +462,139 @@ export class ApplicationV2Service {
   }
 }
 
-async function validateV2Payload(payload: JsonMap, attachments: Set<string>) {
-  const name = requiredPathText(payload, 'organization.name', 'اسم الجمعية', 150);
-  const licenseNumber = requiredPathText(payload, 'organization.licenseNumber', 'رقم الترخيص', 60);
-  const licenseExpiryDate = parseDate(requiredPathText(payload, 'organization.licenseExpiryDate', 'تاريخ انتهاء الترخيص', 10), 'تاريخ انتهاء الترخيص');
-  if (licenseExpiryDate < todayRiyadh()) throw new ApiError('APPLICATION_LICENSE_EXPIRED', 'ترخيص الجمعية منتهٍ', 400);
-  const category = requiredPathText(payload, 'organization.category', 'تصنيف الجمعية', 120);
-  if (!ASSOCIATION_SIZE_OPTIONS.some((option) => option.value === category)) throw new ApiError('APPLICATION_INVALID_REFERENCE', 'اختر تصنيف الجمعية حسب حجمها المالي', 400);
-  const sector = await applicationSectors(payload);
-  const hasWebsite = requiredBoolean(payload, 'organization.hasWebsite', 'وجود موقع إلكتروني للجمعية');
+// Full submission checks every rule and returns normalized projections. A response
+// scope checks only corrected fields and their dependencies; its return is unused.
+async function validateV2Payload(payload: JsonMap, attachments: Set<string>, changed?: Set<string>, db: Prisma.TransactionClient = prisma) {
+  const should = (...keys: string[]) => !changed || keys.some((key) => changed.has(key));
+  const check = <T>(keys: string | string[], rule: () => T): T | undefined => should(...(typeof keys === 'string' ? [keys] : keys)) ? rule() : undefined;
+  const name = check('organization.name', () => requiredPathText(payload, 'organization.name', 'اسم الجمعية', 150));
+  const licenseNumber = check('organization.licenseNumber', () => requiredPathText(payload, 'organization.licenseNumber', 'رقم الترخيص', 60));
+  const licenseExpiryDate = check('organization.licenseExpiryDate', () => parseDate(requiredPathText(payload, 'organization.licenseExpiryDate', 'تاريخ انتهاء الترخيص', 10), 'تاريخ انتهاء الترخيص'));
+  if (licenseExpiryDate && licenseExpiryDate < todayRiyadh()) throw new ApiError('APPLICATION_LICENSE_EXPIRED', 'ترخيص الجمعية منتهٍ', 400);
+  const category = check('organization.category', () => requiredPathText(payload, 'organization.category', 'تصنيف الجمعية', 120));
+  if (category !== undefined && !ASSOCIATION_SIZE_OPTIONS.some((option) => option.value === category)) throw new ApiError('APPLICATION_INVALID_REFERENCE', 'اختر تصنيف الجمعية حسب حجمها المالي', 400);
+  const sector = await check(['organization.sector', 'organization.sectors', 'organization.sectorOther'], () => applicationSectors(payload, db));
+  const hasWebsite = check(['organization.hasWebsite', 'organization.websiteUrl'], () => requiredBoolean(payload, 'organization.hasWebsite', 'وجود موقع إلكتروني للجمعية'));
   if (hasWebsite) validateWebsiteUrl(requiredPathText(payload, 'organization.websiteUrl', 'رابط الموقع الإلكتروني', 500));
-  const officialEmail = requiredEmail(requiredPathText(payload, 'organization.officialEmail', 'البريد الرسمي', 254));
-  const officialPhone = requiredApplicantPhone(payload, 'organization.officialPhone', 'رقم التواصل الرسمي');
-  const coordinatorName = requiredPathText(payload, 'coordinator.name', 'اسم منسق المشروع', 150);
-  const coordinatorTitle = requiredPathText(payload, 'coordinator.title', 'المسمى الوظيفي للمنسق', 120);
-  const coordinatorPhone = requiredApplicantPhone(payload, 'coordinator.phone', 'جوال المنسق');
-  const coordinatorEmail = requiredEmail(requiredPathText(payload, 'coordinator.email', 'بريد المنسق', 254));
-  requiredPathText(payload, 'covenantRepresentative.name', 'اسم ممثل الجمعية في الميثاق', 150);
-  requiredPathText(payload, 'covenantRepresentative.title', 'صفة ممثل الجمعية في الميثاق', 120);
-  requiredPathText(payload, 'executive.name', 'اسم المدير التنفيذي', 150);
-  requiredApplicantPhone(payload, 'executive.phone', 'جوال المدير التنفيذي');
-  requiredPathText(payload, 'executive.education', 'المؤهل العلمي للمدير التنفيذي', 120);
-  requiredInteger(payload, 'executive.experienceYears', 'سنوات خبرة المدير التنفيذي', 0, 80);
-  ['fullTime','partTime','activeVolunteers','nonSaudis','universityOrHigher'].forEach((key) => requiredInteger(payload, `team.${key}`, 'بيانات فريق الجمعية', 0, 1_000_000));
-  requiredBoolean(payload, 'socialResearcher.exists', 'وجود باحث اجتماعي');
-  if (pathValue(payload, 'socialResearcher.exists') === true) { requiredPathText(payload, 'socialResearcher.name', 'اسم الباحث الاجتماعي', 150); requiredApplicantPhone(payload, 'socialResearcher.phone', 'جوال الباحث الاجتماعي'); }
-  requiredInteger(payload, 'readiness.fieldTeamCount', 'عدد أفراد الفريق الميداني', 0, 1_000_000);
-  requiredInteger(payload, 'readiness.weeklyDeliveryCapacity', 'القدرة الأسبوعية للتسليم', 0, 10_000_000);
-  requiredBoolean(payload, 'readiness.hasReceiptStorage', 'توفر موقع أو آلية للاستلام والحفظ');
-  if (pathValue(payload, 'readiness.hasReceiptStorage') === true) requiredPathText(payload, 'readiness.receiptStorageDescription', 'وصف موقع أو آلية الاستلام والحفظ', 1000);
-  requiredBoolean(payload, 'readiness.canDocumentDigitally', 'القدرة على التوثيق الإلكتروني');
-  const registeredFamilies = requiredInteger(payload, 'beneficiaries.registeredFamilies', 'عدد الأسر المسجلة', 0, 10_000_000);
-  const beneficiaryDatabaseUpdatedAt = parseDate(requiredPathText(payload, 'beneficiaries.databaseUpdatedAt', 'تاريخ تحديث قاعدة المستفيدين', 10), 'تاريخ تحديث قاعدة المستفيدين');
-  requiredBoolean(payload, 'beneficiaries.hasSystem', 'استخدام نظام إلكتروني للمستفيدين');
-  if (pathValue(payload, 'beneficiaries.hasSystem') === true) {
+  const officialEmail = check('organization.officialEmail', () => requiredEmail(requiredPathText(payload, 'organization.officialEmail', 'البريد الرسمي', 254)));
+  const officialPhone = check('organization.officialPhone', () => requiredApplicantPhone(payload, 'organization.officialPhone', 'رقم التواصل الرسمي'));
+  const coordinatorName = check('coordinator.name', () => requiredPathText(payload, 'coordinator.name', 'اسم منسق المشروع', 150));
+  const coordinatorTitle = check('coordinator.title', () => requiredPathText(payload, 'coordinator.title', 'المسمى الوظيفي للمنسق', 120));
+  const coordinatorPhone = check('coordinator.phone', () => requiredApplicantPhone(payload, 'coordinator.phone', 'جوال المنسق'));
+  const coordinatorEmail = check('coordinator.email', () => requiredEmail(requiredPathText(payload, 'coordinator.email', 'بريد المنسق', 254)));
+  check('covenantRepresentative.name', () => requiredPathText(payload, 'covenantRepresentative.name', 'اسم ممثل الجمعية في الميثاق', 150));
+  check('covenantRepresentative.title', () => requiredPathText(payload, 'covenantRepresentative.title', 'صفة ممثل الجمعية في الميثاق', 120));
+  check('executive.name', () => requiredPathText(payload, 'executive.name', 'اسم المدير التنفيذي', 150));
+  check('executive.phone', () => requiredApplicantPhone(payload, 'executive.phone', 'جوال المدير التنفيذي'));
+  check('executive.education', () => requiredPathText(payload, 'executive.education', 'المؤهل العلمي للمدير التنفيذي', 120));
+  check('executive.experienceYears', () => requiredInteger(payload, 'executive.experienceYears', 'سنوات خبرة المدير التنفيذي', 0, 80));
+  ['fullTime','partTime','activeVolunteers','nonSaudis','universityOrHigher'].forEach((key) => check(`team.${key}`, () => requiredInteger(payload, `team.${key}`, 'بيانات فريق الجمعية', 0, 1_000_000)));
+  if (should('socialResearcher.exists', 'socialResearcher.name', 'socialResearcher.phone')) {
+    requiredBoolean(payload, 'socialResearcher.exists', 'وجود باحث اجتماعي');
+    if (pathValue(payload, 'socialResearcher.exists') === true) { requiredPathText(payload, 'socialResearcher.name', 'اسم الباحث الاجتماعي', 150); requiredApplicantPhone(payload, 'socialResearcher.phone', 'جوال الباحث الاجتماعي'); }
+  }
+  check('readiness.fieldTeamCount', () => requiredInteger(payload, 'readiness.fieldTeamCount', 'عدد أفراد الفريق الميداني', 0, 1_000_000));
+  check('readiness.weeklyDeliveryCapacity', () => requiredInteger(payload, 'readiness.weeklyDeliveryCapacity', 'القدرة الأسبوعية للتسليم', 0, 10_000_000));
+  if (should('readiness.hasReceiptStorage', 'readiness.receiptStorageDescription')) {
+    requiredBoolean(payload, 'readiness.hasReceiptStorage', 'توفر موقع أو آلية للاستلام والحفظ');
+    if (pathValue(payload, 'readiness.hasReceiptStorage') === true) requiredPathText(payload, 'readiness.receiptStorageDescription', 'وصف موقع أو آلية الاستلام والحفظ', 1000);
+  }
+  check('readiness.canDocumentDigitally', () => requiredBoolean(payload, 'readiness.canDocumentDigitally', 'القدرة على التوثيق الإلكتروني'));
+  const registeredFamilies = check('beneficiaries.registeredFamilies', () => requiredInteger(payload, 'beneficiaries.registeredFamilies', 'عدد الأسر المسجلة', 0, 10_000_000));
+  const beneficiaryDatabaseUpdatedAt = check('beneficiaries.databaseUpdatedAt', () => parseDate(requiredPathText(payload, 'beneficiaries.databaseUpdatedAt', 'تاريخ تحديث قاعدة المستفيدين', 10), 'تاريخ تحديث قاعدة المستفيدين'));
+  if (should('beneficiaries.hasSystem', 'beneficiaries.systemName', ...['search','update','reports','organizedCases'].map((key) => `beneficiaries.capabilities.${key}`))) {
+    requiredBoolean(payload, 'beneficiaries.hasSystem', 'استخدام نظام إلكتروني للمستفيدين');
+    if (pathValue(payload, 'beneficiaries.hasSystem') === true) {
     requiredPathText(payload, 'beneficiaries.systemName', 'اسم نظام المستفيدين', 150);
     ['search','update','reports','organizedCases'].forEach((key) => requiredBoolean(payload, `beneficiaries.capabilities.${key}`, 'إمكانات نظام المستفيدين'));
+    }
   }
-  requiredBoolean(payload, 'beneficiaries.classifiesNeed', 'تصنيف الحالات حسب الحاجة');
-  if (pathValue(payload, 'beneficiaries.classifiesNeed') === true) requiredPathText(payload, 'beneficiaries.classifications', 'تصنيفات الحاجة', 1000);
-  requiredBoolean(payload, 'beneficiaries.hasCaseStudyMechanism', 'آلية دراسة الحالات');
-  if (pathValue(payload, 'beneficiaries.hasCaseStudyMechanism') === true) requiredPathText(payload, 'beneficiaries.caseStudyDescription', 'وصف آلية دراسة الحالات', 1000);
-  requiredBoolean(payload, 'experience.hasRecentInKindProject', 'خبرة مشروع دعم عيني');
-  if (pathValue(payload, 'experience.hasRecentInKindProject') === true) {
+  if (should('beneficiaries.classifiesNeed', 'beneficiaries.classifications')) {
+    requiredBoolean(payload, 'beneficiaries.classifiesNeed', 'تصنيف الحالات حسب الحاجة');
+    if (pathValue(payload, 'beneficiaries.classifiesNeed') === true) requiredPathText(payload, 'beneficiaries.classifications', 'تصنيفات الحاجة', 1000);
+  }
+  if (should('beneficiaries.hasCaseStudyMechanism', 'beneficiaries.caseStudyDescription')) {
+    requiredBoolean(payload, 'beneficiaries.hasCaseStudyMechanism', 'آلية دراسة الحالات');
+    if (pathValue(payload, 'beneficiaries.hasCaseStudyMechanism') === true) requiredPathText(payload, 'beneficiaries.caseStudyDescription', 'وصف آلية دراسة الحالات', 1000);
+  }
+  if (should('experience.hasRecentInKindProject', 'experience.projectName', 'experience.projectYear', 'experience.supportType', 'experience.projectBeneficiaries', 'experience.supporter')) {
+    requiredBoolean(payload, 'experience.hasRecentInKindProject', 'خبرة مشروع دعم عيني');
+    if (pathValue(payload, 'experience.hasRecentInKindProject') === true) {
     requiredPathText(payload, 'experience.projectName', 'اسم المشروع السابق', 200);
     const projectYear = requiredInteger(payload, 'experience.projectYear', 'سنة المشروع السابق', 2000, 9999);
     if (!riyadhRecentYears().includes(projectYear)) throw new ApiError('APPLICATION_PROJECT_YEAR_INVALID', 'اختر سنة التنفيذ من آخر سنتين ميلاديتين', 400);
     requiredPathText(payload, 'experience.supportType', 'نوع الدعم السابق', 200);
     requiredInteger(payload, 'experience.projectBeneficiaries', 'عدد مستفيدي المشروع السابق', 0, 10_000_000);
     requiredPathText(payload, 'experience.supporter', 'الجهة الداعمة', 200);
+    }
   }
-  requiredInteger(payload, 'experience.recentProjectsCount', 'عدد مشاريع الدعم العيني', 0, 1_000_000);
-  requiredInteger(payload, 'experience.recentBeneficiariesCount', 'إجمالي مستفيدي المشاريع السابقة', 0, 10_000_000);
-  const ehsanCount = requiredInteger(payload, 'experience.ehsanSupportCount2025', 'عدد مرات الاستفادة من إحسان خلال 2025', 0, 1_000_000);
-  if (ehsanCount > 0) requiredPathText(payload, 'experience.ehsanSupportTypes', 'أنواع دعم إحسان', 1000);
-  requiredBoolean(payload, 'experience.hasPreviousSimilarSupport', 'الدعم المشابه السابق');
-  if (pathValue(payload, 'experience.hasPreviousSimilarSupport') === true) {
-    requiredPathText(payload, 'experience.previousSupportDescription', 'وصف الدعم السابق', 1000);
-    requiredPathText(payload, 'experience.previousSupporter', 'الداعم السابق', 200);
-    requiredInteger(payload, 'experience.previousSupportYear', 'سنة الدعم السابق', 2000, new Date().getUTCFullYear());
+  check('experience.recentProjectsCount', () => requiredInteger(payload, 'experience.recentProjectsCount', 'عدد مشاريع الدعم العيني', 0, 1_000_000));
+  check('experience.recentBeneficiariesCount', () => requiredInteger(payload, 'experience.recentBeneficiariesCount', 'إجمالي مستفيدي المشاريع السابقة', 0, 10_000_000));
+  const ehsanCount = check(['experience.ehsanSupportCount2025', 'experience.ehsanSupportTypes'], () => requiredInteger(payload, 'experience.ehsanSupportCount2025', 'عدد مرات الاستفادة من إحسان خلال 2025', 0, 1_000_000));
+  if (ehsanCount !== undefined && ehsanCount > 0) requiredPathText(payload, 'experience.ehsanSupportTypes', 'أنواع دعم إحسان', 1000);
+  if (should('experience.hasPreviousSimilarSupport', 'experience.previousSupportDescription', 'experience.previousSupporter', 'experience.previousSupportYear')) {
+    requiredBoolean(payload, 'experience.hasPreviousSimilarSupport', 'الدعم المشابه السابق');
+    if (pathValue(payload, 'experience.hasPreviousSimilarSupport') === true) {
+      requiredPathText(payload, 'experience.previousSupportDescription', 'وصف الدعم السابق', 1000);
+      requiredPathText(payload, 'experience.previousSupporter', 'الداعم السابق', 200);
+      requiredInteger(payload, 'experience.previousSupportYear', 'سنة الدعم السابق', 2000, new Date().getUTCFullYear());
+    }
   }
-  requiredBoolean(payload, 'finance.hasAccountingSystem', 'استخدام نظام محاسبي');
-  if (pathValue(payload, 'finance.hasAccountingSystem') === true) requiredPathText(payload, 'finance.accountingSystemName', 'اسم النظام المحاسبي', 150);
-  requiredBoolean(payload, 'finance.hasSpendingPolicy', 'وجود لائحة صرف');
-  if (pathValue(payload, 'finance.hasSpendingPolicy') === true && !attachments.has('spendingPolicyFile')) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'لائحة الصرف المعتمدة مطلوبة', 400);
-  requiredPercentage(payload, 'finance.governanceScore', 'درجة الحوكمة لآخر إصدار معتمد');
-  if (!attachments.has('governanceReportFile')) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'تقرير درجة الحوكمة لآخر إصدار معتمد مطلوب', 400);
-  const revenue = requiredMoney(payload, 'finance.revenue', 'الإيرادات');
-  const expenses = requiredMoney(payload, 'finance.expenses', 'المصروفات');
-  const currentAssets = requiredMoney(payload, 'finance.currentAssets', 'الأصول المتداولة');
-  const currentLiabilities = requiredMoney(payload, 'finance.currentLiabilities', 'الخصوم المتداولة');
-  if (!attachments.has('financialStatementsFile')) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'القوائم المالية المعتمدة/المراجعة مطلوبة', 400);
-  requiredBoolean(payload, 'planning.hasStrategicPlan', 'الخطة الاستراتيجية');
-  if (pathValue(payload, 'planning.hasStrategicPlan') === true && !attachments.has('strategicPlanFile')) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'الخطة الاستراتيجية مطلوبة', 400);
-  requiredBoolean(payload, 'planning.hasOperationalPlan', 'الخطة التشغيلية');
-  if (pathValue(payload, 'planning.hasOperationalPlan') === true && !attachments.has('operationalPlanFile')) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'الخطة التشغيلية مطلوبة', 400);
-  requiredBoolean(payload, 'planning.hasPostAidFollowUp', 'متابعة الأسر بعد المساعدة');
-  if (pathValue(payload, 'planning.hasPostAidFollowUp') === true) requiredPathText(payload, 'planning.postAidFollowUpDescription', 'آلية متابعة الأسر', 1000);
-  requiredBoolean(payload, 'planning.measuresSatisfaction', 'قياس رضا المستفيدين');
-  if (pathValue(payload, 'planning.measuresSatisfaction') === true) {
-    const satisfactionTool = requiredPathText(payload, 'planning.satisfactionTool', 'أداة قياس الرضا', 120);
-    if (satisfactionTool === 'أخرى') requiredPathText(payload, 'planning.satisfactionOther', 'تحديد أداة قياس الرضا', 200);
+  if (should('finance.hasAccountingSystem', 'finance.accountingSystemName')) {
+    requiredBoolean(payload, 'finance.hasAccountingSystem', 'استخدام نظام محاسبي');
+    if (pathValue(payload, 'finance.hasAccountingSystem') === true) requiredPathText(payload, 'finance.accountingSystemName', 'اسم النظام المحاسبي', 150);
   }
-  requiredInteger(payload, 'planning.lastYearProgramsCount', 'عدد برامج السنة الماضية', 0, 1_000_000);
-  requiredInteger(payload, 'planning.lastYearBeneficiariesCount', 'عدد مستفيدي السنة الماضية', 0, 10_000_000);
-  if (pathValue(payload, 'acknowledgements.allAccepted') !== true || pathValue(payload, 'acknowledgements.consentVersion') !== APPLICATION_CONSENT_VERSION || !validIsoTimestamp(pathValue(payload, 'acknowledgements.acceptedAt'))) throw new ApiError('APPLICATION_ACKNOWLEDGEMENT_REQUIRED', 'الموافقة على الإقرارات مطلوبة قبل الإرسال', 400);
-  if (!attachments.has('licenseFile')) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'ملف الترخيص مطلوب', 400);
+  if (should('finance.hasSpendingPolicy')) {
+    requiredBoolean(payload, 'finance.hasSpendingPolicy', 'وجود لائحة صرف');
+    if (pathValue(payload, 'finance.hasSpendingPolicy') === true && !attachments.has('spendingPolicyFile')) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'لائحة الصرف المعتمدة مطلوبة', 400);
+  }
+  check('finance.governanceScore', () => requiredPercentage(payload, 'finance.governanceScore', 'درجة الحوكمة لآخر إصدار معتمد'));
+  if (!changed && !attachments.has('governanceReportFile')) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'تقرير درجة الحوكمة لآخر إصدار معتمد مطلوب', 400);
+  const financialFields = ['finance.revenue', 'finance.expenses', 'finance.currentAssets', 'finance.currentLiabilities'];
+  const revenue = check(financialFields, () => requiredMoney(payload, 'finance.revenue', 'الإيرادات'));
+  const expenses = check(financialFields, () => requiredMoney(payload, 'finance.expenses', 'المصروفات'));
+  const currentAssets = check(financialFields, () => requiredMoney(payload, 'finance.currentAssets', 'الأصول المتداولة'));
+  const currentLiabilities = check(financialFields, () => requiredMoney(payload, 'finance.currentLiabilities', 'الخصوم المتداولة'));
+  if (!changed && !attachments.has('financialStatementsFile')) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'القوائم المالية المعتمدة/المراجعة مطلوبة', 400);
+  if (should('planning.hasStrategicPlan')) {
+    requiredBoolean(payload, 'planning.hasStrategicPlan', 'الخطة الاستراتيجية');
+    if (pathValue(payload, 'planning.hasStrategicPlan') === true && !attachments.has('strategicPlanFile')) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'الخطة الاستراتيجية مطلوبة', 400);
+  }
+  if (should('planning.hasOperationalPlan')) {
+    requiredBoolean(payload, 'planning.hasOperationalPlan', 'الخطة التشغيلية');
+    if (pathValue(payload, 'planning.hasOperationalPlan') === true && !attachments.has('operationalPlanFile')) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'الخطة التشغيلية مطلوبة', 400);
+  }
+  if (should('planning.hasPostAidFollowUp', 'planning.postAidFollowUpDescription')) {
+    requiredBoolean(payload, 'planning.hasPostAidFollowUp', 'متابعة الأسر بعد المساعدة');
+    if (pathValue(payload, 'planning.hasPostAidFollowUp') === true) requiredPathText(payload, 'planning.postAidFollowUpDescription', 'آلية متابعة الأسر', 1000);
+  }
+  if (should('planning.measuresSatisfaction', 'planning.satisfactionTool', 'planning.satisfactionOther')) {
+    requiredBoolean(payload, 'planning.measuresSatisfaction', 'قياس رضا المستفيدين');
+    if (pathValue(payload, 'planning.measuresSatisfaction') === true) {
+      const satisfactionTool = requiredPathText(payload, 'planning.satisfactionTool', 'أداة قياس الرضا', 120);
+      if (satisfactionTool === 'أخرى') requiredPathText(payload, 'planning.satisfactionOther', 'تحديد أداة قياس الرضا', 200);
+    }
+  }
+  check('planning.lastYearProgramsCount', () => requiredInteger(payload, 'planning.lastYearProgramsCount', 'عدد برامج السنة الماضية', 0, 1_000_000));
+  check('planning.lastYearBeneficiariesCount', () => requiredInteger(payload, 'planning.lastYearBeneficiariesCount', 'عدد مستفيدي السنة الماضية', 0, 10_000_000));
+  if (should('acknowledgements.allAccepted', 'acknowledgements.consentVersion', 'acknowledgements.acceptedAt') && (pathValue(payload, 'acknowledgements.allAccepted') !== true || pathValue(payload, 'acknowledgements.consentVersion') !== APPLICATION_CONSENT_VERSION || !validIsoTimestamp(pathValue(payload, 'acknowledgements.acceptedAt')))) throw new ApiError('APPLICATION_ACKNOWLEDGEMENT_REQUIRED', 'الموافقة على الإقرارات مطلوبة قبل الإرسال', 400);
+  if (!changed && !attachments.has('licenseFile')) throw new ApiError('APPLICATION_ATTACHMENT_REQUIRED', 'ملف الترخيص مطلوب', 400);
 
-  const regionCode = requiredPathText(payload, 'location.regionCode', 'المنطقة الإدارية', 10);
-  const governorateCode = requiredPathText(payload, 'location.governorateCode', 'المحافظة أو مقر الإمارة', 10);
+  const geographicFields = ['location.regionCode', 'location.governorateCode', 'location.centerCode'];
+  const regionCode = check(geographicFields, () => requiredPathText(payload, 'location.regionCode', 'المنطقة الإدارية', 10));
+  const governorateCode = check(geographicFields, () => requiredPathText(payload, 'location.governorateCode', 'المحافظة أو مقر الإمارة', 10));
   const centerCode = readOptionalString(pathValue(payload, 'location.centerCode')) || null;
-  const [region, governorate, center] = await Promise.all([
-    prisma.geographicUnit.findFirst({ where: { officialCode: regionCode, unitType: GeographicUnitType.REGION, active: true } }),
-    prisma.geographicUnit.findFirst({ where: { officialCode: governorateCode, parentOfficialCode: regionCode, unitType: { in: [GeographicUnitType.EMIRATE_SEAT, GeographicUnitType.GOVERNORATE] }, active: true } }),
-    centerCode ? prisma.geographicUnit.findFirst({ where: { officialCode: centerCode, parentOfficialCode: governorateCode, unitType: GeographicUnitType.ADMIN_CENTER, active: true } }) : Promise.resolve(null),
-  ]);
-  if (!region || !governorate || (centerCode && !center)) throw new ApiError('APPLICATION_LOCATION_INVALID', 'الموقع الإداري المختار غير صالح أو خارج نطاق المشروع', 400);
-  const locationOtherText = requiredPathText(payload, 'location.districtCustom', 'الحي', 200);
+  const [region, governorate, center] = should(...geographicFields) ? await Promise.all([
+    db.geographicUnit.findFirst({ where: { officialCode: regionCode, unitType: GeographicUnitType.REGION, active: true } }),
+    db.geographicUnit.findFirst({ where: { officialCode: governorateCode, parentOfficialCode: regionCode, unitType: { in: [GeographicUnitType.EMIRATE_SEAT, GeographicUnitType.GOVERNORATE] }, active: true } }),
+    centerCode ? db.geographicUnit.findFirst({ where: { officialCode: centerCode, parentOfficialCode: governorateCode, unitType: GeographicUnitType.ADMIN_CENTER, active: true } }) : Promise.resolve(null),
+  ]) : [null, null, null];
+  if (should(...geographicFields) && (!region || !governorate || (centerCode && !center))) throw new ApiError('APPLICATION_LOCATION_INVALID', 'الموقع الإداري المختار غير صالح أو خارج نطاق المشروع', 400);
+  const locationOtherText = check('location.districtCustom', () => requiredPathText(payload, 'location.districtCustom', 'الحي', 200));
   const locationNeedsVerification = true;
-  const serviceScope = requiredPathText(payload, 'location.serviceScope', 'نطاق خدمة الجمعية', 1000);
-  return { name, licenseNumber, licenseExpiryDate, category, sector, officialEmail, officialPhone, coordinatorName, coordinatorTitle, coordinatorPhone, coordinatorEmail, registeredFamilies, beneficiaryDatabaseUpdatedAt, revenue, expenses, currentAssets, currentLiabilities, regionCode, governorateCode, centerCode, regionName: region.nameAr.replace(/^منطقة\s+/, ''), governorateName: governorate.nameAr.replace(/^(مدينة|محافظة)\s+/, ''), locationOtherText, locationNeedsVerification, serviceScope, notes: readOptionalString(pathValue(payload, 'organization.notes')) || null };
+  const serviceScope = check('location.serviceScope', () => requiredPathText(payload, 'location.serviceScope', 'نطاق خدمة الجمعية', 1000));
+  if (changed) return;
+  return { name: name!, licenseNumber: licenseNumber!, licenseExpiryDate: licenseExpiryDate!, category: category!, sector: sector!, officialEmail: officialEmail!, officialPhone: officialPhone!, coordinatorName: coordinatorName!, coordinatorTitle: coordinatorTitle!, coordinatorPhone: coordinatorPhone!, coordinatorEmail: coordinatorEmail!, registeredFamilies: registeredFamilies!, beneficiaryDatabaseUpdatedAt: beneficiaryDatabaseUpdatedAt!, revenue: revenue!, expenses: expenses!, currentAssets: currentAssets!, currentLiabilities: currentLiabilities!, regionCode: regionCode!, governorateCode: governorateCode!, centerCode, regionName: region!.nameAr.replace(/^منطقة\s+/, ''), governorateName: governorate!.nameAr.replace(/^(مدينة|محافظة)\s+/, ''), locationOtherText: locationOtherText!, locationNeedsVerification, serviceScope: serviceScope!, notes: readOptionalString(pathValue(payload, 'organization.notes')) || null };
 }
 
 function buildEligibilityEvidence(payload: JsonMap, attachments: Set<string>, needsInfoRounds: number) {
@@ -589,8 +644,23 @@ function buildEvaluationEvidence(payload: JsonMap, attachments: Set<string>, req
 function check(key: string, label: string, outcome: boolean | null, reason: string) { return { key, label, result: outcome === null ? 'NEEDS_REVIEW' : outcome ? 'PASS' : 'FAIL', reason }; }
 function evidence(entries: Array<[string, unknown]>) { return { evidence: entries.map(([label, value]) => ({ label, value: value ?? '—' })), flags: entries.some(([, value]) => value === null || value === undefined || value === '') ? [{ level: 'MISSING', reason: 'توجد بيانات ناقصة وتحتاج مراجعة.' }] : [] }; }
 function pickRatings(dto: EvaluationV2Dto): EvaluationInput { return { operationalReadiness: dto.operationalReadiness, technicalCapability: dto.technicalCapability, previousExperience: dto.previousExperience, integrityTransparency: dto.integrityTransparency, participationCommitment: dto.participationCommitment, sustainabilityImpact: dto.sustainabilityImpact }; }
+// Date-only deadlines represent the complete calendar date in Riyadh (UTC+03).
+// Persisted submittedAt, not read time, determines whether a submitted response was late.
+export function isInformationResponseLate(deadline: Date | null, submittedAt: Date | null, now = new Date()): boolean {
+  if (!deadline) return false;
+  const end = Date.UTC(deadline.getUTCFullYear(), deadline.getUTCMonth(), deadline.getUTCDate() + 1) - 3 * 60 * 60 * 1000;
+  return (submittedAt ?? now).getTime() >= end;
+}
 function publicApplicationStage(application: { status: ApplicationStatus; processingStartedAt: Date | null; eligibilityStatus: EligibilityStatus; selectionList: AssociationSelectionList }, needsInfo: boolean) { if (needsInfo || application.eligibilityStatus === EligibilityStatus.NEEDS_INFO) return 'NEEDS_INFO'; if (application.selectionList === AssociationSelectionList.MAIN) return 'MAIN'; if (application.selectionList === AssociationSelectionList.RESERVE) return 'RESERVE'; if (application.eligibilityStatus === EligibilityStatus.FAILED || application.status === ApplicationStatus.REJECTED) return 'INELIGIBLE'; if (application.eligibilityStatus === EligibilityStatus.PASSED) return 'EVALUATION'; if (application.processingStartedAt) return 'PROCESSING'; return 'RECEIVED'; }
-function timeline(stage: string) { const order = ['DRAFT','RECEIVED','PROCESSING','NEEDS_INFO','EVALUATION','MAIN','RESERVE','INELIGIBLE']; const labels: Record<string,string> = { DRAFT:'مسودة محفوظة',RECEIVED:'تم استلام الطلب',PROCESSING:'جاري المعالجة',NEEDS_INFO:'مطلوب استكمال',EVALUATION:'قيد التقييم والمفاضلة',MAIN:'تم اعتماد المشاركة',RESERVE:'قائمة احتياطية',INELIGIBLE:'غير مستوفٍ' }; const current = order.indexOf(stage); return order.filter((item) => !['MAIN','RESERVE','INELIGIBLE'].includes(item) || item === stage).map((item,index) => ({ key:item,label:labels[item],state:index<current?'COMPLETED':index===current?'CURRENT':'UPCOMING' })); }
+function timeline(stage: string, request?: { status: ApplicationInformationRequestStatus; submittedAt: Date | null } | null, evaluated = false) {
+  const order = ['DRAFT','RECEIVED','PROCESSING','NEEDS_INFO','EVALUATION','MAIN','RESERVE','INELIGIBLE'].filter(item =>
+    (!['MAIN','RESERVE','INELIGIBLE'].includes(item) || item === stage)
+    && (item !== 'NEEDS_INFO' || request?.status === ApplicationInformationRequestStatus.OPEN || Boolean(request?.submittedAt) || stage === 'NEEDS_INFO')
+    && (item !== 'EVALUATION' || stage !== 'INELIGIBLE' || evaluated));
+  const labels: Record<string,string> = { DRAFT:'مسودة محفوظة',RECEIVED:'تم استلام الطلب',PROCESSING:'جاري المعالجة',NEEDS_INFO:request?.submittedAt ? 'تم إرسال الاستكمال — أعيد للمراجعة' : 'مطلوب استكمال',EVALUATION:'قيد التقييم والمفاضلة',MAIN:'تم اعتماد المشاركة',RESERVE:'قائمة احتياطية',INELIGIBLE:'غير مستوفٍ' };
+  const current = order.indexOf(stage);
+  return order.map((item,index) => ({ key:item,label:labels[item],state:item === stage ? 'CURRENT' : item === 'NEEDS_INFO' && request?.submittedAt ? 'COMPLETED' : index < current ? 'COMPLETED' : 'UPCOMING' }));
+}
 // Only projections consumed by participation account/association creation.
 async function correctedAccountIdentity(tx: Prisma.TransactionClient, payload: JsonMap, changed: string[]): Promise<Prisma.AssociationApplicationUpdateInput> {
   const data: Prisma.AssociationApplicationUpdateInput = {};
@@ -604,7 +674,7 @@ async function correctedAccountIdentity(tx: Prisma.TransactionClient, payload: J
   if (changed.includes('organization.officialPhone')) data.phone = requiredApplicantPhone(payload, 'organization.officialPhone', 'رقم التواصل الرسمي');
   if (changed.includes('organization.licenseNumber')) data.licenseNumber = requiredPathText(payload, 'organization.licenseNumber', 'رقم الترخيص', 60);
   if (changed.includes('organization.licenseExpiryDate')) data.licenseExpiryDate = parseDate(requiredPathText(payload, 'organization.licenseExpiryDate', 'تاريخ انتهاء الترخيص', 10), 'تاريخ انتهاء الترخيص');
-  if (changed.includes('organization.sector') || changed.includes('organization.sectors')) data.sector = await applicationSectors(payload);
+  if (changed.includes('organization.sector') || changed.includes('organization.sectors') || changed.includes('organization.sectorOther')) data.sector = await applicationSectors(payload, tx);
   if (changed.includes('organization.notes')) data.notes = readOptionalString(pathValue(payload, 'organization.notes')) || null;
   if (changed.includes('coordinator.name')) data.contactName = requiredPathText(payload, 'coordinator.name', 'اسم منسق المشروع', 150);
   if (changed.includes('coordinator.title')) data.coordinatorTitle = requiredPathText(payload, 'coordinator.title', 'المسمى الوظيفي للمنسق', 120);
@@ -634,6 +704,7 @@ async function correctedAccountIdentity(tx: Prisma.TransactionClient, payload: J
     data.regionOfficialCode = regionCode;
     data.governorateOfficialCode = governorateCode;
   }
+  if (changed.some((key) => ['location.regionCode', 'location.governorateCode', 'location.centerCode'].includes(key))) data.centerOfficialCode = readOptionalString(pathValue(payload, 'location.centerCode')) || null;
   return data;
 }
 
@@ -647,7 +718,7 @@ function requiredBoolean(root: JsonMap, path: string, label: string): boolean { 
 function requiredInteger(root: JsonMap, path: string, label: string, min: number, max: number): number { const value=Number(pathValue(root,path)); if (!Number.isInteger(value)||value<min||value>max) throw new ApiError('APPLICATION_VALIDATION_FAILED', `${label}: أدخل رقمًا صحيحًا صالحًا`, 400); return value; }
 function requiredPercentage(root: JsonMap, path: string, label: string): number { const raw=pathValue(root,path); const value=typeof raw==='number'?raw:NaN; if(!Number.isFinite(value)||value<0||value>100||Math.abs(Math.round(value*100)-value*100)>1e-6) throw new ApiError('APPLICATION_VALIDATION_FAILED', `${label}: أدخل نسبة من 0 إلى 100 بمنزلتين عشريتين كحد أقصى`,400); return value; }
 function validateWebsiteUrl(value: string): void { try { const url=new URL(value); if(!['http:','https:'].includes(url.protocol)||!url.hostname.includes('.')||url.username||url.password) throw new Error('invalid'); } catch { throw new ApiError('APPLICATION_WEBSITE_INVALID', 'أدخل رابط موقع صحيحًا يبدأ بـ http أو https', 400); } }
-async function applicationSectors(payload: JsonMap): Promise<string> { const selected=pathValue(payload,'organization.sectors'); if(!Array.isArray(selected)) return requiredPathText(payload,'organization.sector','مجال عمل الجمعية',120); if(selected.length===0||selected.length>10||selected.some((item)=>typeof item!=='string'||!item.trim()||item.length>120)||new Set(selected).size!==selected.length) throw new ApiError('APPLICATION_INVALID_REFERENCE','اختر مجال عمل واحدًا أو أكثر دون تكرار',400); const values=selected as string[]; const active=await prisma.referenceValue.count({where:{type:'ASSOCIATION_SECTOR',value:{in:values},active:true}}); if(active!==values.length) throw new ApiError('APPLICATION_INVALID_REFERENCE','مجال عمل الجمعية غير معروف',400); const other=values.includes('أخرى')?requiredPathText(payload,'organization.sectorOther','تحديد مجال عمل الجمعية',200):''; return values.map((value)=>value==='أخرى'?`أخرى: ${other}`:value).join('، '); }
+async function applicationSectors(payload: JsonMap, db: Pick<Prisma.TransactionClient, 'referenceValue'> = prisma): Promise<string> { const selected=pathValue(payload,'organization.sectors'); if(!Array.isArray(selected)) return requiredPathText(payload,'organization.sector','مجال عمل الجمعية',120); if(selected.length===0||selected.length>10||selected.some((item)=>typeof item!=='string'||!item.trim()||item.length>120)||new Set(selected).size!==selected.length) throw new ApiError('APPLICATION_INVALID_REFERENCE','اختر مجال عمل واحدًا أو أكثر دون تكرار',400); const values=selected as string[]; const active=await db.referenceValue.count({where:{type:'ASSOCIATION_SECTOR',value:{in:values},active:true}}); if(active!==values.length) throw new ApiError('APPLICATION_INVALID_REFERENCE','مجال عمل الجمعية غير معروف',400); const other=values.includes('أخرى')?requiredPathText(payload,'organization.sectorOther','تحديد مجال عمل الجمعية',200):''; return values.map((value)=>value==='أخرى'?`أخرى: ${other}`:value).join('، '); }
 function requiredMoney(root: JsonMap, path: string, label: string): number { const raw=pathValue(root,path); const value=typeof raw==='string'?Number(raw.replace(/,/g,'')):Number(raw); if(!Number.isFinite(value)||value<0||value>999_999_999_999_999) throw new ApiError('APPLICATION_VALIDATION_FAILED', `${label}: أدخل مبلغًا صالحًا غير سالب`,400); return Math.round(value*100)/100; }
 function requiredApplicantPhone(root: JsonMap, path: string, label: string): string { const value=requiredPathText(root,path,label,30); if(!/^5\d{8}$/.test(value)) throw new ApiError('APPLICATION_PHONE_INVALID','تحقق من أرقام الجوال: يجب إدخال 9 أرقام تبدأ بالرقم 5.',400); return `0${value}`; }
 function riyadhRecentYears(now=new Date()):number[]{ const year=Number(new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Riyadh',year:'numeric'}).format(now)); return [year,year-1]; }

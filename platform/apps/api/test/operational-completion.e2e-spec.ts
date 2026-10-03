@@ -71,6 +71,9 @@ describe('final operational workflows', () => {
       expect(commit.body.temporaryPassword).toBeUndefined();
 
       const participation = await prisma.projectParticipation.findUniqueOrThrow({ where: { applicationId: application.id } });
+      await http().post(`/api/v1/participations/${participation.id}/setup-complete`).set('Cookie', adminCookie)
+        .send({ opId: opId('setup-before-agreement') }).expect(409)
+        .expect(({ body }) => expect(body.error.code).toBe('COVENANT_NOT_READY'));
       const prematureActivation = await http().post(`/api/v1/participations/${participation.id}/activate`).set('Cookie', adminCookie).send({ opId: opId('premature-activation') });
       expect(prematureActivation.status).toBe(409);
       expect(prematureActivation.body.temporaryPassword).toBeUndefined();
@@ -79,9 +82,22 @@ describe('final operational workflows', () => {
         .send({ version: 1, templateVersion: '1.0', reference: 'E2E-AGREEMENT' });
       expect(agreementResponse.status).toBe(201);
       const agreementId = agreementResponse.body.id as string;
+      await http().post(`/api/v1/participations/${participation.id}/setup-complete`).set('Cookie', adminCookie)
+        .send({ opId: opId('setup-before-sent') }).expect(409)
+        .expect(({ body }) => expect(body.error.code).toBe('COVENANT_NOT_READY'));
       await http().post(`/api/v1/participations/agreements/${agreementId}/transition`).set('Cookie', adminCookie)
         .send({ status: AgreementStatus.SENT, opId: opId('agreement-sent') }).expect(201);
+      await http().post(`/api/v1/participations/${participation.id}/signing-account`).set('Cookie', adminCookie)
+        .send({ opId: opId('account-before-readiness') }).expect(409)
+        .expect(({ body }) => expect(body.error.code).toBe('PARTICIPATION_SETUP_INCOMPLETE'));
       await http().post(`/api/v1/participations/${participation.id}/setup-complete`).set('Cookie', adminCookie).send({ opId: opId('setup') }).expect(201);
+      const ready = await prisma.projectParticipation.findUniqueOrThrow({ where: { id: participation.id } });
+      await http().post(`/api/v1/participations/${participation.id}/setup-complete`).set('Cookie', adminCookie)
+        .send({ opId: opId('setup-repeat') }).expect(201);
+      const unchanged = await prisma.projectParticipation.findUniqueOrThrow({ where: { id: participation.id } });
+      expect(unchanged.setupCompletedAt).toEqual(ready.setupCompletedAt);
+      expect(unchanged.setupCompletedById).toBe(ready.setupCompletedById);
+      expect(await prisma.auditLog.count({ where: { entityId: participation.id, action: 'PARTICIPATION_SETUP_COMPLETED' } })).toBe(1);
 
       const accountOpId = opId('signing-account');
       const activation = await http().post(`/api/v1/participations/${participation.id}/signing-account`).set('Cookie', adminCookie).send({ opId: accountOpId });

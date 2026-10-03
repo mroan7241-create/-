@@ -213,6 +213,7 @@ export interface ApplicationDraftView {
 
 export interface ApplicationInformationRequest {
   id: string;
+  isLate?: boolean;
   status?: string;
   note: string | null;
   deadline: string | null;

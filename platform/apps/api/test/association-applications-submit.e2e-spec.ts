@@ -18,8 +18,8 @@ import {
 import { clearLicenseObjects, listLicenseObjectKeys, objectExists, startTestStorage, stopTestStorage } from './utils/storage-harness';
 import { PublicCodeService } from '../src/common/public-code.service';
 
-/** NODE-2 — تقديم طلب انضمام جمعية عبر الـendpoint العام الحقيقي (multipart/form-data). */
-describe('NODE-2 — تقديم طلب الانضمام (عام)', () => {
+/** NODE-2 — retain historical schema-1 validation/DB/storage coverage after retiring its public POST. */
+describe('NODE-2 — بيانات الطلبات التاريخية', () => {
   let app: INestApplication;
   let fixtures: Awaited<ReturnType<typeof seedTestFixtures>>;
 
@@ -39,6 +39,18 @@ describe('NODE-2 — تقديم طلب الانضمام (عام)', () => {
     await cleanNode2State();
     await app.close();
     await stopTestStorage();
+  });
+
+  it('public legacy POST is retired without creating applications or private objects', async () => {
+    const before = await listLicenseObjectKeys();
+    const response = await request(app.getHttpServer()).post('/api/v1/association-applications')
+      .field('name', 'legacy new request').attach('licenseFile', PNG_1X1, { filename: 'license.png', contentType: 'image/png' });
+    expect(response.status).toBe(410);
+    expect(response.body.error.code).toBe('APPLICATION_LEGACY_SUBMISSION_DISABLED');
+    expect(response.body.error.message).toContain('/apply');
+    expect(await prisma.associationApplication.count()).toBe(0);
+    expect(await countNode2FileObjects()).toBe(0);
+    expect(await listLicenseObjectKeys()).toEqual(before);
   });
 
   // 11) + 12) نجاح كامل + حفظ الإجابات الثماني
@@ -382,8 +394,8 @@ describe('NODE-2 — تقديم طلب الانضمام (عام)', () => {
     expect(await listLicenseObjectKeys()).toHaveLength(1);
   });
 
-  // 32) قاعدة التكرار قيد المراجعة عبر الـendpoint الحقيقي
-  it('قاعدة «طلب واحد قيد المراجعة» مطبَّقة فعليًا عبر الـendpoint العام', async () => {
+  // 32) Retained historical service still enforces duplicate protection.
+  it('قاعدة «طلب واحد قيد المراجعة» باقية في خدمة الطلبات التاريخية', async () => {
     const first = validApplicationPayload();
     expect((await submitApplication(app, first)).status).toBe(200);
 

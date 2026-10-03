@@ -16,6 +16,10 @@ describe('applicant session cookie persistence', () => {
   const sessionToken = 'test-applicant-session';
   const draftExpiresAt = new Date('2027-01-01T00:00:00.000Z');
   let sessionExpiresAt: Date;
+  const applications = {
+    submitApplication: jest.fn<() => Promise<object>>(),
+    getApplicationStatus: jest.fn<() => Promise<object>>(),
+  };
   const applicationV2 = {
     createDraft: jest.fn<() => Promise<object>>(),
     loadDraft: jest.fn<() => Promise<object>>(),
@@ -29,7 +33,7 @@ describe('applicant session cookie persistence', () => {
     const moduleRef = await Test.createTestingModule({
       controllers: [ApplicationsController],
       providers: [
-        { provide: ApplicationsService, useValue: {} },
+        { provide: ApplicationsService, useValue: applications },
         { provide: ApplicationV2Service, useValue: applicationV2 },
         { provide: ApplicationAccessService, useValue: applicationAccess },
       ],
@@ -56,6 +60,15 @@ describe('applicant session cookie persistence', () => {
     else process.env.NODE_ENV = originalNodeEnv;
   });
   afterAll(async () => { await app.close(); });
+
+  it('disables only legacy public submission and keeps historical status readable', async () => {
+    const retired = await request(app.getHttpServer()).post('/association-applications').send({ name: 'legacy new request' }).expect(410);
+    expect(retired.body.message).toContain('/apply');
+    expect(applications.submitApplication).not.toHaveBeenCalled();
+    applications.getApplicationStatus.mockResolvedValue({ ok: true, found: true, id: 'APP-000001', status: 'UNDER_REVIEW' });
+    await request(app.getHttpServer()).get('/association-applications/status/legacy-client-request').expect(200).expect(({ body }) => expect(body.id).toBe('APP-000001'));
+    expect(applications.getApplicationStatus).toHaveBeenCalledWith('legacy-client-request');
+  });
 
   it.each([
     ['new draft', '/association-applications/drafts', 201],

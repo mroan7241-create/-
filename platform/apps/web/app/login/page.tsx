@@ -83,7 +83,7 @@ export default function LoginPage() {
           </div>
           <div className="login-account-separator" style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, fontWeight: 600, color: 'var(--zad-900)' }}>
             <span aria-hidden="true" style={{ flex: 1, height: 1, background: 'rgba(58,8,27,.2)' }} />
-            لديك حساب مُفعّل؟ سجّل الدخول
+            لديك بيانات دخول؟ سجّل الدخول
             <span aria-hidden="true" style={{ flex: 1, height: 1, background: 'rgba(58,8,27,.2)' }} />
           </div>
         </>}

@@ -27,3 +27,12 @@ test('requested numeric and yes/no fields preserve their data types', () => {
     finance: { revenue: 15000 }, readiness: { canDocumentDigitally: false },
   });
 });
+
+test('requested multi-value fields preserve arrays and reject an empty selection', () => {
+  assert.deepEqual(buildInformationPayload([{ type: 'FIELD', key: 'organization.sectors', kind: 'array' }], {
+    'organization.sectors': ' خدمات اجتماعية، تنمية مجتمعية\nأخرى ',
+  }), { organization: { sectors: ['خدمات اجتماعية', 'تنمية مجتمعية', 'أخرى'] } });
+  assert.throws(() => buildInformationPayload([{ type: 'FIELD', key: 'organization.sectors', kind: 'array' }], {
+    'organization.sectors': ' ، ,\n ',
+  }));
+});
