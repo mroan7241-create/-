@@ -18,6 +18,10 @@ export function buildInformationPayload(items: Array<{ type: string; key: string
     } else if (item.kind === 'boolean') {
       if (raw !== 'true' && raw !== 'false') throw new Error('اختر نعم أو لا للحقل المطلوب.');
       current[parts[parts.length - 1]!] = raw === 'true';
+    } else if (item.kind === 'array') {
+      const values = raw.split(/[,،\n]/).map(value => value.trim()).filter(Boolean);
+      if (!values.length) throw new Error('أدخل قيمة واحدة على الأقل للحقل المطلوب.');
+      current[parts[parts.length - 1]!] = values;
     } else current[parts[parts.length - 1]!] = raw;
   }
   return payload;

@@ -269,7 +269,19 @@ export class ParticipationsService {
   completeSetup(ctx: AuthContext, id: string, opId: string) {
     return prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'participation-setup', opId, { id }); if (!claim.claimed) return claim.existingResponse!;
-      const result = await tx.projectParticipation.updateMany({ where: { id, status: ParticipationStatus.APPROVED_AWAITING_SETUP }, data: { setupCompletedAt: new Date(), setupCompletedById: ctx.accountId } });
+      await tx.$queryRaw`SELECT id FROM project_participations WHERE id=${id}::uuid FOR UPDATE`;
+      const participation = await tx.projectParticipation.findUnique({ where: { id }, include: { application: { select: { selectionList: true } }, agreements: { orderBy: { version: 'desc' }, take: 1 } } });
+      if (!participation) throw new ApiError('PARTICIPATION_SETUP_INVALID', 'المشاركة غير موجودة أو ليست بانتظار التجهيز', 409);
+      if (participation.setupCompletedAt) {
+        const response = { ok: true as const };
+        await this.idempotency.complete(tx, ctx.accountId, 'participation-setup', opId, response);
+        return response;
+      }
+      if (participation.status !== ParticipationStatus.APPROVED_AWAITING_SETUP) throw new ApiError('PARTICIPATION_SETUP_INVALID', 'المشاركة غير موجودة أو ليست بانتظار التجهيز', 409);
+      if (participation.application?.selectionList !== AssociationSelectionList.MAIN) throw new ApiError('PARTICIPATION_NOT_MAIN', 'لا يمكن تأكيد جاهزية طلب غير موجود في القائمة الأساسية', 409);
+      const agreement = participation.agreements[0];
+      if (!agreement || agreement.status !== AgreementStatus.SENT || agreement.templateVersion !== COVENANT_VERSION || agreement.templateSha256 !== COVENANT_SOURCE_SHA256) throw new ApiError('COVENANT_NOT_READY', 'أنشئ الميثاق المعتمد وأرسله داخل النظام قبل تأكيد جاهزية البيانات', 409);
+      const result = await tx.projectParticipation.updateMany({ where: { id, status: ParticipationStatus.APPROVED_AWAITING_SETUP, setupCompletedAt: null }, data: { setupCompletedAt: new Date(), setupCompletedById: ctx.accountId } });
       if (!result.count) throw new ApiError('PARTICIPATION_SETUP_INVALID', 'المشاركة غير موجودة أو ليست بانتظار التجهيز', 409);
       await audit(tx, ctx, 'PARTICIPATION_SETUP_COMPLETED', 'project_participations', id); const response = { ok: true as const }; await this.idempotency.complete(tx, ctx.accountId, 'participation-setup', opId, response); return response;
     });

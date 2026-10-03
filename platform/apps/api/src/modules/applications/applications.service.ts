@@ -34,6 +34,7 @@ import { normalizePagination, toPaginatedResult, type PaginatedResult, type Pagi
 import { SettingsService } from '../settings/settings.service';
 import { rankApplications, scoreApplication, type EvaluationInput } from './application-evaluation.util';
 import { OnboardingEmailService } from '../auth/email/onboarding-email.service';
+import { isInformationResponseLate } from './application-v2.service';
 
 const QUESTION_KEYS = LEGACY_APPLICATION_QUESTIONS.map((q) => q.key);
 
@@ -370,6 +371,7 @@ export class ApplicationsService {
     if (decision === EligibilityStatus.NEEDS_INFO) throw new ApiError('APPLICATION_INFORMATION_REQUEST_REQUIRED', 'استخدم طلب الاستكمال لتحديد النواقص وإرسالها للجمعية', 409);
     let newlyDecided = false;
     const result = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
       const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'application-eligibility', opId, { id, decision, notes: notes ?? null });
       if (!claim.claimed) return claim.existingResponse!;
       const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM association_applications WHERE id=${id}::uuid FOR UPDATE`;
@@ -390,11 +392,13 @@ export class ApplicationsService {
     let scored: ReturnType<typeof scoreApplication>;
     try { scored = scoreApplication(input); } catch { throw new ApiError('APPLICATION_EVALUATION_INVALID', 'قيم التقييم يجب أن تكون بين 0 و100', 400); }
     return prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
       const claim = await this.idempotency.claim<{ ok: true; score: number }>(tx, ctx.accountId, 'application-evaluation', opId, { id, input });
       if (!claim.claimed) return claim.existingResponse!;
       await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${id}::uuid FOR UPDATE`;
       const application = await tx.associationApplication.findUnique({ where: { id } });
       if (!application) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب الانضمام غير موجود', 404);
+      if (application.status !== ApplicationStatus.UNDER_REVIEW || application.selectionList !== AssociationSelectionList.NONE) throw new ApiError('APPLICATION_EVALUATION_LOCKED', 'لا يمكن تعديل التقييم بعد اعتماد قرار الاختيار', 409);
       if (application.eligibilityStatus !== EligibilityStatus.PASSED) throw new ApiError('APPLICATION_NOT_ELIGIBLE', 'لا يمكن تقييم طلب قبل اجتياز بوابة الأهلية', 409);
       await tx.associationApplication.update({ where: { id }, data: { evaluationBreakdown: scored.breakdown, evaluationScore: scored.total, geographicNeedScore: null, evaluatedAt: new Date(), evaluatedById: ctx.accountId } });
       await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_EVALUATED', entityType: 'association_applications', entityId: id, metadata: { score: scored.total, breakdown: scored.breakdown } } });
@@ -420,9 +424,11 @@ export class ApplicationsService {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
       const claim = await this.idempotency.claim<{ ok: true; main: number; reserve: number; rejected: number }>(tx, ctx.accountId, 'application-selection', opId, { mainTargetCount });
       if (!claim.claimed) return claim.existingResponse!;
+      const existingMainCount = await tx.associationApplication.count({ where: { selectionList: AssociationSelectionList.MAIN } });
+      const availableMainCount = Math.max(0, mainTargetCount - existingMainCount);
       const rows = await tx.associationApplication.findMany({ where: { status: ApplicationStatus.UNDER_REVIEW, eligibilityStatus: EligibilityStatus.PASSED, evaluationScore: { not: null }, selectionList: AssociationSelectionList.NONE }, select: { id: true, publicCode: true, evaluationScore: true, evaluationBreakdown: true, contactName: true, coordinatorPhone: true, coordinatorEmail: true, coordinatorTitle: true } });
       const ranked = rankApplications(rows.map((row) => ({ ...row, score: Number(row.evaluationScore) })));
-      const main = ranked.slice(0, mainTargetCount); const reserve = ranked.slice(mainTargetCount); const rejected: typeof ranked = []; const now = new Date();
+      const main = ranked.slice(0, availableMainCount); const reserve = ranked.slice(availableMainCount); const rejected: typeof ranked = []; const now = new Date();
       for (let i = 0; i < ranked.length; i += 1) await tx.associationApplication.update({ where: { id: ranked[i].id }, data: { evaluationRank: i + 1 } });
       if (main.length) await tx.associationApplication.updateMany({ where: { id: { in: main.map((r) => r.id) } }, data: { selectionList: AssociationSelectionList.MAIN, status: ApplicationStatus.ACCEPTED, selectionApprovedAt: now, selectionApprovedById: ctx.accountId } });
       if (reserve.length) await tx.associationApplication.updateMany({ where: { id: { in: reserve.map((r) => r.id) } }, data: { selectionList: AssociationSelectionList.RESERVE, status: ApplicationStatus.ACCEPTED, selectionApprovedAt: now, selectionApprovedById: ctx.accountId } });
@@ -556,6 +562,7 @@ export class ApplicationsService {
     const payload = { id, reason };
 
     const outcome = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
       const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, scope, opId, payload);
       if (!claim.claimed) return { replayed: true as const };
 
@@ -762,7 +769,7 @@ function mapApplicationSummary(row: {
     evaluationEvidence: row.evaluationEvidence ?? null,
     evaluationBreakdown: row.evaluationBreakdown ?? null,
     attachmentKeys: row.attachments?.map((item) => item.fieldKey) ?? [],
-    latestInformationRequest: row.informationRequests?.[0] ?? null,
+    latestInformationRequest: row.informationRequests?.[0] ? { ...row.informationRequests[0], isLate: (row.informationRequests[0].status === 'OPEN' || row.informationRequests[0].submittedAt != null) && isInformationResponseLate(row.informationRequests[0].deadline, row.informationRequests[0].submittedAt) } : null,
   };
 }
 

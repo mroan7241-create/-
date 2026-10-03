@@ -10,6 +10,10 @@ test('setup is offered only for participation awaiting setup', () => {
   assert.equal(canCompleteParticipationSetup(awaiting), true);
   assert.equal(canCompleteParticipationSetup({ ...awaiting, status: 'ACTIVE' }), false);
   assert.equal(canCompleteParticipationSetup({ ...awaiting, setupCompletedAt: 'done' }), false);
+  assert.equal(canCompleteParticipationSetup({ ...awaiting, selectionList: 'RESERVE' }), false);
+  for (const agreementStatus of [null, 'DRAFT', 'CANCELLED', 'SIGNED_BY_ORG', 'SIGNED']) {
+    assert.equal(canCompleteParticipationSetup({ ...awaiting, agreementStatus }), false);
+  }
 });
 
 test('restricted signing account cannot be offered before setup, main selection, or sent covenant', () => {
@@ -21,7 +25,7 @@ test('restricted signing account cannot be offered before setup, main selection,
 });
 
 test('onboarding stages progress to automatic activation after both signatures', () => {
-  assert.equal(participationStageLabel({ ...awaiting, agreementStatus: 'DRAFT' }), 'إرسال الميثاق وإكمال التجهيز');
+  assert.equal(participationStageLabel({ ...awaiting, agreementStatus: 'DRAFT' }), 'إرسال الميثاق');
   assert.equal(participationStageLabel(awaiting), 'إكمال التجهيز');
   assert.equal(participationStageLabel({ ...awaiting, setupCompletedAt: 'done' }), 'إنشاء حساب توقيع الجمعية');
   assert.equal(participationStageLabel({ ...awaiting, setupCompletedAt: 'done', associationId: 'association' }), 'بانتظار توقيع ممثل الجمعية');

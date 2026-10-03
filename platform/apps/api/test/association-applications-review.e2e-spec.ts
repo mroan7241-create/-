@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { INestApplication } from '@nestjs/common';
-import { prisma, AccountRole, ApplicationStatus, EligibilityStatus } from '@alzad/db';
+import { prisma, AccountRole, ApplicationStatus, EligibilityStatus, Prisma } from '@alzad/db';
 import { createTestApp } from './utils/bootstrap';
 import { cleanAuthState, seedTestFixtures } from './utils/fixtures';
 import {
@@ -61,6 +61,38 @@ describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
       .post(`/api/v1/association-applications/${id}/review`)
       .set('Cookie', cookie)
       .send({ decision: 'reject', opId, ...(reason === undefined ? {} : { reason }) });
+
+  it.each(['bulk', 'individual'])('concurrent bulk and %s selections share the remaining seat and preserve the prior MAIN decision', async (contender) => {
+    const existing = await createApplication();
+    const first = await createApplication();
+    const second = await createApplication();
+    const ids = [existing.id, first.id, second.id];
+    const originalSetting = await prisma.systemSetting.findUnique({ where: { key: 'selection.mainTargetCount' } });
+    try {
+      await prisma.systemSetting.upsert({ where: { key: 'selection.mainTargetCount' }, create: { key: 'selection.mainTargetCount', value: 2 }, update: { value: 2 } });
+      await prisma.associationApplication.updateMany({ where: { id: { in: ids } }, data: { eligibilityStatus: EligibilityStatus.PASSED, evaluationScore: 90 } });
+      await prisma.associationApplication.update({ where: { id: existing.id }, data: { status: ApplicationStatus.ACCEPTED, selectionList: 'MAIN', selectionApprovedAt: new Date('2026-09-01T00:00:00Z') } });
+      const priorDecision = await prisma.associationApplication.findUniqueOrThrow({ where: { id: existing.id } });
+      const firstOp = randomUUID();
+      const select = (opId: string) => http().post('/api/v1/association-applications/selection/commit').set('Cookie', adminCookie).send({ mainTargetCount: 2, opId });
+      const competing = contender === 'bulk' ? select(randomUUID()) : http().post(`/api/v1/association-applications/${second.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'MAIN', opId: randomUUID() });
+      const results = await Promise.all([select(firstOp), competing]);
+      expect(results[0].status).toBe(201);
+      expect(contender === 'bulk' ? [201] : [201, 409]).toContain(results[1].status);
+      if (results[1].status === 409) expect(results[1].body.error.code).toBe('APPLICATION_SELECTION_CAPACITY_FULL');
+      expect(await prisma.associationApplication.count({ where: { id: { in: [first.id, second.id] }, selectionList: 'RESERVE' } })).toBe(1);
+      expect(await prisma.associationApplication.count({ where: { selectionList: 'MAIN' } })).toBe(2);
+      expect(await prisma.associationApplication.findUniqueOrThrow({ where: { id: existing.id } })).toEqual(priorDecision);
+      const replay = await select(firstOp);
+      expect(replay.status).toBe(201);
+      expect(replay.body).toEqual(results[0].body);
+      expect(await prisma.projectParticipation.count({ where: { applicationId: { in: ids } } })).toBe(1);
+    } finally {
+      await prisma.projectParticipation.deleteMany({ where: { applicationId: { in: ids } } });
+      if (originalSetting) await prisma.systemSetting.update({ where: { key: originalSetting.key }, data: { value: originalSetting.value as Prisma.InputJsonValue } });
+      else await prisma.systemSetting.deleteMany({ where: { key: 'selection.mainTargetCount' } });
+    }
+  });
 
   // ————————————————————————————————————————
   // 41) 42) 45) الأدوار

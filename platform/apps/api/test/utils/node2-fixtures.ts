@@ -2,6 +2,9 @@ import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import { prisma } from '@alzad/db';
 import { LEGACY_APPLICATION_QUESTIONS } from '@alzad/shared';
+import { ApplicationsService } from '../../src/modules/applications/applications.service';
+import { HttpExceptionFilter } from '../../src/common/http-exception.filter';
+import { assertE2eNotTargetingProduction } from './production-target.guard';
 
 /**
  * أدوات اختبار NODE-2 فقط — ملف مستقل عمدًا حتى لا نمسّ
@@ -115,21 +118,27 @@ export interface SubmitOptions {
   contentType?: string;
 }
 
-/** يُرسل الطلب فعليًا كـmultipart/form-data عبر الـendpoint الحقيقي. */
-export function submitApplication(app: INestApplication, payload: ApplicationPayload, options: SubmitOptions = {}) {
-  const req = request(app.getHttpServer()).post('/api/v1/association-applications');
-  for (const [key, value] of Object.entries(payload)) {
-    if (value === undefined) continue;
-    req.field(key, key === 'answers' ? JSON.stringify(value) : String(value));
-  }
+/** Historical schema-1 fixtures use the retained service, never reopen its retired public POST. */
+export async function submitApplication(app: INestApplication, payload: ApplicationPayload, options: SubmitOptions = {}): Promise<Pick<request.Response, 'status' | 'body'>> {
+  assertE2eNotTargetingProduction();
   const file = options.file === undefined ? PNG_1X1 : options.file;
-  if (file) {
-    req.attach('licenseFile', file, {
-      filename: options.filename ?? 'license.png',
-      contentType: options.contentType ?? 'image/png',
-    });
+  try {
+    const body = await app.get(ApplicationsService).submitApplication(
+      { ...payload, pledgeAccepted: payload.pledgeAccepted === 'true' },
+      file ?? Buffer.alloc(0),
+      file ? options.contentType ?? 'image/png' : undefined,
+    );
+    return { status: 200, body };
+  } catch (error) {
+    // Preserve the existing error envelope and legacy validation/storage checks.
+    const result: Pick<request.Response, 'status' | 'body'> = { status: 500, body: {} };
+    const response = {
+      status(code: number) { result.status = code; return this; },
+      json(body: unknown) { result.body = body; },
+    };
+    new HttpExceptionFilter().catch(error, { switchToHttp: () => ({ getResponse: () => response, getRequest: () => ({}) }) } as never);
+    return result;
   }
-  return req;
 }
 
 // ————————————————————————————————————————————————

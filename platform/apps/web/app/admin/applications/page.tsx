@@ -278,6 +278,10 @@ function ApplicationDetail({
           </dd>
           <dt>قرار الأهلية</dt>
           <dd style={{ margin: 0 }}>{eligibilityLabel(application.eligibilityStatus)}</dd>
+          {application.latestInformationRequest?.isLate && <>
+            <dt>مهلة الاستكمال</dt>
+            <dd role="status" style={{ margin: 0, color: '#9a6700' }}>متأخر عن مهلة الاستكمال{application.latestInformationRequest.submittedAt ? ' — تم إرسال الاستكمال' : ''}</dd>
+          </>}
           <dt>نتيجة التقييم</dt>
           <dd style={{ margin: 0 }}>{application.evaluationScore == null ? 'لم يُقيّم بعد' : `${application.evaluationScore}/100`}</dd>
           <dt>قائمة الاختيار</dt>

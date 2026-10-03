@@ -1,6 +1,6 @@
-import { BadRequestException, Body, Controller, Get, Headers, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Put, Query, Req, Res, UploadedFile, UploadedFiles, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Headers, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Put, Query, Req, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { FileFieldsInterceptor, FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AccountRole } from '@alzad/db';
 import { Public } from '../../common/decorators/public.decorator';
@@ -10,7 +10,7 @@ import type { AuthContext } from '../auth/auth.types';
 import { ApiError } from '../../common/api-error';
 import { LICENSE_FILE_MAX_BYTES } from '../files/file-validation.util';
 import { ApplicationsService } from './applications.service';
-import { ReviewApplicationDto, SubmitApplicationDto } from './dto/submit-application.dto';
+import { ReviewApplicationDto } from './dto/submit-application.dto';
 import { ListApplicationsQueryDto } from './dto/list-applications-query.dto';
 import { EligibilityDecisionDto, EvaluationDto, SelectionCommitDto } from './dto/application-workflow.dto';
 import { ApplicationV2Service } from './application-v2.service';
@@ -119,52 +119,9 @@ export class ApplicationsController {
   @Public()
   @Post('association-applications')
   @PublicSourceLimit('application-legacy-submit', 60, 3600)
-  @HttpCode(HttpStatus.OK)
-  @UseInterceptors(FileFieldsInterceptor([{ name: 'licenseFile', maxCount: 1 }, { name: 'initialBeneficiaryFile', maxCount: 1 }], { limits: { fileSize: LICENSE_FILE_MAX_BYTES + 1024 } }))
-  @ApiOperation({ summary: 'تقديم طلب انضمام جمعية — عام، multipart/form-data' })
-  async submit(@Body() dto: SubmitApplicationDto, @UploadedFiles() files?: { licenseFile?: Express.Multer.File[]; initialBeneficiaryFile?: Express.Multer.File[] }) {
-    const file = files?.licenseFile?.[0];
-    if (!file && !(dto.website && dto.website.trim())) {
-      throw new ApiError('APPLICATION_LICENSE_INVALID', 'أرفق صورة الترخيص بصيغة JPG أو PNG أو WEBP', 400);
-    }
-
-    let answers: Record<string, boolean> = {};
-    try {
-      answers = dto.answers ? JSON.parse(dto.answers) : {};
-    } catch {
-      throw new BadRequestException('صيغة إجابات أسئلة القبول غير صالحة');
-    }
-
-    return this.applications.submitApplication(
-      {
-        clientRequestId: dto.clientRequestId,
-        name: dto.name,
-        category: dto.category,
-        sector: dto.sector,
-        region: dto.region,
-        city: dto.city,
-        phone: dto.phone,
-        email: dto.email,
-        contactName: dto.contactName,
-        address: dto.address,
-        serviceScope: dto.serviceScope,
-        coordinatorPhone: dto.coordinatorPhone,
-        coordinatorEmail: dto.coordinatorEmail,
-        coordinatorTitle: dto.coordinatorTitle,
-        beneficiaryDatabaseUpdatedAt: dto.beneficiaryDatabaseUpdatedAt,
-        approxBeneficiaryCount: dto.approxBeneficiaryCount,
-        approxNeedCount: dto.approxNeedCount,
-        notes: dto.notes,
-        licenseNumber: dto.licenseNumber,
-        licenseExpiryDate: dto.licenseExpiryDate,
-        answers,
-        pledgeAccepted: dto.pledgeAccepted === 'true',
-        website: dto.website,
-      },
-      file?.buffer ?? Buffer.alloc(0),
-      file?.mimetype,
-      files?.initialBeneficiaryFile?.[0],
-    );
+  @ApiOperation({ summary: 'مسار تقديم قديم متوقف — استخدم صفحة /apply المعتمدة' })
+  submit() {
+    throw new ApiError('APPLICATION_LEGACY_SUBMISSION_DISABLED', 'مسار التقديم القديم متوقف. يرجى تقديم طلب انضمام عبر صفحة /apply المعتمدة', HttpStatus.GONE);
   }
 
   @Public()
