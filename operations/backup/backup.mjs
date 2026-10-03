@@ -113,10 +113,12 @@ export async function deliverStoredBackup(client,commands,bucket,encryptedPath,t
   const bytes=(await stat(encryptedPath)).size;
   if(!Number.isSafeInteger(bytes)||bytes===0) throw new Error('Invalid encrypted backup size');
   const sha256=await hashFile(encryptedPath),key=`${BACKUP_PREFIX}${id}.enc`;
+  console.log('BACKUP_STAGE: ENCRYPTED_BACKUP_UPLOAD');
   const body=createReadStream(encryptedPath);
   try {
     await client.send(new commands.PutObjectCommand({Bucket:bucket,Key:key,Body:body,ContentLength:bytes,ContentType:'application/octet-stream',IfNoneMatch:'*'}));
   } finally { body.destroy(); }
+  console.log('BACKUP_STAGE: ENCRYPTED_BACKUP_READBACK');
   const response=await client.send(new commands.GetObjectCommand({Bucket:bucket,Key:key}));
   if(!response.Body) throw new Error('Missing encrypted backup readback');
   const hash=createHash('sha256');let receivedBytes=0;
@@ -129,6 +131,7 @@ export async function deliverStoredBackup(client,commands,bucket,encryptedPath,t
   } finally { response.Body.destroy?.(); }
   if(receivedBytes!==bytes||(response.ContentLength!==undefined&&response.ContentLength!==bytes)||hash.digest('hex')!==sha256) throw new Error('Encrypted backup readback size or checksum mismatch');
   const text=`تم حفظ نسخة احتياطية مشفّرة والتحقق من حجمها وبصمتها في مساحة التخزين الخاصة الحالية.\nمعرّف النسخة: ${id}\nالحجم بالبايت: ${bytes}\nSHA256 للملف المشفّر الكامل: ${sha256}\nيشمل مخطط public وبياناته وملفات التخزين الخاص. لا يشمل أسرار التشغيل أو كلمات مرور أدوار PostgreSQL. يلزم مفتاح الاستعادة المنفصل لفكها.\nهذا إشعار فقط، بلا مرفقات أو روابط تنزيل.`;
+  console.log('BACKUP_STAGE: BACKUP_EMAIL_NOTIFICATION');
   const result=await transport.sendMail({from,to:RECIPIENT,subject:`إشعار حفظ النسخة الاحتياطية المشفّرة — ${id}`,text,html:`<div dir="rtl" style="text-align:right;font-family:Tahoma,Arial">${text.replaceAll('\n','<br>')}</div>`});
   if(!result.accepted?.some(address=>String(address).toLowerCase()===RECIPIENT)) throw new Error('Backup recipient was not accepted by SMTP');
   return {id,bytes,sha256,storageVerified:true};
@@ -153,11 +156,16 @@ export async function sendParts(transport,encryptedPath,from,id) {
   return {id,parts,bytes:size,sha256,capacityWarning};
 }
 // SMTP/provider error messages can contain credentials, addresses and object keys.
-// Emit only explicitly allowlisted codes and bounded numerical metadata.
+// Emit only explicitly allowlisted codes/service names and bounded numerical metadata.
 export function safeBackupFailure(error) {
   const source=error&&typeof error==='object'?error:{};
   const codes=['BACKUP_EMAIL_SIZE_LIMIT','EAUTH','ETIMEDOUT','ESOCKET','ECONNECTION','ECONNREFUSED','ECONNRESET','EDNS','EENVELOPE','EMESSAGE','ENOENT','EACCES','ENOSPC'];
-  const result={status:'BACKUP_FAILED',code:codes.includes(source.code)?source.code:'UNKNOWN'};
+  const awsNames=['AccessDenied','InvalidAccessKeyId','SignatureDoesNotMatch','ExpiredToken','InvalidToken','AuthorizationHeaderMalformed','NoSuchBucket','NoSuchKey','NotFound','NotImplemented','InvalidRequest','InvalidArgument','InvalidDigest','BadDigest','RequestTimeout','SlowDown','InternalError','InternalServerError','ServiceUnavailable','PreconditionFailed','ConditionalRequestConflict','EntityTooLarge','EntityTooSmall','MissingContentLength','XAmzContentSHA256Mismatch','MethodNotAllowed'];
+  const result={status:'BACKUP_FAILED',code:codes.includes(source.code)?source.code:awsNames.includes(source.name)?source.name:'UNKNOWN'};
+  const metadata=source.$metadata&&typeof source.$metadata==='object'?source.$metadata:{};
+  if(Number.isInteger(metadata.httpStatusCode)&&metadata.httpStatusCode>=100&&metadata.httpStatusCode<=599) result.httpStatusCode=metadata.httpStatusCode;
+  if(Number.isInteger(metadata.attempts)&&metadata.attempts>=1&&metadata.attempts<=10) result.attempts=metadata.attempts;
+  if(Number.isInteger(metadata.totalRetryDelay)&&metadata.totalRetryDelay>=0&&metadata.totalRetryDelay<=600000) result.totalRetryDelay=metadata.totalRetryDelay;
   if(Number.isInteger(source.responseCode)&&source.responseCode>=100&&source.responseCode<=599) result.responseCode=source.responseCode;
   if(['CONN','EHLO','STARTTLS','AUTH','AUTH PLAIN','AUTH LOGIN','MAIL FROM','RCPT TO','DATA'].includes(source.command)) result.command=source.command;
   for(const field of ['bytes','limitBytes']) if(Number.isSafeInteger(source[field])&&source[field]>=0) result[field]=source[field];

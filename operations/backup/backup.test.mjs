@@ -173,6 +173,31 @@ test('backup diagnostics whitelist only safe error metadata and never reveal arb
   assert.deepEqual(safeBackupFailure(null),{status:'BACKUP_FAILED',code:'UNKNOWN'});
 });
 
+test('AWS diagnostics allowlist service error names and bounded HTTP/retry metadata without identifiers',()=>{
+  const secret='synthetic-secret@example.org https://private-storage.invalid/private-object?signature=secret';
+  for(const name of ['AccessDenied','SignatureDoesNotMatch','NotImplemented','InvalidRequest','PreconditionFailed','SlowDown','NoSuchKey']) {
+    const result=safeBackupFailure({name,message:secret,stack:secret,requestId:secret,$metadata:{httpStatusCode:403,attempts:3,totalRetryDelay:250,requestId:secret,extendedRequestId:secret,cfId:secret},$response:{body:secret,headers:{location:secret}}});
+    assert.deepEqual(result,{status:'BACKUP_FAILED',code:name,httpStatusCode:403,attempts:3,totalRetryDelay:250});
+    assert.equal(JSON.stringify(result).includes(secret),false);
+  }
+  assert.deepEqual(safeBackupFailure({code:'ETIMEDOUT',name:'AccessDenied',$metadata:{httpStatusCode:503,attempts:1,totalRetryDelay:0}}),{status:'BACKUP_FAILED',code:'ETIMEDOUT',httpStatusCode:503,attempts:1,totalRetryDelay:0});
+  for(const metadata of [{httpStatusCode:99,attempts:0,totalRetryDelay:-1},{httpStatusCode:600,attempts:11,totalRetryDelay:600001},{httpStatusCode:'403',attempts:'3',totalRetryDelay:'250'},{httpStatusCode:Infinity,attempts:NaN,totalRetryDelay:Infinity}]) assert.deepEqual(safeBackupFailure({name:secret,$metadata:metadata}),{status:'BACKUP_FAILED',code:'UNKNOWN'});
+});
+
+test('stored delivery logs only fixed upload, readback and notification stage markers',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-')),originalLog=console.log,logs=[];
+  try {
+    console.log=(...values)=>logs.push(values);
+    const path=join(dir,'encrypted'),payload=Buffer.from('encrypted fixture');await writeFile(path,payload);
+    const client={send:async command=>{if(command instanceof PutCommand){for await(const chunk of command.input.Body){}return{};}return{Body:Readable.from([payload]),ContentLength:payload.length};}};
+    await backupModule.deliverStoredBackup(client,storageCommands,'private-bucket',path,{sendMail:async()=>({accepted:['marwanalsawi@alzaad.org.sa']})},{address:'private-sender@example.org'},'private-id');
+    assert.deepEqual(logs,[['BACKUP_STAGE: ENCRYPTED_BACKUP_UPLOAD'],['BACKUP_STAGE: ENCRYPTED_BACKUP_READBACK'],['BACKUP_STAGE: BACKUP_EMAIL_NOTIFICATION']]);
+    logs.length=0;
+    await assert.rejects(backupModule.deliverStoredBackup({send:async()=>{throw new Error('private error');}},storageCommands,'private-bucket',path,{}, {},'private-id'));
+    assert.deepEqual(logs,[['BACKUP_STAGE: ENCRYPTED_BACKUP_UPLOAD']]);
+  } finally {console.log=originalLog;await rm(dir,{recursive:true,force:true});}
+});
+
 test('restore verification is networkless, never receives Production settings, and cleans only its own container',async()=>{
   const calls=[];
   const execute=async(command,args,options)=>{calls.push({command,args,options});return args.includes('-At')?(String(args.at(-1)).includes('to_regclass')?'f':'[{"table_name":"_prisma_migrations","row_count":"1"}]'):'';};
