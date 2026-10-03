@@ -112,29 +112,40 @@ export async function deliverStoredBackup(client,commands,bucket,encryptedPath,t
   if(typeof id!=='string'||! /^[A-Za-z0-9][A-Za-z0-9_-]{0,119}$/.test(id)) throw new Error('Invalid backup identifier');
   const bytes=(await stat(encryptedPath)).size;
   if(!Number.isSafeInteger(bytes)||bytes===0) throw new Error('Invalid encrypted backup size');
-  const sha256=await hashFile(encryptedPath),key=`${BACKUP_PREFIX}${id}.enc`;
-  console.log('BACKUP_STAGE: ENCRYPTED_BACKUP_UPLOAD');
-  const body=createReadStream(encryptedPath);
-  try {
-    await client.send(new commands.PutObjectCommand({Bucket:bucket,Key:key,Body:body,ContentLength:bytes,ContentType:'application/octet-stream',IfNoneMatch:'*'}));
-  } finally { body.destroy(); }
-  console.log('BACKUP_STAGE: ENCRYPTED_BACKUP_READBACK');
-  const response=await client.send(new commands.GetObjectCommand({Bucket:bucket,Key:key}));
-  if(!response.Body) throw new Error('Missing encrypted backup readback');
-  const hash=createHash('sha256');let receivedBytes=0;
-  try {
-    for await(const chunk of response.Body) {
-      receivedBytes+=chunk.length;
-      if(receivedBytes>bytes) throw new Error('Encrypted backup readback size mismatch');
-      hash.update(chunk);
-    }
-  } finally { response.Body.destroy?.(); }
-  if(receivedBytes!==bytes||(response.ContentLength!==undefined&&response.ContentLength!==bytes)||hash.digest('hex')!==sha256) throw new Error('Encrypted backup readback size or checksum mismatch');
-  const text=`تم حفظ نسخة احتياطية مشفّرة والتحقق من حجمها وبصمتها في مساحة التخزين الخاصة الحالية.\nمعرّف النسخة: ${id}\nالحجم بالبايت: ${bytes}\nSHA256 للملف المشفّر الكامل: ${sha256}\nيشمل مخطط public وبياناته وملفات التخزين الخاص. لا يشمل أسرار التشغيل أو كلمات مرور أدوار PostgreSQL. يلزم مفتاح الاستعادة المنفصل لفكها.\nهذا إشعار فقط، بلا مرفقات أو روابط تنزيل.`;
+  const sha256=await hashFile(encryptedPath),parts=Math.ceil(bytes/PART_SIZE),wholeHash=createHash('sha256');let totalReadbackBytes=0;
+  for(let index=0;index<parts;index++) {
+    const start=index*PART_SIZE,end=Math.min(bytes,(index+1)*PART_SIZE)-1,partBytes=end-start+1;
+    const key=`${BACKUP_PREFIX}${id}.enc${parts>1?`.part-${String(index+1).padStart(4,'0')}`:''}`;
+    const localHash=createHash('sha256');let localBytes=0;
+    for await(const chunk of createReadStream(encryptedPath,{start,end})) {localBytes+=chunk.length;localHash.update(chunk);}
+    if(localBytes!==partBytes) throw new Error('Encrypted backup source part size mismatch');
+    const partSha256=localHash.digest('hex');
+    console.log('BACKUP_STAGE: ENCRYPTED_BACKUP_UPLOAD');
+    const body=createReadStream(encryptedPath,{start,end});
+    try {
+      await client.send(new commands.PutObjectCommand({Bucket:bucket,Key:key,Body:body,ContentLength:partBytes,ContentType:'application/octet-stream',IfNoneMatch:'*'}));
+    } finally { body.destroy(); }
+    console.log('BACKUP_STAGE: ENCRYPTED_BACKUP_READBACK');
+    const response=await client.send(new commands.GetObjectCommand({Bucket:bucket,Key:key}));
+    if(!response.Body) throw new Error('Missing encrypted backup readback');
+    const hash=createHash('sha256');let receivedBytes=0;
+    try {
+      for await(const chunk of response.Body) {
+        receivedBytes+=chunk.length;
+        if(receivedBytes>partBytes) throw new Error('Encrypted backup readback size mismatch');
+        hash.update(chunk);wholeHash.update(chunk);
+      }
+    } finally { response.Body.destroy?.(); }
+    if(receivedBytes!==partBytes||(response.ContentLength!==undefined&&response.ContentLength!==partBytes)||hash.digest('hex')!==partSha256) throw new Error('Encrypted backup readback size or checksum mismatch');
+    totalReadbackBytes+=receivedBytes;
+  }
+  if(totalReadbackBytes!==bytes||wholeHash.digest('hex')!==sha256) throw new Error('Encrypted backup aggregate size or checksum mismatch');
+  const filenames=parts>1?`${id}.enc.part-0001 … ${id}.enc.part-${String(parts).padStart(4,'0')}`:`${id}.enc`;
+  const text=`تم حفظ نسخة احتياطية مشفّرة والتحقق من حجمها وبصمتها في مساحة التخزين الخاصة الحالية.\nمعرّف النسخة: ${id}\nعدد الأجزاء: ${parts}\nأسماء الملفات بالترتيب: ${filenames}\nالحجم بالبايت: ${bytes}\nSHA256 للملف المشفّر الكامل بعد جمع الأجزاء بالترتيب: ${sha256}\nاحتفظ بجميع الأجزاء المطابقة لهذا المعرّف.\nيشمل مخطط public وبياناته وملفات التخزين الخاص. لا يشمل أسرار التشغيل أو كلمات مرور أدوار PostgreSQL. يلزم مفتاح الاستعادة المنفصل لفكها.\nهذا إشعار فقط، بلا مرفقات أو روابط تنزيل.`;
   console.log('BACKUP_STAGE: BACKUP_EMAIL_NOTIFICATION');
   const result=await transport.sendMail({from,to:RECIPIENT,subject:`إشعار حفظ النسخة الاحتياطية المشفّرة — ${id}`,text,html:`<div dir="rtl" style="text-align:right;font-family:Tahoma,Arial">${text.replaceAll('\n','<br>')}</div>`});
   if(!result.accepted?.some(address=>String(address).toLowerCase()===RECIPIENT)) throw new Error('Backup recipient was not accepted by SMTP');
-  return {id,bytes,sha256,storageVerified:true};
+  return {id,parts,bytes,sha256,storageVerified:true};
 }
 export async function sendParts(transport,encryptedPath,from,id) {
   const size=(await stat(encryptedPath)).size,parts=Math.ceil(size/PART_SIZE),sha256=await hashFile(encryptedPath);
