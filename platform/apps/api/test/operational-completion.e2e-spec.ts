@@ -1,20 +1,23 @@
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
-import { AgreementStatus, EligibilityStatus, Prisma, ProjectClosureStatus, prisma } from '@alzad/db';
+import { AgreementStatus, EligibilityStatus, OutboxEventType, OutboxEventStatus, Prisma, ProjectClosureStatus, prisma } from '@alzad/db';
 import { LEGACY_APPLICATION_QUESTIONS } from '@alzad/shared';
 import { createTestApp } from './utils/bootstrap';
 import { cleanAuthState, seedTestFixtures } from './utils/fixtures';
 import { loginAs } from './utils/node2-fixtures';
+import { NotificationsService } from '../src/modules/notifications/notifications.service';
+import type { FakeEmailService } from '../src/modules/auth/email/fake-email.service';
 
 describe('final operational workflows', () => {
   let app: INestApplication;
   let adminCookie: string;
   let associationCookie: string;
   let fixtures: Awaited<ReturnType<typeof seedTestFixtures>>;
+  let fakeEmail: FakeEmailService;
 
   beforeAll(async () => {
-    ({ app } = await createTestApp());
+    ({ app, fakeEmail } = await createTestApp());
     fixtures = await seedTestFixtures();
     adminCookie = await loginAs(app, fixtures.adminEmail, fixtures.adminPassword);
     associationCookie = await loginAs(app, fixtures.assocEmail, fixtures.assocPassword);
@@ -103,11 +106,19 @@ describe('final operational workflows', () => {
       const activation = await http().post(`/api/v1/participations/${participation.id}/signing-account`).set('Cookie', adminCookie).send({ opId: accountOpId });
       expect(activation.status).toBe(201); expect(typeof activation.body.temporaryPassword).toBe('string'); expect(activation.body.temporaryPassword.length).toBeGreaterThanOrEqual(10);
       resultingAssociationId = activation.body.associationId; resultingAccountId = activation.body.accountId;
+      expect(activation.body).toMatchObject({ emailQueued: true, emailSent: null });
+      expect(await prisma.outboxEvent.count({ where: { type: OutboxEventType.EMAIL_DELIVERY, status: OutboxEventStatus.PENDING } })).toBeGreaterThan(0);
+      await app.get(NotificationsService).processOutbox();
+      expect(fakeEmail.lastSecurityAlert).toMatchObject({ to: email, subject: 'بيانات دخول الجمعية — مشروع الأجهزة الكهربائية' });
+      expect(fakeEmail.lastSecurityAlert?.body).toContain(activation.body.temporaryPassword);
+      const queuedCount = await prisma.outboxEvent.count({ where: { type: OutboxEventType.EMAIL_DELIVERY } });
 
       const replay = await http().post(`/api/v1/participations/${participation.id}/signing-account`).set('Cookie', adminCookie).send({ opId: accountOpId });
       expect(replay.status).toBe(201);
       expect(replay.body.temporaryPassword).toBeNull();
       expect(replay.body.temporaryPasswordPreviouslyIssued).toBe(true);
+      expect(replay.body.emailSent).toBeNull();
+      expect(await prisma.outboxEvent.count({ where: { type: OutboxEventType.EMAIL_DELIVERY } })).toBe(queuedCount);
       const login = await http().post('/api/v1/auth/login').send({ type: 'user', email, password: activation.body.temporaryPassword });
       expect(login.status).toBe(200);
       expect(login.body.user.mustChangePassword).toBe(true);

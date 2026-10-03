@@ -51,13 +51,13 @@ export function SelectionBoard({ showHeader = false, mode = 'all' }: { showHeade
   }, []);
   useEffect(() => { if (mode !== 'settings') void load(); }, [load, mode]);
   useEffect(() => { if (mode === 'settings' || mode === 'all') void getApplicationIntake().then((status) => { setIntake(status); setIntakeTime(status.closesAt ? new Date(Date.parse(status.closesAt) + 3 * 60 * 60_000).toISOString().slice(0, 16) : ''); }).catch((reason) => setMessage(readError(reason))); }, [mode]);
-  async function run(action: () => Promise<unknown>, success: string): Promise<boolean> { setBusy(true); setMessage('جارٍ تنفيذ العملية وتحديث القائمة…'); try { await action(); setMessage(success); await load(); return true; } catch (reason) { setMessage(readError(reason)); return false; } finally { setBusy(false); } }
+  async function run(action: () => Promise<unknown>, success: string): Promise<boolean> { setBusy(true); setMessage('جارٍ تنفيذ العملية وتحديث القائمة…'); try { const result = await action() as { emailQueued?: boolean } | undefined; setMessage(result?.emailQueued === false ? 'تعذّر تجهيز البريد لهذا الطلب. راجع سجل إرسال البريد.' : success); await load(); return true; } catch (reason) { setMessage(readError(reason)); return false; } finally { setBusy(false); } }
   async function submitInfo(input: { note?: string; deadline?: string; items: Array<{ type: 'FIELD' | 'ATTACHMENT'; key: string; reason: string }> }) {
     if (!infoTarget) return;
     setBusy(true); setMessage('جارٍ تسجيل النواقص وإرسال البريد…');
     try {
       const result = await requestApplicationInformation(infoTarget.id, input);
-      setMessage(result.emailSent ? 'تم تسجيل النواقص وإرسال البريد إلى الجمعية.' : 'تم تسجيل النواقص، لكن تعذّر إرسال البريد. استخدم زر إعادة إرسال البريد.');
+      setMessage(result.emailQueued ? 'تم تسجيل النواقص وحفظ رسالة الاستكمال للإرسال.' : result.emailSent ? 'تم تسجيل النواقص وإرسال البريد إلى الجمعية.' : result.emailSent === null ? 'طلب الاستكمال محفوظ مسبقًا؛ لم تُنشأ رسالة مكررة.' : 'تم تسجيل النواقص، لكن تعذّر تجهيز البريد. راجع سجل إرسال البريد.');
       setInfoTarget(null); await load();
     } catch (reason) { setMessage(readError(reason)); }
     finally { setBusy(false); }
@@ -73,10 +73,11 @@ export function SelectionBoard({ showHeader = false, mode = 'all' }: { showHeade
     finally { setBusy(false); }
   }
   async function choose(application: ApplicationSummary, decision: 'MAIN' | 'RESERVE') {
+    if (!window.confirm(`تأكيد ${decision === 'MAIN' ? 'اختيار الأساسية' : 'اختيار الاحتياط'} للجمعية «${application.name}»؟ بعد التأكيد سيُحفظ القرار ويُرسل إشعاره تلقائيًا إلى بريد هذه الجمعية. لا يمكن الرجوع من الأساسية إلى الاحتياط بعد بدء الإرسال أو إنشاء حساب التوقيع.`)) return;
     setBusy(true); setMessage('جارٍ حفظ قرار الاختيار وإرسال الإشعار…');
     try {
       const result = await decideApplicationSelection(application.id, decision);
-      setMessage(result.emailSent === false ? 'حُفظ قرار الاختيار، لكن تعذّر إرسال البريد للجمعية. استخدم زر إعادة الإرسال.' : result.emailSent === null ? 'قرار الاختيار محفوظ مسبقًا؛ لم يُرسل إشعار جديد.' : `تم ${decision === 'MAIN' ? 'اعتماد الجمعية في الأساسية' : 'اعتماد الجمعية في الاحتياط'} وإرسال إشعار القرار.`);
+      setMessage(result.emailQueued ? `تم ${decision === 'MAIN' ? 'اعتماد الجمعية في الأساسية' : 'اعتماد الجمعية في الاحتياط'} وحفظ إشعار القرار للإرسال.` : result.emailSent === false ? 'حُفظ قرار الاختيار، لكن تعذّر تجهيز البريد للجمعية. راجع سجل إرسال البريد.' : result.emailSent === null ? 'قرار الاختيار محفوظ مسبقًا؛ لم يُرسل إشعار جديد.' : `تم ${decision === 'MAIN' ? 'اعتماد الجمعية في الأساسية' : 'اعتماد الجمعية في الاحتياط'} وإرسال إشعار القرار.`);
       await load();
     } catch (reason) { setMessage(readError(reason)); }
     finally { setBusy(false); }
@@ -86,14 +87,14 @@ export function SelectionBoard({ showHeader = false, mode = 'all' }: { showHeade
     setBusy(true); setMessage('جارٍ حفظ قرار الأهلية…');
     try {
       const result = await decideApplicationEligibility(eligibilityTarget.id, decision, notes);
-      setMessage(decision === 'FAILED' && result.emailSent === false ? 'حُفظ قرار عدم الاجتياز، لكن تعذّر إرسال البريد. راجع سجل إرسال البريد.' : decision === 'PASSED' ? 'تم اجتياز الأهلية. أكمل التقييم والاختيار في المرحلة الثانية.' : 'تم حفظ قرار الأهلية.');
+      setMessage(result.emailQueued ? 'حُفظ قرار عدم الاجتياز ورسالة إشعاره للإرسال.' : decision === 'FAILED' && result.emailSent === false ? 'حُفظ قرار عدم الاجتياز، لكن تعذّر تجهيز البريد. راجع سجل إرسال البريد.' : decision === 'PASSED' ? 'تم اجتياز الأهلية. أكمل التقييم والاختيار في المرحلة الثانية.' : 'تم حفظ قرار الأهلية.');
       setEligibilityTarget(null); await load();
     } catch (reason) { setMessage(readError(reason)); }
     finally { setBusy(false); }
   }
   async function retryRejection(application: ApplicationSummary) {
     setBusy(true); setMessage('');
-    try { const result = await resendApplicationRejection(application.id); setMessage(result.emailSent ? 'تم إرسال إشعار عدم الاجتياز للجمعية.' : 'تعذّر إرسال البريد. راجع سجل إرسال البريد.'); }
+    try { const result = await resendApplicationRejection(application.id); setMessage(result.emailQueued ? 'حُفظ إشعار عدم الاجتياز للإرسال.' : result.emailSent ? 'تم إرسال إشعار عدم الاجتياز للجمعية.' : 'تعذّر تجهيز البريد. راجع سجل إرسال البريد.'); }
     catch (reason) { setMessage(readError(reason)); }
     finally { setBusy(false); }
   }
@@ -121,7 +122,7 @@ export function SelectionBoard({ showHeader = false, mode = 'all' }: { showHeade
             {group === 'NEW' && <button style={primaryButtonStyle} disabled={busy} onClick={() => void run(() => startApplicationProcessing([application.id]), 'بدأت مراجعة الطلب.')}>بدء المراجعة</button>}
             {reviewable && !['FAILED', 'NEEDS_INFO'].includes(application.eligibilityStatus) && <button style={secondaryButtonStyle} onClick={() => setEligibilityTarget(application)}>الأهلية والأدلة</button>}
             {reviewable && application.schemaVersion === 2 && !['FAILED', 'NEEDS_INFO'].includes(application.eligibilityStatus) && <button style={secondaryButtonStyle} onClick={() => setInfoTarget(application)}>طلب استكمال وإرسال بريد</button>}
-            {application.eligibilityStatus === 'NEEDS_INFO' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void run(() => resendApplicationInformation(application.id), 'أُعيد إرسال بريد الاستكمال.')}>إعادة إرسال البريد</button>}
+            {application.eligibilityStatus === 'NEEDS_INFO' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void run(() => resendApplicationInformation(application.id), 'حُفظ بريد الاستكمال للإرسال.')}>إعادة إرسال البريد</button>}
             {application.eligibilityStatus === 'FAILED' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void retryRejection(application)}>إعادة إرسال عدم الاجتياز</button>}
             {application.eligibilityStatus === 'PASSED' && <button style={secondaryButtonStyle} onClick={() => setEvaluationTarget(application)}>التقييم 1–5</button>}
             {application.evaluationScore != null && <span className="status-pill">{application.evaluationScore}/100</span>}
@@ -129,7 +130,7 @@ export function SelectionBoard({ showHeader = false, mode = 'all' }: { showHeade
         </article>;
       })}
     </section>}
-    {(mode === 'selection' || mode === 'all') && <section style={cardStyle}><h2>الترتيب وقرار الاختيار النهائي</h2><p>يمكن الاختيار بعد اجتياز الأهلية وحفظ تقييم 1–5. افتح ملف الجمعية وراجع أدلتها قبل اختيار الأساسية أو الاحتياط. ويمكن نقل جمعية الاحتياط إلى الأساسية؛ ولا يُسحب اختيار جمعية أساسية من هنا.</p>{ranked.length === 0 ? <p>لا توجد طلبات مكتملة التقييم.</p> : ranked.map((application, index) => <article key={application.id} className="workflow-row"><div><strong>{index + 1}. {application.name}</strong><p>{application.publicCode} · {application.evaluationScore}/100 · {selectionLabel(application.selectionList)} · {financialLabel(application.financialPriority)}</p></div><div className="button-row"><button style={secondaryButtonStyle} onClick={() => setDetailTarget(application)}>عرض بيانات الجمعية</button>{application.selectionList !== 'MAIN' && <button style={primaryButtonStyle} disabled={busy} onClick={() => void choose(application, 'MAIN')}>{application.selectionList === 'RESERVE' ? 'نقل إلى الأساسية' : 'اعتماد أساسية'}</button>}{application.selectionList === 'NONE' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void choose(application, 'RESERVE')}>اعتماد احتياط</button>}{application.selectionList !== 'NONE' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void run(() => resendApplicationSelection(application.id), 'أُعيد إرسال إشعار الاختيار للجمعية.')}>إعادة إرسال إشعار الاختيار</button>}</div></article>)}</section>}
+    {(mode === 'selection' || mode === 'all') && <section style={cardStyle}><h2>الترتيب وقرار الاختيار النهائي</h2><p>يمكن الاختيار بعد اجتياز الأهلية وحفظ تقييم 1–5. افتح ملف الجمعية وراجع أدلتها قبل اختيار الأساسية أو الاحتياط. يمكن نقل الاحتياط إلى الأساسية، وإرجاع الأساسية إلى الاحتياط قبل بدء إشعار الأساسية أو إنشاء حساب التوقيع. حفظ القرار يرسل الإشعار تلقائيًا لهذه الجمعية.</p>{ranked.length === 0 ? <p>لا توجد طلبات مكتملة التقييم.</p> : ranked.map((application, index) => <article key={application.id} className="workflow-row"><div><strong>{index + 1}. {application.name}</strong><p>{application.publicCode} · {application.evaluationScore}/100 · {selectionLabel(application.selectionList)} · {financialLabel(application.financialPriority)}</p></div><div className="button-row"><button style={secondaryButtonStyle} onClick={() => setDetailTarget(application)}>عرض بيانات الجمعية</button>{application.selectionList !== 'MAIN' && <button style={primaryButtonStyle} disabled={busy} onClick={() => void choose(application, 'MAIN')}>{application.selectionList === 'RESERVE' ? 'نقل إلى الأساسية' : 'اعتماد أساسية'}</button>}{application.selectionList !== 'RESERVE' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void choose(application, 'RESERVE')}>{application.selectionList === 'MAIN' ? 'نقل إلى الاحتياط' : 'اعتماد احتياط'}</button>}{application.selectionList !== 'NONE' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void run(() => resendApplicationSelection(application.id), 'حُفظ إشعار الاختيار للإرسال.')}>إعادة إرسال إشعار الاختيار</button>}</div></article>)}</section>}
     {eligibilityTarget && <EligibilityDialog application={eligibilityTarget} busy={busy} message={message} onClose={() => setEligibilityTarget(null)} onSubmit={saveEligibility} />}
     {evaluationTarget && <EvaluationDialog application={evaluationTarget} busy={busy} message={message} onClose={() => setEvaluationTarget(null)} onSubmit={async (scores) => { if (await run(() => evaluateApplication(evaluationTarget.id, scores), 'تم حفظ التقييم الموزون.')) setEvaluationTarget(null); }} />}
     {infoTarget && <InformationDialog application={infoTarget} busy={busy} message={message} onClose={() => setInfoTarget(null)} onSubmit={submitInfo} />}

@@ -9,6 +9,9 @@ describe('legacy evaluation and shared selection capacity', () => {
   const ratings = { operationalReadiness: 5, technicalCapability: 5, previousExperience: 5, integrityTransparency: 5, participationCommitment: 5, sustainabilityImpact: 5 };
   let tx: ReturnType<typeof transactionFixture>;
   let service: ApplicationsService;
+  let capacity: ReturnType<typeof jest.fn<() => Promise<number | undefined>>>;
+  const access = { sendSelectionDecision: jest.fn(async () => undefined) };
+  const onboarding = { sendRejection: jest.fn(async () => true) };
 
   function transactionFixture() {
     return {
@@ -29,11 +32,13 @@ describe('legacy evaluation and shared selection capacity', () => {
   }
 
   beforeEach(() => {
+    jest.clearAllMocks();
     tx = transactionFixture();
     jest.spyOn(prisma, '$transaction').mockImplementation((async (callback: (client: unknown) => Promise<unknown>) => callback(tx)) as never);
     const idempotency = { claim: jest.fn(async () => ({ claimed: true })), complete: jest.fn(async () => undefined) };
-    const settings = { requireNumber: jest.fn(async () => 3) };
-    service = new ApplicationsService({} as never, {} as never, idempotency as never, { log: jest.fn(async () => undefined) } as never, {} as never, settings as never, { sendRejection: jest.fn(async () => true) } as never);
+    capacity = jest.fn<() => Promise<number | undefined>>().mockResolvedValue(3);
+    const settings = { selectionMainCapacity: capacity };
+    service = new ApplicationsService({} as never, {} as never, idempotency as never, { log: jest.fn(async () => undefined) } as never, {} as never, settings as never, onboarding as never, access as never);
   });
   afterEach(() => { jest.restoreAllMocks(); });
 
@@ -56,6 +61,11 @@ describe('legacy evaluation and shared selection capacity', () => {
     expect(tx.$executeRaw.mock.calls[0][0].join('')).toContain('association-selection:electrical-appliances');
     expect(tx.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.$queryRaw.mock.invocationCallOrder[0]);
     expect(tx.associationApplication.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('queues an ineligibility notice in the same decision transaction', async () => {
+    await expect(service.decideEligibility(ctx, 'application', EligibilityStatus.FAILED, 'سبب', 'eligibility-mail')).resolves.toEqual({ ok: true, emailQueued: true, emailSent: null });
+    expect(onboarding.sendRejection).toHaveBeenCalledWith('application', tx);
   });
 
   it('serializes an eligibility decision with selection before acquiring its application row', async () => {
@@ -93,5 +103,22 @@ describe('legacy evaluation and shared selection capacity', () => {
     const updates = tx.associationApplication.updateMany.mock.calls as unknown as Array<[{ where: { id: { in: string[] } }; data: { selectionList: string } }] >;
     expect(updates.flatMap(([update]) => update.where.id.in)).toEqual(expect.arrayContaining(['candidate-1', 'candidate-2', 'candidate-3']));
     expect(updates.every(([update]) => update.where.id.in.every((id) => id.startsWith('candidate-')))).toBe(true);
+  });
+
+  it('keeps MAIN capacity open when neither the setting nor the request supplies a number', async () => {
+    capacity.mockResolvedValue(undefined);
+    await expect(service.commitSelection(ctx, undefined, 'select-unlimited')).resolves.toEqual({ ok: true, main: 3, reserve: 0, rejected: 0 });
+    expect(tx.projectParticipation.create).toHaveBeenCalledTimes(3);
+  });
+
+  it('enforces a later configured capacity even when the request omits a number', async () => {
+    await expect(service.commitSelection(ctx, undefined, 'select-configured')).resolves.toEqual({ ok: true, main: 1, reserve: 2, rejected: 0 });
+    expect(tx.projectParticipation.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a bulk request override the approved configured capacity', async () => {
+    await expect(service.commitSelection(ctx, 4, 'select-mismatch')).rejects.toMatchObject({ code: 'SELECTION_TARGET_MISMATCH' });
+    expect(tx.associationApplication.updateMany).not.toHaveBeenCalled();
+    expect(access.sendSelectionDecision).not.toHaveBeenCalled();
   });
 });

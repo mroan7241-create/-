@@ -248,10 +248,10 @@ export class ApplicationV2Service {
       } });
       await tx.applicationAttachment.updateMany({ where: { draftId: draft.id }, data: { draftId: null, applicationId: application.id } });
       await tx.associationApplicationDraft.update({ where: { id: draft.id }, data: { status: ApplicationDraftStatus.SUBMITTED, submittedApplicationId: application.id } });
-      return application;
+      const emailQueued = await this.access.sendSubmitted(draft.id, tx);
+      return { application, emailQueued };
     });
-    try { await this.access.sendSubmitted(draft.id); return { ok: true as const, id: result.publicCode, message: 'تم استلام طلب المشاركة بنجاح', emailSent: true }; }
-    catch { return { ok: true as const, id: result.publicCode, message: 'تم استلام طلب المشاركة بنجاح', emailSent: false }; }
+    return { ok: true as const, id: result.application.publicCode, message: 'تم استلام طلب المشاركة بنجاح', emailQueued: result.emailQueued, emailSent: result.emailQueued ? null : false };
   }
 
   async publicStatus(draftCode: string, token: string, applicantSession = '') {
@@ -334,10 +334,14 @@ export class ApplicationV2Service {
     if (!dto.items.length || dto.items.length > 50) throw new ApiError('APPLICATION_INFORMATION_ITEMS_REQUIRED', 'حدد حقلًا أو مرفقًا واحدًا على الأقل', 400);
     if (dto.items.some((item) => item.type === ApplicationInformationItemType.ATTACHMENT && !ALLOWED_ATTACHMENT_KEYS.has(item.key.trim()))) throw new ApiError('APPLICATION_ATTACHMENT_FIELD_INVALID', 'نوع المرفق المطلوب غير صالح', 400);
     const deadline = dto.deadline ? parseDate(dto.deadline, 'المهلة') : null;
+    let emailQueued = false;
+    let newlyRequested = false;
     const response = await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
       const claim = await this.idempotency.claim<{ ok: true; requestId: string }>(tx, ctx.accountId, 'application-information-request', dto.opId, { applicationId, items: dto.items, note: dto.note ?? null, deadline });
       if (!claim.claimed) return claim.existingResponse!;
+      const sourceDraft = await tx.associationApplicationDraft.findFirst({ where: { submittedApplicationId: applicationId }, select: { id: true } });
+      if (sourceDraft) await tx.$queryRaw`SELECT id FROM association_application_drafts WHERE id=${sourceDraft.id}::uuid FOR UPDATE`;
       await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${applicationId}::uuid FOR UPDATE`;
       const application = await tx.associationApplication.findUnique({ where: { id: applicationId }, include: { sourceDraft: { select: { id: true } } } });
       if (!application || application.status !== ApplicationStatus.UNDER_REVIEW) throw new ApiError('APPLICATION_NOT_REVIEWABLE', 'الطلب غير متاح للاستكمال', 409);
@@ -360,11 +364,12 @@ export class ApplicationV2Service {
       } });
       await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_INFORMATION_REQUESTED', entityType: 'association_applications', entityId: applicationId, metadata: { requestId: request.id, items: dto.items.map((item) => ({ type: item.type, key: item.key, reason: item.reason })) } as Prisma.InputJsonValue } });
       const response = { ok: true as const, requestId: request.id };
+      emailQueued = await this.access.sendNeedsInfo(applicationId, tx);
       await this.idempotency.complete(tx, ctx.accountId, 'application-information-request', dto.opId, response);
+      newlyRequested = true;
       return response;
     });
-    try { await this.access.sendNeedsInfo(applicationId); return { ...response, emailSent: true as const }; }
-    catch { return { ...response, emailSent: false as const }; }
+    return { ...response, emailQueued, emailSent: emailQueued || !newlyRequested ? null : false };
   }
 
   async eligibilityEvidence(applicationId: string) {
@@ -395,11 +400,16 @@ export class ApplicationV2Service {
   }
 
   async decideSelection(ctx: AuthContext, applicationId: string, dto: SelectionDecisionDto) {
+    let emailQueued = false;
     let newlyDecided = false;
     const result = await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
       const claim = await this.idempotency.claim<{ ok: true; decision: AssociationSelectionList }>(tx, ctx.accountId, 'application-selection-decision', dto.opId, { applicationId, decision: dto.decision, reason: dto.reason ?? null });
       if (!claim.claimed) return claim.existingResponse!;
+      const sourceDraft = await tx.associationApplicationDraft.findFirst({ where: { submittedApplicationId: applicationId }, select: { id: true } });
+      if (sourceDraft) await tx.$queryRaw`SELECT id FROM association_application_drafts WHERE id=${sourceDraft.id}::uuid FOR UPDATE`;
+      const participationRow = await tx.projectParticipation.findUnique({ where: { applicationId }, select: { id: true } });
+      if (participationRow) await tx.$queryRaw`SELECT id FROM project_participations WHERE id=${participationRow.id}::uuid FOR UPDATE`;
       await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${applicationId}::uuid FOR UPDATE`;
       const application = await tx.associationApplication.findUnique({ where: { id: applicationId } });
       if (!application || application.eligibilityStatus !== EligibilityStatus.PASSED || application.evaluationScore == null) throw new ApiError('APPLICATION_SELECTION_NOT_READY', 'يجب اجتياز الأهلية وإكمال التقييم أولًا', 409);
@@ -409,27 +419,32 @@ export class ApplicationV2Service {
         return response;
       }
       if (application.selectionList === AssociationSelectionList.NONE && application.status !== ApplicationStatus.UNDER_REVIEW) throw new ApiError('APPLICATION_SELECTION_NOT_READY', 'لا يمكن اعتماد اختيار جديد لطلب لم يعد قيد المراجعة', 409);
-      if (application.selectionList === AssociationSelectionList.MAIN && dto.decision === AssociationSelectionList.RESERVE) throw new ApiError('APPLICATION_MAIN_ALREADY_STARTED', 'لا يمكن نقل جمعية أساسية بدأت تهيئتها إلى الاحتياط من هذه الصفحة', 409);
+      if (application.selectionList === AssociationSelectionList.MAIN && dto.decision === AssociationSelectionList.RESERVE) {
+        const participation = await tx.projectParticipation.findUnique({ where: { applicationId }, include: { agreements: true } });
+        if (application.resultingAssociationId || (participation && (participation.status !== ParticipationStatus.APPROVED_AWAITING_SETUP || participation.associationId || participation.activatedAt || participation.closedAt || participation.agreements.some(agreement => agreement.associationAccountId || agreement.signedByOrgAt || agreement.signedByZaadAt || agreement.orgSignatureFileId || agreement.partyOneSignatureFileId || agreement.fullyExecutedAt || agreement.finalFileId || ['SIGNED_BY_ORG', 'SIGNED'].includes(agreement.status))))) throw new ApiError('APPLICATION_MAIN_ALREADY_STARTED', 'لا يمكن النقل إلى الاحتياط بعد إنشاء حساب التوقيع أو بدء التوقيع أو التفعيل', 409);
+        if (!sourceDraft) throw new ApiError('APPLICATION_SELECTION_EMAIL_STARTED', 'تعذر إثبات عدم إرسال إشعار الأساسية للطلب التاريخي؛ القرار السابق محفوظ', 409);
+        await this.access.cancelUnsentMainDecision(tx, applicationId, sourceDraft.id, application.selectionApprovedAt);
+      }
       if (dto.decision === AssociationSelectionList.MAIN) {
-        const capacity = await this.settings.requireNumber('selection.mainTargetCount');
-        if (!Number.isInteger(capacity) || capacity < 1) throw new ApiError('APPLICATION_SELECTION_TARGET_INVALID', 'السعة المعتمدة للجمعيات الأساسية غير صالحة', 409);
-        const existingMain = await tx.associationApplication.count({ where: { selectionList: AssociationSelectionList.MAIN } });
-        if (existingMain >= capacity) throw new ApiError('APPLICATION_SELECTION_CAPACITY_FULL', 'اكتملت السعة المعتمدة للجمعيات الأساسية', 409);
+        const capacity = await this.settings.selectionMainCapacity(tx);
+        if (capacity !== undefined) {
+          const existingMain = await tx.associationApplication.count({ where: { selectionList: AssociationSelectionList.MAIN } });
+          if (existingMain >= capacity) throw new ApiError('APPLICATION_SELECTION_CAPACITY_FULL', 'اكتملت السعة المعتمدة للجمعيات الأساسية', 409);
+        }
       }
       const now = new Date();
       await tx.associationApplication.update({ where: { id: applicationId }, data: { selectionList: dto.decision, selectionReason: dto.reason?.trim() || null, status: ApplicationStatus.ACCEPTED, selectionApprovedAt: now, selectionApprovedById: ctx.accountId } });
       if (dto.decision === AssociationSelectionList.MAIN) {
         await tx.projectParticipation.upsert({ where: { applicationId }, update: {}, create: { applicationId, status: ParticipationStatus.APPROVED_AWAITING_SETUP, activationBasis: ActivationBasis.AGREEMENT_COMPLETED, coordinatorName: application.contactName, coordinatorPhone: application.coordinatorPhone, coordinatorEmail: application.coordinatorEmail, coordinatorTitle: application.coordinatorTitle } });
       }
-      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_SELECTION_DECIDED', entityType: 'association_applications', entityId: applicationId, metadata: { decision: dto.decision, reason: dto.reason ?? null } } });
+      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_SELECTION_DECIDED', entityType: 'association_applications', entityId: applicationId, metadata: { previousDecision: application.selectionList, decision: dto.decision, reason: dto.reason ?? null, selectionApprovedAt: now.toISOString() } } });
       const response = { ok: true as const, decision: dto.decision };
+      if (sourceDraft) emailQueued = await this.access.sendSelectionDecision(applicationId, tx);
       await this.idempotency.complete(tx, ctx.accountId, 'application-selection-decision', dto.opId, response);
       newlyDecided = true;
       return response;
     });
-    if (!newlyDecided) return { ...result, emailSent: null };
-    try { await this.access.sendSelectionDecision(applicationId); return { ...result, emailSent: true }; }
-    catch { return { ...result, emailSent: false }; }
+    return { ...result, emailQueued, emailSent: emailQueued || !newlyDecided ? null : false };
   }
 
   private async requireAttachmentMutation(tx: Prisma.TransactionClient, draftId: string, fieldKey: string) {

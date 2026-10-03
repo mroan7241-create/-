@@ -13,6 +13,7 @@ import { loginAs, loginAsDelegate } from './utils/node2-fixtures';
 import { startTestStorage, stopTestStorage, storageClient, testBucket } from './utils/storage-harness';
 import { COVENANT_SOURCE_SHA256, COVENANT_TITLE } from '../src/modules/participations/covenant-document.service';
 import type { FakeEmailService } from '../src/modules/auth/email/fake-email.service';
+import { NotificationsService } from '../src/modules/notifications/notifications.service';
 
 describe('Covenant V1 execution gate', () => {
   let fakeEmail: FakeEmailService;
@@ -32,6 +33,8 @@ describe('Covenant V1 execution gate', () => {
     await http().post(`/api/v1/participations/agreements/${agreementId}/transition`).set('Cookie', adminCookie).send({ status: AgreementStatus.SENT, opId: opId('sent') }).expect(201);
     const accountOperation = opId('account');
     const prepared = await http().post(`/api/v1/participations/${participationId}/signing-account`).set('Cookie', adminCookie).send({ opId: accountOperation }).expect(201); temporaryPassword = prepared.body.temporaryPassword; associationId = prepared.body.associationId; accountId = prepared.body.accountId;
+    expect(prepared.body).toMatchObject({ emailQueued: true, emailSent: null });
+    await app.get(NotificationsService).processOutbox();
     expect(fakeEmail.lastSecurityAlert).toMatchObject({ to: email, subject: 'بيانات دخول الجمعية — مشروع الأجهزة الكهربائية' });
     expect(fakeEmail.lastSecurityAlert!.body).toContain(temporaryPassword);
     expect(fakeEmail.lastSecurityAlert!.body).toContain('/login');
@@ -110,6 +113,7 @@ describe('Covenant V1 execution gate', () => {
   it('19. exactly one concurrent Party-One handwritten signature fully executes the covenant', async () => { const attempts = await Promise.all([http().post(`/api/v1/participations/covenant/party-one/${partyOneToken}/sign`).field('opId', opId('party-one-a')).attach('signature', signature, { filename: 'synthetic-signature.png', contentType: 'image/png' }), http().post(`/api/v1/participations/covenant/party-one/${partyOneToken}/sign`).field('opId', opId('party-one-b')).attach('signature', signature, { filename: 'synthetic-signature.png', contentType: 'image/png' })]); expect(attempts.map(({ status }) => status).sort()).toEqual([201, 403]); const accepted = attempts.find(({ status }) => status === 201)!; expect(accepted.body.status).toBe('SIGNED'); finalSha256 = accepted.body.finalSha256; });
   it('20. the single-use Party-One token cannot be reused', async () => { await http().post(`/api/v1/participations/covenant/party-one/${partyOneToken}/sign`).field('opId', opId('reuse')).attach('signature', signature, { filename: 'synthetic-signature.png', contentType: 'image/png' }).expect(403); });
   it('20b. committed completion emails the exact final PDF once and authenticated replay does not resend', async () => {
+    await app.get(NotificationsService).processOutbox();
     const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId } });
     expect(fakeEmail.lastSecurityAlert).toMatchObject({ to: account.email, subject: 'اكتمال اعتماد الميثاق وتفعيل بوابة الجمعية — مشروع الأجهزة الكهربائية' });
     const attachment = fakeEmail.lastSecurityAlert?.pdfAttachment;

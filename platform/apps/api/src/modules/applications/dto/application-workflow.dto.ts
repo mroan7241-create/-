@@ -17,6 +17,6 @@ export class EvaluationDto {
   @IsString() opId!: string;
 }
 export class SelectionCommitDto {
-  @IsInt() @Min(1) mainTargetCount!: number;
+  @IsOptional() @IsInt() @Min(1) mainTargetCount?: number;
   @IsString() opId!: string;
 }

@@ -352,7 +352,7 @@ function ApplicationDetail({
         )}
 
         {application.eligibilityStatus === 'NEEDS_INFO' && <div style={{ marginTop: 16 }}>
-          <button type="button" style={secondaryButtonStyle} onClick={async () => { setNotificationMessage(null); try { await resendApplicationInformation(application.id); setNotificationMessage('تمت إعادة إرسال إشعار الاستكمال إلى البريد الرسمي.'); } catch (reason) { setNotificationMessage(reason instanceof ApiClientError ? reason.message : 'تعذّرت إعادة إرسال الإشعار.'); } }}>إعادة إرسال إشعار الاستكمال</button>
+          <button type="button" style={secondaryButtonStyle} onClick={async () => { setNotificationMessage(null); try { const result = await resendApplicationInformation(application.id); setNotificationMessage(result.emailQueued ? 'حُفظ إشعار الاستكمال للإرسال إلى البريد الرسمي.' : 'تعذّر تجهيز إشعار الاستكمال. راجع سجل إرسال البريد.'); } catch (reason) { setNotificationMessage(reason instanceof ApiClientError ? reason.message : 'تعذّرت إعادة إرسال الإشعار.'); } }}>إعادة إرسال إشعار الاستكمال</button>
           {notificationMessage && <p role="status" style={notificationMessage.startsWith('تم') ? { color: '#17663a' } : errorStyle}>{notificationMessage}</p>}
         </div>}
 

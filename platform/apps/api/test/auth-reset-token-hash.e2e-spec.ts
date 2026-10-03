@@ -5,6 +5,7 @@ import { cleanAuthState, resetAccountPassword, seedTestFixtures } from './utils/
 import { prisma } from '@alzad/db';
 import { resetTokenHash, sha256Hex } from '../src/common/crypto.util';
 import { FakeEmailService } from '../src/modules/auth/email/fake-email.service';
+import { NotificationsService } from '../src/modules/notifications/notifications.service';
 
 /**
  * NODE-1.1 §3 — password_reset_tokens.token_hash يجب أن يكون
@@ -32,9 +33,13 @@ describe('Auth — password reset token HMAC hashing (NODE-1.1 §3)', () => {
   });
 
   const http = () => request(app.getHttpServer());
+  async function requestReset() {
+    await http().post('/api/v1/auth/password-reset/request').send({ email: fixtures.assocEmail });
+    await app.get(NotificationsService).processOutbox();
+  }
 
   it('token_hash المخزَّن في DB لا يساوي الرمز الخام', async () => {
-    await http().post('/api/v1/auth/password-reset/request').send({ email: fixtures.assocEmail });
+    await requestReset();
     const code = fakeEmail.lastPasswordReset!.code;
 
     const token = await prisma.passwordResetToken.findFirst({ where: { emailNormalized: fixtures.assocEmail }, orderBy: { createdAt: 'desc' } });
@@ -43,7 +48,7 @@ describe('Auth — password reset token HMAC hashing (NODE-1.1 §3)', () => {
   });
 
   it('token_hash لا يساوي SHA-256 العادي للرمز (يجب أن يكون HMAC بمفتاح سرّي، لا hash بلا مفتاح)', async () => {
-    await http().post('/api/v1/auth/password-reset/request').send({ email: fixtures.assocEmail });
+    await requestReset();
     const code = fakeEmail.lastPasswordReset!.code;
 
     const token = await prisma.passwordResetToken.findFirst({ where: { emailNormalized: fixtures.assocEmail }, orderBy: { createdAt: 'desc' } });
@@ -52,7 +57,7 @@ describe('Auth — password reset token HMAC hashing (NODE-1.1 §3)', () => {
   });
 
   it('HMAC الصحيح يُتحقَّق منه بنجاح عند تأكيد الاستعادة', async () => {
-    await http().post('/api/v1/auth/password-reset/request').send({ email: fixtures.assocEmail });
+    await requestReset();
     const code = fakeEmail.lastPasswordReset!.code;
 
     const confirm = await http()
@@ -69,7 +74,7 @@ describe('Auth — password reset token HMAC hashing (NODE-1.1 §3)', () => {
   });
 
   it('رمز خاطئ (HMAC غير مطابق) يُرفض برسالة موحَّدة', async () => {
-    await http().post('/api/v1/auth/password-reset/request').send({ email: fixtures.assocEmail });
+    await requestReset();
 
     const res = await http()
       .post('/api/v1/auth/password-reset/confirm')

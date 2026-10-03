@@ -291,6 +291,7 @@ enum IdempotencyKeyStatus {
 }
 
 enum OutboxEventType {
+  EMAIL_DELIVERY
   BENEFICIARY_APPROVED
   RECEIPT_CONFIRMED
   STOCK_INCREASED

@@ -13,7 +13,7 @@ describe('SMTP Arabic layout and completed Covenant attachment', () => {
   afterEach(() => { process.env = { ...previous }; jest.restoreAllMocks(); });
 
   it('uses inline RTL/right alignment, approved logo, escaped content, and the actual PDF attachment', async () => {
-    const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({});
+    const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ accepted: ['test@example.org'] });
     jest.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail } as never);
     const pdf = Buffer.from('%PDF-synthetic');
     await new SmtpEmailService().sendSecurityAlert({ to: 'test@example.org', name: '<script>test</script>', subject: 'اكتمال الميثاق', body: '<script>unsafe</script>\nرسالة عربية', action: { label: 'بوابة الجمعية', url: 'https://web.example.org/association' }, pdfAttachment: { filename: 'covenant-test.pdf', content: pdf } });
@@ -29,8 +29,14 @@ describe('SMTP Arabic layout and completed Covenant attachment', () => {
     expect(sent.attachments[1]).toEqual({ filename: 'covenant-test.pdf', content: pdf, contentType: 'application/pdf' });
   });
 
+  it.each([{ accepted: [] }, { accepted: ['other@example.org'] }, { accepted: ['test@example.org.attacker.invalid'] }])('rejects SMTP acceptance that excludes the exact requested recipient', async ({ accepted }) => {
+    const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ accepted });
+    jest.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail } as never);
+    await expect(new SmtpEmailService().sendPasswordResetCode({ to: 'test@example.org', name: 'test', code: 'synthetic' })).rejects.toThrow('MAIL_RECIPIENT_NOT_ACCEPTED');
+  });
+
   it('applies the same branded Arabic template to tracking, password-reset and operational reports', async () => {
-    const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({});
+    const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ accepted: ['test@example.org'] });
     jest.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail } as never);
     const service = new SmtpEmailService();
     await service.sendPasswordResetCode({ to: 'test@example.org', name: 'تجريبي', code: '123456' });
@@ -42,6 +48,13 @@ describe('SMTP Arabic layout and completed Covenant attachment', () => {
       expect(sent.html).toContain('align="right"'); expect(sent.html).toContain('cid:alzad-approved-logo');
       expect(sent.attachments).toHaveLength(1);
     }
+  });
+
+  it('uses the event message ID and accepts the exact recipient with normalized casing only', async () => {
+    const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ accepted: ['TEST@example.org'] });
+    jest.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail } as never);
+    await new SmtpEmailService().sendPasswordResetCode({ to: 'test@example.org', name: 'n', code: 'secret' }, { messageId: '<event@alzad-mail.invalid>' });
+    expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ messageId: '<event@alzad-mail.invalid>' }));
   });
 
   it('records SMTP acceptance and correlation without recipients, codes, links, bodies or provider response', async () => {
@@ -77,7 +90,7 @@ describe('SMTP Arabic layout and completed Covenant attachment', () => {
 
   it('does not leak unrecognized error codes or unsafe message IDs and preserves failures if logging is unavailable', async () => {
     const failure = Object.assign(new Error('private-detail'), { code: 'private-error-code' });
-    const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValueOnce({ messageId: 'private-id\nprivate-header' }).mockRejectedValue(failure);
+    const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValueOnce({ messageId: 'private-id\nprivate-header', accepted: ['private@example.org'] }).mockRejectedValue(failure);
     jest.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail } as never);
     const service = new SmtpEmailService();
     const params = { to: 'private@example.org', subject: 'private-subject', text: 'private-body' };

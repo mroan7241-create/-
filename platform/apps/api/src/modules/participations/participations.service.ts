@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { prisma, AccountRole, AccountStatus, AgreementStatus, AssociationSelectionList, AssociationStatus, AuthCredentialType, CoordinatorChangeStatus, FileCategory, ParticipationStatus, Prisma } from '@alzad/db';
 import { ApiError } from '../../common/api-error';
@@ -17,7 +17,6 @@ import { OnboardingEmailService } from '../auth/email/onboarding-email.service';
 
 @Injectable()
 export class ParticipationsService {
-  private readonly logger = new Logger(ParticipationsService.name);
   constructor(
     private readonly codes: PublicCodeService,
     private readonly idempotency: IdempotencyService,
@@ -27,7 +26,7 @@ export class ParticipationsService {
   ) {}
 
   list(ctx: AuthContext) {
-    const where: Prisma.ProjectParticipationWhereInput = ctx.role === AccountRole.ADMIN ? {} : { associationId: ctx.associationId ?? '__none__' };
+    const where: Prisma.ProjectParticipationWhereInput = ctx.role === AccountRole.ADMIN ? { OR: [{ applicationId: null }, { application: { selectionList: AssociationSelectionList.MAIN } }] } : { associationId: ctx.associationId ?? '__none__' };
     return prisma.projectParticipation.findMany({ where, include: { association: true, application: true, agreements: { orderBy: { version: 'desc' } }, closureReport: true }, orderBy: { createdAt: 'desc' } });
   }
 
@@ -95,12 +94,12 @@ export class ParticipationsService {
       await tx.associationApplication.update({ where: { id: participation.application.id }, data: { resultingAssociationId: association.id, reviewedAt: new Date(), reviewedById: ctx.accountId } });
       await tx.participationAgreement.update({ where: { id: agreement.id }, data: { associationAccountId: account.id } });
       await audit(tx, ctx, 'COVENANT_RESTRICTED_ACCOUNT_CREATED', 'participation_agreements', agreement.id, { associationId: association.id, accountId: account.id });
+      await this.onboardingEmail.sendCredentials(account.id, temporaryPassword, tx);
       const response = { associationId: association.id, accountId: account.id };
       await this.idempotency.complete(tx, ctx.accountId, scope, opId, response);
       return { replayed: false as const, response, temporaryPassword };
     });
-    const emailSent = outcome.replayed ? null : await this.onboardingEmail.sendCredentials(outcome.response.accountId, outcome.temporaryPassword);
-    return { ok: true as const, ...outcome.response, temporaryPassword: outcome.replayed ? null : outcome.temporaryPassword, temporaryPasswordPreviouslyIssued: outcome.replayed, emailSent };
+    return { ok: true as const, ...outcome.response, temporaryPassword: outcome.replayed ? null : outcome.temporaryPassword, temporaryPasswordPreviouslyIssued: outcome.replayed, emailQueued: !outcome.replayed, emailSent: null };
   }
 
   async getOwnCovenant(ctx: AuthContext) {
@@ -223,17 +222,16 @@ export class ParticipationsService {
           { actorAccountId: null, actorRole: null, associationId: current.participation.associationId, action: 'COVENANT_PARTY_ONE_SIGNED', entityType: 'participation_agreements', entityId: current.id, metadata: { representative: PARTY_ONE_NAME, signingSessionIssuedById: current.partyOneSigningIssuedById } },
           { actorAccountId: null, actorRole: null, associationId: current.participation.associationId, action: 'COVENANT_FULLY_EXECUTED', entityType: 'participation_agreements', entityId: current.id, metadata: { version: COVENANT_VERSION, finalSha256, signingSessionIssuedById: current.partyOneSigningIssuedById } },
         ] });
+        const completionEmail = await this.onboardingEmail.sendCovenantCompletion(current.id, finalBytes, tx);
+        if (!completionEmail.ok) throw new ApiError('COVENANT_EMAIL_DELIVERY_FAILED', 'تعذر تسجيل رسالة الميثاق للإرسال؛ راجع الإدارة.', 503);
         const response = { ok: true as const, status: AgreementStatus.SIGNED, finalSha256 };
         await this.idempotency.complete(tx, agreement.createdById, 'covenant-party-one-sign', opId, response);
         return { replayed: false as const, response };
       });
       if (outcome.replayed) {
         for (const key of uploaded) await this.storage.deleteObjectBestEffort(key);
-      } else {
-        try { await this.onboardingEmail.sendCovenantCompletion(agreement.id, finalBytes); }
-        catch { this.logger.warn('Committed Covenant remains valid; completion email requires retry.'); }
       }
-      return outcome.response;
+      return { ...outcome.response, emailQueued: !outcome.replayed, emailSent: null };
     } catch (error) {
       for (const key of uploaded) await this.storage.deleteObjectBestEffort(key);
       throw error;
@@ -307,10 +305,10 @@ export class ParticipationsService {
       await tx.associationApplication.update({ where: { id: participation.application.id }, data: { resultingAssociationId: association.id, reviewedAt: new Date(), reviewedById: ctx.accountId } });
       await tx.projectParticipation.update({ where: { id }, data: { associationId: association.id, status: ParticipationStatus.ACTIVE, activatedAt: new Date() } });
       await audit(tx, ctx, 'ASSOCIATION_ACTIVATED', 'project_participations', id, { associationId: association.id, accountId: account.id });
+      await this.onboardingEmail.sendCredentials(account.id, temporaryPassword, tx);
       const response = { associationId: association.id, accountId: account.id }; await this.idempotency.complete(tx, ctx.accountId, scope, opId, response); return { replayed: false as const, response, temporaryPassword };
     });
-    const emailSent = outcome.replayed ? null : await this.onboardingEmail.sendCredentials(outcome.response.accountId, outcome.temporaryPassword);
-    return { ok: true as const, ...outcome.response, temporaryPassword: outcome.replayed ? null : outcome.temporaryPassword, temporaryPasswordPreviouslyIssued: outcome.replayed, emailSent };
+    return { ok: true as const, ...outcome.response, temporaryPassword: outcome.replayed ? null : outcome.temporaryPassword, temporaryPasswordPreviouslyIssued: outcome.replayed, emailQueued: !outcome.replayed, emailSent: null };
   }
 
   requestCoordinatorChange(ctx: AuthContext, participationId: string, dto: CoordinatorChangeDto) {

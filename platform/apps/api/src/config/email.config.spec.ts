@@ -13,6 +13,7 @@ const complete: NodeJS.ProcessEnv = {
   SMTP_FROM_EMAIL: 'mailer@example.test',
   SMTP_FROM_NAME: 'Test Platform',
   PUBLIC_WEB_URL: 'https://example.test',
+  EMAIL_DELIVERY_ENCRYPTION_KEY: Buffer.alloc(32, 17).toString('base64'),
 };
 
 describe('production email startup configuration', () => {
@@ -23,7 +24,7 @@ describe('production email startup configuration', () => {
     expect(() => assertProductionEmailConfigured({ ...complete, EMAIL_PROVIDER: provider })).toThrow(/EMAIL_PROVIDER/);
   });
 
-  test.each(['SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_FROM_EMAIL', 'SMTP_FROM_NAME', 'PUBLIC_WEB_URL'] as const)(
+  test.each(['SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_FROM_EMAIL', 'SMTP_FROM_NAME', 'PUBLIC_WEB_URL', 'EMAIL_DELIVERY_ENCRYPTION_KEY'] as const)(
     'rejects missing %s without exposing values', (variable) => {
       const env = { ...complete };
       delete env[variable];
@@ -50,6 +51,14 @@ describe('production email startup configuration', () => {
   test('accepts complete configuration without sending mail', () => {
     expect(() => assertProductionEmailConfigured(complete)).not.toThrow();
     expect(emailReadiness(complete)).toBe('ok');
+  });
+
+  test.each(['not-base64', Buffer.alloc(31).toString('base64'), Buffer.alloc(33).toString('base64'), Buffer.alloc(32).toString('base64').replace(/=$/, '')])('rejects malformed or non-32-byte mail encryption key', (key) => {
+    expect(() => assertProductionEmailConfigured({ ...complete, EMAIL_DELIVERY_ENCRYPTION_KEY: key })).toThrow('EMAIL_DELIVERY_ENCRYPTION_KEY');
+  });
+
+  test.each(['AUTH_RATE_LIMIT_HMAC_KEY', 'AUTH_CREDENTIAL_LOOKUP_HMAC_KEY', 'AUTH_RESET_TOKEN_HMAC_KEY'])('rejects mail key reuse with %s', name => {
+    expect(() => assertProductionEmailConfigured({ ...complete, [name]: complete.EMAIL_DELIVERY_ENCRYPTION_KEY })).toThrow('EMAIL_DELIVERY_ENCRYPTION_KEY');
   });
 
   test.each(['development', 'test'])('allows DevEmailService in %s without SMTP', (mode) => {

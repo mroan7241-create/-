@@ -4,6 +4,7 @@ import { createTestApp } from './utils/bootstrap';
 import { cleanAuthState, resetAccountPassword, seedTestFixtures } from './utils/fixtures';
 import { prisma } from '@alzad/db';
 import { FakeEmailService } from '../src/modules/auth/email/fake-email.service';
+import { NotificationsService } from '../src/modules/notifications/notifications.service';
 
 describe('Auth — password change / reset / association reset (NODE-1)', () => {
   let app: INestApplication;
@@ -33,6 +34,12 @@ describe('Auth — password change / reset / association reset (NODE-1)', () => 
     const res = await http().post('/api/v1/auth/login').send({ type: 'user', email, password });
     expect(res.status).toBe(200);
     return res.headers['set-cookie'][0];
+  }
+
+  async function requestReset(email: string) {
+    const result = await http().post('/api/v1/auth/password-reset/request').send({ email });
+    await app.get(NotificationsService).processOutbox();
+    return result;
   }
 
   // 16) previous password reuse rejected
@@ -72,27 +79,27 @@ describe('Auth — password change / reset / association reset (NODE-1)', () => 
 
   // 17) password reset request generic for unknown email / disabled account / disabled association
   it('طلب استعادة كلمة مرور لبريد غير موجود يُرجع رسالة عامة موحَّدة بلا إنشاء أي رمز', async () => {
-    const res = await http().post('/api/v1/auth/password-reset/request').send({ email: 'unknown-nobody@example.org' });
+    const res = await requestReset('unknown-nobody@example.org');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(fakeEmail.lastPasswordReset).toBeNull();
   });
 
   it('طلب استعادة كلمة مرور لحساب موقوف يُرجع نفس الرسالة العامة بلا إنشاء رمز', async () => {
-    const res = await http().post('/api/v1/auth/password-reset/request').send({ email: fixtures.suspendedAssocEmail });
+    const res = await requestReset(fixtures.suspendedAssocEmail);
     expect(res.status).toBe(200);
     expect(fakeEmail.lastPasswordReset).toBeNull();
   });
 
   it('طلب استعادة كلمة مرور لحساب جمعيته معطَّلة يُرجع نفس الرسالة العامة بلا إنشاء رمز', async () => {
-    const res = await http().post('/api/v1/auth/password-reset/request').send({ email: fixtures.disabledAssocOrgEmail });
+    const res = await requestReset(fixtures.disabledAssocOrgEmail);
     expect(res.status).toBe(200);
     expect(fakeEmail.lastPasswordReset).toBeNull();
   });
 
   // 22) delegate cannot use email reset
   it('لا يمكن لمندوب استخدام مسار استعادة كلمة المرور بالبريد (لا يوجد credential بريد+كلمة مرور له)', async () => {
-    const res = await http().post('/api/v1/auth/password-reset/request').send({ email: fixtures.delegateEmail });
+    const res = await requestReset(fixtures.delegateEmail);
     expect(res.status).toBe(200);
     expect(fakeEmail.lastPasswordReset).toBeNull();
     const tokenCount = await prisma.passwordResetToken.count();
@@ -100,15 +107,40 @@ describe('Auth — password change / reset / association reset (NODE-1)', () => 
   });
 
   it('طلب استعادة كلمة مرور صالح لـ ASSOCIATION نشطة ينشئ رمزًا ويرسله عبر FakeEmailService', async () => {
-    const res = await http().post('/api/v1/auth/password-reset/request').send({ email: fixtures.assocEmail });
+    const res = await requestReset(fixtures.assocEmail);
     expect(res.status).toBe(200);
     expect(fakeEmail.lastPasswordReset?.to).toBe(fixtures.assocEmail);
     expect(fakeEmail.lastPasswordReset?.code).toMatch(/^RST-/);
   });
 
+  it('keeps the delivered predecessor usable while a replacement is queued and suppresses that stale replacement after reset', async () => {
+    await requestReset(fixtures.assocEmail);
+    const deliveredCode = fakeEmail.lastPasswordReset!.code;
+    await http().post('/api/v1/auth/password-reset/request').send({ email: fixtures.assocEmail }).expect(200);
+    expect(await prisma.passwordResetToken.count({ where: { emailNormalized: fixtures.assocEmail, consumedAt: null } })).toBe(2);
+    expect(fakeEmail.lastPasswordReset!.code).toBe(deliveredCode);
+    await http().post('/api/v1/auth/password-reset/confirm').send({ email: fixtures.assocEmail, code: deliveredCode, newPassword: 'PredecessorResetPass123' }).expect(200);
+    await app.get(NotificationsService).processOutbox();
+    expect(fakeEmail.lastPasswordReset!.code).toBe(deliveredCode);
+    expect(await prisma.passwordResetToken.count({ where: { emailNormalized: fixtures.assocEmail, consumedAt: null } })).toBe(0);
+    await loginAs(fixtures.assocEmail, 'PredecessorResetPass123');
+  });
+
+  it('preserves a previously delivered reset code when replacement SMTP acceptance is uncertain', async () => {
+    await requestReset(fixtures.assocEmail);
+    const deliveredCode = fakeEmail.lastPasswordReset!.code;
+    const failure = jest.spyOn(fakeEmail, 'sendPasswordResetCode').mockRejectedValueOnce(new Error('synthetic uncertain SMTP outcome'));
+    try {
+      await requestReset(fixtures.assocEmail);
+      expect(await prisma.passwordResetToken.count({ where: { emailNormalized: fixtures.assocEmail, consumedAt: null } })).toBe(2);
+      await http().post('/api/v1/auth/password-reset/confirm').send({ email: fixtures.assocEmail, code: deliveredCode, newPassword: 'UncertainResetPass123' }).expect(200);
+      await loginAs(fixtures.assocEmail, 'UncertainResetPass123');
+    } finally { failure.mockRestore(); }
+  });
+
   // 18) TTL 15 minutes
   it('رمز إعادة التعيين منتهي الصلاحية (expiresAt في الماضي) يُرفض برسالة موحَّدة', async () => {
-    await http().post('/api/v1/auth/password-reset/request').send({ email: fixtures.assocEmail });
+    await requestReset(fixtures.assocEmail);
     const code = fakeEmail.lastPasswordReset!.code;
     await prisma.passwordResetToken.updateMany({
       where: { emailNormalized: fixtures.assocEmail, consumedAt: null },
@@ -122,7 +154,7 @@ describe('Auth — password change / reset / association reset (NODE-1)', () => 
 
   // 19) invalid attempt counting
   it('محاولات رمز خاطئ تُحسب — بعد استنفاد الحد الأقصى يُبطَل الرمز حتى لو أُدخل الرمز الصحيح لاحقًا', async () => {
-    await http().post('/api/v1/auth/password-reset/request').send({ email: fixtures.assocEmail });
+    await requestReset(fixtures.assocEmail);
     const correctCode = fakeEmail.lastPasswordReset!.code;
 
     // authConfig.passwordResetMaxAttempts = 6 — نستنفدها بمحاولات خاطئة
@@ -147,7 +179,7 @@ describe('Auth — password change / reset / association reset (NODE-1)', () => 
   it('رمز صحيح يُتيح تعيين كلمة مرور جديدة مرة واحدة فقط، ويُبطل كل الجلسات القائمة', async () => {
     const activeSessionCookie = await loginAs(fixtures.assocEmail, fixtures.assocPassword);
 
-    await http().post('/api/v1/auth/password-reset/request').send({ email: fixtures.assocEmail });
+    await requestReset(fixtures.assocEmail);
     const code = fakeEmail.lastPasswordReset!.code;
 
     const confirm = await http()

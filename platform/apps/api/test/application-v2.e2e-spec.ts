@@ -1,4 +1,5 @@
 import request from 'supertest';
+import { jest } from '@jest/globals';
 import { randomInt, randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import { Prisma, prisma } from '@alzad/db';
@@ -7,6 +8,8 @@ import { cleanAuthState, seedTestFixtures } from './utils/fixtures';
 import { loginAs } from './utils/node2-fixtures';
 import { clearLicenseObjects, startTestStorage, stopTestStorage } from './utils/storage-harness';
 import { FakeEmailService } from '../src/modules/auth/email/fake-email.service';
+import { NotificationsService } from '../src/modules/notifications/notifications.service';
+import { ApplicationAccessService } from '../src/modules/applications/application-access.service';
 
 const PREFIX = 'V2-E2E-';
 const PDF = Buffer.from('%PDF-1.7\n%application-v2-test\n', 'utf8');
@@ -14,6 +17,12 @@ const PDF = Buffer.from('%PDF-1.7\n%application-v2-test\n', 'utf8');
 describe('Application V2 launch gate', () => {
   let app: INestApplication; let adminCookie: string; let fixtures: Awaited<ReturnType<typeof seedTestFixtures>>; let fakeEmail: FakeEmailService;
   const http = () => request(app.getHttpServer());
+  const flushEmail = () => app.get(NotificationsService).processOutbox();
+  async function requestAccess(email: string) {
+    const result = await http().post('/api/v1/association-applications/access/request').send({ email }).expect(200);
+    await flushEmail();
+    return result;
+  }
 
   it('failed eligibility sends its real outcome once, after commit, without creating an account', async () => {
     const suffix = randomUUID();
@@ -22,6 +31,7 @@ describe('Application V2 launch gate', () => {
     const route = `/api/v1/association-applications/${application.id}/eligibility`;
     const input = { decision: 'FAILED', notes: 'متطلبات أهلية غير مكتملة', opId };
     await http().post(route).set('Cookie', adminCookie).send(input).expect(201);
+    await flushEmail();
     const persisted = await prisma.associationApplication.findUniqueOrThrow({ where: { id: application.id } });
     expect(persisted.eligibilityStatus).toBe('FAILED');
     expect(persisted.resultingAssociationId).toBeNull();
@@ -29,6 +39,7 @@ describe('Application V2 launch gate', () => {
     expect(fakeEmail.lastSecurityAlert?.body).toContain('متطلبات أهلية غير مكتملة');
     fakeEmail.lastSecurityAlert = null;
     await http().post(route).set('Cookie', adminCookie).send(input).expect(201);
+    await flushEmail();
     expect(fakeEmail.lastSecurityAlert).toBeNull();
     expect(await prisma.auditLog.count({ where: { entityId: application.id, action: 'APPLICATION_REJECTION_EMAIL_SENT' } })).toBe(1);
   });
@@ -78,8 +89,8 @@ describe('Application V2 launch gate', () => {
     payload.location.regionCode = '0013';
     payload.location.governorateCode = '0247';
     const saved = await http().put(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set(applicantAccess).send({ revision: partialSave.body.revision, payload }).expect(200);
-    const genericUnknown = await http().post('/api/v1/association-applications/access/request').send({ email: 'nobody@example.org' }).expect(200);
-    const accessRequest = await http().post('/api/v1/association-applications/access/request').send({ email: payload.organization.officialEmail }).expect(200);
+    const genericUnknown = await requestAccess('nobody@example.org');
+    const accessRequest = await requestAccess(payload.organization.officialEmail);
     expect(accessRequest.body.message).toBe(genericUnknown.body.message);
     const accessUrl = fakeEmail.lastApplicationAccess?.items[0]?.url;
     expect(accessUrl).toContain('/apply/access?token=');
@@ -96,7 +107,8 @@ describe('Application V2 launch gate', () => {
     await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/attachments`).set(applicantAccess).field('fieldKey', 'governanceReportFile').attach('file', PDF, { filename: 'governance.pdf', contentType: 'application/pdf' }).expect(201);
     const submitted = await http().post(`/api/v1/association-applications/drafts/${created.body.draftCode}/submit`).set(applicantAccess).send({ revision: saved.body.revision });
     if (submitted.status !== 201) throw new Error(`Application V2 submit failed (${submitted.status}): ${JSON.stringify(submitted.body)}`);
-    expect(submitted.body.emailSent).toBe(true);
+    expect(submitted.body.emailQueued).toBe(true); expect(submitted.body.emailSent).toBeNull();
+    await flushEmail();
     const row = await prisma.associationApplication.findUniqueOrThrow({ where: { publicCode: submitted.body.id } });
     expect(row.region).toBe('الجوف');
     expect(row.city).toBe('سكاكا');
@@ -109,7 +121,8 @@ describe('Application V2 launch gate', () => {
 
     await http().post('/api/v1/association-applications/processing/start').set('Cookie', adminCookie).send({ applicationIds: [row.id], opId: randomUUID() }).expect(201);
     const requested = await http().post(`/api/v1/association-applications/${row.id}/information-request`).set('Cookie', adminCookie).send({ items: [{ type: 'FIELD', key: 'organization.notes', reason: 'أضف وصفًا مختصرًا' }, { type: 'FIELD', key: 'coordinator.phone', reason: 'صحح رقم جوال المنسق' }], note: 'استكمال محدد', opId: randomUUID() }).expect(201);
-    expect(requested.body.emailSent).toBe(true);
+    expect(requested.body.emailQueued).toBe(true); expect(requested.body.emailSent).toBeNull();
+    await flushEmail();
     expect(fakeEmail.lastApplicationAccess?.subject).toContain('مطلوب استكمال');
     expect(fakeEmail.lastApplicationAccess?.intro).toContain('أضف وصفًا مختصرًا');
     const tracking = await http().get(`/api/v1/association-applications/track/${created.body.draftCode}`).set(applicantAccess).expect(200);
@@ -134,6 +147,7 @@ describe('Application V2 launch gate', () => {
     await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(409).expect(({ body }) => expect(body.error.code).toBe('APPLICATION_SELECTION_NOT_READY'));
     await http().post(`/api/v1/association-applications/${row.id}/evaluation`).set('Cookie', adminCookie).send({ operationalReadiness: 5, technicalCapability: 4, previousExperience: 3, integrityTransparency: 5, participationCommitment: 4, sustainabilityImpact: 5, opId: randomUUID() }).expect(201);
     await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(201);
+    await flushEmail();
     expect(fakeEmail.lastApplicationAccess?.subject).toContain('قرار اختيار الجمعية');
     expect(fakeEmail.lastApplicationAccess?.intro).toContain('قائمة الاحتياط');
     expect(fakeEmail.lastApplicationAccess?.items[0]?.code).toBe(submitted.body.id);
@@ -145,17 +159,42 @@ describe('Application V2 launch gate', () => {
     try {
       await prisma.systemSetting.deleteMany({ where: { key: capacityKey } });
       const reserveEmail = fakeEmail.lastApplicationAccess;
-      await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'MAIN', opId: randomUUID() }).expect(409)
-        .expect(({ body }) => expect(body.error.code).toBe('REQUIRED_SETTING_MISSING'));
-      const unchanged = await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id }, include: { participation: true, sourceDraft: true } });
-      expect(unchanged).toEqual(final);
+      await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'MAIN', opId: randomUUID() }).expect(201);
+      const beforeSend = await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id }, include: { participation: true, sourceDraft: true } });
+      expect(beforeSend.selectionList).toBe('MAIN'); expect(beforeSend.participation).not.toBeNull();
       expect(fakeEmail.lastApplicationAccess).toEqual(reserveEmail);
+      const queuedMain = await prisma.auditLog.findFirstOrThrow({ where: { action: 'APPLICATION_ACCESS_EMAIL_QUEUED', entityId: final.sourceDraft!.id, metadata: { path: ['selectionList'], equals: 'MAIN' } }, orderBy: { createdAt: 'desc' } });
+      const mainEventId = (queuedMain.metadata as { eventId: string }).eventId;
+      const mainEvent = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: mainEventId } });
+      const queueFailure = jest.spyOn(app.get(ApplicationAccessService), 'sendSelectionDecision').mockRejectedValueOnce(new Error('synthetic queue unavailable'));
+      try {
+        await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(500);
+      } finally { queueFailure.mockRestore(); }
+      expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id } })).selectionList).toBe('MAIN');
+      expect(await prisma.outboxEvent.findUniqueOrThrow({ where: { id: mainEventId } })).toEqual(mainEvent);
+      await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(201);
+      const downgraded = await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id }, include: { participation: true } });
+      expect(downgraded.selectionList).toBe('RESERVE'); expect(downgraded.participation?.id).toBe(beforeSend.participation?.id);
+      await flushEmail();
+      expect(fakeEmail.lastApplicationAccess?.intro).toContain('قائمة الاحتياط');
       const capacity = await prisma.associationApplication.count({ where: { selectionList: 'MAIN' } }) + 1;
       await prisma.systemSetting.create({ data: { key: capacityKey, value: capacity } });
       await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'MAIN', opId: randomUUID() }).expect(201);
+      let release!: () => void, started!: () => void;
+      const smtpBlocked = new Promise<void>(resolve => { release = resolve; });
+      const smtpStarted = new Promise<void>(resolve => { started = resolve; });
+      const originalSend = fakeEmail.sendApplicationAccess.bind(fakeEmail);
+      const sending = jest.spyOn(fakeEmail, 'sendApplicationAccess').mockImplementationOnce(async params => { started(); await smtpBlocked; await originalSend(params); });
+      const worker = flushEmail();
+      try {
+        await smtpStarted;
+        await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(409);
+        expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id } })).selectionList).toBe('MAIN');
+      } finally { release(); await worker; sending.mockRestore(); }
       expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id }, include: { participation: true } })).participation).not.toBeNull();
       const previousSelectionUrl = fakeEmail.lastApplicationAccess?.items[0]?.url;
       await http().post(`/api/v1/association-applications/${row.id}/selection-decision/resend`).set('Cookie', adminCookie).expect(201);
+      await flushEmail();
       expect(fakeEmail.lastApplicationAccess?.intro).toContain('القائمة الأساسية');
       expect(fakeEmail.lastApplicationAccess?.items[0]?.url).not.toBe(previousSelectionUrl);
       await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(409);
@@ -201,7 +240,7 @@ describe('Application V2 launch gate', () => {
     const draft = await prisma.associationApplicationDraft.findUniqueOrThrow({ where: { publicCode: created.body.draftCode } });
     await prisma.applicationApplicantSession.updateMany({ where: { draftId: draft.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
     await http().get(`/api/v1/association-applications/drafts/${created.body.draftCode}`).set('Cookie', oldCookie).expect(403);
-    await http().post('/api/v1/association-applications/access/request').send({ email }).expect(200);
+    await requestAccess(email);
     const accessUrl = fakeEmail.lastApplicationAccess?.items[0]?.url;
     expect(accessUrl).toContain('/apply/access?token=');
     const recovered = await http().post('/api/v1/association-applications/access/exchange').send({ token: new URL(accessUrl!).searchParams.get('token') }).expect(200);
@@ -216,11 +255,13 @@ describe('Application V2 launch gate', () => {
     const email = `access-failure-${randomUUID()}@example.org`;
     await http().put(`/api/v1/association-applications/drafts/${created.body.draftCode}`)
       .set('Cookie', created.headers['set-cookie'][0]).send({ revision: 0, payload: { organization: { officialEmail: email } } }).expect(200);
-    await http().post('/api/v1/association-applications/access/request').send({ email }).expect(200);
+    await requestAccess(email);
     const priorUrl = fakeEmail.lastApplicationAccess?.items[0]?.url;
     expect(priorUrl).toContain('/apply/access?token=');
     jest.spyOn(fakeEmail, 'sendApplicationAccess').mockRejectedValueOnce(new Error('synthetic SMTP failure'));
-    await http().post('/api/v1/association-applications/access/request').send({ email }).expect(200);
+    await requestAccess(email);
+    const draft = await prisma.associationApplicationDraft.findUniqueOrThrow({ where: { publicCode: created.body.draftCode } });
+    expect(await prisma.applicationAccessToken.count({ where: { draftId: draft.id, consumedAt: null } })).toBe(2);
     await http().post('/api/v1/association-applications/access/exchange')
       .send({ token: new URL(priorUrl!).searchParams.get('token') }).expect(200);
     jest.restoreAllMocks();
@@ -249,14 +290,14 @@ describe('Application V2 launch gate', () => {
     for (const draft of [first.body, second.body]) {
       await http().put(`/api/v1/association-applications/drafts/${draft.draftCode}`).set('x-application-resume-token', draft.resumeToken).send({ revision: 0, payload: { organization: { officialEmail: email } } }).expect(200);
     }
-    await http().post('/api/v1/association-applications/access/request').send({ email }).expect(200);
+    await requestAccess(email);
     expect(fakeEmail.lastApplicationAccess?.items).toHaveLength(2);
     const firstRow = await prisma.associationApplicationDraft.findUniqueOrThrow({ where: { publicCode: first.body.draftCode } });
     await prisma.applicationAccessToken.updateMany({ where: { draftId: firstRow.id, consumedAt: null }, data: { expiresAt: new Date(Date.now() - 1000) } });
     const expiredItem = fakeEmail.lastApplicationAccess!.items.find((item) => item.code === first.body.draftCode)!;
     await http().post('/api/v1/association-applications/access/exchange').send({ token: new URL(expiredItem.url).searchParams.get('token') }).expect(403);
 
-    await http().post('/api/v1/association-applications/access/request').send({ email }).expect(200);
+    await requestAccess(email);
     const renewed = fakeEmail.lastApplicationAccess!.items.find((item) => item.code === first.body.draftCode)!;
     const exchange = await http().post('/api/v1/association-applications/access/exchange').send({ token: new URL(renewed.url).searchParams.get('token') }).expect(200);
     await http().get(`/api/v1/association-applications/drafts/${second.body.draftCode}`).set('Cookie', exchange.headers['set-cookie'][0]).expect(403);

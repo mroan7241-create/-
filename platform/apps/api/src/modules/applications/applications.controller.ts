@@ -186,8 +186,7 @@ export class ApplicationsController {
   @Post('association-applications/:id/information-request/resend')
   @Roles(AccountRole.ADMIN)
   async resendInformationRequest(@Param('id', ParseUUIDPipe) id: string) {
-    await this.applicationAccess.sendNeedsInfo(id);
-    return { ok: true };
+    return { ok: true, emailQueued: await this.applicationAccess.sendNeedsInfo(id) };
   }
 
   @Post('association-applications/:id/evaluation')
@@ -203,8 +202,7 @@ export class ApplicationsController {
   @Post('association-applications/:id/selection-decision/resend')
   @Roles(AccountRole.ADMIN)
   async resendSelectionDecision(@Param('id', ParseUUIDPipe) id: string) {
-    await this.applicationAccess.sendSelectionDecision(id);
-    return { ok: true };
+    return { ok: true, emailQueued: await this.applicationAccess.sendSelectionDecision(id) };
   }
 
   @Post('association-applications/selection/preview')

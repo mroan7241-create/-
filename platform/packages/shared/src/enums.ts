@@ -194,6 +194,7 @@ export enum IdempotencyKeyStatus {
 
 /** أنواع أحداث outbox_events — قائمة أولية فقط، تُوسَّع مستقبلًا (لا Notification Engine كامل في NODE-0). */
 export enum OutboxEventType {
+  EMAIL_DELIVERY = 'EMAIL_DELIVERY',
   BENEFICIARY_APPROVED = 'BENEFICIARY_APPROVED',
   RECEIPT_CONFIRMED = 'RECEIPT_CONFIRMED',
   STOCK_INCREASED = 'STOCK_INCREASED',

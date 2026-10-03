@@ -59,7 +59,7 @@ export default function AssociationCovenantPage() {
 
   async function emailFinal() {
     setBusy(true); setError(''); setEmailStatus('');
-    try { const result = await sendOwnCovenantCompletionEmail(); setEmailStatus(result.alreadySent ? 'سبق إرسال النسخة المعتمدة إلى بريد الجمعية. راجع البريد الوارد والبريد غير المرغوب فيه.' : 'تم إرسال النسخة المعتمدة إلى بريد الجمعية.'); }
+    try { const result = await sendOwnCovenantCompletionEmail(); setEmailStatus(result.alreadySent ? 'سبق إرسال النسخة المعتمدة إلى بريد الجمعية. راجع البريد الوارد والبريد غير المرغوب فيه.' : result.emailQueued || result.alreadyQueued ? 'النسخة المعتمدة محفوظة للإرسال إلى بريد الجمعية؛ لم يُؤكّد وصولها بعد.' : 'تعذّر تجهيز رسالة النسخة المعتمدة. تواصل مع مسؤول البرنامج.'); }
     catch (reason) { setError(readError(reason)); }
     finally { setBusy(false); }
   }

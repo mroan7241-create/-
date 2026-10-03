@@ -1,10 +1,20 @@
 /** Fail closed before listen: DEV email must never serve a production process. */
 import { isEmail } from 'class-validator';
 
+export function emailDeliveryEncryptionKey(env: NodeJS.ProcessEnv = process.env): Buffer {
+  const raw = env.EMAIL_DELIVERY_ENCRYPTION_KEY;
+  if (!raw || !/^[A-Za-z0-9+/]{43}=$/.test(raw)) throw new Error('MAIL_ENCRYPTION_KEY_INVALID');
+  const key = Buffer.from(raw, 'base64');
+  if (key.length !== 32 || key.toString('base64') !== raw) throw new Error('MAIL_ENCRYPTION_KEY_INVALID');
+  if (['AUTH_RATE_LIMIT_HMAC_KEY', 'AUTH_CREDENTIAL_LOOKUP_HMAC_KEY', 'AUTH_RESET_TOKEN_HMAC_KEY'].some(name => env[name]?.trim() === raw)) throw new Error('MAIL_ENCRYPTION_KEY_INVALID');
+  return key;
+}
+
 export function assertProductionEmailConfigured(env: NodeJS.ProcessEnv = process.env): void {
   if (env.NODE_ENV !== 'production') return;
   const invalid: string[] = [];
   if (env.EMAIL_PROVIDER?.trim().toUpperCase() !== 'SMTP') invalid.push('EMAIL_PROVIDER');
+  try { emailDeliveryEncryptionKey(env); } catch { invalid.push('EMAIL_DELIVERY_ENCRYPTION_KEY'); }
   for (const name of ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_FROM_NAME'] as const) {
     if (!env[name]?.trim()) invalid.push(name);
   }

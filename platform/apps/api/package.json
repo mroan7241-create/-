@@ -63,6 +63,7 @@
       "ts"
     ],
     "rootDir": "src",
+    "setupFiles": ["<rootDir>/../test/utils/unit-mail-env.ts"],
     "testRegex": ".*\\.spec\\.ts$",
     "extensionsToTreatAsEsm": [
       ".ts"

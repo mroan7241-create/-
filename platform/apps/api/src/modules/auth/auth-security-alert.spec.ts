@@ -6,7 +6,7 @@ import type { RateLimitService } from '../../common/rate-limit.service';
 import type { AuditService } from '../audit/audit.service';
 import type { EmailService } from './email/email.service';
 
-describe('Password reset post-commit security notification', () => {
+describe('Password reset post-commit response after durable notification enqueue', () => {
   afterEach(() => jest.restoreAllMocks());
 
   function setup() {
@@ -18,31 +18,31 @@ describe('Password reset post-commit security notification', () => {
     return { service, transaction, log, sendSecurityAlert };
   }
 
-  it('preserves the successful reset response and emits no failure event when the alert succeeds', async () => {
+  it('preserves the successful reset response without attempting SMTP after commit', async () => {
     const { service, transaction, log, sendSecurityAlert } = setup();
     await expect(service.confirmPasswordReset('test@example.org', 'synthetic-code', 'synthetic-password')).resolves.toEqual({ ok: true });
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(log).toHaveBeenCalledTimes(1);
-    expect(sendSecurityAlert).toHaveBeenCalledTimes(1);
+    expect(sendSecurityAlert).not.toHaveBeenCalled();
   });
 
-  it('audits a failed alert without rerunning or failing the committed password change', async () => {
+  it('does not rerun the committed password change or invoke even a failing SMTP provider', async () => {
     const { service, transaction, log, sendSecurityAlert } = setup();
     sendSecurityAlert.mockRejectedValue(new Error('private-SMTP-error'));
     await expect(service.confirmPasswordReset('test@example.org', 'synthetic-code', 'synthetic-password')).resolves.toEqual({ ok: true });
-    expect(log).toHaveBeenNthCalledWith(2, { id: 'synthetic-account', role: AccountRole.ADMIN, associationId: null }, 'PASSWORD_RESET_SECURITY_ALERT_EMAIL_FAILED', 'accounts', 'synthetic-account');
+    expect(log).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(log.mock.calls)).not.toMatch(/private-SMTP|synthetic-code|synthetic-password|test@example/);
     expect(transaction).toHaveBeenCalledTimes(1);
-    expect(sendSecurityAlert).toHaveBeenCalledTimes(1);
+    expect(sendSecurityAlert).not.toHaveBeenCalled();
   });
 
-  it('still returns success if both the failure audit and fallback logger fail', async () => {
+  it('does not depend on SMTP failure-audit or fallback logger after commit', async () => {
     const { service, transaction, log, sendSecurityAlert } = setup();
     sendSecurityAlert.mockRejectedValue(new Error('private-SMTP-error'));
     log.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('audit unavailable'));
     jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => { throw new Error('logger unavailable'); });
     await expect(service.confirmPasswordReset('test@example.org', 'synthetic-code', 'synthetic-password')).resolves.toEqual({ ok: true });
     expect(transaction).toHaveBeenCalledTimes(1);
-    expect(sendSecurityAlert).toHaveBeenCalledTimes(1);
+    expect(sendSecurityAlert).not.toHaveBeenCalled();
   });
 });

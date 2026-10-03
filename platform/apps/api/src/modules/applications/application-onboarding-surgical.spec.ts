@@ -72,18 +72,19 @@ describe('individual selection and final evaluation guards', () => {
   function fixture(selectionList: AssociationSelectionList = AssociationSelectionList.NONE, mainCount = 0) {
     const tx = {
       $executeRaw: jest.fn(async () => 1), $queryRaw: jest.fn(async () => [{ id: 'app' }]),
+      associationApplicationDraft: { findFirst: jest.fn(async () => null) },
       associationApplication: {
         findUnique: jest.fn(async () => ({ id: 'app', status: selectionList === AssociationSelectionList.NONE ? ApplicationStatus.UNDER_REVIEW : ApplicationStatus.ACCEPTED,
           eligibilityStatus: EligibilityStatus.PASSED, selectionList, evaluationScore: 80, schemaVersion: 1 })),
         count: jest.fn(async () => mainCount), update: jest.fn(async () => ({})),
       },
-      projectParticipation: { upsert: jest.fn(async () => ({})) }, auditLog: { create: jest.fn(async () => ({})) },
+      projectParticipation: { findUnique: jest.fn(async () => null), upsert: jest.fn(async () => ({})) }, auditLog: { create: jest.fn(async () => ({})) },
     };
     jest.spyOn(prisma, '$transaction').mockImplementation((fn: unknown) => Promise.resolve((fn as (transaction: unknown) => unknown)(tx)) as never);
     const access = { sendSelectionDecision: jest.fn(async () => undefined) };
     const service = new ApplicationV2Service({} as never,
       { claim: async () => ({ claimed: true }), complete: async () => undefined } as never,
-      {} as never, {} as never, access as never, { requireNumber: async () => 1 } as never);
+      {} as never, {} as never, access as never, { selectionMainCapacity: async () => 1 } as never);
     return { tx, service, access };
   }
   it.each([AssociationSelectionList.MAIN, AssociationSelectionList.RESERVE])('does not rewrite evaluation after %s selection', async selection => {

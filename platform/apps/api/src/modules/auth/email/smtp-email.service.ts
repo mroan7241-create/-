@@ -7,6 +7,7 @@ import { EMAIL_LOGO_CID, emailLayout } from './email-layout';
 import {
   ApplicationAccessEmailParams,
   EmailService,
+  EmailSendOptions,
   OperationalDigestEmailParams,
   PasswordResetEmailParams,
   SecurityAlertEmailParams,
@@ -45,27 +46,27 @@ export class SmtpEmailService implements EmailService {
     });
   }
 
-  async sendPasswordResetCode(params: PasswordResetEmailParams): Promise<void> {
+  async sendPasswordResetCode(params: PasswordResetEmailParams, options?: EmailSendOptions): Promise<void> {
     const subject = 'استعادة كلمة المرور — منصة مشروع الأجهزة الكهربائية';
     const code = escapeHtml(params.code);
     await this.send('PASSWORD_RESET', params.to, subject,
       `مرحبًا ${params.name}\n\nرمز استعادة كلمة المرور: ${params.code}\n\nينتهي الرمز خلال دقائق. إذا لم تطلبه فتجاهل هذه الرسالة.`,
-      layout(`مرحبًا ${escapeHtml(params.name)}`, `<p>استخدم الرمز التالي لاستعادة كلمة المرور:</p><p style="font-size:24px;font-weight:700;letter-spacing:2px;direction:ltr;text-align:center">${code}</p><p>ينتهي الرمز خلال دقائق. إذا لم تطلبه فتجاهل هذه الرسالة.</p>`));
+      layout(`مرحبًا ${escapeHtml(params.name)}`, `<p>استخدم الرمز التالي لاستعادة كلمة المرور:</p><p style="font-size:24px;font-weight:700;letter-spacing:2px;direction:ltr;text-align:center">${code}</p><p>ينتهي الرمز خلال دقائق. إذا لم تطلبه فتجاهل هذه الرسالة.</p>`), undefined, options);
   }
 
-  async sendSecurityAlert(params: SecurityAlertEmailParams): Promise<void> {
+  async sendSecurityAlert(params: SecurityAlertEmailParams, options?: EmailSendOptions): Promise<void> {
     const action = params.action ? `<p><a href="${escapeAttribute(params.action.url)}" style="display:inline-block;background:#65102f;color:#fff;padding:12px 20px;text-decoration:none;border-radius:8px">${escapeHtml(params.action.label)}</a></p>` : '';
     await this.send('NOTICE', params.to, params.subject, `${params.name}\n\n${params.body}`,
       layout(`السادة/ ${escapeHtml(params.name)} المحترمون`, `<p style="line-height:1.9;direction:rtl;text-align:right">${escapeHtml(params.body).replace(/\n/g, '<br>')}</p>${action}`),
-      params.pdfAttachment ? [{ filename: params.pdfAttachment.filename, content: params.pdfAttachment.content, contentType: 'application/pdf' }] : undefined);
+      params.pdfAttachment ? [{ filename: params.pdfAttachment.filename, content: params.pdfAttachment.content, contentType: 'application/pdf' }] : undefined, options);
   }
 
-  async sendApplicationAccess(params: ApplicationAccessEmailParams): Promise<void> {
+  async sendApplicationAccess(params: ApplicationAccessEmailParams, options?: EmailSendOptions): Promise<void> {
     const rows = params.items.map((item) => `${item.label} ${item.code}\n${item.url}`).join('\n\n');
     const htmlRows = params.items.map((item) => `<div style="border:1px solid #eadce1;border-radius:10px;padding:16px;margin:12px 0"><p style="margin:0 0 10px"><strong>${escapeHtml(item.label)} ${escapeHtml(item.code)}</strong></p><a href="${escapeAttribute(item.url)}" style="display:inline-block;background:#65102f;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">فتح الطلب بأمان</a></div>`).join('');
     await this.send('APPLICATION_ACCESS', params.to, params.subject,
       `مرحبًا ${params.name}\n\n${params.intro}\n\n${rows}\n\nتنتهي الروابط خلال وقت قصير وتُستخدم مرة واحدة.`,
-      layout(`مرحبًا ${escapeHtml(params.name)}`, `<p style="line-height:1.9;direction:rtl;text-align:right">${escapeHtml(params.intro).replace(/\n/g, '<br>')}</p>${htmlRows}<p>تنتهي الروابط خلال وقت قصير وتُستخدم مرة واحدة.</p>`));
+      layout(`مرحبًا ${escapeHtml(params.name)}`, `<p style="line-height:1.9;direction:rtl;text-align:right">${escapeHtml(params.intro).replace(/\n/g, '<br>')}</p>${htmlRows}<p>تنتهي الروابط خلال وقت قصير وتُستخدم مرة واحدة.</p>`), undefined, options);
   }
 
   async sendOperationalDigest(params: OperationalDigestEmailParams): Promise<void> {
@@ -73,11 +74,12 @@ export class SmtpEmailService implements EmailService {
     await this.send('OPERATIONAL_DIGEST', params.to, params.subject, params.text, layout(escapeHtml(params.subject), `<p style="line-height:1.9">${content}</p>`));
   }
 
-  private async send(kind: 'PASSWORD_RESET' | 'NOTICE' | 'APPLICATION_ACCESS' | 'OPERATIONAL_DIGEST', to: string, subject: string, text: string, html: string, attachments?: Array<{ filename: string; content: Buffer; contentType: string }>): Promise<void> {
+  private async send(kind: 'PASSWORD_RESET' | 'NOTICE' | 'APPLICATION_ACCESS' | 'OPERATIONAL_DIGEST', to: string, subject: string, text: string, html: string, attachments?: Array<{ filename: string; content: Buffer; contentType: string }>, options?: EmailSendOptions): Promise<void> {
     const traceId = randomUUID();
     const startedAt = Date.now();
     try {
-      const info = await this.transporter.sendMail({ from: this.from, to, subject, text, html, attachments: [{ filename: 'alzad-logo.png', content: this.logo, contentType: 'image/png', cid: EMAIL_LOGO_CID }, ...(attachments ?? [])] });
+      const info = await this.transporter.sendMail({ from: this.from, to, subject, text, html, ...(options ? { messageId: options.messageId } : {}), attachments: [{ filename: 'alzad-logo.png', content: this.logo, contentType: 'image/png', cid: EMAIL_LOGO_CID }, ...(attachments ?? [])] });
+      if (!Array.isArray(info?.accepted) || !info.accepted.some(address => typeof address === 'string' && address.trim().toLowerCase() === to.trim().toLowerCase())) throw Object.assign(new Error('MAIL_RECIPIENT_NOT_ACCEPTED'), { code: 'MAIL_RECIPIENT_NOT_ACCEPTED' });
       // SMTP acceptance is not proof of inbox delivery. Do not log recipients,
       // response text, subjects, message bodies, links or attachment contents.
       this.record('log', { event: 'SMTP_ACCEPTED', kind, traceId, durationMs: Date.now() - startedAt,
@@ -87,7 +89,7 @@ export class SmtpEmailService implements EmailService {
     } catch (error) {
       const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
       this.record('warn', { event: 'SMTP_FAILED', kind, traceId, durationMs: Date.now() - startedAt,
-        code: typeof code === 'string' && ['EAUTH', 'ECONNECTION', 'ESOCKET', 'ETIMEDOUT', 'EDNS', 'EENVELOPE', 'EMESSAGE', 'ESTREAM'].includes(code) ? code : 'UNSPECIFIED' });
+        code: typeof code === 'string' && ['EAUTH', 'ECONNECTION', 'ESOCKET', 'ETIMEDOUT', 'EDNS', 'EENVELOPE', 'EMESSAGE', 'ESTREAM', 'MAIL_RECIPIENT_NOT_ACCEPTED'].includes(code) ? code : 'UNSPECIFIED' });
       throw error;
     }
   }

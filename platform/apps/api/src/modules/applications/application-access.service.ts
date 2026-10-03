@@ -4,12 +4,15 @@ import {
   ApplicationAccessTokenPurpose,
   ApplicationDraftStatus,
   ApplicationInformationRequestStatus,
+  Prisma,
   prisma,
+  OutboxEventType,
+  OutboxEventStatus,
 } from '@alzad/db';
 import { ApiError } from '../../common/api-error';
 import { sha256Hex } from '../../common/crypto.util';
 import { RateLimitService } from '../../common/rate-limit.service';
-import { EmailService } from '../auth/email/email.service';
+import { EmailService, enqueueEmail, decryptEmailDelivery, type EmailDeliveryPayload, type EmailDeliveryContext } from '../auth/email/email.service';
 import { applicationRequirementDescription } from '@alzad/shared';
 
 export const APPLICANT_SESSION_COOKIE = 'alzad_applicant_session';
@@ -136,16 +139,19 @@ export class ApplicationAccessService {
     return session.draft;
   }
 
-  async sendSubmitted(draftId: string): Promise<void> {
-    const draft = await prisma.associationApplicationDraft.findUnique({ where: { id: draftId }, include: { submittedApplication: true } });
+  async sendSubmitted(draftId: string, tx?: Prisma.TransactionClient): Promise<boolean> {
+    const draft = await (tx ?? prisma).associationApplicationDraft.findUnique({ where: { id: draftId }, include: { submittedApplication: true } });
     const email = normalizeEmail(draft?.submittedApplication?.email ?? draft?.contactEmail ?? '');
-    if (!draft || !email) return;
-    await this.issueAndSend(email, [{ id: draft.id, publicCode: draft.publicCode, displayCode: draft.submittedApplication?.publicCode, status: draft.status, name: draft.submittedApplication?.name ?? 'الجمعية', needsInfo: false }],
-      'متابعة طلب المشاركة — مشروع الأجهزة الكهربائية', 'تم استلام طلبك. استخدم الرابط الآمن لمتابعة حالته.');
+    if (!draft || !email) return false;
+    return this.issueAndSend(email, [{ id: draft.id, publicCode: draft.publicCode, displayCode: draft.submittedApplication?.publicCode, status: draft.status, name: draft.submittedApplication?.name ?? 'الجمعية', needsInfo: false }],
+      'متابعة طلب المشاركة — مشروع الأجهزة الكهربائية', 'تم استلام طلبك. استخدم الرابط الآمن لمتابعة حالته.', tx);
   }
 
-  async sendSelectionDecision(applicationId: string): Promise<void> {
-    const application = await prisma.associationApplication.findUnique({
+  async sendSelectionDecision(applicationId: string, tx?: Prisma.TransactionClient): Promise<boolean> {
+    if (!tx) return prisma.$transaction(client => this.sendSelectionDecision(applicationId, client));
+    const source = await tx.associationApplicationDraft.findFirst({ where: { submittedApplicationId: applicationId }, select: { id: true } });
+    if (source) await tx.$queryRaw`SELECT id FROM association_application_drafts WHERE id=${source.id}::uuid FOR UPDATE`;
+    const application = await tx.associationApplication.findUnique({
       where: { id: applicationId }, include: { sourceDraft: true },
     });
     const draft = application?.sourceDraft;
@@ -154,12 +160,47 @@ export class ApplicationAccessService {
     const intro = application.selectionList === 'MAIN'
       ? 'تم اختيار جمعيتكم في القائمة الأساسية. يمكنكم متابعة متطلبات التهيئة عبر رابط الطلب الآمن.'
       : 'تم اختيار جمعيتكم في قائمة الاحتياط. يمكنكم متابعة حالة الطلب عبر الرابط الآمن.';
-    await this.issueAndSend(email, [{ id: draft.id, publicCode: draft.publicCode, displayCode: application.publicCode, status: draft.status, name: application.name, needsInfo: false }],
-      'قرار اختيار الجمعية — مشروع الأجهزة الكهربائية', intro);
+    return this.issueAndSend(email, [{ id: draft.id, publicCode: draft.publicCode, displayCode: application.publicCode, status: draft.status, name: application.name, needsInfo: false }],
+      'قرار اختيار الجمعية — مشروع الأجهزة الكهربائية', intro, tx, { applicationId, selectionList: application.selectionList as 'MAIN' | 'RESERVE', selectionApprovedAt: application.selectionApprovedAt?.toISOString() ?? null });
   }
 
-  async sendNeedsInfo(applicationId: string): Promise<void> {
-    const application = await prisma.associationApplication.findUnique({
+  async cancelUnsentMainDecision(tx: Prisma.TransactionClient, applicationId: string, draftId: string, selectionApprovedAt: Date | null) {
+    const blocked = () => new ApiError('APPLICATION_SELECTION_EMAIL_STARTED', 'لا يمكن النقل إلى الاحتياط بعد بدء إشعار الأساسية، أو عند تعذر إثبات أنه لم يُرسل', 409);
+    if (!selectionApprovedAt) throw blocked();
+    // A resend must never make a historical MAIN decision eligible for reversal.
+    // Only the original decision transaction can write this exact decision stamp.
+    const origin = await tx.auditLog.findFirst({ where: { entityType: 'association_applications', AND: [
+      { metadata: { path: ['selectionApprovedAt'], equals: selectionApprovedAt.toISOString() } },
+      { OR: [
+        { action: 'APPLICATION_SELECTION_DECIDED', entityId: applicationId, metadata: { path: ['decision'], equals: 'MAIN' } },
+        { action: 'APPLICATION_SELECTION_COMMITTED', metadata: { path: ['mainIds'], array_contains: [applicationId] } },
+      ] },
+    ] }, select: { id: true } });
+    if (!origin) throw blocked();
+    const records = await tx.auditLog.findMany({ where: { action: 'APPLICATION_ACCESS_EMAIL_QUEUED', entityId: draftId, AND: [{ metadata: { path: ['applicationId'], equals: applicationId } }, { metadata: { path: ['selectionList'], equals: 'MAIN' } }] }, select: { metadata: true } });
+    if (!records.length) throw blocked(); // Historical SMTP outcomes have no reliable decision-specific receipt.
+    const ids = records.map(record => (record.metadata as { eventId?: unknown })?.eventId);
+    if (ids.some(id => typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))) throw blocked();
+    let currentDecisionTracked = false;
+    for (const id of [...new Set(ids as string[])].sort()) {
+      await tx.$queryRaw`SELECT id FROM outbox_events WHERE id=${id}::uuid FOR UPDATE`;
+      const event = await tx.outboxEvent.findUnique({ where: { id } });
+      const payload = event?.payload as unknown as EmailDeliveryPayload;
+      if (!event || event.type !== OutboxEventType.EMAIL_DELIVERY || payload?.phase !== 'READY' || event.status === OutboxEventStatus.PROCESSED || (event.status === OutboxEventStatus.FAILED && !event.lastError) || (event.lastError && !['MAIL_TEMPORARY_FAILURE', 'MAIL_STATE_UNAVAILABLE', 'MAIL_STATE_INVALID', 'MAIL_EXPIRED', 'MAIL_ATTACHMENT_INVALID', 'MAIL_CONFIGURATION_INVALID', 'MAIL_DELIVERY_REJECTED'].includes(event.lastError))) throw blocked();
+      let delivery;
+      try { delivery = decryptEmailDelivery(event.id, payload); } catch { throw blocked(); }
+      const context = delivery.context;
+      if (context.type !== 'access' || context.expected?.applicationId !== applicationId || context.expected.selectionList !== 'MAIN' || !Array.isArray(context.draftTokens) || !context.draftTokens.length || context.draftTokens.some(token => !token || typeof token.id !== 'string' || !token.id || token.draftId !== draftId)) throw blocked();
+      if (context.expected.selectionApprovedAt === selectionApprovedAt.toISOString()) currentDecisionTracked = true;
+      const cancelled = await tx.outboxEvent.updateMany({ where: { id: event.id, status: event.status, lockedAt: event.lockedAt, payload: { path: ['phase'], equals: 'READY' } }, data: { status: OutboxEventStatus.FAILED, failedAt: new Date(), lockedAt: null, lastError: 'MAIL_STATE_INVALID' } });
+      if (cancelled.count !== 1) throw blocked();
+      await tx.applicationAccessToken.updateMany({ where: { id: { in: context.draftTokens.map(token => token.id) }, draftId, consumedAt: null }, data: { consumedAt: new Date() } });
+    }
+    if (!currentDecisionTracked) throw blocked(); // Caller transaction rolls back all cancellations.
+  }
+
+  async sendNeedsInfo(applicationId: string, tx?: Prisma.TransactionClient): Promise<boolean> {
+    const application = await (tx ?? prisma).associationApplication.findUnique({
       where: { id: applicationId },
       include: {
         sourceDraft: true,
@@ -172,8 +213,8 @@ export class ApplicationAccessService {
     const request = application.informationRequests[0]!;
     const details = request.items.map((item, index) => `${index + 1}. ${applicationRequirementDescription(item.type, item.key, item.reason)}`).join('\n');
     const note = request.note?.trim();
-    await this.issueAndSend(email, [{ id: draft.id, publicCode: draft.publicCode, status: draft.status, name: application.name, needsInfo: true }],
-      'مطلوب استكمال بيانات الطلب — مشروع الأجهزة الكهربائية', `يرجى استكمال المتطلبات التالية عبر رابط طلبكم الآمن:\n${details}${note ? `\nملاحظة: ${note}` : ''}`);
+    return this.issueAndSend(email, [{ id: draft.id, publicCode: draft.publicCode, status: draft.status, name: application.name, needsInfo: true }],
+      'مطلوب استكمال بيانات الطلب — مشروع الأجهزة الكهربائية', `يرجى استكمال المتطلبات التالية عبر رابط طلبكم الآمن:\n${details}${note ? `\nملاحظة: ${note}` : ''}`, tx, { applicationId, informationRequestId: request.id });
   }
 
   private async issueAndSend(
@@ -181,13 +222,26 @@ export class ApplicationAccessService {
     drafts: Array<{ id: string; publicCode: string; displayCode?: string; status: ApplicationDraftStatus; name: string; needsInfo: boolean }>,
     subject: string,
     intro: string,
-  ) {
+    transaction?: Prisma.TransactionClient,
+    expected?: Extract<EmailDeliveryContext, { type: 'access' }>['expected'],
+  ): Promise<boolean> {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + ACCESS_TOKEN_TTL_MINUTES * 60_000);
-    const issued = drafts.map((draft) => ({ draft, raw: randomBytes(32).toString('base64url') }));
-    await prisma.$transaction(async (tx) => {
+    const queue = async (tx: Prisma.TransactionClient) => {
+      const issued: Array<{ draft: typeof drafts[number]; raw: string }> = [];
+      const draftTokens: Array<{ id: string; draftId: string; predecessorIds: string[] }> = [];
+      // Same ordered draft locks as the worker; capture only existing predecessors.
+      for (const draftId of [...new Set(drafts.map((draft) => draft.id))].sort()) {
+        await tx.$queryRaw`SELECT id FROM association_application_drafts WHERE id=${draftId}::uuid FOR UPDATE`;
+      }
+      for (const draft of drafts) {
+        const current = await tx.associationApplicationDraft.findUnique({ where: { id: draft.id }, select: { status: true, expiresAt: true } });
+        if (!current || current.expiresAt <= now || ![ApplicationDraftStatus.ACTIVE, ApplicationDraftStatus.SUBMITTED].includes(current.status as 'ACTIVE' | 'SUBMITTED')) continue;
+        issued.push({ draft, raw: randomBytes(32).toString('base64url') });
+      }
       for (const item of issued) {
-        await tx.applicationAccessToken.create({ data: {
+        const predecessors = await tx.applicationAccessToken.findMany({ where: { draftId: item.draft.id, consumedAt: null, expiresAt: { gt: now } }, select: { id: true } });
+        const token = await tx.applicationAccessToken.create({ data: {
           draftId: item.draft.id,
           purpose: item.draft.needsInfo
             ? ApplicationAccessTokenPurpose.NEEDS_INFO
@@ -197,11 +251,11 @@ export class ApplicationAccessService {
           tokenHash: sha256Hex(item.raw),
           expiresAt,
         } });
+        draftTokens.push({ id: token.id, draftId: item.draft.id, predecessorIds: predecessors.map(({ id }) => id) });
       }
-    });
-    try {
+      if (!issued.length) return false;
       const base = publicWebUrl();
-      await this.email.sendApplicationAccess({
+      const queued = await enqueueEmail(tx, 'APPLICATION_ACCESS', {
         to: email,
         name: issued[0]?.draft.name ?? 'الجمعية',
         subject,
@@ -211,36 +265,19 @@ export class ApplicationAccessService {
           code: draft.displayCode ?? draft.publicCode,
           url: `${base}/apply/access?token=${encodeURIComponent(raw)}`,
         })),
-      });
-    } catch (error) {
-      await prisma.applicationAccessToken.updateMany({ where: { tokenHash: { in: issued.map((item) => sha256Hex(item.raw)) }, consumedAt: null }, data: { consumedAt: new Date() } });
-      await prisma.auditLog.createMany({ data: issued.map((item) => ({
+      }, { type: 'access', draftTokens, ...(expected ? { expected } : {}) });
+      await tx.auditLog.createMany({ data: issued.map((item) => ({
         actorAccountId: null,
         actorRole: null,
-        action: 'APPLICATION_ACCESS_EMAIL_FAILED',
+        action: 'APPLICATION_ACCESS_EMAIL_QUEUED',
         entityType: 'association_application_drafts',
         entityId: item.draft.id,
+        metadata: { eventId: queued.eventId, ...(expected?.selectionList ? { applicationId: expected.applicationId, selectionList: expected.selectionList } : {}), purpose: item.draft.needsInfo ? 'NEEDS_INFO' : item.draft.status === ApplicationDraftStatus.ACTIVE ? 'DRAFT_RESUME' : 'SUBMITTED_STATUS' },
       })) });
-      throw error;
-    }
-    // Keep the previous usable link if SMTP fails; revoke it only after the
-    // replacement was accepted by the mail provider.
-    await prisma.$transaction(async (tx) => {
-      for (const item of issued) {
-        await tx.applicationAccessToken.updateMany({
-          where: { draftId: item.draft.id, consumedAt: null, tokenHash: { not: sha256Hex(item.raw) } },
-          data: { consumedAt: new Date() },
-        });
-      }
-    });
-    await prisma.auditLog.createMany({ data: issued.map((item) => ({
-      actorAccountId: null,
-      actorRole: null,
-      action: 'APPLICATION_ACCESS_EMAIL_SENT',
-      entityType: 'association_application_drafts',
-      entityId: item.draft.id,
-      metadata: { purpose: item.draft.needsInfo ? 'NEEDS_INFO' : item.draft.status === ApplicationDraftStatus.ACTIVE ? 'DRAFT_RESUME' : 'SUBMITTED_STATUS' },
-    })) });
+      return true;
+    };
+    if (transaction) return queue(transaction);
+    return prisma.$transaction(queue);
   }
 }
 

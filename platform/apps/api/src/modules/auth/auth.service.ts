@@ -17,7 +17,7 @@ import { assertPasswordPolicy } from '../../common/password-policy';
 import { RateLimitService } from '../../common/rate-limit.service';
 import { ApiError, authAssociationDisabled, authForbidden, authInvalidCredentials } from '../../common/api-error';
 import { AuditService } from '../audit/audit.service';
-import { EmailService } from './email/email.service';
+import { EmailService, enqueueEmail } from './email/email.service';
 import type { AuthContext } from './auth.types';
 
 const DELEGATE_CODE_RE = /^MND-[A-Z0-9]{6,12}$/;
@@ -273,37 +273,32 @@ export class AuthService {
 
     const code = generateAccessCode('RST', 8);
     try {
-      await this.emailService.sendPasswordResetCode({ to: email, name: account.name, code });
+      await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM accounts WHERE id=${account.id}::uuid FOR UPDATE`;
+        const currentCredential = await tx.authCredential.findUnique({ where: { id: credential!.id }, include: { account: { include: { association: true } } } });
+        const current = currentCredential?.account;
+        if (!currentCredential || !current || currentCredential.type !== AuthCredentialType.EMAIL_PASSWORD || currentCredential.identifier !== email || current.status !== AccountStatus.ACTIVE || ![AccountRole.ADMIN, AccountRole.ASSOCIATION, AccountRole.ABANMI].includes(current.role as 'ADMIN' | 'ASSOCIATION' | 'ABANMI') || (current.role === AccountRole.ASSOCIATION && current.association?.status !== AssociationStatus.ACTIVE)) return;
+        const predecessors = await tx.passwordResetToken.findMany({ where: { accountId: account.id, consumedAt: null, expiresAt: { gt: new Date() } }, select: { id: true } });
+        // Persist the candidate and the encrypted delivery atomically. The worker
+        // consumes only these captured predecessors after confirmed SMTP acceptance.
+        const token = await tx.passwordResetToken.create({
+          data: {
+            accountId: account.id,
+            emailNormalized: email,
+            tokenHash: resetTokenHash(code),
+            expiresAt: new Date(Date.now() + authConfig.passwordResetTtlSeconds * 1000),
+          },
+        });
+        await enqueueEmail(tx, 'PASSWORD_RESET', { to: email, name: current.name, code }, { type: 'reset', tokenId: token.id, accountId: current.id, credentialHash: currentCredential.secretHash, predecessorIds: predecessors.map(({ id }) => id) });
+        await tx.auditLog.create({ data: { actorAccountId: current.id, actorRole: current.role, associationId: current.associationId, action: 'PASSWORD_RESET_REQUESTED', entityType: 'accounts', entityId: current.id } });
+      });
     } catch {
-      // فشل الإرسال لا يُفصح عنه، والرمز لا يُخزَّن أصلًا — لا فائدة من رمز لن يصل صاحبه.
-      await prisma.auditLog.create({ data: {
-        actorAccountId: account.id,
-        actorRole: account.role,
-        associationId: account.associationId,
-        action: 'PASSWORD_RESET_EMAIL_FAILED',
-        entityType: 'accounts',
-        entityId: account.id,
-      } });
-      return generic;
+      // Enqueue failure rolls back the candidate and keeps predecessors valid.
+      // The public response must not reveal that this email owns an account.
+      try {
+        await prisma.auditLog.create({ data: { actorAccountId: account.id, actorRole: account.role, associationId: account.associationId, action: 'PASSWORD_RESET_EMAIL_QUEUE_FAILED', entityType: 'accounts', entityId: account.id } });
+      } catch { try { this.logger.warn('PASSWORD_RESET_EMAIL_QUEUE_FAILED: audit unavailable'); } catch { /* best-effort diagnostics */ } }
     }
-
-    await prisma.$transaction(async (tx) => {
-      // طلب جديد يُبطل أي رمز سابق نشط لنفس الحساب — لا أكثر من رمز صالح واحد في وقت واحد.
-      await tx.passwordResetToken.updateMany({
-        where: { accountId: account.id, consumedAt: null },
-        data: { consumedAt: new Date() },
-      });
-      await tx.passwordResetToken.create({
-        data: {
-          accountId: account.id,
-          emailNormalized: email,
-          tokenHash: resetTokenHash(code),
-          expiresAt: new Date(Date.now() + authConfig.passwordResetTtlSeconds * 1000),
-        },
-      });
-    });
-
-    await this.audit.log({ id: account.id, role: account.role, associationId: account.associationId }, 'PASSWORD_RESET_REQUESTED', 'accounts', account.id);
     return generic;
   }
 
@@ -320,19 +315,21 @@ export class AuthService {
     // نُعيد نتيجة (outcome) من الداخل بدل رمي الاستثناء، ونرمي الخطأ بعد التزام (commit) المعاملة.
     type ConfirmOutcome = { ok: true; account: NonNullable<Awaited<ReturnType<typeof prisma.account.findUnique>>> } | { ok: false };
 
+    const providedHash = resetTokenHash(code);
     const outcome: ConfirmOutcome = await prisma.$transaction(async (tx) => {
+      const owner = await tx.authCredential.findUnique({ where: { type_identifier: { type: AuthCredentialType.EMAIL_PASSWORD, identifier: email } }, select: { accountId: true } });
+      if (owner) await tx.$queryRaw`SELECT id FROM accounts WHERE id=${owner.accountId}::uuid FOR UPDATE`;
       const rows = await tx.$queryRaw<
         { id: string; account_id: string; token_hash: string; attempt_count: number; expires_at: Date; consumed_at: Date | null }[]
       >`SELECT id, account_id, token_hash, attempt_count, expires_at, consumed_at
         FROM password_reset_tokens
         WHERE email_normalized = ${email} AND consumed_at IS NULL
-        ORDER BY created_at DESC LIMIT 1 FOR UPDATE`;
+        ORDER BY CASE WHEN token_hash = ${providedHash} THEN 0 ELSE 1 END, created_at DESC LIMIT 1 FOR UPDATE`;
       const token = rows[0];
       if (!token || token.expires_at <= new Date() || token.attempt_count >= authConfig.passwordResetMaxAttempts) {
         return { ok: false };
       }
 
-      const providedHash = resetTokenHash(code);
       const isMatch = timingSafeEqualHex(providedHash, token.token_hash);
       if (!isMatch) {
         const nextAttempts = token.attempt_count + 1;
@@ -362,7 +359,12 @@ export class AuthService {
       });
       await tx.account.update({ where: { id: account.id }, data: { mustChangePassword: false } });
       await tx.authSession.updateMany({ where: { accountId: account.id, revokedAt: null }, data: { revokedAt: new Date() } });
-      await tx.passwordResetToken.update({ where: { id: token.id }, data: { consumedAt: new Date() } });
+      await tx.passwordResetToken.updateMany({ where: { accountId: account.id, consumedAt: null }, data: { consumedAt: new Date() } });
+      await enqueueEmail(tx, 'NOTICE', {
+        to: email, name: account.name,
+        subject: 'تنبيه أمني: تغيّرت كلمة مرور حسابك',
+        body: 'تم تغيير كلمة مرور حسابك للتو. إن لم يكن هذا أنت فتواصل فورًا مع إدارة المشروع.',
+      }, { type: 'notice', accountId: account.id });
 
       return { ok: true, account };
     });
@@ -382,26 +384,6 @@ export class AuthService {
       'accounts',
       accountForAlert.id,
     );
-
-    try {
-      await this.emailService.sendSecurityAlert({
-        to: email,
-        name: accountForAlert.name,
-        subject: 'تنبيه أمني: تغيّرت كلمة مرور حسابك',
-        body: `تم تغيير كلمة مرور حسابك للتو. إن لم يكن هذا أنت فتواصل فورًا مع إدارة المشروع.`,
-      });
-    } catch {
-      // The password transaction already committed. Neither notification nor
-      // failure-audit errors may report a failed password change to the user.
-      try {
-        await this.audit.log(
-          { id: accountForAlert.id, role: accountForAlert.role, associationId: accountForAlert.associationId },
-          'PASSWORD_RESET_SECURITY_ALERT_EMAIL_FAILED', 'accounts', accountForAlert.id,
-        );
-      } catch {
-        try { this.logger.warn('PASSWORD_RESET_SECURITY_ALERT_EMAIL_FAILED: failure audit unavailable'); } catch { /* best-effort diagnostics */ }
-      }
-    }
 
     return { ok: true };
   }

@@ -17,8 +17,8 @@ export class SettingsService {
     return { items: await prisma.systemSetting.findMany({ orderBy: { key: 'asc' } }) };
   }
 
-  async getValue<T>(key: SettingKey): Promise<T | undefined> {
-    const row = await prisma.systemSetting.findUnique({ where: { key } });
+  async getValue<T>(key: SettingKey, tx?: Prisma.TransactionClient): Promise<T | undefined> {
+    const row = await (tx ?? prisma).systemSetting.findUnique({ where: { key } });
     return row?.value as T | undefined;
   }
 
@@ -28,6 +28,12 @@ export class SettingsService {
       throw new ApiError('REQUIRED_SETTING_MISSING', `الإعداد التشغيلي المطلوب غير مضبوط: ${key}`, 409);
     }
     return value;
+  }
+
+  async selectionMainCapacity(tx: Prisma.TransactionClient): Promise<number | undefined> {
+    const value = await this.getValue<unknown>('selection.mainTargetCount', tx);
+    if (value == null) return undefined;
+    return validateSetting('selection.mainTargetCount', value) as number;
   }
 
   async applicationIntakeStatus(now = new Date()) {
@@ -44,6 +50,7 @@ export class SettingsService {
     if (!SETTING_KEYS.includes(key as SettingKey)) throw new ApiError('SETTING_KEY_NOT_ALLOWED', 'مفتاح الإعداد غير معتمد', 400);
     const value = validateSetting(key as SettingKey, rawValue);
     return prisma.$transaction(async (tx) => {
+      if (key === 'selection.mainTargetCount') await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
       const old = await tx.systemSetting.findUnique({ where: { key } });
       const row = await tx.systemSetting.upsert({
         where: { key }, create: { key, value: value === null ? Prisma.JsonNull : value as Prisma.InputJsonValue }, update: { value: value === null ? Prisma.JsonNull : value as Prisma.InputJsonValue },
@@ -61,6 +68,7 @@ export class SettingsService {
 export function validateSetting(key: SettingKey, value: unknown): unknown {
   if (key === 'selection.passThreshold') return numberInRange(value, 0, 100, key);
   if (key === 'selection.mainTargetCount') {
+    if (value === null) return null;
     const n = numberInRange(value, 1, 1_000_000, key);
     if (!Number.isInteger(n)) throw invalid(key);
     return n;

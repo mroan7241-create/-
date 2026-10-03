@@ -16,6 +16,9 @@ await assertE2eSafetyCanary(async () => {
   return rows[0]?.present === true;
 });
 
+// Set only after proving this database is an isolated E2E target.
+process.env.EMAIL_DELIVERY_ENCRYPTION_KEY = Buffer.alloc(32, 73).toString('base64');
+
 if (process.env.OBJECT_STORAGE_EXTERNAL !== 'true') {
   process.env.OBJECT_STORAGE_ENDPOINT = `http://127.0.0.1:${TEST_S3_PORT}`;
   process.env.OBJECT_STORAGE_REGION = 'us-east-1';
