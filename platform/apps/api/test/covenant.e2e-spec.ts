@@ -41,9 +41,11 @@ describe('Covenant V1 execution gate', () => {
     fakeEmail.lastSecurityAlert = null;
     const replay = await http().post(`/api/v1/participations/${participationId}/signing-account`).set('Cookie', adminCookie).send({ opId: accountOperation }).expect(201);
     expect(replay.body.temporaryPassword).toBeNull();
+    await app.get(NotificationsService).processOutbox();
     expect(fakeEmail.lastSecurityAlert).toBeNull();
-    const emailAudits = await prisma.auditLog.findMany({ where: { entityId: accountId, action: 'ASSOCIATION_CREDENTIALS_EMAIL_SENT' } });
+    const emailAudits = await prisma.auditLog.findMany({ where: { entityId: accountId, action: 'ONBOARDING_CREDENTIALS_EMAIL_SENT' } });
     expect(emailAudits).toHaveLength(1);
+    expect(emailAudits[0].metadata).toMatchObject({ accepted: true, stale: false });
     expect(JSON.stringify(emailAudits)).not.toContain(temporaryPassword);
     abanmiAccountId = (await prisma.account.create({ data: { publicCode: `E2E-ABN-COV-${suffix}`, name: 'أبانمي اختبار الميثاق', email: `abanmi-cov-${suffix}@example.org`, role: AccountRole.ABANMI, status: AccountStatus.ACTIVE } })).id;
     await prisma.authCredential.create({ data: { accountId: abanmiAccountId, type: AuthCredentialType.EMAIL_PASSWORD, identifier: `abanmi-cov-${suffix}@example.org`, secretHash: await hashSecret('Abanmi!Covenant2026') } });
@@ -122,6 +124,7 @@ describe('Covenant V1 execution gate', () => {
     expect(attachment!.content.subarray(0, 5).toString('ascii')).toBe('%PDF-');
     fakeEmail.lastSecurityAlert = null;
     await http().post('/api/v1/participations/covenant/completion-email').set('Cookie', associationCookie).send({}).expect(201).expect(({ body }) => expect(body).toEqual({ ok: true, alreadySent: true }));
+    await app.get(NotificationsService).processOutbox();
     expect(fakeEmail.lastSecurityAlert).toBeNull();
     expect(await prisma.auditLog.count({ where: { entityId: agreementId, action: 'COVENANT_COMPLETION_EMAIL_SENT' } })).toBe(1);
   });

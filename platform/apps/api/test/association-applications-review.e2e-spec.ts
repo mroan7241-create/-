@@ -15,6 +15,7 @@ import {
 import { clearLicenseObjects, startTestStorage, stopTestStorage } from './utils/storage-harness';
 import { MAX_PAGE } from '../src/common/pagination.util';
 import type { FakeEmailService } from '../src/modules/auth/email/fake-email.service';
+import { NotificationsService } from '../src/modules/notifications/notifications.service';
 
 /** NODE-2 — مراجعة الطلبات (ADMIN حصرًا): قائمة/تفاصيل/ملف الترخيص/قبول/رفض. */
 describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
@@ -416,10 +417,12 @@ describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
     const rejectOperation = randomUUID();
     const ok = await reject(id, rejectOperation, 'الترخيص غير ساري والمستندات ناقصة');
     expect(ok.status).toBe(201);
+    await app.get(NotificationsService).processOutbox();
     expect(fakeEmail.lastSecurityAlert).toMatchObject({ to: payload.email.toLowerCase(), subject: 'نتيجة طلب المشاركة — مشروع الأجهزة الكهربائية' });
     expect(fakeEmail.lastSecurityAlert!.body).toContain('الترخيص غير ساري والمستندات ناقصة');
     fakeEmail.lastSecurityAlert = null;
     expect((await reject(id, rejectOperation, 'الترخيص غير ساري والمستندات ناقصة')).status).toBe(201);
+    await app.get(NotificationsService).processOutbox();
     expect(fakeEmail.lastSecurityAlert).toBeNull();
     expect(await prisma.auditLog.count({ where: { entityId: id, action: 'APPLICATION_REJECTION_EMAIL_SENT' } })).toBe(1);
 

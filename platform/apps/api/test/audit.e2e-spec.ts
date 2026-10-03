@@ -4,6 +4,7 @@ import { createTestApp } from './utils/bootstrap';
 import { cleanAuthState, resetAccountPassword, seedTestFixtures } from './utils/fixtures';
 import { prisma } from '@alzad/db';
 import { FakeEmailService } from '../src/modules/auth/email/fake-email.service';
+import { NotificationsService } from '../src/modules/notifications/notifications.service';
 
 describe('Audit — security-sensitive actions recorded (NODE-1)', () => {
   let app: INestApplication;
@@ -68,6 +69,8 @@ describe('Audit — security-sensitive actions recorded (NODE-1)', () => {
     const requestedEntries = await prisma.auditLog.findMany({ where: { action: 'PASSWORD_RESET_REQUESTED' } });
     expect(requestedEntries.length).toBe(1);
 
+    await app.get(NotificationsService).processOutbox();
+    expect(fakeEmail.lastPasswordReset).toMatchObject({ to: fixtures.assocEmail });
     const code = fakeEmail.lastPasswordReset!.code;
     await http()
       .post('/api/v1/auth/password-reset/confirm')
