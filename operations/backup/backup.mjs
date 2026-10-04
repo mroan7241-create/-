@@ -94,7 +94,10 @@ export async function collectObjects(client,commands,bucket,directory,maxBytes=2
     manifest.push({key:item.Key,filename,bytes:item.Size,sha256:await hashFile(destination),etag:item.ETag,versionId:response.VersionId,contentType:response.ContentType});
   }
   const after=await listing();
-  if(JSON.stringify(before.map(i=>[i.Key,i.ETag,i.Size]))!==JSON.stringify(after.map(i=>[i.Key,i.ETag,i.Size]))) throw new Error('Storage changed during backup; retry without reporting success');
+  // New uploads belong to a later database snapshot. Every captured object must
+  // still exist unchanged; database references are checked separately below.
+  const remaining=new Map(after.map(item=>[item.Key,item]));
+  if(before.some(item=>{const current=remaining.get(item.Key);return !current||current.ETag!==item.ETag||current.Size!==item.Size;})) throw new Error('Storage changed during backup; retry without reporting success');
   return manifest;
 }
 export function assertSnapshotReferences(references, manifest, bucket) {

@@ -242,6 +242,28 @@ test('AWS diagnostics allowlist service error names and bounded HTTP/retry metad
   for(const metadata of [{httpStatusCode:99,attempts:0,totalRetryDelay:-1},{httpStatusCode:600,attempts:11,totalRetryDelay:600001},{httpStatusCode:'403',attempts:'3',totalRetryDelay:'250'},{httpStatusCode:Infinity,attempts:NaN,totalRetryDelay:Infinity}]) assert.deepEqual(safeBackupFailure({name:secret,$metadata:metadata}),{status:'BACKUP_FAILED',code:'UNKNOWN'});
 });
 
+test('new uploads after capture do not invalidate unchanged snapshot objects or waive database references',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  try {
+    const original={Key:'private/original',ETag:'one',Size:1},added={Key:'private/new-upload',ETag:'two',Size:1};let listings=0;
+    const client={send:async command=>{if(command instanceof ListCommand)return{Contents:++listings===1?[original]:[original,added]};assert.equal(command.input.Key,original.Key);assert.equal(command.input.IfMatch,original.ETag);return{Body:Readable.from([Buffer.from('x')])};}};
+    const manifest=await collectObjects(client,storageCommands,'test',dir);
+    assert.equal(manifest.length,1);assert.equal(manifest[0].key,original.Key);
+    assert.equal(assertSnapshotReferences([{bucket:'test',key:original.Key,sha256:manifest[0].sha256}],manifest,'test'),1);
+    assert.throws(()=>assertSnapshotReferences([{bucket:'test',key:added.Key}],manifest,'test'));
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+for(const change of ['deleted','resized','replaced']) test(`captured object ${change} cannot be hidden by a new upload`,async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  try {
+    const original={Key:'private/original',ETag:'one',Size:1},added={Key:'private/new-upload',ETag:'two',Size:1};let listings=0;
+    const current=change==='deleted'?[]:[{...original,...(change==='resized'?{Size:2}:{ETag:'changed'})}];
+    const client={send:async command=>{if(command instanceof ListCommand)return{Contents:++listings===1?[original]:[...current,added]};return{Body:Readable.from([Buffer.from('x')])};}};
+    await assert.rejects(collectObjects(client,storageCommands,'test',dir),/Storage changed during backup/);
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
 test('local snapshot failure diagnostics distinguish fixed invariant errors without exposing arbitrary text',()=>{
   assert.deepEqual(safeBackupFailure(new Error('Storage changed during backup; retry without reporting success')),{status:'BACKUP_FAILED',code:'BACKUP_STORAGE_CHANGED'});
   assert.deepEqual(safeBackupFailure(new Error('Backup exceeds configured size limit')),{status:'BACKUP_FAILED',code:'BACKUP_STORAGE_SIZE_LIMIT'});
