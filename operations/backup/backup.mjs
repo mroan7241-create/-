@@ -172,7 +172,17 @@ export function safeBackupFailure(error) {
   const source=error&&typeof error==='object'?error:{};
   const codes=['BACKUP_EMAIL_SIZE_LIMIT','EAUTH','ETIMEDOUT','ESOCKET','ECONNECTION','ECONNREFUSED','ECONNRESET','EDNS','EENVELOPE','EMESSAGE','ENOENT','EACCES','ENOSPC'];
   const awsNames=['AccessDenied','InvalidAccessKeyId','SignatureDoesNotMatch','ExpiredToken','InvalidToken','AuthorizationHeaderMalformed','NoSuchBucket','NoSuchKey','NotFound','NotImplemented','InvalidRequest','InvalidArgument','InvalidDigest','BadDigest','RequestTimeout','SlowDown','InternalError','InternalServerError','ServiceUnavailable','PreconditionFailed','ConditionalRequestConflict','EntityTooLarge','EntityTooSmall','MissingContentLength','XAmzContentSHA256Mismatch','MethodNotAllowed'];
-  const result={status:'BACKUP_FAILED',code:codes.includes(source.code)?source.code:awsNames.includes(source.name)?source.name:'UNKNOWN'};
+  // Exact local literals only: never print provider messages or object identifiers.
+  const localErrors=new Map([
+    ['Storage changed during backup; retry without reporting success','BACKUP_STORAGE_CHANGED'],
+    ['Backup exceeds configured size limit','BACKUP_STORAGE_SIZE_LIMIT'],
+    ['Object size mismatch','BACKUP_OBJECT_SIZE_MISMATCH'],
+    ['Missing object body','BACKUP_OBJECT_BODY_MISSING'],
+    ['Incomplete object metadata','BACKUP_OBJECT_METADATA_MISSING'],
+    ['Incomplete storage listing','BACKUP_STORAGE_LIST_INCOMPLETE'],
+    ['Database snapshot references an unavailable or mismatched private object; backup must not be reported successful','BACKUP_REFERENCE_MISMATCH'],
+  ]);
+  const result={status:'BACKUP_FAILED',code:codes.includes(source.code)?source.code:awsNames.includes(source.name)?source.name:localErrors.get(source.message)||'UNKNOWN'};
   const metadata=source.$metadata&&typeof source.$metadata==='object'?source.$metadata:{};
   if(Number.isInteger(metadata.httpStatusCode)&&metadata.httpStatusCode>=100&&metadata.httpStatusCode<=599) result.httpStatusCode=metadata.httpStatusCode;
   if(Number.isInteger(metadata.attempts)&&metadata.attempts>=1&&metadata.attempts<=10) result.attempts=metadata.attempts;

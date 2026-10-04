@@ -242,6 +242,13 @@ test('AWS diagnostics allowlist service error names and bounded HTTP/retry metad
   for(const metadata of [{httpStatusCode:99,attempts:0,totalRetryDelay:-1},{httpStatusCode:600,attempts:11,totalRetryDelay:600001},{httpStatusCode:'403',attempts:'3',totalRetryDelay:'250'},{httpStatusCode:Infinity,attempts:NaN,totalRetryDelay:Infinity}]) assert.deepEqual(safeBackupFailure({name:secret,$metadata:metadata}),{status:'BACKUP_FAILED',code:'UNKNOWN'});
 });
 
+test('local snapshot failure diagnostics distinguish fixed invariant errors without exposing arbitrary text',()=>{
+  assert.deepEqual(safeBackupFailure(new Error('Storage changed during backup; retry without reporting success')),{status:'BACKUP_FAILED',code:'BACKUP_STORAGE_CHANGED'});
+  assert.deepEqual(safeBackupFailure(new Error('Backup exceeds configured size limit')),{status:'BACKUP_FAILED',code:'BACKUP_STORAGE_SIZE_LIMIT'});
+  assert.deepEqual(safeBackupFailure(new Error('Database snapshot references an unavailable or mismatched private object; backup must not be reported successful')),{status:'BACKUP_FAILED',code:'BACKUP_REFERENCE_MISMATCH'});
+  assert.deepEqual(safeBackupFailure(new Error('Storage changed during backup; key=secret')),{status:'BACKUP_FAILED',code:'UNKNOWN'});
+});
+
 test('stored delivery logs only fixed upload, readback and notification stage markers',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-')),originalLog=console.log,logs=[];
   try {

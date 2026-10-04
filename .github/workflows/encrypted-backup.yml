@@ -47,7 +47,8 @@ jobs:
     needs: test
     if: >-
       github.repository == 'mroan7241-create/-' &&
-      github.ref == 'refs/heads/platform/node-migration' &&
+      (github.ref == 'refs/heads/platform/node-migration' ||
+       (github.ref == 'refs/heads/codex/admin-closure-surgical-20261005' && github.event_name == 'workflow_dispatch' && inputs.initial_verification)) &&
       (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
       (vars.BACKUP_ENABLED == 'true' ||
        (github.event_name == 'workflow_dispatch' && inputs.initial_verification))
