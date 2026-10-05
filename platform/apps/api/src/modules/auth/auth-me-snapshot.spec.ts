@@ -23,7 +23,8 @@ describe('GET /auth/me request-local snapshot', () => {
 
     await expect(service.getMe(ctx)).resolves.toEqual({
       id: 'account-id', publicCode: 'USR-1', name: 'اختبار', role, associationId,
-      mustChangePassword: false, covenantRequired, covenantStatus, adminFullAccess: false, adminPermissions: [],
+      mustChangePassword: false, covenantRequired, covenantStatus,
+      ...(role === AccountRole.ADMIN ? { adminFullAccess: false, adminPermissions: [] } : {}),
     });
     expect(accountRead).not.toHaveBeenCalled();
     expect(covenantRead).not.toHaveBeenCalled();

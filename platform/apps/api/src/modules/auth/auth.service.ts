@@ -30,7 +30,7 @@ export interface LoginResult {
   expiresAt: Date;
   /** سقف مطلق ثابت للجلسة (12h) — الـcontroller يستخدمه لعمر الكوكي، لا expiresAt المنزلق. */
   absoluteExpiresAt: Date;
-  account: { id: string; publicCode: string; name: string; role: AccountRole; associationId: string | null; mustChangePassword: boolean; covenantRequired: boolean; covenantStatus: AgreementStatus | null; adminFullAccess: boolean; adminPermissions: AdminPermission[] };
+  account: { id: string; publicCode: string; name: string; role: AccountRole; associationId: string | null; mustChangePassword: boolean; covenantRequired: boolean; covenantStatus: AgreementStatus | null; adminFullAccess?: boolean; adminPermissions?: AdminPermission[] };
 }
 
 export interface RequestMeta {
@@ -196,8 +196,7 @@ export class AuthService {
       role: ctx.role,
       associationId: ctx.associationId,
       mustChangePassword: ctx.mustChangePassword,
-      adminFullAccess: ctx.role === AccountRole.ADMIN && ctx.adminFullAccess === true,
-      adminPermissions: ctx.role === AccountRole.ADMIN ? normalizeAdminPermissions(ctx.adminPermissions) : [],
+      ...this.adminState({ role: ctx.role, adminFullAccess: ctx.adminFullAccess, adminPermissions: ctx.adminPermissions }),
       covenantRequired: ctx.meSnapshot.covenantRequired,
       covenantStatus: ctx.meSnapshot.covenantStatus,
     };
@@ -216,9 +215,10 @@ export class AuthService {
   }
 
   private adminState(account: { role: AccountRole; adminFullAccess?: boolean; adminPermissions?: string[] }) {
+    if (account.role !== AccountRole.ADMIN) return {};
     return {
-      adminFullAccess: account.role === AccountRole.ADMIN && account.adminFullAccess === true,
-      adminPermissions: account.role === AccountRole.ADMIN ? normalizeAdminPermissions(account.adminPermissions) : [],
+      adminFullAccess: account.adminFullAccess === true,
+      adminPermissions: normalizeAdminPermissions(account.adminPermissions),
     };
   }
 
