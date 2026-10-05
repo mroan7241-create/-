@@ -19,6 +19,7 @@ import { ReceiptsService } from '../src/modules/receipts/receipts.service';
 import { InventoryService } from '../src/modules/inventory/inventory.service';
 import { ProcurementService } from '../src/modules/procurement/procurement.service';
 import { AutoAllocationService } from '../src/modules/allocation/auto-allocation.service';
+import { ApplicationV2Service } from '../src/modules/applications/application-v2.service';
 import { beneficiaryPayload } from './utils/node3-fixtures';
 import { JPEG_1X1, PNG_1X1 } from './utils/node2-fixtures';
 import { startTestStorage, stopTestStorage } from './utils/storage-harness';
@@ -159,7 +160,8 @@ describe('final operational workflows', () => {
     await prisma.projectClosureReport.create({ data: { projectKey: 'e2e-operational-review', snapshotJson: { source: 'isolated-e2e' }, lastActorId: fixtures.assocAccountId } });
     const original = await prisma.projectClosureReport.findUniqueOrThrow({ where: { projectKey: 'e2e-operational-review' } });
     await prisma.projectClosureReport.delete({ where: { id: original.id } });
-    const report = await prisma.projectClosureReport.upsert({ where: { projectKey: 'electrical-appliances' }, create: { projectKey: 'electrical-appliances', snapshotJson: { source: 'isolated-e2e' }, lastActorId: fixtures.assocAccountId }, update: { status: ProjectClosureStatus.GENERATED, snapshotJson: { source: 'isolated-e2e' }, donorFeedbackNotes: null, lastActorId: fixtures.assocAccountId } });
+    const generated = await http().post('/api/v1/reports/closure/project/generate').set('Cookie', adminCookie).expect(201);
+    const report = generated.body as { id: string };
     try {
       await http().get('/api/v1/reports/closure/project').set('Cookie', associationCookie).expect(403);
       const get = await http().get('/api/v1/reports/closure/project').set('Cookie', adminCookie).expect(200);
@@ -261,8 +263,113 @@ describe('closure and operational transaction serialization', () => {
   }, 60000);
 
   beforeEach(async () => { scope = await createScope(); });
-  afterEach(async () => { jest.restoreAllMocks(); await cleanScope(scope); });
+  afterEach(async () => { jest.restoreAllMocks(); await prisma.projectClosureReport.deleteMany({ where: { projectKey: 'electrical-appliances' } }); await cleanScope(scope); });
   afterAll(async () => { await app.close(); await stopTestStorage(); });
+
+  async function closeScope() {
+    const report = await closure.generate(scope.ctx, scope.participationId, op('project-source'));
+    await closure.transitionOrganization(scope.ctx, report.id, OrganizationClosureStatus.SUBMITTED, op('project-submit'));
+    for (const status of [OrganizationClosureStatus.UNDER_REVIEW, OrganizationClosureStatus.APPROVED, OrganizationClosureStatus.CLOSED]) {
+      await closure.transitionOrganization(admin, report.id, status, op(`project-${status}`));
+    }
+    return report;
+  }
+
+  async function waitForAdmissionLock() {
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      const rows = await prisma.$queryRaw<{ waiting: boolean }[]>`
+        SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname=current_database()
+          AND wait_event_type='Lock' AND query LIKE '%association-selection:electrical-appliances%') AS waiting
+      `;
+      if (rows[0]?.waiting) return;
+      await new Promise((done) => setTimeout(done, 20));
+    }
+    throw new Error('Competing project transaction did not reach the existing admission lock');
+  }
+
+  it('keeps externally reviewed/final project snapshots immutable and preserves their actor', async () => {
+    await closeScope();
+    const report = await closure.generateProject(admin);
+    for (const status of [ProjectClosureStatus.UNDER_INTERNAL_REVIEW, ProjectClosureStatus.APPROVED_INTERNAL, ProjectClosureStatus.SUBMITTED_TO_DONOR, ProjectClosureStatus.DONOR_APPROVED, ProjectClosureStatus.PROJECT_CLOSED]) {
+      await closure.transitionProject(admin, status);
+      if ([ProjectClosureStatus.SUBMITTED_TO_DONOR, ProjectClosureStatus.DONOR_APPROVED, ProjectClosureStatus.PROJECT_CLOSED].includes(status)) {
+        const before = await prisma.projectClosureReport.findUniqueOrThrow({ where: { id: report.id } });
+        await expect(closure.generateProject(admin)).rejects.toMatchObject({ code: 'PROJECT_CLOSURE_REPORT_LOCKED' });
+        expect(await prisma.projectClosureReport.findUniqueOrThrow({ where: { id: report.id } })).toEqual(before);
+      }
+    }
+  });
+
+  it('does not approve an outdated snapshot after reopening, then refreshes through the existing review path', async () => {
+    const organization = await closeScope();
+    await closure.generateProject(admin);
+    await closure.transitionProject(admin, ProjectClosureStatus.UNDER_INTERNAL_REVIEW);
+    await closure.reopen(admin, organization.id, 'إعادة فتح معزولة');
+    await expect(closure.transitionProject(admin, ProjectClosureStatus.APPROVED_INTERNAL)).rejects.toMatchObject({ code: 'PROJECT_CLOSURE_ORGANIZATIONS_OPEN' });
+    await openEscalation(scope.ctx, EscalationSeverity.LOW);
+    await closure.transitionOrganization(scope.ctx, organization.id, OrganizationClosureStatus.SUBMITTED, op('project-resubmit'));
+    for (const status of [OrganizationClosureStatus.UNDER_REVIEW, OrganizationClosureStatus.APPROVED, OrganizationClosureStatus.CLOSED]) await closure.transitionOrganization(admin, organization.id, status, op(`refresh-${status}`));
+    await expect(closure.transitionProject(admin, ProjectClosureStatus.APPROVED_INTERNAL)).rejects.toMatchObject({ code: 'PROJECT_CLOSURE_SNAPSHOT_STALE' });
+    const refreshed = await closure.generateProject(admin);
+    expect(refreshed.status).toBe(ProjectClosureStatus.GENERATED);
+    await closure.transitionProject(admin, ProjectClosureStatus.UNDER_INTERNAL_REVIEW);
+    await closure.transitionProject(admin, ProjectClosureStatus.APPROVED_INTERNAL);
+  });
+
+  it('sees a concurrently committed new participation before generation without rejecting its admission', async () => {
+    await closeScope();
+    const gate = latch(); const release = latch(); let addedId: string | undefined;
+    const admission = prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
+      addedId = (await tx.projectParticipation.create({ data: { status: ParticipationStatus.APPROVED_AWAITING_SETUP, activationBasis: ActivationBasis.AGREEMENT_COMPLETED } })).id;
+      gate.resolve(); await release.promise;
+    }, { timeout: 10000 });
+    await gate.promise;
+    const generated = closure.generateProject(admin).then(() => ({ ok: true }), (error: unknown) => ({ error }));
+    try {
+      await waitForAdmissionLock(); release.resolve(); await admission;
+      expect(await generated).toMatchObject({ error: { code: 'PROJECT_CLOSURE_ORGANIZATIONS_OPEN' } });
+      expect(await prisma.projectParticipation.findUnique({ where: { id: addedId } })).not.toBeNull();
+    } finally { release.resolve(); await admission; await generated; if (addedId) await prisma.projectParticipation.delete({ where: { id: addedId } }); }
+  });
+
+  it('serializes concurrent initial generation instead of creating duplicate project reports', async () => {
+    await closeScope();
+    const reports = await Promise.all([closure.generateProject(admin), closure.generateProject(admin)]);
+    expect(reports[0].id).toBe(reports[1].id);
+    expect(await prisma.projectClosureReport.count({ where: { projectKey: 'electrical-appliances' } })).toBe(1);
+  });
+
+  it('allows public draft creation during a project snapshot and admits a later participation without freezing intake', async () => {
+    await closeScope();
+    const gate = latch(); const release = latch(); let addedId: string | undefined;
+    const target = closure as unknown as { currentProjectReports(tx: Prisma.TransactionClient): Promise<unknown> };
+    const collect = target.currentProjectReports.bind(closure);
+    jest.spyOn(target, 'currentProjectReports').mockImplementationOnce(async (tx) => {
+      const reports = await collect(tx); gate.resolve(); await release.promise; return reports;
+    });
+    const generation = closure.generateProject(admin);
+    await gate.promise;
+    const admission = prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
+      return tx.projectParticipation.create({ data: { status: ParticipationStatus.APPROVED_AWAITING_SETUP, activationBasis: ActivationBasis.AGREEMENT_COMPLETED } });
+    }, { timeout: 10000 });
+    const draftRequest = op('public-draft');
+    try {
+      await waitForAdmissionLock();
+      const draft = await app.get(ApplicationV2Service).createDraft(draftRequest, undefined, 'isolated-project-closure');
+      expect(draft.draftCode).toBeTruthy();
+      release.resolve(); const report = await generation; addedId = (await admission).id;
+      expect((report.snapshotJson as { organizationReports: unknown[] }).organizationReports).toHaveLength(1);
+      await expect(closure.transitionProject(admin, ProjectClosureStatus.UNDER_INTERNAL_REVIEW)).rejects.toMatchObject({ code: 'PROJECT_CLOSURE_ORGANIZATIONS_OPEN' });
+      expect(await prisma.projectParticipation.findUnique({ where: { id: addedId } })).not.toBeNull();
+    } finally {
+      release.resolve(); await generation; addedId ??= (await admission).id;
+      await prisma.associationApplicationDraft.deleteMany({ where: { clientRequestId: draftRequest } });
+      if (addedId) await prisma.projectParticipation.delete({ where: { id: addedId } });
+    }
+  });
 
   it('completes closure from ACTIVE, replays past operations, and refreshes a reopened snapshot', async () => {
     const generateOp = op('generate');

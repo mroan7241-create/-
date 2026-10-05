@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { isDeepStrictEqual } from 'node:util';
 import { prisma, AccountRole, OrganizationClosureStatus, ParticipationStatus, Prisma, ProjectClosureStatus } from '@alzad/db';
 import { ApiError } from '../../common/api-error';
 import { IdempotencyService } from '../../common/idempotency.service';
@@ -151,24 +152,29 @@ export class ClosureService {
 
   async generateProject(ctx: AuthContext) {
     return prisma.$transaction(async (tx) => {
+      // Reuse admission's existing lock; never change public intake or its state.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
       await tx.$queryRaw`SELECT id FROM project_closure_reports WHERE project_key='electrical-appliances' FOR UPDATE`;
-      // Existing participations remain stable while totals are collected. This
-      // does not block admission of a future participation or change intake.
-      await tx.$queryRaw`SELECT id FROM project_participations ORDER BY id FOR SHARE`;
-      const open = await tx.projectParticipation.count({ where: { status: { not: ParticipationStatus.CLOSED } } });
-      if (open) throw new ApiError('PROJECT_CLOSURE_ORGANIZATIONS_OPEN', 'لا يمكن إنشاء التقرير الختامي قبل إغلاق كل المشاركات', 409);
-      const reports = await tx.organizationClosureReport.findMany({ where: { status: OrganizationClosureStatus.CLOSED }, select: { id: true, snapshotJson: true } });
+      const current = await tx.projectClosureReport.findUnique({ where: { projectKey: 'electrical-appliances' } });
+      if (current && ![ProjectClosureStatus.GENERATED, ProjectClosureStatus.UNDER_INTERNAL_REVIEW, ProjectClosureStatus.APPROVED_INTERNAL, ProjectClosureStatus.DONOR_FEEDBACK].some((status) => status === current.status)) {
+        throw new ApiError('PROJECT_CLOSURE_REPORT_LOCKED', 'لا يمكن استبدال تقرير مرسل للداعم أو معتمد منه أو مغلق؛ التحديث متاح قبل الإرسال أو ضمن ملاحظات الداعم', 409);
+      }
+      const reports = await this.currentProjectReports(tx);
       const snapshot = { organizationReports: reports, generatedAt: new Date() };
-      return tx.projectClosureReport.upsert({
+      const status = current?.status === ProjectClosureStatus.DONOR_FEEDBACK ? ProjectClosureStatus.DONOR_FEEDBACK : ProjectClosureStatus.GENERATED;
+      const report = await tx.projectClosureReport.upsert({
         where: { projectKey: 'electrical-appliances' },
         create: { projectKey: 'electrical-appliances', snapshotJson: snapshot, lastActorId: ctx.accountId },
-        update: { snapshotJson: snapshot, lastActorId: ctx.accountId },
+        update: { status, snapshotJson: snapshot, lastActorId: ctx.accountId },
       });
+      await audit(tx, ctx, 'PROJECT_CLOSURE_GENERATED', 'project_closure_reports', report.id, { previousStatus: current?.status ?? null, previousSnapshot: current?.snapshotJson ?? null });
+      return report;
     });
   }
 
   async transitionProject(ctx: AuthContext, to: ProjectClosureStatus, donorFeedbackNotes?: string) {
     return prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
       await tx.$queryRaw`SELECT id FROM project_closure_reports WHERE project_key='electrical-appliances' FOR UPDATE`;
       const report = await tx.projectClosureReport.findUnique({ where: { projectKey: 'electrical-appliances' } });
       if (!report) throw new ApiError('PROJECT_CLOSURE_NOT_FOUND', 'التقرير الختامي غير موجود', 404);
@@ -183,10 +189,30 @@ export class ClosureService {
       };
       if (!next[report.status]?.includes(to)) throw new ApiError('PROJECT_CLOSURE_TRANSITION_INVALID', 'لا يمكن تجاوز حالات اعتماد التقرير الختامي', 409);
       if (to === ProjectClosureStatus.DONOR_FEEDBACK && !donorFeedbackNotes?.trim()) throw new ApiError('DONOR_FEEDBACK_REQUIRED', 'ملاحظات الداعم مطلوبة', 400);
+      // Feedback is not approval: it must remain recordable so an outdated
+      // donor submission can follow the existing refresh/resubmission path.
+      if (to !== ProjectClosureStatus.DONOR_FEEDBACK) {
+        const reports = await this.currentProjectReports(tx);
+        const stored = report.snapshotJson && typeof report.snapshotJson === 'object' && !Array.isArray(report.snapshotJson)
+          ? report.snapshotJson.organizationReports : undefined;
+        const storedReports = Array.isArray(stored) ? [...stored].sort((a, b) => String(a && typeof a === 'object' && !Array.isArray(a) ? a.id : '').localeCompare(String(b && typeof b === 'object' && !Array.isArray(b) ? b.id : ''))) : undefined;
+        if (!isDeepStrictEqual(storedReports, reports)) throw new ApiError('PROJECT_CLOSURE_SNAPSHOT_STALE', 'بيانات التقرير لا تطابق تقارير المشاركات الحالية؛ حدّث التقرير وأعد مراجعته قبل متابعة الاعتماد', 409);
+      }
       await tx.projectClosureReport.update({ where: { id: report.id }, data: { status: to, lastActorId: ctx.accountId, donorFeedbackNotes: donorFeedbackNotes?.trim() || report.donorFeedbackNotes } });
       await audit(tx, ctx, 'PROJECT_CLOSURE_TRANSITIONED', 'project_closure_reports', report.id, { to, donorFeedbackNotes: donorFeedbackNotes ?? null });
       return { ok: true };
     });
+  }
+
+  private async currentProjectReports(tx: Prisma.TransactionClient) {
+    await tx.$queryRaw`SELECT id FROM project_participations ORDER BY id FOR SHARE`;
+    const participations = await tx.projectParticipation.findMany({
+      select: { status: true, closureReport: { select: { id: true, status: true, snapshotJson: true } } },
+    });
+    if (participations.some((p) => p.status !== ParticipationStatus.CLOSED || p.closureReport?.status !== OrganizationClosureStatus.CLOSED)) {
+      throw new ApiError('PROJECT_CLOSURE_ORGANIZATIONS_OPEN', 'لا يمكن اعتماد التقرير الختامي قبل إغلاق كل المشاركات وتقاريرها', 409);
+    }
+    return participations.map((p) => ({ id: p.closureReport!.id, snapshotJson: p.closureReport!.snapshotJson })).sort((a, b) => a.id.localeCompare(b.id));
   }
 }
 
