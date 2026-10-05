@@ -15,6 +15,7 @@ import {
   type Paginated,
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { canAdmin } from '../../lib/admin-access';
 import { AppShell } from '../../components/AppShell';
 import { initialQueryParam } from '../../lib/query';
 import { BulkImportButton } from '../../lib/beneficiary-import';
@@ -175,7 +176,7 @@ export default function AdminBeneficiariesPage() {
             نهائي ولا يُعاد فتحه.
           </p>
         </div>
-        <BulkImportButton isAdmin={true} onImported={() => void load()} />
+        {canAdmin(user, 'beneficiaries.manage') && <BulkImportButton isAdmin={true} onImported={() => void load()} />}
       </div>
 
       {/* شريط الأدوات — بحث/تصفية/ترتيب خادمية بالكامل */}
@@ -245,7 +246,7 @@ export default function AdminBeneficiariesPage() {
       {notice && <p style={{ ...successStyle, marginTop: 12 }}>{notice}</p>}
 
       {/* شريط الاعتماد بالجملة */}
-      {selected.size > 0 && (
+      {canAdmin(user, 'beneficiaries.manage') && selected.size > 0 && (
         <div
           style={{
             ...cardStyle,
@@ -304,13 +305,13 @@ export default function AdminBeneficiariesPage() {
             <thead>
               <tr>
                 <th style={thStyle}>
-                  <input
+                  {canAdmin(user, 'beneficiaries.manage') && <input
                     type="checkbox"
                     aria-label="تحديد الكل"
                     checked={selectableIds.length > 0 && selected.size === selectableIds.length}
                     disabled={selectableIds.length === 0}
                     onChange={toggleAll}
-                  />
+                  />}
                 </th>
                 <th style={thStyle}>الرقم</th>
                 <th style={thStyle}>الاسم</th>
@@ -325,13 +326,13 @@ export default function AdminBeneficiariesPage() {
               {data.items.map((row) => (
                 <tr key={row.id}>
                   <td style={tdStyle}>
-                    <input
+                    {canAdmin(user, 'beneficiaries.manage') && <input
                       type="checkbox"
                       aria-label={`تحديد ${row.name}`}
                       checked={selected.has(row.id)}
                       disabled={row.reviewStatus !== 'UNDER_REVIEW'}
                       onChange={() => toggleOne(row.id)}
-                    />
+                    />}
                   </td>
                   <td style={tdStyle}>{row.publicCode}</td>
                   <td style={tdStyle}>{row.name}</td>
@@ -347,7 +348,7 @@ export default function AdminBeneficiariesPage() {
                   </td>
                   <td style={tdStyle}>
                     <button type="button" style={secondaryButtonStyle} onClick={() => void openDetail(row.id)}>
-                      {row.reviewStatus === 'UNDER_REVIEW' ? 'مراجعة' : 'عرض'}
+                      {canAdmin(user, 'beneficiaries.manage') && row.reviewStatus === 'UNDER_REVIEW' ? 'مراجعة' : 'عرض'}
                     </button>
                   </td>
                 </tr>
@@ -379,6 +380,7 @@ export default function AdminBeneficiariesPage() {
 
       {detail && (
         <ReviewModal
+          canManage={canAdmin(user, 'beneficiaries.manage')}
           detail={detail}
           onClose={() => setDetail(null)}
           onDone={async (message) => {
@@ -388,7 +390,7 @@ export default function AdminBeneficiariesPage() {
           }}
         />
       )}
-      {bulkDecision && <div style={modalOverlayStyle} role="dialog" aria-modal="true"><div style={{ ...modalStyle, maxWidth: 520 }}>
+      {canAdmin(user, 'beneficiaries.manage') && bulkDecision && <div style={modalOverlayStyle} role="dialog" aria-modal="true"><div style={{ ...modalStyle, maxWidth: 520 }}>
         <h2>{bulkDecision === 'APPROVED' ? 'تأكيد الاعتماد الجماعي' : 'تأكيد الرفض الجماعي'}</h2>
         <p>{bulkDecision === 'APPROVED' ? `سيُعتمد ${selected.size} مستفيد مع كل احتياجاتهم المعلّقة بعد إعادة تحقق الخادم.` : `سيُرفض ${selected.size} مستفيد وتُسجّل العلة على المستفيد واحتياجاته.`}</p>
         {bulkDecision === 'REJECTED' && <label style={labelStyle}>سبب الرفض (إلزامي)<textarea style={{ ...inputStyle, minHeight: 100 }} value={bulkReason} onChange={(event) => setBulkReason(event.target.value)} maxLength={500} /></label>}
@@ -400,10 +402,12 @@ export default function AdminBeneficiariesPage() {
 
 /** نافذة المراجعة الفردية — قرار المستفيد + قرار كل احتياج معلَّق معًا. */
 function ReviewModal({
+  canManage,
   detail,
   onClose,
   onDone,
 }: {
+  canManage: boolean;
   detail: BeneficiaryDetail;
   onClose: () => void;
   onDone: (message: string) => Promise<void>;
@@ -502,8 +506,8 @@ function ReviewModal({
                   {need.rejectReason && <div style={mutedStyle}>{need.rejectReason}</div>}
                 </td>
                 <td style={tdStyle}>
-                  {need.decisionStatus !== 'PENDING' || decided ? (
-                    <span style={mutedStyle}>مكتمل</span>
+                  {need.decisionStatus !== 'PENDING' || decided || !canManage ? (
+                    <span style={mutedStyle}>{need.decisionStatus === 'PENDING' && !canManage ? 'عرض فقط' : 'مكتمل'}</span>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                       <select
@@ -532,10 +536,9 @@ function ReviewModal({
           </tbody>
         </table>
 
-        {decided ? (
+        {decided || !canManage ? (
           <p style={{ ...mutedStyle, marginTop: 16 }}>
-            سبق البتّ نهائيًا في هذا المستفيد ({BENEFICIARY_REVIEW_STATUS_LABELS[detail.reviewStatus]})
-            {detail.beneficiaryRejectReason ? ` — السبب: ${detail.beneficiaryRejectReason}` : ''}. لا يمكن إعادة فتح القرار.
+            {decided ? `سبق البتّ نهائيًا في هذا المستفيد (${BENEFICIARY_REVIEW_STATUS_LABELS[detail.reviewStatus]})${detail.beneficiaryRejectReason ? ` — السبب: ${detail.beneficiaryRejectReason}` : ''}. لا يمكن إعادة فتح القرار.` : 'صلاحية هذا الحساب تتيح عرض بيانات المستفيد فقط.'}
           </p>
         ) : (
           <>
@@ -558,7 +561,7 @@ function ReviewModal({
           </>
         )}
 
-        {decided && (
+        {(decided || !canManage) && (
           <button type="button" style={{ ...secondaryButtonStyle, marginTop: 16 }} onClick={onClose}>
             إغلاق
           </button>

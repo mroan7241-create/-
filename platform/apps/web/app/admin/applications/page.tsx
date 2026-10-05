@@ -9,9 +9,11 @@ import {
   startApplicationProcessing,
   type ApplicationStatus,
   type ApplicationSummary,
+  type CurrentUser,
   type Paginated,
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { canAdmin } from '../../lib/admin-access';
 import { AppShell } from '../../components/AppShell';
 import { SelectionBoard } from '../selection/page';
 import { WorkflowHub } from '../../components/WorkflowHub';
@@ -63,6 +65,8 @@ export default function AdminApplicationsPage() {
     const requested = initialQueryParam('view');
     return WORKSPACE_SECTIONS.some(({ key }) => key === requested) ? requested as WorkspaceSection : initialQueryParam('status') ? 'files' : 'review';
   });
+  const visibleSections = WORKSPACE_SECTIONS.filter((section) => canAdmin(user, section.key === 'activation' ? 'participations.read' : section.key === 'settings' ? 'settings.manage' : 'applications.read'));
+  const currentSection = visibleSections.some(({ key }) => key === activeSection) ? activeSection : visibleSections[0]?.key;
 
   const load = useCallback(async () => {
     setListError(null);
@@ -78,8 +82,8 @@ export default function AdminApplicationsPage() {
   }, [page, search, status, workflow]);
 
   useEffect(() => {
-    if (user && activeSection === 'files') void load();
-  }, [user, load, activeSection]);
+    if (user && currentSection === 'files') void load();
+  }, [user, load, currentSection]);
 
   useEffect(() => {
     if (!initialQueryParam('search') || !data?.items.length) return;
@@ -97,19 +101,19 @@ export default function AdminApplicationsPage() {
         <p>راجع الأهلية، اختر الجمعيات الأساسية، ثم تابع الميثاق والتفعيل في مكان واحد.</p>
       </header>
       <nav className={styles.sections} aria-label="مراحل انضمام الجمعيات">
-        {WORKSPACE_SECTIONS.map((section, index) => <button
+        {visibleSections.map((section) => <button
           key={section.key}
           type="button"
-          className={`${styles.sectionButton} ${activeSection === section.key ? styles.sectionActive : ''}`}
-          aria-current={activeSection === section.key ? 'step' : undefined}
+          className={`${styles.sectionButton} ${currentSection === section.key ? styles.sectionActive : ''}`}
+          aria-current={currentSection === section.key ? 'step' : undefined}
           onClick={() => setActiveSection(section.key)}
-        ><span className={styles.number} aria-hidden="true">{index < 3 ? index + 1 : index === 3 ? '⌕' : '⚙'}</span><span><strong>{section.title}</strong><small>{section.description}</small></span></button>)}
+        ><span className={styles.number} aria-hidden="true">{WORKSPACE_SECTIONS.indexOf(section) < 3 ? WORKSPACE_SECTIONS.indexOf(section) + 1 : section.key === 'files' ? '⌕' : '⚙'}</span><span><strong>{section.title}</strong><small>{section.description}</small></span></button>)}
       </nav>
-      {activeSection === 'review' && <section aria-label="المراجعة والأهلية"><SelectionBoard mode="review" /></section>}
-      {activeSection === 'selection' && <section aria-label="التقييم والاختيار"><SelectionBoard mode="selection" /></section>}
-      {activeSection === 'activation' && <section aria-label="الميثاق والتفعيل"><WorkflowHub user={user} sectionKeys={['participations']} /></section>}
-      {activeSection === 'settings' && <section aria-label="موعد التقديم"><SelectionBoard mode="settings" /></section>}
-      {activeSection === 'files' && <section aria-label="ملفات الطلبات">
+      {currentSection === 'review' && <section aria-label="المراجعة والأهلية"><SelectionBoard user={user} mode="review" /></section>}
+      {currentSection === 'selection' && <section aria-label="التقييم والاختيار"><SelectionBoard user={user} mode="selection" /></section>}
+      {currentSection === 'activation' && <section aria-label="الميثاق والتفعيل"><WorkflowHub user={user} sectionKeys={['participations']} /></section>}
+      {currentSection === 'settings' && <section aria-label="موعد التقديم"><SelectionBoard user={user} mode="settings" /></section>}
+      {currentSection === 'files' && <section aria-label="ملفات الطلبات">
       <h2>تفاصيل الطلبات والبحث</h2>
       <div className="button-row" style={{ marginBottom: 16 }}>{[['','الكل'],['new','جديدة'],['processing','قيد المعالجة'],['missing','بانتظار الاستكمال']].map(([key,label]) => <button key={key} type="button" style={workflow === key ? primaryButtonStyle : secondaryButtonStyle} onClick={() => { setWorkflow(key); setPage(1); }}>{label}{data && 'counts' in data ? ` (${(data as Paginated<ApplicationSummary> & { counts?: Record<string, number> }).counts?.[key || 'all'] ?? 0})` : ''}</button>)}</div>
       {actionMessage && <p role="status" style={actionMessage.startsWith('تم') ? { color: 'var(--success)' } : errorStyle}>{actionMessage}</p>}
@@ -180,7 +184,7 @@ export default function AdminApplicationsPage() {
             )}
             {data?.items.map((row) => (
               <tr key={row.id} onClick={() => setSelected(row)} style={{ cursor: 'pointer' }}>
-                <td style={tdStyle}><input type="checkbox" aria-label={`تحديد ${row.name}`} checked={checked.includes(row.id)} onClick={(event) => event.stopPropagation()} onChange={(event) => setChecked((old) => event.target.checked ? [...new Set([...old, row.id])] : old.filter((id) => id !== row.id))} /> {row.name}</td>
+                <td style={tdStyle}>{canAdmin(user, 'applications.review') && <input type="checkbox" aria-label={`تحديد ${row.name}`} checked={checked.includes(row.id)} onClick={(event) => event.stopPropagation()} onChange={(event) => setChecked((old) => event.target.checked ? [...new Set([...old, row.id])] : old.filter((id) => id !== row.id))} />} {row.name}</td>
                 <td style={{ ...tdStyle, ...ltrStyle }}>{row.publicCode}</td>
                 <td style={tdStyle}>
                   <span style={statusBadgeStyle(row.status === 'ACCEPTED' ? 'good' : row.status === 'REJECTED' ? 'bad' : 'neutral')}>
@@ -202,7 +206,7 @@ export default function AdminApplicationsPage() {
           </tbody>
         </table>
       </div>
-      <div className="button-row" style={{ marginTop: 12 }}><button type="button" style={primaryButtonStyle} disabled={!checked.length} onClick={async () => { setActionMessage(''); try { const result = await startApplicationProcessing(checked); setActionMessage(`تم بدء معالجة ${result.started} طلب، وسبق بدء ${result.alreadyStarted}.`); setChecked([]); await load(); } catch (reason) { setActionMessage(reason instanceof Error ? reason.message : 'تعذر بدء المعالجة.'); } }}>بدء معالجة المحدد ({checked.length})</button></div>
+      {canAdmin(user, 'applications.review') && <div className="button-row" style={{ marginTop: 12 }}><button type="button" style={primaryButtonStyle} disabled={!checked.length} onClick={async () => { setActionMessage(''); try { const result = await startApplicationProcessing(checked); setActionMessage(`تم بدء معالجة ${result.started} طلب، وسبق بدء ${result.alreadyStarted}.`); setChecked([]); await load(); } catch (reason) { setActionMessage(reason instanceof Error ? reason.message : 'تعذر بدء المعالجة.'); } }}>بدء معالجة المحدد ({checked.length})</button></div>}
 
       {data && (
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 16, flexWrap: 'wrap' }}>
@@ -225,6 +229,7 @@ export default function AdminApplicationsPage() {
 
       {selected && (
         <ApplicationDetail
+          user={user}
           application={selected}
           onClose={() => setSelected(null)}
         />
@@ -235,9 +240,11 @@ export default function AdminApplicationsPage() {
 }
 
 function ApplicationDetail({
+  user,
   application,
   onClose,
 }: {
+  user: CurrentUser;
   application: ApplicationSummary;
   onClose: () => void;
 }) {
@@ -286,6 +293,10 @@ function ApplicationDetail({
           <dd style={{ margin: 0 }}>{application.evaluationScore == null ? 'لم يُقيّم بعد' : `${application.evaluationScore}/100`}</dd>
           <dt>قائمة الاختيار</dt>
           <dd style={{ margin: 0 }}>{selectionLabel(application.selectionList)}</dd>
+          <dt>بدأ المعالجة</dt><dd style={{ margin: 0 }}>{actorLabel(application.processingStarter, application.processingStartedAt)}</dd>
+          <dt>راجع الأهلية</dt><dd style={{ margin: 0 }}>{actorLabel(application.eligibilityReviewer, application.eligibilityReviewedAt)}</dd>
+          <dt>قيّم الطلب</dt><dd style={{ margin: 0 }}>{actorLabel(application.evaluator, application.evaluatedAt)}</dd>
+          <dt>اعتمد الاختيار</dt><dd style={{ margin: 0 }}>{actorLabel(application.selectionApprover, application.selectionApprovedAt)}</dd>
           <dt>التصنيف / المجال</dt>
           <dd style={{ margin: 0 }}>
             {application.category ?? '—'} / {application.sector ?? '—'}
@@ -351,7 +362,7 @@ function ApplicationDetail({
           </p>
         )}
 
-        {application.eligibilityStatus === 'NEEDS_INFO' && <div style={{ marginTop: 16 }}>
+        {canAdmin(user, 'applications.review') && application.eligibilityStatus === 'NEEDS_INFO' && <div style={{ marginTop: 16 }}>
           <button type="button" style={secondaryButtonStyle} onClick={async () => { setNotificationMessage(null); try { const result = await resendApplicationInformation(application.id); setNotificationMessage(result.emailQueued ? 'حُفظ إشعار الاستكمال للإرسال إلى البريد الرسمي.' : 'تعذّر تجهيز إشعار الاستكمال. راجع سجل إرسال البريد.'); } catch (reason) { setNotificationMessage(reason instanceof ApiClientError ? reason.message : 'تعذّرت إعادة إرسال الإشعار.'); } }}>إعادة إرسال إشعار الاستكمال</button>
           {notificationMessage && <p role="status" style={notificationMessage.startsWith('تم') ? { color: '#17663a' } : errorStyle}>{notificationMessage}</p>}
         </div>}
@@ -372,6 +383,10 @@ function ApplicationDetail({
 
 function eligibilityLabel(value: ApplicationSummary['eligibilityStatus']) {
   return ({ PENDING: 'بانتظار القرار', PASSED: 'مجتاز', FAILED: 'غير مجتاز', NEEDS_INFO: 'يحتاج معلومات' })[value];
+}
+
+function actorLabel(actor: ApplicationSummary['evaluator'], at: string | null): string {
+  return actor ? `${actor.name} (${actor.publicCode})${at ? ` — ${new Date(at).toLocaleString('ar-SA')}` : ''}` : '—';
 }
 
 function selectionLabel(value: ApplicationSummary['selectionList']) {

@@ -11,6 +11,7 @@ import {
   type ReferenceValueType,
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { canAdmin } from '../../lib/admin-access';
 import { AppShell } from '../../components/AppShell';
 import { PageHeader } from '../../components/PageHeader';
 import { LoadingState, ErrorState } from '../../components/States';
@@ -75,7 +76,7 @@ export default function AdminReferenceDataPage() {
 
       {data && (
         <>
-          <form onSubmit={submit} style={{ ...cardStyle, display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 480, marginBottom: 24 }}>
+          {canAdmin(user, 'reference.manage') && <form onSubmit={submit} style={{ ...cardStyle, display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 480, marginBottom: 24 }}>
             <label style={labelStyle}>
               النوع
               <select
@@ -118,7 +119,7 @@ export default function AdminReferenceDataPage() {
             <div>
               <button type="submit" disabled={busy} style={primaryButtonStyle}>{busy ? 'جارٍ الحفظ…' : 'إضافة'}</button>
             </div>
-          </form>
+          </form>}
 
           <h2 style={{ fontSize: 16, marginBottom: 10 }}>القيم الحالية</h2>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 14 }}>

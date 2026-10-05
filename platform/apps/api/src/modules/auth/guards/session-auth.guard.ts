@@ -2,6 +2,8 @@ import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { AccountRole, AgreementStatus, ParticipationStatus, prisma } from '@alzad/db';
+import { hasAdminPermission, hasCompletedParticipationCovenant, normalizeAdminPermissions } from '@alzad/shared';
+import { adminRoutePolicy } from '../admin-route-permissions';
 import { authConfig } from '../../../config/auth.config';
 import { sha256Hex } from '../../../common/crypto.util';
 import { ApiError, authForbidden, authPasswordChangeRequired, authSessionExpired } from '../../../common/api-error';
@@ -22,7 +24,7 @@ interface RequestWithAuth extends Request {
  * 3) حالة الحساب ACTIVE.
  * 4) حالة الجمعية ACTIVE إن كان الدور تابعًا لجمعية (نفس assertActorEnabled_ القديمة).
  * 5) sliding expiry: last_seen_at + expires_at = min(now+6h, absolute_expires_at) — لا تمديد للسقف المطلق أبدًا.
- * 6) mustChangePassword gate (دور ASSOCIATION فقط — نفس شرط legacy requireSession_ الحرفي) ما لم يُعفَ endpoint صراحة.
+ * 6) mustChangePassword gate للحسابات ذات كلمة المرور المؤقتة ما لم يُعفَ endpoint صراحة.
  * 7) فحص الدور (@Roles) إن وُجد.
  */
 @Injectable()
@@ -55,8 +57,17 @@ export class SessionAuthGuard implements CanActivate {
 
     const account = session.account;
     if (account.status !== 'ACTIVE') throw authSessionExpired();
+    if (account.archivedAt) throw authSessionExpired();
     if (account.associationId && account.association && account.association.status !== 'ACTIVE') {
       throw authSessionExpired();
+    }
+
+    if (account.role === AccountRole.ADMIN && account.adminFullAccess !== true) {
+      const registeredPath: unknown = request.route?.path;
+      const policy = adminRoutePolicy(request.method, typeof registeredPath === 'string' ? registeredPath : undefined);
+      if (!policy || policy === 'owner' || (policy !== 'self' && !hasAdminPermission(false, account.adminPermissions, policy))) {
+        throw authForbidden();
+      }
     }
 
     // ABANMI is deny-by-default at the central boundary. This remains effective
@@ -88,7 +99,7 @@ export class SessionAuthGuard implements CanActivate {
       context.getClass(),
     ]);
     // الحسابات المنشأة بكلمة مرور مؤقتة لا تدخل أي بوابة أعمال قبل تغييرها.
-    if (account.mustChangePassword && (account.role === 'ASSOCIATION' || account.role === 'ABANMI') && !allowMustChangePassword) {
+    if (account.mustChangePassword && (account.role === 'ASSOCIATION' || account.role === 'ABANMI' || account.role === 'ADMIN') && !allowMustChangePassword) {
       throw authPasswordChangeRequired();
     }
 
@@ -101,7 +112,7 @@ export class SessionAuthGuard implements CanActivate {
         select: { status: true, agreements: { orderBy: { version: 'desc' }, take: 1, select: { status: true } } },
       });
       covenantStatus = participation?.agreements[0]?.status ?? null;
-      covenantRequired = Boolean(participation) && (participation!.status !== ParticipationStatus.ACTIVE || covenantStatus !== AgreementStatus.SIGNED);
+      covenantRequired = Boolean(participation) && !hasCompletedParticipationCovenant(participation!.status, covenantStatus);
       covenantStateChecked = true;
       if (covenantRequired) {
         const path = request.originalUrl.split('?')[0];
@@ -110,6 +121,12 @@ export class SessionAuthGuard implements CanActivate {
           (request.method === 'POST' && /\/(auth\/logout|participations\/covenant\/sign)$/.test(path)) ||
           (request.method === 'PATCH' && /\/auth\/password$/.test(path));
         if (!allowed) throw new ApiError('COVENANT_EXECUTION_REQUIRED', 'يجب استكمال اعتماد ميثاق المشاركة قبل استخدام العمليات', 403);
+      } else if (participation && [ParticipationStatus.READY_TO_CLOSE, ParticipationStatus.CLOSURE_SUBMITTED, ParticipationStatus.CLOSED].some((status) => status === participation.status)) {
+        const path = request.originalUrl.split('?')[0];
+        const allowed = request.method === 'GET' ||
+          (request.method === 'POST' && (/\/auth\/logout$/.test(path) || /\/reports\/closure\/organization(?:\/generate|\/[0-9a-f-]+\/transition)$/.test(path))) ||
+          (request.method === 'PATCH' && (/\/auth\/password$/.test(path) || /\/reports\/closure\/organization\/[0-9a-f-]+$/.test(path)));
+        if (!allowed) throw new ApiError('PARTICIPATION_CLOSURE_IN_PROGRESS', 'العمليات متوقفة أثناء إغلاق المشاركة؛ تظل المتابعة والتقرير متاحين', 409);
       }
     }
 
@@ -124,6 +141,8 @@ export class SessionAuthGuard implements CanActivate {
       associationId: account.associationId,
       sessionId: session.id,
       mustChangePassword: account.mustChangePassword,
+      adminFullAccess: account.role === AccountRole.ADMIN && account.adminFullAccess === true,
+      adminPermissions: account.role === AccountRole.ADMIN ? normalizeAdminPermissions(account.adminPermissions) : [],
       ...(covenantStateChecked ? { meSnapshot: {
         publicCode: account.publicCode,
         name: account.name,

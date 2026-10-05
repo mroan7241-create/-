@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { AppShell } from '../../components/AppShell';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { canAdmin } from '../../lib/admin-access';
 import { apiFetch, DEVICE_TYPE_LABELS, DEVICE_TYPES, newOpId, type DeviceType } from '../../lib/api';
 import { cardStyle, errorStyle, inputStyle, labelStyle, mutedStyle, primaryButtonStyle, secondaryButtonStyle, tableStyle, tdStyle, thStyle } from '../../lib/ui';
 
@@ -68,7 +69,7 @@ export default function CentralStockPage() {
         <p>المتاح للتوجيه: <strong>{row.availableQty}</strong></p>
       </section>)}
     </div>
-    <section style={{ ...cardStyle, marginBottom: 18 }}>
+    {canAdmin(user, 'inventory.manage') && <section style={{ ...cardStyle, marginBottom: 18 }}>
       <h2>تحديث المخزون</h2>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'end' }}>
         <label style={labelStyle}>نوع الجهاز
@@ -91,12 +92,12 @@ export default function CentralStockPage() {
         <button type="button" style={primaryButtonStyle} disabled={busy} onClick={() => void recordArrival()}>تسجيل الوارد</button>
       </div>
       <p style={mutedStyle}>إذا تجاوز الوارد العدد المتعاقد عليه، صحّح العدد الكلي أولًا. لا تُسجّل الأجهزة الواردة مرتين.</p>
-    </section>
-    <section style={{ ...cardStyle, marginBottom: 18 }}>
+    </section>}
+    {canAdmin(user, 'procurement.read') && <section style={{ ...cardStyle, marginBottom: 18 }}>
       <h2>توجيه الكميات للجمعيات</h2>
       <p>أنشئ أمر شراء للجمعية ثم شحنة بالكمية المناسبة. لا يمكن إنشاء الشحنة إذا تجاوزت مخزون الزاد المتاح.</p>
       <Link href="/admin/procurement" style={primaryButtonStyle}>الانتقال إلى المشتريات والشحنات</Link>
-    </section>
+    </section>}
     <section style={{ ...cardStyle, marginBottom: 18, overflowX: 'auto' }}>
       <h2>آخر الكميات الموجّهة</h2>
       {data && !data.dispatches.length && <p style={mutedStyle}>لم تُوجّه كميات من المخزون المركزي بعد.</p>}

@@ -32,12 +32,13 @@ async function main() {
   assertSeedNotTargetingProduction();
   const admin = await prisma.account.upsert({
     where: { publicCode: 'ADM-000001' },
-    update: {},
+    update: { adminFullAccess: true },
     create: {
       publicCode: 'ADM-000001',
       name: 'مدير النظام (تجريبي)',
       email: 'admin@example.org',
       role: AccountRole.ADMIN,
+      adminFullAccess: true,
       status: AccountStatus.ACTIVE,
       credentials: {
         create: {

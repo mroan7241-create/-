@@ -246,7 +246,7 @@ async function upsertUserAccount(
   const secretHash = await hashSecret(password);
   const account = await prisma.account.upsert({
     where: { publicCode },
-    update: { status, mustChangePassword, associationId: associationId ?? undefined },
+    update: { status, mustChangePassword, associationId: associationId ?? undefined, adminFullAccess: role === AccountRole.ADMIN },
     create: {
       publicCode,
       name: `حساب اختبار ${publicCode}`,
@@ -255,6 +255,7 @@ async function upsertUserAccount(
       associationId: associationId ?? undefined,
       status,
       mustChangePassword,
+      adminFullAccess: role === AccountRole.ADMIN,
     },
   });
 

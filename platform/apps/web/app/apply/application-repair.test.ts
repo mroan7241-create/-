@@ -7,6 +7,34 @@ import { selectionGroup } from '../admin/selection/selection-groups.ts';
 // @ts-ignore -- standalone node --test, not a browser import
 import { evaluationFacts } from '../admin/selection/evaluation-evidence.ts';
 import { applicationRequirementDescription, applicationRequirementLabel } from '@alzad/shared';
+// @ts-ignore -- standalone node --test, not a browser import
+import { GET as faviconRedirect } from '../favicon.ico/route.ts';
+// @ts-ignore -- standalone node --test, not a browser import
+import { canAccessAdminPath, canAdmin, isAdminOwner } from '../lib/admin-access.ts';
+
+test('staff page access defaults to deny and owner display compatibility never overrides explicit denial', () => {
+  const staff = { role: 'ADMIN' as const, publicCode: 'ADM-000002', adminFullAccess: false, adminPermissions: ['applications.evaluate' as const, 'activities.read' as const] };
+  assert.equal(canAdmin(staff, 'applications.read'), true);
+  assert.equal(canAdmin(staff, 'applications.evaluate'), true);
+  assert.equal(canAdmin(staff, 'applications.select'), false);
+  assert.equal(canAccessAdminPath(staff, '/admin/applications?view=review'), true);
+  assert.equal(canAccessAdminPath(staff, '/admin/activities'), true);
+  for (const path of ['/admin', '/admin/accounts', '/admin/accounts/new', '/admin/associations', '/admin/unknown']) assert.equal(canAccessAdminPath(staff, path), false, path);
+  assert.equal(canAccessAdminPath({ ...staff, adminPermissions: [] }, '/admin/applications'), false);
+  assert.equal(canAccessAdminPath({ ...staff, role: 'ASSOCIATION' }, '/admin/activities'), false);
+  assert.equal(isAdminOwner({ role: 'ADMIN', publicCode: 'ADM-000001' }), true);
+  assert.equal(isAdminOwner({ ...staff, publicCode: 'ADM-000001' }), false);
+  assert.equal(isAdminOwner({ role: 'ADMIN', publicCode: 'ADM-000002' }), false);
+});
+
+test('favicon redirect is relative and cannot leak an internal hosting origin', () => {
+  const response = faviconRedirect();
+  assert.equal(response.status, 307);
+  assert.equal(response.headers.get('location'), '/brand/zadLogo.png');
+  for (const origin of ['https://example.org', 'https://greenyellow-hawk-333467.hostingersite.com']) {
+    assert.equal(new URL(response.headers.get('location')!, origin).origin, origin);
+  }
+});
 
 test('selection lists separate failed and needs-info applications from actionable and selected lists', () => {
   assert.equal(selectionGroup({ eligibilityStatus: 'FAILED', selectionList: 'NONE', processingStartedAt: null }), 'FAILED');

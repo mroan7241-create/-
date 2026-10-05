@@ -310,7 +310,7 @@ export class ApplicationsService {
     const [rows, total] = await Promise.all([
       prisma.associationApplication.findMany({
         where,
-        include: { answers: true, reviewedBy: true, licenseFile: true, attachments: true, informationRequests: { include: { items: true }, orderBy: { requestedAt: 'desc' }, take: 1 } },
+        include: { answers: true, reviewedBy: true, eligibilityReviewedBy: { select: { id: true, name: true, publicCode: true } }, evaluatedBy: { select: { id: true, name: true, publicCode: true } }, selectionApprovedBy: { select: { id: true, name: true, publicCode: true } }, processingStartedBy: { select: { id: true, name: true, publicCode: true } }, licenseFile: true, attachments: true, informationRequests: { include: { items: true }, orderBy: { requestedAt: 'desc' }, take: 1 } },
         orderBy: { submittedAt: 'desc' },
         skip,
         take,
@@ -339,7 +339,7 @@ export class ApplicationsService {
   async getApplicationDetail(id: string) {
     const application = await prisma.associationApplication.findUnique({
       where: { id },
-      include: { answers: true, reviewedBy: true, licenseFile: true, attachments: true, informationRequests: { include: { items: true }, orderBy: { requestedAt: 'desc' } } },
+      include: { answers: true, reviewedBy: true, eligibilityReviewedBy: { select: { id: true, name: true, publicCode: true } }, evaluatedBy: { select: { id: true, name: true, publicCode: true } }, selectionApprovedBy: { select: { id: true, name: true, publicCode: true } }, processingStartedBy: { select: { id: true, name: true, publicCode: true } }, licenseFile: true, attachments: true, informationRequests: { include: { items: true }, orderBy: { requestedAt: 'desc' } } },
     });
     if (!application) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب الانضمام غير موجود', 404);
     return mapApplicationSummary(application);
@@ -698,6 +698,13 @@ function mapApplicationSummary(row: {
   submittedAt: Date;
   reviewedAt: Date | null;
   reviewedBy?: { name: string } | null;
+  eligibilityReviewedBy?: { id: string; name: string; publicCode: string } | null;
+  evaluatedBy?: { id: string; name: string; publicCode: string } | null;
+  selectionApprovedBy?: { id: string; name: string; publicCode: string } | null;
+  processingStartedBy?: { id: string; name: string; publicCode: string } | null;
+  eligibilityReviewedAt?: Date | null;
+  evaluatedAt?: Date | null;
+  selectionApprovedAt?: Date | null;
   pledgeAccepted: boolean;
   pledgeAcceptedAt: Date | null;
   answers?: { questionKey: string; answer: boolean }[];
@@ -751,6 +758,13 @@ function mapApplicationSummary(row: {
     submittedAt: row.submittedAt,
     reviewedAt: row.reviewedAt,
     reviewer: row.reviewedBy?.name ?? null,
+    eligibilityReviewer: row.eligibilityReviewedBy ?? null,
+    evaluator: row.evaluatedBy ?? null,
+    selectionApprover: row.selectionApprovedBy ?? null,
+    processingStarter: row.processingStartedBy ?? null,
+    eligibilityReviewedAt: row.eligibilityReviewedAt ?? null,
+    evaluatedAt: row.evaluatedAt ?? null,
+    selectionApprovedAt: row.selectionApprovedAt ?? null,
     answers: answersList,
     yesCount,
     totalQuestions: total,

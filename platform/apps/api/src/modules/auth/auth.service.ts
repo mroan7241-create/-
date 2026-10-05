@@ -1,7 +1,8 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { setTimeout as delay } from 'node:timers/promises';
 import { timingSafeEqual } from 'node:crypto';
-import { prisma, AccountRole, AccountStatus, AgreementStatus, AssociationStatus, AuthCredentialType, ParticipationStatus } from '@alzad/db';
+import { prisma, AccountRole, AccountStatus, AgreementStatus, AssociationStatus, AuthCredentialType } from '@alzad/db';
+import { hasCompletedParticipationCovenant, normalizeAdminPermissions, type AdminPermission } from '@alzad/shared';
 import { authConfig } from '../../config/auth.config';
 import {
   delegateCredentialLookupHash,
@@ -29,7 +30,7 @@ export interface LoginResult {
   expiresAt: Date;
   /** سقف مطلق ثابت للجلسة (12h) — الـcontroller يستخدمه لعمر الكوكي، لا expiresAt المنزلق. */
   absoluteExpiresAt: Date;
-  account: { id: string; publicCode: string; name: string; role: AccountRole; associationId: string | null; mustChangePassword: boolean; covenantRequired: boolean; covenantStatus: AgreementStatus | null };
+  account: { id: string; publicCode: string; name: string; role: AccountRole; associationId: string | null; mustChangePassword: boolean; covenantRequired: boolean; covenantStatus: AgreementStatus | null; adminFullAccess: boolean; adminPermissions: AdminPermission[] };
 }
 
 export interface RequestMeta {
@@ -68,7 +69,7 @@ export class AuthService {
     );
     const passwordOk = credential && (await verifySecret(credential.secretHash, password));
 
-    if (!credential || !account || account.status !== AccountStatus.ACTIVE || !roleOk || !passwordOk) {
+    if (!credential || !account || account.status !== AccountStatus.ACTIVE || account.archivedAt || !roleOk || !passwordOk) {
       await delay(350);
       throw authInvalidCredentials();
     }
@@ -95,6 +96,7 @@ export class AuthService {
         role: account.role,
         associationId: account.associationId,
         mustChangePassword: account.mustChangePassword,
+        ...this.adminState(account),
         ...covenant,
       },
     };
@@ -149,6 +151,7 @@ export class AuthService {
         role: account.role,
         associationId: account.associationId,
         mustChangePassword: account.mustChangePassword,
+        ...this.adminState(account),
         covenantRequired: false,
         covenantStatus: null,
       },
@@ -193,6 +196,8 @@ export class AuthService {
       role: ctx.role,
       associationId: ctx.associationId,
       mustChangePassword: ctx.mustChangePassword,
+      adminFullAccess: ctx.role === AccountRole.ADMIN && ctx.adminFullAccess === true,
+      adminPermissions: ctx.role === AccountRole.ADMIN ? normalizeAdminPermissions(ctx.adminPermissions) : [],
       covenantRequired: ctx.meSnapshot.covenantRequired,
       covenantStatus: ctx.meSnapshot.covenantStatus,
     };
@@ -205,7 +210,15 @@ export class AuthService {
       role: account.role,
       associationId: account.associationId,
       mustChangePassword: account.mustChangePassword,
+      ...this.adminState(account),
       ...covenant,
+    };
+  }
+
+  private adminState(account: { role: AccountRole; adminFullAccess?: boolean; adminPermissions?: string[] }) {
+    return {
+      adminFullAccess: account.role === AccountRole.ADMIN && account.adminFullAccess === true,
+      adminPermissions: account.role === AccountRole.ADMIN ? normalizeAdminPermissions(account.adminPermissions) : [],
     };
   }
 
@@ -214,7 +227,7 @@ export class AuthService {
     const participation = await prisma.projectParticipation.findUnique({ where: { associationId }, select: { status: true, agreements: { orderBy: { version: 'desc' }, take: 1, select: { status: true } } } });
     if (!participation) return { covenantRequired: false, covenantStatus: null };
     const covenantStatus = participation.agreements[0]?.status ?? null;
-    return { covenantRequired: participation.status !== ParticipationStatus.ACTIVE || covenantStatus !== AgreementStatus.SIGNED, covenantStatus };
+    return { covenantRequired: !hasCompletedParticipationCovenant(participation.status, covenantStatus), covenantStatus };
   }
 
   // ================================================================

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiClientError, listAuditLog, type AuditLogEntry, type Paginated } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { canAdmin } from '../../lib/admin-access';
 import { AppShell } from '../../components/AppShell';
 import { AssociationSelect } from '../../lib/association-select';
 import { cardStyle, errorStyle, labelStyle, ltrStyle, mutedStyle, secondaryButtonStyle, tableStyle, tdStyle, thStyle } from '../../lib/ui';
@@ -36,10 +37,10 @@ export default function AdminAuditPage() {
     <AppShell user={user}>
       <h1 style={{ fontSize: 22, marginBottom: 16 }}>سجل العمليات</h1>
 
-      <label style={{ ...labelStyle, maxWidth: 280, marginBottom: 16 }}>
+      {canAdmin(user, 'associations.read') && <label style={{ ...labelStyle, maxWidth: 280, marginBottom: 16 }}>
         تصفية حسب الجمعية (اختياري)
         <AssociationSelect value={associationId} onChange={(id) => { setPage(1); setAssociationId(id); }} />
-      </label>
+      </label>}
 
       {error && <p role="alert" style={errorStyle}>{error}</p>}
 

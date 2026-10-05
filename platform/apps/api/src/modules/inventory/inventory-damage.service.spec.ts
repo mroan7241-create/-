@@ -87,8 +87,9 @@ describe('damage case administrative workflow', () => {
   it('opens a damage case atomically when an administrator marks a warehouse device damaged', async () => {
     const { service, tx } = fixture();
     await service.markDeviceDamaged(admin, 'device-id', { opId: 'mark', notes: 'انكسار الغلاف' });
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
-    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.deviceUnit.findUnique.mock.invocationCallOrder[0]);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.$queryRaw.mock.invocationCallOrder[1]);
+    expect(tx.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(tx.deviceUnit.findUnique.mock.invocationCallOrder[1]);
     expect(tx.deviceUnit.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: DeviceStatus.DAMAGED }) }));
     expect(tx.damageCase.create).toHaveBeenCalledWith({ data: { deviceId: 'device-id', associationId: 'association-a', quantity: 1, description: 'انكسار الغلاف' } });
   });
@@ -100,7 +101,7 @@ describe('damage case administrative workflow', () => {
     tx.deviceUnit.update.mockImplementation(async () => { status = DeviceStatus.DAMAGED; return {}; });
     await service.markDeviceDamaged(admin, 'device-id', { opId: 'first' });
     await expect(service.markDeviceDamaged(admin, 'device-id', { opId: 'second' })).rejects.toMatchObject({ code: 'DEVICE_NOT_EDITABLE' });
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(4);
     expect(tx.damageCase.create).toHaveBeenCalledTimes(1);
   });
 });

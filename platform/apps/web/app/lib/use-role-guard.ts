@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePathname } from 'next/navigation';
 import { getMe, type CurrentUser } from './api';
+import { canAccessAdminPath } from './admin-access';
+import { homeForUser } from '../components/nav-config';
 
 /**
  * بوابة دور على مستوى الواجهة — راحة للمستخدم فقط، وليست ضمانة أمنية:
@@ -31,6 +33,10 @@ export function useRoleGuard(allowed: CurrentUser['role'][]): { user: CurrentUse
         }
         if (!allowed.includes(me.role)) {
           router.replace('/dashboard');
+          return;
+        }
+        if (me.role === 'ADMIN' && !canAccessAdminPath(me, pathname)) {
+          router.replace(homeForUser(me));
           return;
         }
         setUser(me);

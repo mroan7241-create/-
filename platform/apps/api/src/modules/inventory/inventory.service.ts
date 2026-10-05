@@ -3,6 +3,7 @@ import { prisma, Prisma, AccountRole, DamageCaseStatus, DeviceStatus, DeviceType
 import { ApiError, authForbidden } from '../../common/api-error';
 import { normalizePagination, toPaginatedResult, type PaginatedResult, type PaginationParams } from '../../common/pagination.util';
 import { IdempotencyService } from '../../common/idempotency.service';
+import { lockParticipationForOperationalWrite } from '../../common/participation-write-lock.util';
 import { AuditService } from '../audit/audit.service';
 import { validateDeviceSpec } from '../receipts/receipt-reference.util';
 import type { AuthContext } from '../auth/auth.types';
@@ -71,6 +72,7 @@ export class InventoryService {
       const claim = await this.idempotency.claim<{ ok: true; id: string }>(tx, ctx.accountId, 'device-update', dto.opId, payload);
       if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse! };
 
+      await this.lockParticipationForDeviceWrite(tx, id);
       const device = await tx.deviceUnit.findUnique({ where: { id } });
       if (!device) throw new ApiError('DEVICE_NOT_FOUND', 'الجهاز غير موجود', 404);
       if (device.status !== DeviceStatus.WAREHOUSE) {
@@ -106,6 +108,7 @@ export class InventoryService {
       const claim = await this.idempotency.claim<{ ok: true; id: string }>(tx, ctx.accountId, 'device-mark-damaged', dto.opId, { id, notes: dto.notes?.trim() || null });
       if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse! };
 
+      await this.lockParticipationForDeviceWrite(tx, id);
       // Different opIds still serialize on the same device, so only the first
       // request can observe WAREHOUSE and create a DamageCase.
       await tx.$queryRaw`SELECT id FROM device_units WHERE id=${id}::uuid FOR UPDATE`;
@@ -176,6 +179,9 @@ export class InventoryService {
         tx, ctx.accountId, 'damage-case-decision', dto.opId, { id, status: dto.status, resolution },
       );
       if (!claim.claimed) return claim.existingResponse!;
+      const scope = await tx.damageCase.findUnique({ where: { id }, select: { associationId: true } });
+      if (!scope) throw new ApiError('DAMAGE_CASE_NOT_FOUND', 'حالة التلف غير موجودة', 404);
+      await lockParticipationForOperationalWrite(tx, scope.associationId);
       await tx.$queryRaw`SELECT id FROM damage_cases WHERE id=${id}::uuid FOR UPDATE`;
       const damage = await tx.damageCase.findUnique({ where: { id } });
       if (!damage) throw new ApiError('DAMAGE_CASE_NOT_FOUND', 'حالة التلف غير موجودة', 404);
@@ -210,6 +216,11 @@ export class InventoryService {
       await this.idempotency.complete(tx, ctx.accountId, 'damage-case-decision', dto.opId, response);
       return response;
     });
+  }
+  private async lockParticipationForDeviceWrite(tx: Prisma.TransactionClient, id: string) {
+    const device = await tx.deviceUnit.findUnique({ where: { id }, select: { associationId: true } });
+    if (!device) throw new ApiError('DEVICE_NOT_FOUND', 'الجهاز غير موجود', 404);
+    await lockParticipationForOperationalWrite(tx, device.associationId);
   }
 }
 

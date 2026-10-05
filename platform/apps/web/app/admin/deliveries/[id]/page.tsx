@@ -3,6 +3,7 @@
 import { AppShell } from '../../../components/AppShell';
 import { DeliveryDetailView } from '../../../components/DeliveryDetailView';
 import { useRoleGuard } from '../../../lib/use-role-guard';
+import { canAdmin } from '../../../lib/admin-access';
 import { useParams } from 'next/navigation';
 
 export default function AdminDeliveryDetailPage() {
@@ -13,7 +14,7 @@ export default function AdminDeliveryDetailPage() {
 
   return (
     <AppShell user={user}>
-      <DeliveryDetailView missionId={params.id} listHref="/admin/deliveries" />
+      <DeliveryDetailView missionId={params.id} listHref="/admin/deliveries" canManage={canAdmin(user, 'deliveries.manage')} />
     </AppShell>
   );
 }

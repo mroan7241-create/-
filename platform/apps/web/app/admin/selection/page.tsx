@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppShell } from '../../components/AppShell';
 import { PageHeader } from '../../components/PageHeader';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { canAdmin } from '../../lib/admin-access';
+import type { CurrentUser } from '../../lib/api';
 import { apiFetch, decideApplicationEligibility, decideApplicationSelection, evaluateApplication, getApplicationEligibilityEvidence, getApplicationIntake, requestApplicationInformation, resendApplicationInformation, resendApplicationRejection, resendApplicationSelection, saveSystemSetting, startApplicationProcessing, type ApplicationSummary, type Paginated } from '../../lib/api';
 import { selectionGroup, SELECTION_GROUPS, type SelectionGroup } from './selection-groups';
 import { fetchPagedItems } from './selection-load';
@@ -25,10 +27,15 @@ const ACTIONABLE_GROUPS = ['NEW', 'RETURNED', 'PROCESSING', 'PASSED_UNSELECTED']
 export default function SelectionPage() {
   const { user, loading } = useRoleGuard(['ADMIN']);
   if (loading || !user) return null;
-  return <AppShell user={user}><SelectionBoard showHeader /></AppShell>;
+  return <AppShell user={user}><SelectionBoard user={user} showHeader /></AppShell>;
 }
 
-export function SelectionBoard({ showHeader = false, mode = 'all' }: { showHeader?: boolean; mode?: 'all' | 'review' | 'selection' | 'settings' }) {
+export function SelectionBoard({ user, showHeader = false, mode = 'all' }: { user: CurrentUser; showHeader?: boolean; mode?: 'all' | 'review' | 'selection' | 'settings' }) {
+  const canRead = canAdmin(user, 'applications.read');
+  const canReview = canAdmin(user, 'applications.review');
+  const canEvaluate = canAdmin(user, 'applications.evaluate');
+  const canSelect = canAdmin(user, 'applications.select');
+  const canSettings = canAdmin(user, 'settings.manage');
   const [apps, setApps] = useState<ApplicationSummary[]>([]); const [filter, setFilter] = useState<SelectionGroup>('ACTION');
   const [eligibilityTarget, setEligibilityTarget] = useState<ApplicationSummary | null>(null); const [evaluationTarget, setEvaluationTarget] = useState<ApplicationSummary | null>(null); const [infoTarget, setInfoTarget] = useState<ApplicationSummary | null>(null);
   const [detailTarget, setDetailTarget] = useState<ApplicationSummary | null>(null);
@@ -49,8 +56,8 @@ export function SelectionBoard({ showHeader = false, mode = 'all' }: { showHeade
       if (sequence === loadSequence.current) setListLoading(false);
     }
   }, []);
-  useEffect(() => { if (mode !== 'settings') void load(); }, [load, mode]);
-  useEffect(() => { if (mode === 'settings' || mode === 'all') void getApplicationIntake().then((status) => { setIntake(status); setIntakeTime(status.closesAt ? new Date(Date.parse(status.closesAt) + 3 * 60 * 60_000).toISOString().slice(0, 16) : ''); }).catch((reason) => setMessage(readError(reason))); }, [mode]);
+  useEffect(() => { if (mode !== 'settings' && canRead) void load(); }, [load, mode, canRead]);
+  useEffect(() => { if (canSettings && (mode === 'settings' || mode === 'all')) void getApplicationIntake().then((status) => { setIntake(status); setIntakeTime(status.closesAt ? new Date(Date.parse(status.closesAt) + 3 * 60 * 60_000).toISOString().slice(0, 16) : ''); }).catch((reason) => setMessage(readError(reason))); }, [mode, canSettings]);
   async function run(action: () => Promise<unknown>, success: string): Promise<boolean> { setBusy(true); setMessage('جارٍ تنفيذ العملية وتحديث القائمة…'); try { const result = await action() as { emailQueued?: boolean } | undefined; setMessage(result?.emailQueued === false ? 'تعذّر تجهيز البريد لهذا الطلب. راجع سجل إرسال البريد.' : success); await load(); return true; } catch (reason) { setMessage(readError(reason)); return false; } finally { setBusy(false); } }
   async function submitInfo(input: { note?: string; deadline?: string; items: Array<{ type: 'FIELD' | 'ATTACHMENT'; key: string; reason: string }> }) {
     if (!infoTarget) return;
@@ -107,10 +114,10 @@ export function SelectionBoard({ showHeader = false, mode = 'all' }: { showHeade
   return <>
     {showHeader && <PageHeader title="الأهلية والتقييم والاختيار" subtitle="الأهلية، ثم التقييم، ثم قرار القائمة الأساسية أو الاحتياطية." />}
     {message && <p role="status" aria-live="polite" style={busy ? { color: 'var(--muted)' } : message.startsWith('تم') ? successStyle : errorStyle}>{message}</p>}
-    {mode !== 'settings' && listLoading && <p role="status">جارٍ تحديث قوائم الجمعيات…</p>}
-    {(mode === 'settings' || mode === 'all') && <section style={cardStyle}><h2>موعد استقبال طلبات الجمعيات</h2><p>{intake === null ? 'جارٍ تحميل حالة التقديم…' : intake.closesAt ? `التقديم ${intake.open ? 'مفتوح' : 'مغلق'} — الموعد بتوقيت الرياض.` : 'التقديم مفتوح دون موعد إغلاق.'}</p><label style={labelStyle}>آخر موعد للتقديم — توقيت الرياض<input type="datetime-local" style={inputStyle} value={intakeTime} onChange={(event) => setIntakeTime(event.target.value)} /></label><div className="button-row"><button style={primaryButtonStyle} disabled={busy || !intakeTime} onClick={() => { const date = new Date(`${intakeTime}:00+03:00`); if (!Number.isNaN(date.getTime())) void saveIntake(date.toISOString()); }}>حفظ الموعد</button><button style={secondaryButtonStyle} disabled={busy || !intake?.closesAt} onClick={() => void saveIntake(null)}>إلغاء موعد الإغلاق</button></div><small>بعد الموعد يُرفض بدء طلب جديد وإرسال المسودات، وتبقى متابعة الطلبات السابقة متاحة.</small></section>}
-    {mode !== 'settings' && <section style={cardStyle}><h2>قوائم الطلبات</h2><div className="button-row" role="group" aria-label="قوائم الأهلية والاختيار">{groups.map((group) => <button key={group.key} type="button" style={activeFilter === group.key ? primaryButtonStyle : secondaryButtonStyle} aria-pressed={activeFilter === group.key} onClick={() => setFilter(group.key)}>{group.label} ({counts[group.key]})</button>)}</div></section>}
-    {mode !== 'settings' && <section style={cardStyle}>
+    {canRead && mode !== 'settings' && listLoading && <p role="status">جارٍ تحديث قوائم الجمعيات…</p>}
+    {canSettings && (mode === 'settings' || mode === 'all') && <section style={cardStyle}><h2>موعد استقبال طلبات الجمعيات</h2><p>{intake === null ? 'جارٍ تحميل حالة التقديم…' : intake.closesAt ? `التقديم ${intake.open ? 'مفتوح' : 'مغلق'} — الموعد بتوقيت الرياض.` : 'التقديم مفتوح دون موعد إغلاق.'}</p><label style={labelStyle}>آخر موعد للتقديم — توقيت الرياض<input type="datetime-local" style={inputStyle} value={intakeTime} onChange={(event) => setIntakeTime(event.target.value)} /></label><div className="button-row"><button style={primaryButtonStyle} disabled={busy || !intakeTime} onClick={() => { const date = new Date(`${intakeTime}:00+03:00`); if (!Number.isNaN(date.getTime())) void saveIntake(date.toISOString()); }}>حفظ الموعد</button><button style={secondaryButtonStyle} disabled={busy || !intake?.closesAt} onClick={() => void saveIntake(null)}>إلغاء موعد الإغلاق</button></div><small>بعد الموعد يُرفض بدء طلب جديد وإرسال المسودات، وتبقى متابعة الطلبات السابقة متاحة.</small></section>}
+    {canRead && mode !== 'settings' && <section style={cardStyle}><h2>قوائم الطلبات</h2><div className="button-row" role="group" aria-label="قوائم الأهلية والاختيار">{groups.map((group) => <button key={group.key} type="button" style={activeFilter === group.key ? primaryButtonStyle : secondaryButtonStyle} aria-pressed={activeFilter === group.key} onClick={() => setFilter(group.key)}>{group.label} ({counts[group.key]})</button>)}</div></section>}
+    {canRead && mode !== 'settings' && <section style={cardStyle}>
       <h2>{SELECTION_GROUPS.find((group) => group.key === activeFilter)?.label}</h2>
       {visible.length === 0 ? <p>لا توجد طلبات في هذه القائمة.</p> : visible.map((application) => {
         const group = selectionGroup(application);
@@ -119,18 +126,18 @@ export function SelectionBoard({ showHeader = false, mode = 'all' }: { showHeade
           <div><strong>{application.name}</strong><p>{application.publicCode} · {application.city} · الأهلية: {ELIGIBILITY_LABELS[application.eligibilityStatus]} · الاختيار: {selectionLabel(application.selectionList)}</p>{group === 'RETURNED' && <p role="status" style={successStyle}>ورد استكمال من الجمعية. راجع البنود والمرفقات قبل القرار.</p>}</div>
           <div className="button-row">
             {group === 'RETURNED' && <button style={primaryButtonStyle} onClick={() => setDetailTarget(application)}>مراجعة الاستكمال</button>}
-            {group === 'NEW' && <button style={primaryButtonStyle} disabled={busy} onClick={() => void run(() => startApplicationProcessing([application.id]), 'بدأت مراجعة الطلب.')}>بدء المراجعة</button>}
-            {reviewable && !['FAILED', 'NEEDS_INFO'].includes(application.eligibilityStatus) && <button style={secondaryButtonStyle} onClick={() => setEligibilityTarget(application)}>الأهلية والأدلة</button>}
-            {reviewable && application.schemaVersion === 2 && !['FAILED', 'NEEDS_INFO'].includes(application.eligibilityStatus) && <button style={secondaryButtonStyle} onClick={() => setInfoTarget(application)}>طلب استكمال وإرسال بريد</button>}
-            {application.eligibilityStatus === 'NEEDS_INFO' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void run(() => resendApplicationInformation(application.id), 'حُفظ بريد الاستكمال للإرسال.')}>إعادة إرسال البريد</button>}
-            {application.eligibilityStatus === 'FAILED' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void retryRejection(application)}>إعادة إرسال عدم الاجتياز</button>}
-            {application.eligibilityStatus === 'PASSED' && <button style={secondaryButtonStyle} onClick={() => setEvaluationTarget(application)}>التقييم 1–5</button>}
+            {canReview && group === 'NEW' && <button style={primaryButtonStyle} disabled={busy} onClick={() => void run(() => startApplicationProcessing([application.id]), 'بدأت مراجعة الطلب.')}>بدء المراجعة</button>}
+            {canReview && reviewable && !['FAILED', 'NEEDS_INFO'].includes(application.eligibilityStatus) && <button style={secondaryButtonStyle} onClick={() => setEligibilityTarget(application)}>الأهلية والأدلة</button>}
+            {canReview && reviewable && application.schemaVersion === 2 && !['FAILED', 'NEEDS_INFO'].includes(application.eligibilityStatus) && <button style={secondaryButtonStyle} onClick={() => setInfoTarget(application)}>طلب استكمال وإرسال بريد</button>}
+            {canReview && application.eligibilityStatus === 'NEEDS_INFO' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void run(() => resendApplicationInformation(application.id), 'حُفظ بريد الاستكمال للإرسال.')}>إعادة إرسال البريد</button>}
+            {canReview && application.eligibilityStatus === 'FAILED' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void retryRejection(application)}>إعادة إرسال عدم الاجتياز</button>}
+            {canEvaluate && application.eligibilityStatus === 'PASSED' && <button style={secondaryButtonStyle} onClick={() => setEvaluationTarget(application)}>التقييم 1–5</button>}
             {application.evaluationScore != null && <span className="status-pill">{application.evaluationScore}/100</span>}
           </div>
         </article>;
       })}
     </section>}
-    {(mode === 'selection' || mode === 'all') && <section style={cardStyle}><h2>الترتيب وقرار الاختيار النهائي</h2><p>يمكن الاختيار بعد اجتياز الأهلية وحفظ تقييم 1–5. افتح ملف الجمعية وراجع أدلتها قبل اختيار الأساسية أو الاحتياط. يمكن نقل الاحتياط إلى الأساسية، وإرجاع الأساسية إلى الاحتياط قبل بدء إشعار الأساسية أو إنشاء حساب التوقيع. حفظ القرار يرسل الإشعار تلقائيًا لهذه الجمعية.</p>{ranked.length === 0 ? <p>لا توجد طلبات مكتملة التقييم.</p> : ranked.map((application, index) => <article key={application.id} className="workflow-row"><div><strong>{index + 1}. {application.name}</strong><p>{application.publicCode} · {application.evaluationScore}/100 · {selectionLabel(application.selectionList)} · {financialLabel(application.financialPriority)}</p></div><div className="button-row"><button style={secondaryButtonStyle} onClick={() => setDetailTarget(application)}>عرض بيانات الجمعية</button>{application.selectionList !== 'MAIN' && <button style={primaryButtonStyle} disabled={busy} onClick={() => void choose(application, 'MAIN')}>{application.selectionList === 'RESERVE' ? 'نقل إلى الأساسية' : 'اعتماد أساسية'}</button>}{application.selectionList !== 'RESERVE' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void choose(application, 'RESERVE')}>{application.selectionList === 'MAIN' ? 'نقل إلى الاحتياط' : 'اعتماد احتياط'}</button>}{application.selectionList !== 'NONE' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void run(() => resendApplicationSelection(application.id), 'حُفظ إشعار الاختيار للإرسال.')}>إعادة إرسال إشعار الاختيار</button>}</div></article>)}</section>}
+    {canRead && (mode === 'selection' || mode === 'all') && <section style={cardStyle}><h2>الترتيب وقرار الاختيار النهائي</h2><p>يمكن الاختيار بعد اجتياز الأهلية وحفظ تقييم 1–5. افتح ملف الجمعية وراجع أدلتها قبل اختيار الأساسية أو الاحتياط. يمكن نقل الاحتياط إلى الأساسية، وإرجاع الأساسية إلى الاحتياط قبل بدء إشعار الأساسية أو إنشاء حساب التوقيع. حفظ القرار يرسل الإشعار تلقائيًا لهذه الجمعية.</p>{ranked.length === 0 ? <p>لا توجد طلبات مكتملة التقييم.</p> : ranked.map((application, index) => <article key={application.id} className="workflow-row"><div><strong>{index + 1}. {application.name}</strong><p>{application.publicCode} · {application.evaluationScore}/100 · {selectionLabel(application.selectionList)} · {financialLabel(application.financialPriority)}</p></div><div className="button-row"><button style={secondaryButtonStyle} onClick={() => setDetailTarget(application)}>عرض بيانات الجمعية</button>{canSelect && application.selectionList !== 'MAIN' && <button style={primaryButtonStyle} disabled={busy} onClick={() => void choose(application, 'MAIN')}>{application.selectionList === 'RESERVE' ? 'نقل إلى الأساسية' : 'اعتماد أساسية'}</button>}{canSelect && application.selectionList !== 'RESERVE' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void choose(application, 'RESERVE')}>{application.selectionList === 'MAIN' ? 'نقل إلى الاحتياط' : 'اعتماد احتياط'}</button>}{canSelect && application.selectionList !== 'NONE' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void run(() => resendApplicationSelection(application.id), 'حُفظ إشعار الاختيار للإرسال.')}>إعادة إرسال إشعار الاختيار</button>}</div></article>)}</section>}
     {eligibilityTarget && <EligibilityDialog application={eligibilityTarget} busy={busy} message={message} onClose={() => setEligibilityTarget(null)} onSubmit={saveEligibility} />}
     {evaluationTarget && <EvaluationDialog application={evaluationTarget} busy={busy} message={message} onClose={() => setEvaluationTarget(null)} onSubmit={async (scores) => { if (await run(() => evaluateApplication(evaluationTarget.id, scores), 'تم حفظ التقييم الموزون.')) setEvaluationTarget(null); }} />}
     {infoTarget && <InformationDialog application={infoTarget} busy={busy} message={message} onClose={() => setInfoTarget(null)} onSubmit={submitInfo} />}
@@ -192,6 +199,7 @@ function ApplicationReviewDialog({ application, onClose }: { application: Applic
     <p>المدينة: {application.city} · الأهلية: {ELIGIBILITY_LABELS[application.eligibilityStatus]} · التقييم: {application.evaluationScore == null ? 'لم يُحفظ بعد' : `${application.evaluationScore}/100`}</p>
     {request?.status === 'SUBMITTED' && <section style={cardStyle}><h3>استكمال ورد من الجمعية</h3><p>تاريخ الإرسال: {request.submittedAt ? new Date(request.submittedAt).toLocaleString('ar-SA') : 'غير متاح'}</p><ul>{request.items.map((item) => <li key={`${item.type}-${item.key}`}><strong>{applicationRequirementLabel(item.type, item.key)}</strong> — {item.reason}{item.type === 'ATTACHMENT' && <span> · {application.attachmentKeys.includes(item.key) ? 'المرفق موجود في الطلب' : 'المرفق غير ظاهر في الطلب'}</span>}</li>)}</ul></section>}
     <p>المرفقات الموجودة: {application.attachmentKeys.length ? application.attachmentKeys.map((key) => APPLICATION_ATTACHMENT_LABELS[key] ?? key).join('، ') : 'لا توجد'}</p>
+    <p>مراجع الأهلية: {application.eligibilityReviewer?.name ?? '—'} · المقيّم: {application.evaluator?.name ?? '—'} · معتمد الاختيار: {application.selectionApprover?.name ?? '—'}</p>
     {CRITERIA.map((criterion) => <details key={criterion.key}><summary style={{ cursor: 'pointer', fontWeight: 700, marginBlock: 10 }}>{criterion.label}</summary><EvidenceFacts application={application} axis={criterion.key} /></details>)}
     <a href={`/admin/applications?view=files&search=${encodeURIComponent(application.publicCode)}`} style={{ ...secondaryButtonStyle, display: 'inline-block', textDecoration: 'none', marginBlock: 12 }}>فتح الملف الكامل والمرفقات</a>
   </Dialog>;

@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { getMe } from '../lib/api';
-import { homeForRole } from './nav-config';
+import { homeForUser } from './nav-config';
 
 export function RootRedirect() {
   const router = useRouter();
@@ -19,7 +19,7 @@ export function RootRedirect() {
           router.replace('/association/covenant');
           return;
         }
-        router.replace(homeForRole(user.role));
+        router.replace(homeForUser(user));
       })
       .catch(() => router.replace('/login'));
   }, [router]);

@@ -19,6 +19,7 @@ import {
 import { ApiError, authForbidden } from '../../common/api-error';
 import { PublicCodeService } from '../../common/public-code.service';
 import { IdempotencyService } from '../../common/idempotency.service';
+import { lockParticipationForOperationalWrite } from '../../common/participation-write-lock.util';
 import { AuditService } from '../audit/audit.service';
 import { cleanText } from '../../common/validation/text.util';
 import { normalizePagination, toPaginatedResult, type PaginatedResult, type PaginationParams } from '../../common/pagination.util';
@@ -182,6 +183,7 @@ export class ReceiptsService {
         if (!claim.claimed) return { replayed: true as const, batchId: claim.existingResponse!.batchId };
 
         await assertActiveAssociation(tx, input.associationId);
+        await lockParticipationForOperationalWrite(tx, input.associationId);
         if (input.shipmentId) {
           await tx.$queryRaw`SELECT id FROM shipments WHERE id = ${input.shipmentId}::uuid FOR UPDATE`;
           const shipment = await tx.shipment.findUnique({ where: { id: input.shipmentId }, include: {
@@ -273,6 +275,9 @@ export class ReceiptsService {
       const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'receipt-batch-send', opId, { id });
       if (!claim.claimed) return { replayed: true as const };
 
+      const scope = await tx.receiptBatch.findUnique({ where: { id }, select: { associationId: true } });
+      if (!scope) throw new ApiError('RECEIPT_BATCH_NOT_FOUND', 'محضر الاستلام غير موجود', 404);
+      await lockParticipationForOperationalWrite(tx, scope.associationId);
       const rows = await tx.$queryRaw<{ id: string; association_id: string; status: string }[]>`
         SELECT id, association_id, status FROM receipt_batches WHERE id = ${id}::uuid FOR UPDATE
       `;
@@ -466,6 +471,7 @@ export class ReceiptsService {
           idempotencyPayload,
         );
         if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse!, allocationEventId: null as string | null };
+        await lockParticipationForOperationalWrite(tx, batch.associationId);
 
         const rows = await tx.$queryRaw<{ id: string; association_id: string; shipment_id: string | null; status: string }[]>`
           SELECT id, association_id, shipment_id, status FROM receipt_batches WHERE id = ${id}::uuid FOR UPDATE

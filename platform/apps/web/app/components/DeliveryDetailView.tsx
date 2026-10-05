@@ -45,7 +45,7 @@ function formatDate(value: string | null) {
   return value ? new Date(value).toLocaleString('ar-SA') : '—';
 }
 
-export function DeliveryDetailView({ missionId, listHref }: { missionId: string; listHref: string }) {
+export function DeliveryDetailView({ missionId, listHref, canManage = true }: { missionId: string; listHref: string; canManage?: boolean }) {
   const [mission, setMission] = useState<DeliveryMissionDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -164,7 +164,7 @@ export function DeliveryDetailView({ missionId, listHref }: { missionId: string;
             </div>
           </section>
 
-          {(mission.status === 'DELIVERY_FAILED' || mission.status === 'OUT_WITH_DELEGATE') && (
+          {canManage && (mission.status === 'DELIVERY_FAILED' || mission.status === 'OUT_WITH_DELEGATE') && (
             <section style={{ ...cardStyle, marginTop: 16 }} aria-labelledby="delivery-actions-heading">
               <h2 id="delivery-actions-heading" style={{ fontSize: 18, marginTop: 0 }}>الإجراءات المتاحة</h2>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'end' }}>

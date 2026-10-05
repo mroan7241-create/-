@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { apiFetch, ApiClientError } from '../lib/api';
+import { apiFetch, ApiClientError, type CurrentUser } from '../lib/api';
+import { homeForUser } from '../components/nav-config';
 import { PasswordField } from '../components/PasswordField';
 
 type Tab = 'user' | 'delegate';
@@ -42,11 +43,11 @@ export default function LoginPage() {
     try {
       const body =
         tab === 'user' ? { type: 'user', email, password } : { type: 'delegate', code };
-      const res = await apiFetch<{ ok: true; user: { role: string; mustChangePassword: boolean; covenantRequired: boolean } }>('/auth/login', {
+      const res = await apiFetch<{ ok: true; user: CurrentUser }>('/auth/login', {
         method: 'POST',
         body: JSON.stringify(body),
       });
-      router.push(res.user.mustChangePassword ? '/change-password' : res.user.role === 'ASSOCIATION' && res.user.covenantRequired ? '/association/covenant' : '/dashboard');
+      router.push(res.user.mustChangePassword ? '/change-password' : res.user.role === 'ASSOCIATION' && res.user.covenantRequired ? '/association/covenant' : homeForUser(res.user));
     } catch (err) {
       if (err instanceof ApiClientError) {
         setError(ERROR_MESSAGES[err.code] ?? err.message);

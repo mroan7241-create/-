@@ -14,6 +14,7 @@ import {
   type Paginated,
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { canAdmin, canAdminAll } from '../../lib/admin-access';
 import { AppShell } from '../../components/AppShell';
 import { ConfirmDialog, type ConfirmDialogProps } from '../../components/ConfirmDialog';
 import { AssociationSelect } from '../../lib/association-select';
@@ -108,10 +109,11 @@ export default function AdminDelegatesPage() {
     <AppShell user={user}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
         <h1 style={{ fontSize: 22 }}>المناديب</h1>
-        <button type="button" style={primaryButtonStyle} onClick={() => setEditing('new')}>
+        {canAdminAll(user, ['delegates.manage', 'associations.read']) && <button type="button" style={primaryButtonStyle} onClick={() => setEditing('new')}>
           إضافة مندوب
-        </button>
+        </button>}
       </div>
+      {canAdmin(user, 'delegates.manage') && !canAdmin(user, 'associations.read') && <p style={mutedStyle}>إضافة مندوب تتطلب أيضًا صلاحية قراءة الجمعيات لاختيار الجمعية.</p>}
 
       <form
         onSubmit={(e) => {
@@ -125,9 +127,9 @@ export default function AdminDelegatesPage() {
           بحث (اسم/رمز/جوال)
           <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} style={inputStyle} />
         </label>
-        <div style={{ minWidth: 220 }}>
+        {canAdmin(user, 'associations.read') && <div style={{ minWidth: 220 }}>
           <AssociationSelect value={associationId} onChange={(id) => { setPage(1); setAssociationId(id); }} />
-        </div>
+        </div>}
         <label style={{ ...labelStyle, flex: '0 1 180px' }}>
           الحالة
           <select value={status} onChange={(e) => { setPage(1); setStatus(e.target.value as '' | AccountStatus); }} style={inputStyle}>
@@ -168,13 +170,13 @@ export default function AdminDelegatesPage() {
                 </td>
                 <td style={tdStyle}>{row.lastLoginAt ? new Date(row.lastLoginAt).toLocaleString('ar-SA') : 'لم يسجّل دخول بعد'}</td>
                 <td style={tdStyle}>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {canAdmin(user, 'delegates.manage') && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     <button type="button" style={secondaryButtonStyle} onClick={() => setEditing(row)}>تعديل</button>
                     <button type="button" style={secondaryButtonStyle} onClick={() => toggleStatus(row)}>
                       {row.status === 'ACTIVE' ? 'تعطيل' : 'تفعيل'}
                     </button>
                     <button type="button" style={secondaryButtonStyle} onClick={() => regenerateCode(row)}>إعادة توليد الرمز</button>
-                  </div>
+                  </div>}
                 </td>
               </tr>
             ))}
@@ -190,7 +192,7 @@ export default function AdminDelegatesPage() {
         </div>
       )}
 
-      {editing && (
+      {canAdmin(user, 'delegates.manage') && editing && (
         <DelegateForm
           delegate={editing === 'new' ? null : editing}
           onClose={() => setEditing(null)}

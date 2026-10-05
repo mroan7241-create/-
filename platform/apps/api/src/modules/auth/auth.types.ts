@@ -1,4 +1,5 @@
 import { AccountRole, AgreementStatus } from '@alzad/db';
+import type { AdminPermission } from '@alzad/shared';
 
 /**
  * سياق المصادقة الموحَّد المُرفَق على كل طلب موثَّق (request.authContext)
@@ -12,6 +13,8 @@ export interface AuthContext {
   associationId: string | null;
   sessionId: string;
   mustChangePassword: boolean;
+  adminFullAccess?: boolean;
+  adminPermissions?: AdminPermission[];
   /** بيانات سبق أن تحقق منها حارس الجلسة في الطلب نفسه؛ لا تُخزَّن بين الطلبات. */
   meSnapshot?: {
     publicCode: string;

@@ -13,6 +13,7 @@ import {
   type Paginated,
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { canAdmin, canAdminAll } from '../../lib/admin-access';
 import { AppShell } from '../../components/AppShell';
 import { AssociationSelect } from '../../lib/association-select';
 import { BeneficiarySelect } from '../../lib/beneficiary-select';
@@ -65,8 +66,9 @@ export default function AdminDeliveriesPage() {
     <AppShell user={user}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
         <h1 style={{ fontSize: 22 }}>عمليات التسليم</h1>
-        <button type="button" style={primaryButtonStyle} onClick={() => setShowAssign(true)}>إسناد مندوب</button>
+        {canAdminAll(user, ['deliveries.manage', 'associations.read', 'beneficiaries.read', 'delegates.read']) && <button type="button" style={primaryButtonStyle} onClick={() => setShowAssign(true)}>إسناد مندوب</button>}
       </div>
+      {canAdmin(user, 'deliveries.manage') && !canAdminAll(user, ['associations.read', 'beneficiaries.read', 'delegates.read']) && <p style={mutedStyle}>الإسناد يتطلب أيضًا قراءة الجمعيات والمستفيدين والمناديب لاختيار الحسابات المرتبطة.</p>}
 
       <label style={{ ...labelStyle, maxWidth: 260, marginBottom: 16 }}>
         الحالة
@@ -103,7 +105,7 @@ export default function AdminDeliveriesPage() {
                 <td style={tdStyle}>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     <Link href={`/admin/deliveries/${row.id}`} style={{ ...secondaryButtonStyle, textDecoration: 'none' }}>التفاصيل</Link>
-                    {row.status === 'DELIVERY_FAILED' && (
+                    {canAdmin(user, 'deliveries.manage') && row.status === 'DELIVERY_FAILED' && (
                       <button type="button" style={secondaryButtonStyle} onClick={() => doRetry(row.id)}>↻ إعادة المحاولة</button>
                     )}
                   </div>
@@ -122,7 +124,7 @@ export default function AdminDeliveriesPage() {
         </div>
       )}
 
-      {showAssign && (
+      {canAdminAll(user, ['deliveries.manage', 'associations.read', 'beneficiaries.read', 'delegates.read']) && showAssign && (
         <AssignModal
           onClose={() => setShowAssign(false)}
           onDone={(message) => {

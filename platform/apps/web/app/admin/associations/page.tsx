@@ -15,6 +15,7 @@ import {
   type ReferenceData,
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { canAdmin } from '../../lib/admin-access';
 import { AppShell } from '../../components/AppShell';
 import { ConfirmDialog, type ConfirmDialogProps } from '../../components/ConfirmDialog';
 import { initialQueryParam } from '../../lib/query';
@@ -79,7 +80,7 @@ export default function AdminAssociationsPage() {
   const [resetResult, setResetResult] = useState<{ name: string; password: string; phone: string; email: string } | null>(null);
   const [confirmation, setConfirmation] = useState<Omit<ConfirmDialogProps, 'onCancel'> | null>(null);
   const [partyOneLink, setPartyOneLink] = useState<{ name: string; url: string } | null>(null);
-  const [profile, setProfile] = useState<{ association: AssociationSummary & { account?: { status: string; mustChangePassword: boolean; lastLoginAt: string | null } | null }; report: AbanmiReport } | null>(null);
+  const [profile, setProfile] = useState<{ association: AssociationSummary & { account?: { status: string; mustChangePassword: boolean; lastLoginAt: string | null } | null }; report: AbanmiReport | null } | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
 
   const load = useCallback(async () => {
@@ -134,7 +135,7 @@ export default function AdminAssociationsPage() {
     try {
       const [association, report] = await Promise.all([
         apiFetch<AssociationSummary & { account?: { status: string; mustChangePassword: boolean; lastLoginAt: string | null } | null }>(`/associations/${row.id}`),
-        getAdminReport({ associationId: row.id }),
+        canAdmin(user, 'reports.read') ? getAdminReport({ associationId: row.id }) : Promise.resolve(null),
       ]);
       setProfile({ association, report });
     } catch (err) {
@@ -148,9 +149,9 @@ export default function AdminAssociationsPage() {
     <AppShell user={user}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
         <h1 style={{ fontSize: 22 }}>الجمعيات</h1>
-        <button type="button" style={primaryButtonStyle} onClick={() => setEditing('new')}>
+        {canAdmin(user, 'associations.manage') && <button type="button" style={primaryButtonStyle} onClick={() => setEditing('new')}>
           إضافة جمعية
-        </button>
+        </button>}
       </div>
 
       <form
@@ -229,9 +230,9 @@ export default function AdminAssociationsPage() {
                 <td style={{ ...tdStyle, ...ltrStyle }}>{row.beneficiariesCount}</td>
                 <td style={{ ...tdStyle, ...ltrStyle }}>{row.devicesCount}</td>
                 <td style={{ ...tdStyle, ...ltrStyle }}>{row.delegatesCount}</td>
-                <td style={tdStyle}>{row.covenant ? <div style={{ display: 'grid', gap: 5 }}><strong>{covenantStatus(row.covenant.status)}</strong><span>الإصدار {row.covenant.templateVersion}</span><span dir="ltr">{row.covenant.reference}</span>{row.covenant.orgSignerName && <span>الممثل: {row.covenant.orgSignerName}</span>}{row.covenant.signedByOrgAt && <span>توقيع الجمعية: {formatDate(row.covenant.signedByOrgAt)}</span>}{row.covenant.fullyExecutedAt && <span>الاكتمال: {formatDate(row.covenant.fullyExecutedAt)}</span>}{row.covenant.status === 'SIGNED_BY_ORG' && <button type="button" style={secondaryButtonStyle} onClick={() => void issuePartyOneSigningSession(row.covenant!.id).then((result) => setPartyOneLink({ name: row.name, url: `${window.location.origin}${result.path}` })).catch((err) => setListError(err instanceof ApiClientError ? err.message : 'تعذّر إنشاء رابط التوقيع.'))}>رابط توقيع الطرف الأول</button>}{row.covenant.status === 'SIGNED' && <button type="button" style={secondaryButtonStyle} onClick={() => void getFinalCovenantUrl(row.covenant!.id).then(({ url }) => window.open(url, '_blank', 'noopener,noreferrer'))}>تنزيل النسخة النهائية</button>}</div> : 'لا يوجد'}</td>
+                <td style={tdStyle}>{row.covenant ? <div style={{ display: 'grid', gap: 5 }}><strong>{covenantStatus(row.covenant.status)}</strong><span>الإصدار {row.covenant.templateVersion}</span><span dir="ltr">{row.covenant.reference}</span>{row.covenant.orgSignerName && <span>الممثل: {row.covenant.orgSignerName}</span>}{row.covenant.signedByOrgAt && <span>توقيع الجمعية: {formatDate(row.covenant.signedByOrgAt)}</span>}{row.covenant.fullyExecutedAt && <span>الاكتمال: {formatDate(row.covenant.fullyExecutedAt)}</span>}{canAdmin(user, 'participations.manage') && row.covenant.status === 'SIGNED_BY_ORG' && <button type="button" style={secondaryButtonStyle} onClick={() => void issuePartyOneSigningSession(row.covenant!.id).then((result) => setPartyOneLink({ name: row.name, url: `${window.location.origin}${result.path}` })).catch((err) => setListError(err instanceof ApiClientError ? err.message : 'تعذّر إنشاء رابط التوقيع.'))}>رابط توقيع الطرف الأول</button>}{canAdmin(user, 'participations.read') && row.covenant.status === 'SIGNED' && <button type="button" style={secondaryButtonStyle} onClick={() => void getFinalCovenantUrl(row.covenant!.id).then(({ url }) => window.open(url, '_blank', 'noopener,noreferrer'))}>تنزيل النسخة النهائية</button>}</div> : 'لا يوجد'}</td>
                 <td style={tdStyle}>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {canAdmin(user, 'associations.manage') && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     <button type="button" style={secondaryButtonStyle} onClick={() => setEditing(row)}>
                       تعديل
                     </button>
@@ -241,7 +242,7 @@ export default function AdminAssociationsPage() {
                     <button type="button" style={dangerButtonStyle} onClick={() => resetPassword(row)}>
                       إعادة تعيين كلمة المرور
                     </button>
-                  </div>
+                  </div>}
                 </td>
               </tr>
             ))}
@@ -263,7 +264,7 @@ export default function AdminAssociationsPage() {
         </div>
       )}
 
-      {editing && (
+      {canAdmin(user, 'associations.manage') && editing && (
         <AssociationForm
           reference={reference}
           association={editing === 'new' ? null : editing}
@@ -329,11 +330,11 @@ export default function AdminAssociationsPage() {
             <span className="zad-sum-card2"><b className="zad-sv2b">{profile.association.beneficiariesCount}</b><span className="zad-sl2b">مستفيدون</span></span>
             <span className="zad-sum-card2"><b className="zad-sv2b">{profile.association.devicesCount}</b><span className="zad-sl2b">أجهزة</span></span>
             <span className="zad-sum-card2"><b className="zad-sv2b">{profile.association.delegatesCount}</b><span className="zad-sl2b">مندوبون</span></span>
-            <span className="zad-sum-card2"><b className="zad-sv2b">{profile.report.overall.deliveries}</b><span className="zad-sl2b">مهام تسليم</span></span>
+            {profile.report && <span className="zad-sum-card2"><b className="zad-sv2b">{profile.report.overall.deliveries}</b><span className="zad-sl2b">مهام تسليم</span></span>}
           </div>
           <p>حالة الحساب: {profile.association.account?.status === 'ACTIVE' ? 'نشط' : 'غير نشط'} · آخر دخول: {profile.association.account?.lastLoginAt ? new Date(profile.association.account.lastLoginAt).toLocaleString('ar-SA') : 'لم يسجّل دخولًا'}</p>
           <p>الميثاق: {profile.association.covenant ? covenantStatus(profile.association.covenant.status) : 'لا يوجد ميثاق'}</p>
-          <Link href={`/admin/reports?associationId=${profile.association.id}`} style={{ ...primaryButtonStyle, textDecoration: 'none', display: 'inline-block' }}>عرض التقرير الكامل</Link>
+          {canAdmin(user, 'reports.read') && <Link href={`/admin/reports?associationId=${profile.association.id}`} style={{ ...primaryButtonStyle, textDecoration: 'none', display: 'inline-block' }}>عرض التقرير الكامل</Link>}
         </>}
       </section></div>}
     </AppShell>

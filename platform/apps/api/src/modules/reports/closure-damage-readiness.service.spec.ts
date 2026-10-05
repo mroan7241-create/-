@@ -6,6 +6,18 @@ import type { ReconciliationService } from './reconciliation.service';
 describe('damage closure gate', () => {
   afterEach(() => jest.restoreAllMocks());
 
+  it.each(Object.values(ParticipationStatus))('uses the actual participation state %s without adding a transition', async (status) => {
+    jest.spyOn(prisma.projectParticipation, 'findUnique').mockResolvedValue({ associationId: 'association-a', status } as never);
+    for (const delegate of [prisma.beneficiary, prisma.beneficiaryNeed, prisma.deliveryMission, prisma.damageCase,
+      prisma.shipmentReconciliationIssue, prisma.escalationCase, prisma.deliveryAttempt]) {
+      jest.spyOn(delegate, 'count').mockResolvedValue(0);
+    }
+    const readiness = new ClosureReadinessService({ reconcile: jest.fn<() => Promise<unknown>>().mockResolvedValue({ violations: [] }) } as unknown as ReconciliationService);
+    const result = await readiness.check('participation-id');
+    const allowed: ParticipationStatus[] = [ParticipationStatus.ACTIVE, ParticipationStatus.EXECUTING, ParticipationStatus.READY_TO_CLOSE, ParticipationStatus.CLOSURE_SUBMITTED];
+    expect(result.ready).toBe(allowed.includes(status));
+  });
+
   it('blocks final association reporting until every damage case is CLOSED', async () => {
     jest.spyOn(prisma.projectParticipation, 'findUnique').mockResolvedValue({ associationId: 'association-a', status: ParticipationStatus.EXECUTING } as never);
     jest.spyOn(prisma.beneficiary, 'count').mockResolvedValue(0);

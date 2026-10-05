@@ -17,6 +17,7 @@ import {
 import { ApiError, authForbidden } from '../../common/api-error';
 import { PublicCodeService } from '../../common/public-code.service';
 import { IdempotencyService } from '../../common/idempotency.service';
+import { lockParticipationForOperationalWrite } from '../../common/participation-write-lock.util';
 import { AuditService } from '../audit/audit.service';
 import { cleanText, requiredText } from '../../common/validation/text.util';
 import { normalizeSaudiPhone } from '../../common/validation/phone.util';
@@ -252,6 +253,7 @@ export class BeneficiariesService {
 
       const association = await tx.association.findUnique({ where: { id: associationId }, select: { id: true } });
       if (!association) throw new ApiError('BENEFICIARY_ASSOCIATION_NOT_FOUND', 'اختر جمعية صحيحة', 400);
+      await lockParticipationForOperationalWrite(tx, associationId);
 
       // قفل استشاري لكل (جمعية، جوال) **قبل** فحص التكرار وقبل الكتابة —
       // يغلق سباق TOCTOU الذي كان يسمح لطلبين متزامنين بالمرور معًا.
@@ -353,6 +355,7 @@ export class BeneficiariesService {
 
         const association = await tx.association.findUnique({ where: { id: associationId }, select: { id: true } });
         if (!association) throw new ApiError('BENEFICIARY_ASSOCIATION_NOT_FOUND', 'اختر جمعية صحيحة', 400);
+        await lockParticipationForOperationalWrite(tx, associationId);
 
         const allPhones = ok.flatMap((r) => [r.fields.phone, r.fields.secondaryPhone]);
         await acquirePhoneLocks(tx, associationId, allPhones);
@@ -537,6 +540,7 @@ export class BeneficiariesService {
         payload,
       );
       if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse ?? { ok: true as const } };
+      await lockParticipationForOperationalWrite(tx, existing.associationId);
 
       // إعادة قراءة الحالة **داخل** المعاملة مع قفل الصف — القرار لا يُبنى
       // على قراءة سابقة تجاوزها الزمن (سباق: الإدارة تبتّ بينما التعديل
@@ -656,6 +660,7 @@ export class BeneficiariesService {
       const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'beneficiary-location-update', input.opId, { id, lat: input.lat, lng: input.lng });
       if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse! };
 
+      await this.lockParticipationForBeneficiaryWrite(tx, ctx, id);
       const beneficiary = await tx.beneficiary.findFirst({ where: { id, archivedAt: null } });
       if (!beneficiary) throw beneficiaryNotFound();
 
@@ -702,11 +707,15 @@ export class BeneficiariesService {
       const claim = await this.idempotency.claim<{ beneficiaryId: string }>(tx, ctx.accountId, scope, opId, { needId });
       if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse! };
 
+      const needScope = await tx.beneficiaryNeed.findUnique({ where: { id: needId }, select: { associationId: true, beneficiaryId: true } });
+      if (!needScope) throw new ApiError('BENEFICIARY_NEED_NOT_FOUND', 'الاحتياج غير موجود', 404);
+      this.assertTenantAccess(ctx, needScope.associationId);
+      await lockParticipationForOperationalWrite(tx, needScope.associationId);
+
+      const locked = await this.lockBeneficiary(tx, needScope.beneficiaryId);
+      if (!locked) throw new ApiError('BENEFICIARY_NOT_FOUND', 'المستفيد المرتبط بهذا الاحتياج غير موجود', 404);
       const need = await tx.beneficiaryNeed.findUnique({ where: { id: needId } });
       if (!need) throw new ApiError('BENEFICIARY_NEED_NOT_FOUND', 'الاحتياج غير موجود', 404);
-
-      const locked = await this.lockBeneficiary(tx, need.beneficiaryId);
-      if (!locked) throw new ApiError('BENEFICIARY_NOT_FOUND', 'المستفيد المرتبط بهذا الاحتياج غير موجود', 404);
       this.assertTenantAccess(ctx, need.associationId);
 
       // Legacy يشترط «تحت المراجعة» حرفيًا، لا مجرد "ليست نهائية".
@@ -893,6 +902,7 @@ export class BeneficiariesService {
     return prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<ReviewOutcome>(tx, ctx.accountId, scope, input.opId, payload);
       if (!claim.claimed) return { replayed: true as const, result: claim.existingResponse!, allocationEventId: null as string | null };
+      await this.lockParticipationForBeneficiaryWrite(tx, ctx, id);
 
       // `SELECT ... FOR UPDATE` — مراجعتان متزامنتان لنفس المستفيد
       // تتسلسلان هنا؛ الثانية ترى الحالة المبتوتة وتُرفض بـ409 نظيف.
@@ -1031,6 +1041,7 @@ export class BeneficiariesService {
     const outcome = await prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'beneficiary-list-decision', opId, { id, listType, listRank: listRank ?? null, reason });
       if (!claim.claimed) return { response: claim.existingResponse!, associationId: null as string | null, triggerAllocation: false, allocationEventId: null as string | null };
+      await this.lockParticipationForBeneficiaryWrite(tx, ctx, id);
       await tx.$queryRaw`SELECT id FROM beneficiaries WHERE id=${id}::uuid FOR UPDATE`;
       const beneficiary = await tx.beneficiary.findUnique({ where: { id } });
       if (!beneficiary || beneficiary.reviewStatus !== BeneficiaryReviewStatus.APPROVED) throw new ApiError('BENEFICIARY_LIST_INELIGIBLE', 'المستفيد غير معتمد للقائمة', 409);
@@ -1053,6 +1064,7 @@ export class BeneficiariesService {
     const reason = requiredText(reasonRaw, 'سبب الترقية', 1000);
     return prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'beneficiary-reserve-promotion', opId, { id, listRank: listRank ?? null, reason }); if (!claim.claimed) return claim.existingResponse!;
+      await this.lockParticipationForBeneficiaryWrite(tx, ctx, id);
       await tx.$queryRaw`SELECT id FROM beneficiaries WHERE id=${id}::uuid FOR UPDATE`;
       const beneficiary = await tx.beneficiary.findUnique({ where: { id } });
       if (!beneficiary || beneficiary.listType !== BeneficiaryListType.RESERVE || beneficiary.reviewStatus !== BeneficiaryReviewStatus.APPROVED) throw new ApiError('BENEFICIARY_NOT_RESERVE', 'المستفيد ليس احتياطيًا معتمدًا', 409);
@@ -1066,6 +1078,7 @@ export class BeneficiariesService {
     const reason = requiredText(reasonRaw, 'سبب الاستبدال', 1000);
     return prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ ok: true; replacementId: string }>(tx, ctx.accountId, 'beneficiary-replacement', opId, { oldId, newId, escalationCaseId, reason }); if (!claim.claimed) return claim.existingResponse!;
+      await this.lockParticipationForBeneficiaryWrite(tx, ctx, oldId);
       await tx.$queryRaw`SELECT id FROM beneficiaries WHERE id IN (${oldId}::uuid, ${newId}::uuid) ORDER BY id FOR UPDATE`;
       const [oldBeneficiary, newBeneficiary, escalation] = await Promise.all([tx.beneficiary.findUnique({ where: { id: oldId } }), tx.beneficiary.findUnique({ where: { id: newId } }), tx.escalationCase.findUnique({ where: { id: escalationCaseId } })]);
       if (!oldBeneficiary || !newBeneficiary || oldBeneficiary.associationId !== newBeneficiary.associationId) throw new ApiError('BENEFICIARY_REPLACEMENT_INVALID', 'المستفيدان غير موجودين ضمن الجمعية نفسها', 409);
@@ -1108,6 +1121,13 @@ export class BeneficiariesService {
       this.logger.warn(`نجح قرار المراجعة فعليًا لكن فشلت إشارة التخصيص للجمعية ${associationId}: ${message}`);
       return message;
     }
+  }
+
+  private async lockParticipationForBeneficiaryWrite(tx: Prisma.TransactionClient, ctx: AuthContext, id: string) {
+    const beneficiary = await tx.beneficiary.findUnique({ where: { id }, select: { associationId: true } });
+    if (!beneficiary) throw beneficiaryNotFound();
+    this.assertTenantAccess(ctx, beneficiary.associationId);
+    await lockParticipationForOperationalWrite(tx, beneficiary.associationId);
   }
 
   private async lockBeneficiary(tx: Prisma.TransactionClient, id: string) {

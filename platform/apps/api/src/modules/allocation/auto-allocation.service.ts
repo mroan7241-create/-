@@ -17,6 +17,7 @@ import { AuditService } from '../audit/audit.service';
 import { planAutoAllocation, type CandidateBeneficiary } from './auto-allocation-planner';
 import type { AuthContext } from '../auth/auth.types';
 import { ApiError, authForbidden } from '../../common/api-error';
+import { lockParticipationForOperationalWrite } from '../../common/participation-write-lock.util';
 
 type AllocationRunSummary = { skipped: string | null; completed: number; filled: number; reclaimed: number };
 
@@ -152,6 +153,9 @@ export class AutoAllocationService implements AllocationTriggerPort {
   private async executeForAssociation(associationId: string): Promise<AllocationRunSummary> {
     return prisma.$transaction(
       async (tx) => {
+        if (!await lockParticipationForOperationalWrite(tx, associationId, { skipFrozen: true })) {
+          return { skipped: 'closure-in-progress', completed: 0, filled: 0, reclaimed: 0 };
+        }
         await this.acquireAssociationLock(tx, associationId);
 
         const association = await tx.association.findUnique({ where: { id: associationId }, select: { status: true } });

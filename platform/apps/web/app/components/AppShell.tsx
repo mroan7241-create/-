@@ -8,7 +8,7 @@ import { Menu, X } from 'lucide-react';
 import type { CurrentUser } from '../lib/api';
 import { logout } from '../lib/api';
 import { finishLogout } from '../lib/logout-flow';
-import { navGroupsForRole, ROLE_LABELS } from './nav-config';
+import { homeForUser, navGroupsForRole, ROLE_LABELS } from './nav-config';
 import { mobileMenuButtonStyle, mobileOverlayStyle } from './shell-styles';
 
 /**
@@ -25,8 +25,8 @@ export function AppShell({ user, children, restricted = false }: { user: Current
   const [logoutError, setLogoutError] = useState('');
   const pathname = usePathname();
   const router = useRouter();
-  const groups = restricted ? [] : navGroupsForRole(user.role);
-  const homeHref = user.role === 'ADMIN' ? '/admin' : user.role === 'ASSOCIATION' ? '/association' : '/abanmi';
+  const groups = restricted ? [] : navGroupsForRole(user.role, user);
+  const homeHref = homeForUser(user);
 
   useEffect(() => {
     if (!mobileOpen) return;

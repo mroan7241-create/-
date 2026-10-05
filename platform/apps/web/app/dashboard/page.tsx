@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { getMe } from '../lib/api';
-import { homeForRole } from '../components/nav-config';
+import { homeForUser } from '../components/nav-config';
 
 /**
  * موجِّه بحسب الدور فقط — لم يعد غلافًا مؤقتًا (NODE-1 سابقًا). أي شاشة
@@ -22,7 +22,7 @@ export default function DashboardRedirectPage() {
           router.replace('/change-password');
           return;
         }
-        router.replace(homeForRole(user.role));
+        router.replace(homeForUser(user));
       })
       .catch(() => router.replace('/login'));
   }, [router]);

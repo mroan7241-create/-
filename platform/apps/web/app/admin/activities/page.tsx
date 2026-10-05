@@ -11,6 +11,7 @@ import {
   type ActivityStatus,
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { canAdmin } from '../../lib/admin-access';
 import { AppShell } from '../../components/AppShell';
 import {
   cardStyle,
@@ -82,10 +83,10 @@ export default function AdminActivitiesPage() {
     <AppShell user={user}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
         <h1 style={{ fontSize: 22 }}>متابعة المشروع</h1>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {canAdmin(user, 'activities.manage') && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button type="button" disabled={importBusy} style={secondaryButtonStyle} onClick={() => void importCatalog()}>{importBusy ? 'جارٍ الاستيراد…' : 'استيراد خطة المشروع (13 نشاطًا)'}</button>
           <button type="button" style={primaryButtonStyle} onClick={() => setEditing('new')}>إضافة نشاط</button>
-        </div>
+        </div>}
       </div>
 
       {error && <p role="alert" style={errorStyle}>{error}</p>}
@@ -114,14 +115,14 @@ export default function AdminActivitiesPage() {
                     <a href={a.evidenceUrl} target="_blank" rel="noopener noreferrer">رابط الشاهد ↗</a>
                   </p>
                 )}
-                <button type="button" style={{ ...secondaryButtonStyle, marginTop: 8 }} onClick={() => setEditing(a)}>تعديل</button>
+                {canAdmin(user, 'activities.manage') && <button type="button" style={{ ...secondaryButtonStyle, marginTop: 8 }} onClick={() => setEditing(a)}>تعديل</button>}
               </div>
             ))}
           </div>
         </section>
       ))}
 
-      {editing && (
+      {canAdmin(user, 'activities.manage') && editing && (
         <ActivityForm
           activity={editing === 'new' ? null : editing}
           onClose={() => setEditing(null)}

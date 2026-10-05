@@ -438,6 +438,8 @@ model Account {
   /// على جدول يحمل صفوفًا فعلًا.
   phone             String?
   role              AccountRole
+  adminFullAccess   Boolean       @default(false) @map("admin_full_access")
+  adminPermissions  String[]      @default([]) @map("admin_permissions")
   associationId     String?       @map("association_id") @db.Uuid
   status            AccountStatus @default(ACTIVE)
   mustChangePassword Boolean      @default(false) @map("must_change_password")

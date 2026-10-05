@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { canAdmin } from '../../lib/admin-access';
 import { AppShell } from '../../components/AppShell';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { AssociationSelect } from '../../lib/association-select';
@@ -175,7 +176,7 @@ export default function AdminInventoryPage() {
       {error && <p style={errorStyle}>{error}</p>}
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-        <div style={{ minWidth: 220 }}>
+        {canAdmin(user, 'associations.read') && <div style={{ minWidth: 220 }}>
           <AssociationSelect
             value={associationId}
             onChange={(id) => {
@@ -184,7 +185,7 @@ export default function AdminInventoryPage() {
             }}
             placeholder="كل الجمعيات — ابحث لتصفية..."
           />
-        </div>
+        </div>}
         <select style={{ ...inputStyle, width: 180 }} value={deviceType} onChange={(e) => { setDeviceType(e.target.value as DeviceType | ''); setPage(1); }}>
           <option value="">كل الأنواع</option>
           {DEVICE_TYPES.map((t) => (
@@ -251,7 +252,7 @@ export default function AdminInventoryPage() {
             <span>آخر تحديث: {new Date(detail.updatedAt).toLocaleString('ar-SA')}</span>
           </div>
 
-          {detail.status === 'WAREHOUSE' && (
+          {canAdmin(user, 'inventory.manage') && detail.status === 'WAREHOUSE' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
               <label style={labelStyle}>
                 نوع الجهاز
@@ -302,14 +303,14 @@ export default function AdminInventoryPage() {
                 <td style={tdStyle}>{item.description}</td>
                 <td style={tdStyle}>{damageStatusLabels[item.status]}{item.resolution && <div style={mutedStyle}>{item.resolution}</div>}</td>
                 <td style={tdStyle}>
-                  {item.status === 'OPEN' && <button type="button" disabled={damageBusy} style={secondaryButtonStyle} onClick={() => decideDamageCase(item.id, 'UNDER_REVIEW')}>بدء المراجعة</button>}
-                  {item.status === 'UNDER_REVIEW' && <div style={{ minWidth: 220 }}>
+                  {canAdmin(user, 'inventory.manage') && item.status === 'OPEN' && <button type="button" disabled={damageBusy} style={secondaryButtonStyle} onClick={() => decideDamageCase(item.id, 'UNDER_REVIEW')}>بدء المراجعة</button>}
+                  {canAdmin(user, 'inventory.manage') && item.status === 'UNDER_REVIEW' && <div style={{ minWidth: 220 }}>
                     <label style={labelStyle}>قرار المعالجة
                       <textarea style={inputStyle} maxLength={2000} rows={2} value={damageResolution[item.id] ?? ''} onChange={(e) => setDamageResolution((current) => ({ ...current, [item.id]: e.target.value }))} />
                     </label>
                     <button type="button" disabled={damageBusy || !damageResolution[item.id]?.trim()} style={primaryButtonStyle} onClick={() => decideDamageCase(item.id, 'SETTLED')}>حفظ التسوية</button>
                   </div>}
-                  {item.status === 'SETTLED' && <button type="button" disabled={damageBusy} style={secondaryButtonStyle} onClick={() => setConfirmCloseDamageId(item.id)}>إغلاق الحالة</button>}
+                  {canAdmin(user, 'inventory.manage') && item.status === 'SETTLED' && <button type="button" disabled={damageBusy} style={secondaryButtonStyle} onClick={() => setConfirmCloseDamageId(item.id)}>إغلاق الحالة</button>}
                   {item.status !== 'OPEN' && item.status !== 'UNDER_REVIEW' && item.status !== 'SETTLED' && item.status !== 'CLOSED' && <span style={mutedStyle}>يتطلب توثيق الإرجاع أو البديل</span>}
                   {item.status === 'CLOSED' && <span style={mutedStyle}>لا إجراء</span>}
                 </td>

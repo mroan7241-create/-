@@ -17,6 +17,8 @@ import { reportValueLabel } from '../lib/report-labels';
 import Link from 'next/link';
 import { workflowLabel } from '../lib/workflow-label';
 import { canPrepareCovenant } from '../lib/covenant-selection';
+import { canAccessAdminPath, canAdmin, canAdminAll } from '../lib/admin-access';
+import type { AdminPermission } from '@alzad/shared';
 import { settleSelectedWorkflowJobs, type WorkflowJob } from './workflow-jobs';
 import { canCompleteParticipationSetup, canCreateCovenantSigningAccount, participationStageLabel, type ParticipationStageInput } from './participation-stage';
 
@@ -24,6 +26,8 @@ type Section = { key: string; title: string; rows: WorkflowRecord[]; error?: str
 export type WorkflowSectionKey = 'participations' | 'deliveries' | 'procurement' | 'escalations' | 'notifications' | 'beneficiaries' | 'outbox' | 'project-closure';
 type FormKind = 'agreement' | 'coordinator' | 'closure' | 'reopen' | 'return-good' | 'return-damaged' | 'escalation' | 'escalation-decision' | 'list-main' | 'list-reserve' | 'promote' | 'purchase-order' | 'shipment' | 'donor-feedback';
 type OpenForm = { kind: FormKind; row?: WorkflowRecord };
+const SECTION_READ: Record<WorkflowSectionKey, AdminPermission> = { participations: 'participations.read', deliveries: 'deliveries.read', procurement: 'procurement.read', escalations: 'escalations.read', notifications: 'notifications.manage', beneficiaries: 'beneficiaries.read', outbox: 'notifications.manage', 'project-closure': 'reports.read' };
+const SECTION_MANAGE: Record<string, AdminPermission> = { participations: 'participations.manage', deliveries: 'deliveries.manage', procurement: 'procurement.manage', escalations: 'escalations.manage', notifications: 'notifications.manage', beneficiaries: 'beneficiaries.manage', outbox: 'notifications.manage', 'project-closure': 'reports.manage' };
 
 export function WorkflowHub({ user, sectionKeys }: { user: CurrentUser; sectionKeys?: WorkflowSectionKey[] }) {
   const [sections, setSections] = useState<Section[]>([]);
@@ -45,13 +49,14 @@ export function WorkflowHub({ user, sectionKeys }: { user: CurrentUser; sectionK
     ];
     if (user.role === 'ADMIN') jobs.push(['outbox', 'مراقبة أحداث الأتمتة المتعثرة', () => listOutboxFailures()]);
     if (user.role === 'ADMIN') jobs.push(['project-closure', 'التقرير الختامي للمشروع', () => getProjectClosure().then((report) => report ? [report] : [])]);
-    const settled = await settleSelectedWorkflowJobs(jobs, sectionKeySignature ? sectionKeySignature.split('|') as WorkflowSectionKey[] : undefined);
+    const permittedJobs = user.role === 'ADMIN' ? jobs.filter(([key]) => canAdmin(user, SECTION_READ[key])) : jobs;
+    const settled = await settleSelectedWorkflowJobs(permittedJobs, sectionKeySignature ? sectionKeySignature.split('|') as WorkflowSectionKey[] : undefined);
     setSections(settled.map(({ key, title, result }) => {
       if (result.status === 'rejected') return { key, title, rows: [], error: readError(result.reason) };
       const body = result.value as { items?: WorkflowRecord[] };
       return { key, title, rows: Array.isArray(body) ? body : body.items ?? [] };
     }));
-  }, [user.role, sectionKeySignature]);
+  }, [user, sectionKeySignature]);
   useEffect(() => { void load(); }, [load]);
 
   async function act(action: () => Promise<unknown>, success = 'تم تنفيذ العملية وتحديث البيانات.', credentialEmail = '') {
@@ -77,11 +82,13 @@ export function WorkflowHub({ user, sectionKeys }: { user: CurrentUser; sectionK
     {credential && <section style={{ ...cardStyle, border: '2px solid #d46a2e' }}><h2>بيانات الدخول المؤقتة — تُعرض مرة واحدة</h2><p>البريد: <b dir="ltr">{credential.email}</b></p><p>كلمة المرور المؤقتة: <b dir="ltr">{credential.password}</b></p><button style={secondaryButtonStyle} onClick={() => setCredential(null)}>فهمت وحفظت البيانات بأمان</button></section>}
     {signingLink && <section style={{ ...cardStyle, border: '2px solid #d46a2e' }}><h2>رابط توقيع الطرف الأول — أحادي الاستخدام</h2><p>لا يفتح صلاحيات الإدارة وينتهي تلقائيًا. سلّمه للممثل المخول فقط.</p><code dir="ltr" style={{ overflowWrap: 'anywhere' }}>{signingLink}</code><div className="button-row"><button style={secondaryButtonStyle} onClick={() => navigator.clipboard.writeText(signingLink)}>نسخ الرابط</button><a style={{ ...primaryButtonStyle, textDecoration: 'none' }} href={signingLink} target="_blank" rel="noopener noreferrer">فتح جلسة التوقيع</a><button style={secondaryButtonStyle} onClick={() => setSigningLink(null)}>إخفاء</button></div></section>}
     <div className="workflow-toolbar">
-      {user.role === 'ADMIN' && sectionKeys?.includes('procurement') && <button style={primaryButtonStyle} onClick={() => setForm({ kind: 'purchase-order' })}>إنشاء أمر شراء</button>}
-      {user.role === 'ADMIN' && sectionKeys?.includes('project-closure') && <button style={secondaryButtonStyle} onClick={() => void act(() => generateProjectClosure(), 'تم توليد التقرير الختامي من البيانات المغلقة.')}>توليد تقرير المشروع</button>}
-      {sectionKeys?.includes('escalations') && <button style={secondaryButtonStyle} onClick={() => setForm({ kind: 'escalation' })}>فتح تصعيد تشغيلي</button>}
+      {canAdminAll(user, ['procurement.manage', 'associations.read']) && sectionKeys?.includes('procurement') && <button style={primaryButtonStyle} onClick={() => setForm({ kind: 'purchase-order' })}>إنشاء أمر شراء</button>}
+      {canAdmin(user, 'procurement.manage') && !canAdmin(user, 'associations.read') && sectionKeys?.includes('procurement') && <p>إنشاء أمر شراء يتطلب أيضًا قراءة الجمعيات.</p>}
+      {canAdmin(user, 'reports.manage') && sectionKeys?.includes('project-closure') && <button style={secondaryButtonStyle} onClick={() => void act(() => generateProjectClosure(), 'تم توليد التقرير الختامي من البيانات المغلقة.')}>توليد تقرير المشروع</button>}
+      {(user.role !== 'ADMIN' || canAdminAll(user, ['escalations.manage', 'associations.read'])) && sectionKeys?.includes('escalations') && <button style={secondaryButtonStyle} onClick={() => setForm({ kind: 'escalation' })}>فتح تصعيد تشغيلي</button>}
+      {canAdmin(user, 'escalations.manage') && !canAdmin(user, 'associations.read') && sectionKeys?.includes('escalations') && <p>فتح تصعيد مرتبط بجمعية يتطلب أيضًا قراءة الجمعيات.</p>}
     </div>
-    {user.role === 'ADMIN' && sectionKeys?.includes('escalations') && <BusinessCalendarSettings busy={busy} act={act} />}
+    {canAdmin(user, 'settings.manage') && sectionKeys?.includes('escalations') && <BusinessCalendarSettings busy={busy} act={act} />}
     {form && <OperationalForm form={form} user={user} associations={associationOptions} busy={busy} close={() => setForm(null)} act={act} />}
     {sections.map((section) => <section key={section.key} style={cardStyle}><h2>{section.title}</h2>{section.key === 'participations' && user.role === 'ADMIN' && <p>التسلسل: إنشاء الاتفاقية ← إرسالها للنظام ← تأكيد جاهزية بيانات الجمعية ← إنشاء حساب دخول مقيّد وإرسال بياناته ← توقيع الجمعية ← توقيع الطرف الأول. لا تُفتح العمليات إلا بعد التوقيعين.</p>}{section.error ? <p style={errorStyle}>{section.error}</p> : section.rows.length === 0 ? <p>لا توجد عناصر تحتاج إجراء.</p> : section.rows.map((row) => <OperationalRow key={row.id} user={user} section={section.key} row={row} busy={busy} setForm={setForm} act={act} />)}</section>)}
   </div>;
@@ -116,8 +123,9 @@ function OperationalRow({ user, section, row, busy, setForm, act }: { user: Curr
     associationId: row.associationId,
   };
   const buttons: React.ReactNode[] = [];
-  const button = (label: string, action: () => Promise<unknown>, success?: string) => buttons.push(<button key={label} style={secondaryButtonStyle} disabled={busy} onClick={() => void act(action, success)}>{label}</button>);
-  const formButton = (label: string, kind: FormKind) => buttons.push(<button key={label} style={secondaryButtonStyle} disabled={busy} onClick={() => setForm({ kind, row })}>{label}</button>);
+  const canManage = user.role !== 'ADMIN' || canAdmin(user, SECTION_MANAGE[section]);
+  const button = (label: string, action: () => Promise<unknown>, success?: string, permission?: AdminPermission) => { if (user.role !== 'ADMIN' || (permission ? canAdmin(user, permission) : canManage)) buttons.push(<button key={label} style={secondaryButtonStyle} disabled={busy} onClick={() => void act(action, success)}>{label}</button>); };
+  const formButton = (label: string, kind: FormKind) => { if (canManage && (user.role !== 'ADMIN' || kind !== 'reopen' || canAdmin(user, 'reports.manage'))) buttons.push(<button key={label} style={secondaryButtonStyle} disabled={busy} onClick={() => setForm({ kind, row })}>{label}</button>); };
 
   if (section === 'participations') {
     const agreement = currentAgreement;
@@ -128,13 +136,13 @@ function OperationalRow({ user, section, row, busy, setForm, act }: { user: Curr
         if (!agreement) formButton('إنشاء اتفاقية', 'agreement');
         if (agreement?.status === 'DRAFT') button('إرسال الاتفاقية للنظام', () => transitionAgreement(agreement.id, 'SENT'), 'تم تجهيز الاتفاقية داخل النظام. الخطوة التالية تأكيد جاهزية البيانات، ثم إرسال حساب الدخول للجمعية.');
       }
-      if (canCreateCovenantSigningAccount(participationStage)) buttons.push(<button key="signing-account" style={secondaryButtonStyle} disabled={busy} onClick={() => void act(() => prepareCovenantSigningAccount(row.id), 'تم إنشاء حساب توقيع مقيّد؛ لن تفتح العمليات قبل اكتمال الميثاق.', String((row.application as WorkflowRecord | undefined)?.email ?? ''))}>إنشاء حساب توقيع مقيّد</button>);
+      if (canManage && canCreateCovenantSigningAccount(participationStage)) buttons.push(<button key="signing-account" style={secondaryButtonStyle} disabled={busy} onClick={() => void act(() => prepareCovenantSigningAccount(row.id), 'تم إنشاء حساب توقيع مقيّد؛ لن تفتح العمليات قبل اكتمال الميثاق.', String((row.application as WorkflowRecord | undefined)?.email ?? ''))}>إنشاء حساب توقيع مقيّد</button>);
       if (agreement?.status === 'SIGNED_BY_ORG') button('إنشاء رابط توقيع الطرف الأول', () => issuePartyOneSigningSession(agreement.id));
-      if (agreement?.status === 'SIGNED') button('تنزيل النسخة النهائية', () => getFinalCovenantUrl(agreement.id).then(({ url }) => { window.open(url, '_blank', 'noopener,noreferrer'); }));
+      if (agreement?.status === 'SIGNED') button('تنزيل النسخة النهائية', () => getFinalCovenantUrl(agreement.id).then(({ url }) => { window.open(url, '_blank', 'noopener,noreferrer'); }), undefined, 'participations.read');
       if (canCompleteParticipationSetup(participationStage)) button('تأكيد جاهزية بيانات الجمعية', () => completeParticipationSetup(row.id), 'تم تأكيد جاهزية بيانات الجمعية. لم يُرسل حساب الدخول بعد؛ أنشئ حساب التوقيع المقيّد في الخطوة التالية.');
-      if (closure?.status === 'SUBMITTED') button('بدء مراجعة الإغلاق', () => transitionOrganizationClosure(closure.id, 'UNDER_REVIEW'));
-      if (closure?.status === 'UNDER_REVIEW') button('اعتماد تقرير الجمعية', () => transitionOrganizationClosure(closure.id, 'APPROVED'));
-      if (closure?.status === 'APPROVED') button('إغلاق المشاركة', () => transitionOrganizationClosure(closure.id, 'CLOSED'));
+      if (closure?.status === 'SUBMITTED') button('بدء مراجعة الإغلاق', () => transitionOrganizationClosure(closure.id, 'UNDER_REVIEW'), undefined, 'reports.manage');
+      if (closure?.status === 'UNDER_REVIEW') button('اعتماد تقرير الجمعية', () => transitionOrganizationClosure(closure.id, 'APPROVED'), undefined, 'reports.manage');
+      if (closure?.status === 'APPROVED') button('إغلاق المشاركة', () => transitionOrganizationClosure(closure.id, 'CLOSED'), undefined, 'reports.manage');
       if (closure?.status === 'CLOSED') formButton('إعادة فتح موثقة', 'reopen');
     } else {
       if (agreement?.status === 'SIGNED') button('تنزيل الميثاق المعتمد', () => getFinalCovenantUrl().then(({ url }) => { window.open(url, '_blank', 'noopener,noreferrer'); }));
@@ -152,7 +160,7 @@ function OperationalRow({ user, section, row, busy, setForm, act }: { user: Curr
   if (section === 'escalations' && user.role === 'ADMIN' && ['OPEN', 'NEEDS_INFO'].includes(status)) formButton('قرار زاد', 'escalation-decision');
   if (section === 'notifications') {
     const href = notificationHref(row, user.role);
-    if (href) buttons.push(<Link key="open-notification" href={href} style={{ ...secondaryButtonStyle, textDecoration: 'none' }}>فتح العنصر المرتبط</Link>);
+    if (href && (user.role !== 'ADMIN' || canAccessAdminPath(user, href))) buttons.push(<Link key="open-notification" href={href} style={{ ...secondaryButtonStyle, textDecoration: 'none' }}>فتح العنصر المرتبط</Link>);
     if (!row.readAt) button('تحديد كمقروء', () => markNotificationRead(row.id));
   }
   if (section === 'beneficiaries' && user.role === 'ADMIN') { formButton('إدراج في القائمة الأساسية', 'list-main'); formButton('إدراج في قائمة الاحتياط', 'list-reserve'); if (row.listType === 'RESERVE') formButton('ترقية احتياطي', 'promote'); }

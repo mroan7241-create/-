@@ -1,5 +1,5 @@
 import { jest } from '@jest/globals';
-import { AccountRole, AgreementStatus, prisma } from '@alzad/db';
+import { AccountRole, AgreementStatus, ParticipationStatus, prisma } from '@alzad/db';
 import { AuthService } from './auth.service';
 import type { AuthContext } from './auth.types';
 import type { RateLimitService } from '../../common/rate-limit.service';
@@ -23,9 +23,17 @@ describe('GET /auth/me request-local snapshot', () => {
 
     await expect(service.getMe(ctx)).resolves.toEqual({
       id: 'account-id', publicCode: 'USR-1', name: 'اختبار', role, associationId,
-      mustChangePassword: false, covenantRequired, covenantStatus,
+      mustChangePassword: false, covenantRequired, covenantStatus, adminFullAccess: false, adminPermissions: [],
     });
     expect(accountRead).not.toHaveBeenCalled();
     expect(covenantRead).not.toHaveBeenCalled();
   });
+
+  it.each(Object.values(ParticipationStatus).flatMap((status) => [AgreementStatus.SIGNED, AgreementStatus.SIGNED_BY_ORG, AgreementStatus.SENT].map((agreement) => ({ status, agreement }))))('login/fallback me classifies $status / $agreement consistently', async ({ status, agreement }) => {
+      jest.spyOn(prisma.account, 'findUniqueOrThrow').mockResolvedValue({ id: 'account', publicCode: 'ASC-1', name: 'اختبار', role: AccountRole.ASSOCIATION, associationId: 'association', mustChangePassword: false } as never);
+      jest.spyOn(prisma.projectParticipation, 'findUnique').mockResolvedValue({ status, agreements: [{ status: agreement }] } as never);
+      const service = new AuthService({} as RateLimitService, {} as AuditService, {} as EmailService);
+      const complete = agreement === AgreementStatus.SIGNED && ['ACTIVE', 'EXECUTING', 'READY_TO_CLOSE', 'CLOSURE_SUBMITTED', 'CLOSED'].includes(status);
+      await expect(service.getMe({ accountId: 'account', role: AccountRole.ASSOCIATION, associationId: 'association', sessionId: 'session', mustChangePassword: false })).resolves.toMatchObject({ covenantRequired: !complete, covenantStatus: agreement });
+    });
 });

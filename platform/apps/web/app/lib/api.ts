@@ -1,4 +1,4 @@
-import { APPLICATION_UPLOAD_MAX_BYTES, APPLICATION_UPLOAD_SIZE_MESSAGE } from '@alzad/shared';
+import { APPLICATION_UPLOAD_MAX_BYTES, APPLICATION_UPLOAD_SIZE_MESSAGE, type AdminPermission } from '@alzad/shared';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001/api/v1';
 
@@ -158,6 +158,13 @@ export interface ApplicationSummary {
   submittedAt: string;
   reviewedAt: string | null;
   reviewer: string | null;
+  processingStarter: { id: string; name: string; publicCode: string } | null;
+  eligibilityReviewer: { id: string; name: string; publicCode: string } | null;
+  evaluator: { id: string; name: string; publicCode: string } | null;
+  selectionApprover: { id: string; name: string; publicCode: string } | null;
+  eligibilityReviewedAt: string | null;
+  evaluatedAt: string | null;
+  selectionApprovedAt: string | null;
   answers: { key: string; label: string; value: boolean | null }[];
   yesCount: number;
   totalQuestions: number;
@@ -298,6 +305,8 @@ export interface CurrentUser {
   role: 'ADMIN' | 'ASSOCIATION' | 'DELEGATE' | 'ABANMI';
   associationId: string | null;
   mustChangePassword: boolean;
+  adminFullAccess?: boolean;
+  adminPermissions?: AdminPermission[];
   covenantRequired: boolean;
   covenantStatus: 'DRAFT' | 'SENT' | 'SIGNED_BY_ORG' | 'SIGNED' | 'CANCELLED' | 'SUPERSEDED' | null;
 }
@@ -305,6 +314,25 @@ export interface CurrentUser {
 export function getMe(): Promise<CurrentUser> {
   return apiFetch<CurrentUser>('/auth/me');
 }
+
+export interface AdminAccountSummary {
+  id: string;
+  publicCode: string;
+  name: string;
+  email: string | null;
+  status: 'ACTIVE' | 'SUSPENDED';
+  lastLoginAt: string | null;
+  createdAt: string;
+  mustChangePassword: boolean;
+  adminFullAccess: boolean;
+  adminPermissions: AdminPermission[];
+}
+
+export function listAdminAccounts(): Promise<AdminAccountSummary[]> { return apiFetch('/accounts/admins'); }
+export function createAdminAccount(input: { name: string; email: string; adminPermissions: AdminPermission[] }): Promise<{ ok: true; accountId: string; temporaryPassword: string }> { return apiFetch('/accounts/admins', { method: 'POST', body: JSON.stringify(input) }); }
+export function updateAdminAccount(id: string, input: { name?: string; adminPermissions?: AdminPermission[] }): Promise<{ ok: true }> { return apiFetch(`/accounts/admins/${id}`, { method: 'PATCH', body: JSON.stringify(input) }); }
+export function setAdminAccountStatus(id: string, status: 'ACTIVE' | 'SUSPENDED'): Promise<{ ok: true }> { return apiFetch(`/accounts/admins/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }); }
+export function resetAdminAccountPassword(id: string): Promise<{ ok: true; temporaryPassword: string }> { return apiFetch(`/accounts/admins/${id}/reset-password`, { method: 'POST' }); }
 
 export function logout(): Promise<{ ok: true }> {
   return apiFetch('/auth/logout', { method: 'POST' });

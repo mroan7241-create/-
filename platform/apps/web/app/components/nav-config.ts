@@ -18,6 +18,7 @@ import {
   Workflow,
 } from 'lucide-react';
 import type { CurrentUser } from '../lib/api';
+import { canAccessAdminPath, canAdmin, isAdminOwner } from '../lib/admin-access';
 
 export interface NavItem {
   href: string;
@@ -37,6 +38,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/admin/beneficiaries', label: 'المستفيدون', icon: Users, roles: ['ADMIN'], available: true, group: 'الكيانات' },
   { href: '/admin/delegates', label: 'المناديب', icon: Bike, roles: ['ADMIN'], available: true, group: 'الكيانات' },
   { href: '/admin/abanmi', label: 'حسابات أبانمي', icon: Users, roles: ['ADMIN'], available: true, group: 'الكيانات' },
+  { href: '/admin/accounts', label: 'حسابات الإدارة', icon: Users, roles: ['ADMIN'], available: true, group: 'الكيانات' },
   { href: '/admin/inventory', label: 'المخزون', icon: Package, roles: ['ADMIN'], available: true, group: 'العمليات' },
   { href: '/admin/central-stock', label: 'مخزون الزاد المركزي', icon: Boxes, roles: ['ADMIN'], available: true, group: 'العمليات' },
   { href: '/admin/allocation', label: 'التخصيص', icon: Boxes, roles: ['ADMIN'], available: true, group: 'العمليات' },
@@ -69,12 +71,12 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/abanmi/activities', label: 'متابعة المشروع', icon: TrendingUp, roles: ['ABANMI'], available: false, group: 'المتابعة' },
 ];
 
-export function navForRole(role: CurrentUser['role']): NavItem[] {
-  return NAV_ITEMS.filter((item) => item.roles.includes(role) && item.available);
+export function navForRole(role: CurrentUser['role'], user?: CurrentUser): NavItem[] {
+  return NAV_ITEMS.filter((item) => item.roles.includes(role) && (item.available || (item.href === '/admin/participation' && user?.role === 'ADMIN' && !isAdminOwner(user) && canAdmin(user, 'notifications.manage'))) && (role !== 'ADMIN' || (!!user && canAccessAdminPath(user, item.href))));
 }
 
-export function navGroupsForRole(role: CurrentUser['role']): { group: string; items: NavItem[] }[] {
-  const items = navForRole(role);
+export function navGroupsForRole(role: CurrentUser['role'], user?: CurrentUser): { group: string; items: NavItem[] }[] {
+  const items = navForRole(role, user);
   const order: string[] = [];
   const byGroup = new Map<string, NavItem[]>();
   for (const item of items) {
@@ -99,4 +101,8 @@ export function homeForRole(role: CurrentUser['role']): string {
   if (role === 'ASSOCIATION') return '/association';
   if (role === 'DELEGATE') return '/delegate';
   return '/abanmi';
+}
+
+export function homeForUser(user: CurrentUser): string {
+  return user.role === 'ADMIN' ? navForRole(user.role, user)[0]?.href ?? '/admin/access-empty' : homeForRole(user.role);
 }

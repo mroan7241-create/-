@@ -23,6 +23,7 @@ import {
 import { ApiError, authForbidden } from '../../common/api-error';
 import { PublicCodeService } from '../../common/public-code.service';
 import { IdempotencyService } from '../../common/idempotency.service';
+import { lockParticipationForOperationalWrite } from '../../common/participation-write-lock.util';
 import { AuditService } from '../audit/audit.service';
 import { StorageService } from '../files/storage.service';
 import { validateReceiptEvidenceFile } from '../files/file-validation.util';
@@ -75,6 +76,9 @@ export class DeliveriesService {
       const claim = await this.idempotency.claim<{ missionId: string }>(tx, ctx.accountId, 'delivery-assign', input.opId, input);
       if (!claim.claimed) return { replayed: true as const, missionId: claim.existingResponse!.missionId };
 
+      const scope = await tx.beneficiary.findUnique({ where: { id: input.beneficiaryId }, select: { associationId: true } });
+      if (!scope || (ctx.role === AccountRole.ASSOCIATION && scope.associationId !== ctx.associationId)) throw new ApiError('BENEFICIARY_NOT_FOUND', 'المستفيد غير موجود', 404);
+      await lockParticipationForOperationalWrite(tx, scope.associationId);
       await tx.$queryRaw<{ id: string }[]>`SELECT id FROM beneficiaries WHERE id = ${input.beneficiaryId}::uuid FOR UPDATE`;
 
       const beneficiary = await tx.beneficiary.findUnique({ where: { id: input.beneficiaryId } });
@@ -169,6 +173,7 @@ export class DeliveriesService {
     const outcome = await prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'delivery-confirm-handover', opId, { missionId });
       if (!claim.claimed) return { replayed: true as const };
+      await this.lockParticipationForMissionWrite(tx, ctx, missionId);
 
       const mission = await tx.deliveryMission.findUnique({ where: { id: missionId } });
       if (!mission || mission.delegateAccountId !== ctx.accountId) {
@@ -257,6 +262,7 @@ export class DeliveriesService {
     const outcome = await prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'delivery-decline-handover', opId, { missionId, reason: cleanReason });
       if (!claim.claimed) return { replayed: true as const };
+      await this.lockParticipationForMissionWrite(tx, ctx, missionId);
 
       const mission = await tx.deliveryMission.findUnique({ where: { id: missionId } });
       if (!mission || mission.delegateAccountId !== ctx.accountId) throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
@@ -312,6 +318,7 @@ export class DeliveriesService {
       const outcome = await prisma.$transaction(async (tx) => {
         const claim = await this.idempotency.claim<{ attemptId: string }>(tx, ctx.accountId, 'delivery-confirm', opId, { missionId });
         if (!claim.claimed) return { replayed: true as const, attemptId: claim.existingResponse!.attemptId };
+        await this.lockParticipationForMissionWrite(tx, ctx, missionId);
 
         const mission = await tx.deliveryMission.findUnique({ where: { id: missionId } });
         if (!mission || mission.delegateAccountId !== ctx.accountId) throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
@@ -381,6 +388,7 @@ export class DeliveriesService {
     const outcome = await prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ attemptId: string }>(tx, ctx.accountId, 'delivery-fail', input.opId, { missionId, ...input });
       if (!claim.claimed) return { replayed: true as const, attemptId: claim.existingResponse!.attemptId };
+      await this.lockParticipationForMissionWrite(tx, ctx, missionId);
 
       const mission = await tx.deliveryMission.findUnique({ where: { id: missionId } });
       if (!mission || mission.delegateAccountId !== ctx.accountId) throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
@@ -416,6 +424,7 @@ export class DeliveriesService {
     const outcome = await prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'delivery-retry', opId, { missionId });
       if (!claim.claimed) return { replayed: true as const };
+      await this.lockParticipationForMissionWrite(tx, ctx, missionId);
 
       const mission = await tx.deliveryMission.findUnique({ where: { id: missionId } });
       if (!mission) throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
@@ -445,6 +454,7 @@ export class DeliveriesService {
     if (input.decision !== DeliveryApprovalDecision.APPROVED && !input.reason?.trim()) throw new ApiError('DELIVERY_APPROVAL_REASON_REQUIRED', 'سبب القرار مطلوب', 400);
     return prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ ok: true; finalized: boolean }>(tx, ctx.accountId, `delivery-approval-${stage}`, input.opId, { missionId, decision: input.decision, reason: input.reason ?? null }); if (!claim.claimed) return claim.existingResponse!;
+      await this.lockParticipationForMissionWrite(tx, ctx, missionId);
       await tx.$queryRaw`SELECT id FROM delivery_missions WHERE id=${missionId}::uuid FOR UPDATE`;
       const mission = await tx.deliveryMission.findUnique({ where: { id: missionId }, include: { attempts: { orderBy: { attemptedAt: 'desc' }, take: 1 }, approvals: { orderBy: { createdAt: 'desc' } } } });
       if (!mission || (stage === DeliveryApprovalStage.ASSOCIATION && ctx.associationId !== mission.associationId)) throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
@@ -481,6 +491,7 @@ export class DeliveriesService {
   private async simpleMissionTransition(ctx: AuthContext, missionId: string, opId: string, from: DeliveryStatus, to: DeliveryStatus, data: Prisma.DeliveryMissionUpdateInput, action: string, metadata?: Prisma.InputJsonObject) {
     return prisma.$transaction(async (tx) => {
       const scope = `delivery-${action.toLowerCase()}`; const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, scope, opId, { missionId, to, metadata: metadata ?? null }); if (!claim.claimed) return claim.existingResponse!;
+      await this.lockParticipationForMissionWrite(tx, ctx, missionId);
       const mission = await tx.deliveryMission.findUnique({ where: { id: missionId } }); if (!mission || (ctx.role === AccountRole.DELEGATE && mission.delegateAccountId !== ctx.accountId) || (ctx.role === AccountRole.ASSOCIATION && mission.associationId !== ctx.associationId)) throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
       if (mission.status !== from) throw new ApiError('DELIVERY_INVALID_TRANSITION', 'انتقال حالة التسليم غير مسموح', 409);
       await tx.deliveryMission.update({ where: { id: missionId }, data: { ...data, status: to } }); await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, associationId: mission.associationId, action, entityType: 'delivery_missions', entityId: missionId, metadata } }); const response = { ok: true as const }; await this.idempotency.complete(tx, ctx.accountId, scope, opId, response); return response;
@@ -490,6 +501,7 @@ export class DeliveriesService {
   async requestReturn(ctx: AuthContext, missionId: string, input: { notes?: string; opId: string }) {
     return prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ ok: true; attemptId: string }>(tx, ctx.accountId, 'delivery-return-request', input.opId, { missionId, notes: input.notes ?? null }); if (!claim.claimed) return claim.existingResponse!;
+      await this.lockParticipationForMissionWrite(tx, ctx, missionId);
       await tx.$queryRaw`SELECT id FROM delivery_missions WHERE id=${missionId}::uuid FOR UPDATE`;
       const mission = await tx.deliveryMission.findUnique({ where: { id: missionId } }); if (!mission || (ctx.role === AccountRole.DELEGATE && mission.delegateAccountId !== ctx.accountId) || (ctx.role === AccountRole.ASSOCIATION && mission.associationId !== ctx.associationId)) throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
       if (mission.status !== DeliveryStatus.OUT_WITH_DELEGATE && mission.status !== DeliveryStatus.DELIVERY_FAILED && mission.status !== DeliveryStatus.DEFERRED) throw new ApiError('DELIVERY_INVALID_TRANSITION', 'لا يمكن طلب الإرجاع من الحالة الحالية', 409);
@@ -505,6 +517,7 @@ export class DeliveriesService {
     if (!input.notes?.trim()) throw new ApiError('RETURN_CONFIRMATION_REASON_REQUIRED', 'ملاحظات/سبب تأكيد الإرجاع مطلوبة', 400);
     const outcome = await prisma.$transaction(async (tx) => {
       const scope = adminOverride ? 'delivery-return-admin-override' : 'delivery-return-confirm'; const claim = await this.idempotency.claim<{ ok: true; associationId: string }>(tx, ctx.accountId, scope, input.opId, { missionId, condition: input.condition, notes: input.notes }); if (!claim.claimed) return { replayed: true as const, ...claim.existingResponse!, allocationEventId: null as string | null };
+      await this.lockParticipationForMissionWrite(tx, ctx, missionId);
       await tx.$queryRaw`SELECT id FROM delivery_missions WHERE id=${missionId}::uuid FOR UPDATE`;
       const mission = await tx.deliveryMission.findUnique({ where: { id: missionId } }); if (!mission || (!adminOverride && mission.associationId !== ctx.associationId)) throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
       if (mission.status !== DeliveryStatus.PENDING_RETURN_APPROVAL) throw new ApiError('RETURN_CONFIRMATION_INVALID', 'المهمة ليست بانتظار تأكيد الإرجاع', 409);
@@ -533,6 +546,7 @@ export class DeliveriesService {
     const outcome = await prisma.$transaction(async (tx) => {
       const claim = await this.idempotency.claim<{ attemptId: string; associationId: string }>(tx, ctx.accountId, 'delivery-return', input.opId, { missionId, ...input });
       if (!claim.claimed) return { replayed: true as const, attemptId: claim.existingResponse!.attemptId, associationId: claim.existingResponse!.associationId, allocationEventId: null as string | null };
+      await this.lockParticipationForMissionWrite(tx, ctx, missionId);
 
       const mission = await tx.deliveryMission.findUnique({ where: { id: missionId } });
       if (!mission) throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
@@ -601,6 +615,15 @@ export class DeliveriesService {
       await this.triggerAllocationAfterCommittedReturn(outcome.associationId, outcome.allocationEventId);
     }
     return { ok: true as const, attemptId: outcome.attemptId };
+  }
+
+  private async lockParticipationForMissionWrite(tx: Prisma.TransactionClient, ctx: AuthContext, id: string) {
+    const mission = await tx.deliveryMission.findUnique({ where: { id }, select: { associationId: true, delegateAccountId: true } });
+    if (!mission || (ctx.role === AccountRole.DELEGATE && mission.delegateAccountId !== ctx.accountId) ||
+      (ctx.role === AccountRole.ASSOCIATION && mission.associationId !== ctx.associationId)) {
+      throw new ApiError('DELIVERY_MISSION_NOT_FOUND', 'مهمة التسليم غير موجودة', 404);
+    }
+    await lockParticipationForOperationalWrite(tx, mission.associationId);
   }
 
   private async triggerAllocationAfterCommittedReturn(associationId: string, eventId: string | null) {

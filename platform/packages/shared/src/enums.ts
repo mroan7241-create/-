@@ -42,6 +42,15 @@ export enum ParticipationStatus {
 }
 export enum ActivationBasis { AGREEMENT_COMPLETED = 'AGREEMENT_COMPLETED', LEGACY_MIGRATION = 'LEGACY_MIGRATION', ADMIN_REOPEN = 'ADMIN_REOPEN' }
 export enum AgreementStatus { DRAFT = 'DRAFT', SENT = 'SENT', SIGNED_BY_ORG = 'SIGNED_BY_ORG', SIGNED = 'SIGNED', CANCELLED = 'CANCELLED', SUPERSEDED = 'SUPERSEDED' }
+
+/** Completion survives the operational/closure lifecycle; suspended and setup
+ * participations remain restricted, even if an older agreement was signed. */
+export function hasCompletedParticipationCovenant(status: string, agreementStatus: string | null): boolean {
+  return agreementStatus === AgreementStatus.SIGNED && [
+    ParticipationStatus.ACTIVE, ParticipationStatus.EXECUTING, ParticipationStatus.READY_TO_CLOSE,
+    ParticipationStatus.CLOSURE_SUBMITTED, ParticipationStatus.CLOSED,
+  ].some((value) => value === status);
+}
 export enum BeneficiaryListType { MAIN = 'MAIN', RESERVE = 'RESERVE', REJECTED = 'REJECTED' }
 
 /** حالة مراجعة المستفيد نفسه — StateRules.gs BENEFICIARY_REVIEW_STATUSES. */

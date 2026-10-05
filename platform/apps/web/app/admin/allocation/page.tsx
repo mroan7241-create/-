@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { AppShell } from '../../components/AppShell';
 import { AssociationSelect } from '../../lib/association-select';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { canAdmin } from '../../lib/admin-access';
 import { ApiClientError, DEVICE_TYPE_LABELS, getAllocationBaskets, runAllocation, type AllocationBasket, type AllocationBaskets, type DeviceType } from '../../lib/api';
 import { cardStyle, errorStyle, labelStyle, mutedStyle, primaryButtonStyle, secondaryButtonStyle } from '../../lib/ui';
 
@@ -28,7 +29,7 @@ export default function AdminAllocationPage() {
   if (loading || !user) return null;
   return <AppShell user={user}>
     <h1>تشغيل التخصيص</h1><p style={mutedStyle}>يعرض المحرك الفعلي فقط. لا يمكن إسناد مندوب قبل اكتمال السلة.</p>
-    <div style={{ ...cardStyle, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'end' }}><label style={{ ...labelStyle, minWidth: 260 }}>الجمعية<AssociationSelect value={associationId} onChange={(id) => { setAssociationId(id); setData(null); setNotice(''); }} /></label><button type="button" style={secondaryButtonStyle} disabled={!associationId || busy} onClick={load}>{busy ? 'جارٍ التحميل…' : 'تحديث الحالة'}</button><button type="button" style={primaryButtonStyle} disabled={!associationId || busy} onClick={run}>{busy ? 'جارٍ التشغيل…' : 'تشغيل/إعادة محاولة التخصيص'}</button></div>
+    <div style={{ ...cardStyle, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'end' }}>{canAdmin(user, 'associations.read') ? <label style={{ ...labelStyle, minWidth: 260 }}>الجمعية<AssociationSelect value={associationId} onChange={(id) => { setAssociationId(id); setData(null); setNotice(''); }} /></label> : <p style={mutedStyle}>اختيار الجمعية لعرض التخصيص يتطلب أيضًا صلاحية قراءة الجمعيات.</p>}<button type="button" style={secondaryButtonStyle} disabled={!associationId || busy} onClick={load}>{busy ? 'جارٍ التحميل…' : 'تحديث الحالة'}</button>{canAdmin(user, 'allocation.manage') && <button type="button" style={primaryButtonStyle} disabled={!associationId || busy} onClick={run}>{busy ? 'جارٍ التشغيل…' : 'تشغيل/إعادة محاولة التخصيص'}</button>}</div>
     {error && <p role="alert" style={errorStyle}>{error}</p>}{notice && <p style={mutedStyle}>{notice}</p>}
     {data && <><div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', margin: '16px 0' }}><Stat label="إجمالي السلال" value={data.summary.total} /><Stat label="مكتملة" value={data.summary.complete} /><Stat label="ناقصة" value={data.summary.incomplete} /><Stat label="جاهزة للإسناد" value={data.summary.readyForAssignment} /></div><p style={mutedStyle}>المخزون الحر: {Object.entries(data.stock).map(([type, qty]) => `${DEVICE_TYPE_LABELS[type as DeviceType]}: ${qty}`).join(' — ')}</p><BasketSection title="السلال المكتملة" rows={data.complete} empty="لا توجد سلال مكتملة." /><BasketSection title="السلال الناقصة" rows={data.incomplete} empty="لا توجد سلال ناقصة." /></>}
     {!data && !busy && associationId && !error && <p style={mutedStyle}>حدّد “تحديث الحالة” لقراءة سلال الجمعية.</p>}

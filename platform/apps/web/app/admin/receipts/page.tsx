@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { canAdmin, canAdminAll } from '../../lib/admin-access';
 import { AppShell } from '../../components/AppShell';
 import { AssociationSelect } from '../../lib/association-select';
 import { initialQueryParam } from '../../lib/query';
@@ -79,7 +80,7 @@ export default function AdminReceiptsPage() {
   }, [user, page, statusFilter]);
 
   useEffect(() => {
-    if (!user || !showCreate || !associationId) return;
+    if (!user || !showCreate || !associationId || !canAdmin(user, 'procurement.read')) return;
     setShipmentsError('');
     listProcurement().then(setOrders).catch((e) => setShipmentsError(e instanceof ApiClientError ? e.message : 'تعذّر تحميل الشحنات'));
   }, [user, showCreate, associationId]);
@@ -179,12 +180,13 @@ export default function AdminReceiptsPage() {
             <option key={k} value={k}>{v}</option>
           ))}
         </select>
-        <button style={primaryButtonStyle} onClick={() => setShowCreate((v) => !v)}>
+        {canAdminAll(user, ['receipts.manage', 'associations.read']) && <button style={primaryButtonStyle} onClick={() => setShowCreate((v) => !v)}>
           {showCreate ? 'إلغاء' : '+ محضر جديد'}
-        </button>
+        </button>}
       </div>
+      {canAdmin(user, 'receipts.manage') && !canAdmin(user, 'associations.read') && <p style={mutedStyle}>إنشاء محضر يتطلب أيضًا قراءة الجمعيات لاختيار الجمعية المستلمة.</p>}
 
-      {showCreate && (
+      {canAdminAll(user, ['receipts.manage', 'associations.read']) && showCreate && (
         <section style={{ ...cardStyle, marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
           <label style={labelStyle}>
             الجمعية المستلمة
@@ -211,6 +213,7 @@ export default function AdminReceiptsPage() {
               {availableShipments.map(({ shipment }) => <option key={shipment.id} value={shipment.id}>{String(shipment.publicCode ?? shipment.id)}</option>)}
             </select>
             {shipmentsError && <span style={errorStyle}>{shipmentsError}</span>}
+            {!canAdmin(user, 'procurement.read') && <span style={mutedStyle}>ربط المحضر بشحنة يتطلب قراءة المشتريات. يمكنك اختيار محضر مستقل.</span>}
           </label>}
           <label style={labelStyle}>
             اسم المورد
@@ -286,7 +289,7 @@ export default function AdminReceiptsPage() {
                 <td style={tdStyle}>{b.sentDate ? new Date(b.sentDate).toLocaleDateString('ar-SA') : '—'}</td>
                 <td style={tdStyle}>{b.itemCount}</td>
                 <td style={tdStyle}>
-                  {b.status === 'DRAFT' && (
+                  {canAdmin(user, 'receipts.manage') && b.status === 'DRAFT' && (
                     <button
                       style={secondaryButtonStyle}
                       onClick={(e) => {

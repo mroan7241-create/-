@@ -1,3 +1,3 @@
-export function GET(request: Request) {
-  return Response.redirect(new URL('/brand/zadLogo.png', request.url), 307);
+export function GET() {
+  return new Response(null, { status: 307, headers: { Location: '/brand/zadLogo.png' } });
 }
