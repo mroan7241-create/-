@@ -293,7 +293,7 @@ describe('closure and operational transaction serialization', () => {
     const report = await closure.generateProject(admin);
     for (const status of [ProjectClosureStatus.UNDER_INTERNAL_REVIEW, ProjectClosureStatus.APPROVED_INTERNAL, ProjectClosureStatus.SUBMITTED_TO_DONOR, ProjectClosureStatus.DONOR_APPROVED, ProjectClosureStatus.PROJECT_CLOSED]) {
       await closure.transitionProject(admin, status);
-      if ([ProjectClosureStatus.SUBMITTED_TO_DONOR, ProjectClosureStatus.DONOR_APPROVED, ProjectClosureStatus.PROJECT_CLOSED].includes(status)) {
+      if (status === ProjectClosureStatus.SUBMITTED_TO_DONOR || status === ProjectClosureStatus.DONOR_APPROVED || status === ProjectClosureStatus.PROJECT_CLOSED) {
         const before = await prisma.projectClosureReport.findUniqueOrThrow({ where: { id: report.id } });
         await expect(closure.generateProject(admin)).rejects.toMatchObject({ code: 'PROJECT_CLOSURE_REPORT_LOCKED' });
         expect(await prisma.projectClosureReport.findUniqueOrThrow({ where: { id: report.id } })).toEqual(before);
