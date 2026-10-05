@@ -133,7 +133,7 @@ export class AccountsService {
     const temporaryPassword = generateStrongTempPassword();
     const secretHash = await hashSecret(temporaryPassword);
     const account = await prisma.$transaction(async (tx) => {
-      if (dto.invite) await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`abanmi-invitation:${email}`}, 0))`;
+      if (dto.invite) await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`abanmi-invitation:${email}`}, 0))`;
       const duplicate = await tx.authCredential.findUnique({
         where: { type_identifier: { type: AuthCredentialType.EMAIL_PASSWORD, identifier: email } },
         ...(dto.invite ? { include: { account: true } } : {}),
