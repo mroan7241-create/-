@@ -15,6 +15,11 @@ export const SELECTION_GROUPS: Array<{ key: SelectionGroup; label: string }> = [
   { key: 'ALL', label: 'جميع الطلبات' },
 ];
 
+/** Presentation only: never sort or mutate the complete source list. */
+export function regionApplications<T extends { region: string }>(applications: readonly T[], region: string): T[] {
+  return applications.filter((application) => !region || application.region === region);
+}
+
 export function selectionGroup(application: Pick<ApplicationSummary, 'eligibilityStatus' | 'selectionList' | 'processingStartedAt'> & { latestInformationRequest?: ApplicationSummary['latestInformationRequest'] }): Exclude<SelectionGroup, 'ACTION' | 'ALL'> {
   if (application.eligibilityStatus === 'FAILED') return 'FAILED';
   if (application.eligibilityStatus === 'NEEDS_INFO') return 'NEEDS_INFO';

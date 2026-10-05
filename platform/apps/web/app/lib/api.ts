@@ -194,6 +194,7 @@ export interface ApplicationSummary {
   evaluationEvidence: Record<string, unknown> | null;
   evaluationBreakdown: Record<string, unknown> | null;
   attachmentKeys: string[];
+  hasInitialBeneficiaryFile?: boolean;
   latestInformationRequest: ApplicationInformationRequest | null;
 }
 
@@ -255,7 +256,7 @@ export function submitApplicationInformation(draftCode: string, resumeToken: str
 export function requestApplicationAccess(email: string): Promise<{ ok: true; message: string }> { return apiFetch('/association-applications/access/request', { method: 'POST', body: JSON.stringify({ email }) }); }
 export function exchangeApplicationAccess(token: string): Promise<{ ok: true; draftCode: string; destination: '/apply' | '/apply/status' }> { return apiFetch('/association-applications/access/exchange', { method: 'POST', body: JSON.stringify({ token }) }); }
 export function requestPasswordReset(email: string): Promise<{ ok: true; message: string }> { return apiFetch('/auth/password-reset/request', { method: 'POST', body: JSON.stringify({ email }) }); }
-export function confirmPasswordReset(email: string, code: string, newPassword: string): Promise<{ ok: true }> { return apiFetch('/auth/password-reset/confirm', { method: 'POST', body: JSON.stringify({ email, code, newPassword }) }); }
+export function confirmPasswordReset(email: string, code: string, newPassword: string, name?: string): Promise<{ ok: true }> { return apiFetch('/auth/password-reset/confirm', { method: 'POST', body: JSON.stringify({ email, code, newPassword, ...(name !== undefined ? { name } : {}) }) }); }
 export function startApplicationProcessing(applicationIds: string[]) { return apiFetch<{ ok: true; started: number; alreadyStarted: number }>('/association-applications/processing/start', { method: 'POST', body: JSON.stringify({ applicationIds, opId: newOpId() }) }); }
 export function getApplicationEligibilityEvidence(id: string) { return apiFetch<Record<string, unknown>>(`/association-applications/${id}/eligibility-evidence`); }
 export function requestApplicationInformation(id: string, input: { note?: string; deadline?: string; items: Array<{ type: 'FIELD' | 'ATTACHMENT'; key: string; reason: string }> }): Promise<{ ok: true; requestId: string; emailQueued?: boolean; emailSent: boolean | null }> { return apiFetch(`/association-applications/${id}/information-request`, { method: 'POST', body: JSON.stringify({ ...input, opId: newOpId() }) }); }

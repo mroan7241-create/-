@@ -3,6 +3,18 @@ import assert from 'node:assert/strict';
 // Node 24's type-stripping runner needs the explicit TypeScript extension.
 // @ts-ignore -- standalone node --test import
 import { fetchPagedItems } from './selection-load.ts';
+// @ts-ignore -- standalone node --test import
+import { regionApplications } from './selection-groups.ts';
+
+test('region filter hides only other regions, counts all pages and preserves order/source', async () => {
+  const all = await fetchPagedItems(async (page) => ({ items: [{ id: page, region: page === 2 ? 'القصيم' : 'الرياض' }], totalPages: 3 }));
+  const before = JSON.stringify(all);
+  assert.deepEqual(regionApplications(all, 'الرياض').map((row) => row.id), [1, 3]);
+  assert.equal(regionApplications(all, 'القصيم').length, 1);
+  assert.deepEqual(regionApplications(all, ''), all);
+  assert.deepEqual(regionApplications(all, 'غير موجودة'), []);
+  assert.equal(JSON.stringify(all), before);
+});
 
 test('selection board fetches pages concurrently with a bound and preserves order', async () => {
   let active = 0;

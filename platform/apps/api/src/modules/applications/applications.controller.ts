@@ -152,9 +152,9 @@ export class ApplicationsController {
 
   @Get('association-applications/:id/license-file')
   @Roles(AccountRole.ADMIN)
-  @ApiOperation({ summary: 'رابط موقَّع قصير العمر لعرض ملف الترخيص — ADMIN فقط، Audit عند كل عرض' })
-  async licenseFile(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string) {
-    return this.applications.getLicenseSignedUrl(ctx, id);
+  @ApiOperation({ summary: 'رابط موقَّع قصير العمر لمرفق الطلب — الترخيص افتراضيًا أو fieldKey، ADMIN فقط، Audit عند كل عرض' })
+  async licenseFile(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Query('fieldKey') fieldKey?: string) {
+    return this.applications.getLicenseSignedUrl(ctx, id, fieldKey);
   }
 
   @Post('association-applications/:id/review')

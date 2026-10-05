@@ -14,7 +14,7 @@ import {
   ParticipationStatus,
   ActivationBasis,
 } from '@alzad/db';
-import { LEGACY_APPLICATION_QUESTIONS } from '@alzad/shared';
+import { APPLICATION_ATTACHMENT_LABELS, LEGACY_APPLICATION_QUESTIONS } from '@alzad/shared';
 import { ApiError } from '../../common/api-error';
 import { RateLimitService } from '../../common/rate-limit.service';
 import { PublicCodeService } from '../../common/public-code.service';
@@ -348,15 +348,19 @@ export class ApplicationsService {
   // ================================================================
   // ADMIN LICENSE FILE — signed URL قصير العمر
   // ================================================================
-  async getLicenseSignedUrl(ctx: AuthContext, id: string): Promise<{ url: string }> {
-    const application = await prisma.associationApplication.findUnique({ where: { id }, include: { licenseFile: true } });
+  async getLicenseSignedUrl(ctx: AuthContext, id: string, fieldKey = 'licenseFile'): Promise<{ url: string }> {
+    if (!Object.hasOwn(APPLICATION_ATTACHMENT_LABELS, fieldKey)) throw new ApiError('APPLICATION_ATTACHMENT_INVALID', 'نوع المرفق غير صالح', 400);
+    const application = await prisma.associationApplication.findUnique({ where: { id }, include: { licenseFile: true, initialBeneficiaryFile: true, attachments: { include: { file: true } } } });
     if (!application) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب الانضمام غير موجود', 404);
-    if (!application.licenseFile || application.licenseFile.category !== FileCategory.ASSOCIATION_LICENSE) {
+    const file = fieldKey === 'licenseFile' ? application.licenseFile : application.attachments.find((item) => item.fieldKey === fieldKey)?.file ?? (fieldKey === 'initialBeneficiaryFile' ? application.initialBeneficiaryFile : null);
+    const category = fieldKey === 'licenseFile' ? FileCategory.ASSOCIATION_LICENSE : fieldKey === 'initialBeneficiaryFile' ? FileCategory.APPLICATION_INITIAL_BENEFICIARIES : FileCategory.APPLICATION_SUPPORTING_DOCUMENT;
+    if (!file || file.category !== category) {
+      if (fieldKey !== 'licenseFile') throw new ApiError('APPLICATION_ATTACHMENT_NOT_FOUND', 'لا يوجد هذا المرفق في الطلب', 404);
       throw new ApiError('APPLICATION_LICENSE_INVALID', 'لا يوجد ملف ترخيص مرفق بهذا الطلب', 404);
     }
 
-    const url = await this.storage.getSignedGetUrl(application.licenseFile.objectKey, storageConfig.licenseSignedUrlSeconds);
-    await this.audit.log({ id: ctx.accountId, role: ctx.role, associationId: ctx.associationId }, 'APPLICATION_LICENSE_VIEWED', 'association_applications', id);
+    const url = await this.storage.getSignedGetUrl(file.objectKey, storageConfig.licenseSignedUrlSeconds);
+    await this.audit.log({ id: ctx.accountId, role: ctx.role, associationId: ctx.associationId }, fieldKey === 'licenseFile' ? 'APPLICATION_LICENSE_VIEWED' : 'APPLICATION_ATTACHMENT_VIEWED', 'association_applications', id, fieldKey === 'licenseFile' ? undefined : { fieldKey });
     return { url };
   }
 
@@ -729,6 +733,7 @@ function mapApplicationSummary(row: {
   evaluationEvidence?: Prisma.JsonValue | null;
   evaluationBreakdown?: Prisma.JsonValue | null;
   attachments?: { fieldKey: string }[];
+  initialBeneficiaryFileId?: string | null;
   informationRequests?: { id: string; status: string; note: string | null; deadline: Date | null; requestedAt: Date; submittedAt: Date | null; items: { type: string; key: string; reason: string }[] }[];
 }) {
   const answersList = LEGACY_APPLICATION_QUESTIONS.map((q) => {
@@ -770,6 +775,7 @@ function mapApplicationSummary(row: {
     totalQuestions: total,
     scoreLabel: total ? `${yesCount}/${total}` : '',
     hasLicenseFile: !!row.licenseFile,
+    hasInitialBeneficiaryFile: !!row.initialBeneficiaryFileId || !!row.attachments?.some((item) => item.fieldKey === 'initialBeneficiaryFile'),
     pledgeAccepted: row.pledgeAccepted,
     pledgedAt: row.pledgeAcceptedAt,
     eligibilityStatus: row.eligibilityStatus ?? EligibilityStatus.PENDING,

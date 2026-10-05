@@ -12,6 +12,19 @@ describe('SMTP Arabic layout and completed Covenant attachment', () => {
   });
   afterEach(() => { process.env = { ...previous }; jest.restoreAllMocks(); });
 
+  it('sends an Abanmi activation button with secrets in the fragment, not URL query or logs', async () => {
+    const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ accepted: ['test@example.org'] });
+    jest.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail } as never);
+    const code = `INV-${'A'.repeat(32)}`;
+    await new SmtpEmailService().sendPasswordResetCode({ to: 'test@example.org', name: 'مدعو', code, invitation: true });
+    const sent = sendMail.mock.calls[0]![0] as { html: string; text: string; subject: string };
+    expect(sent.subject).toContain('دعوة'); expect(sent.html).toContain('تفعيل حسابي');
+    const url = new URL(sent.text.split('\n').find((line) => line.startsWith('https://'))!);
+    expect(url.pathname).toBe('/forgot-password'); expect(url.search).toBe('');
+    expect(new URLSearchParams(url.hash.slice(1)).get('code')).toBe(code);
+    expect(JSON.stringify((Logger.prototype.log as jest.Mock).mock.calls)).not.toContain(code);
+  });
+
   it('uses inline RTL/right alignment, approved logo, escaped content, and the actual PDF attachment', async () => {
     const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ accepted: ['test@example.org'] });
     jest.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail } as never);

@@ -5,6 +5,8 @@ import ExcelJS from 'exceljs';
 import { AccountRole, AccountStatus, AuthCredentialType, DeliveryStatus, prisma } from '@alzad/db';
 import { createTestApp } from './utils/bootstrap';
 import { cleanAuthState, hashSecret, seedTestFixtures } from './utils/fixtures';
+import { FakeEmailService } from '../src/modules/auth/email/fake-email.service';
+import { NotificationsService } from '../src/modules/notifications/notifications.service';
 
 function parseBinary(response: Response, callback: (error: Error | null, body?: Buffer) => void) {
   const chunks: Buffer[] = [];
@@ -18,12 +20,14 @@ describe('ABANMI — read-only portal and privacy boundary', () => {
   let cookie: string;
   let accountId: string;
   let generatedAccountId: string | undefined;
+  let invitedAccountId: string | undefined;
+  let fakeEmail: FakeEmailService;
   let fixtures: Awaited<ReturnType<typeof seedTestFixtures>>;
   const email = 'e2e-abanmi@example.org';
   const password = 'E2eAbanmiPass123';
 
   beforeAll(async () => {
-    ({ app } = await createTestApp());
+    ({ app, fakeEmail } = await createTestApp());
     fixtures = await seedTestFixtures();
     const account = await prisma.account.upsert({
       where: { publicCode: 'E2E-ABN-0001' },
@@ -47,6 +51,13 @@ describe('ABANMI — read-only portal and privacy boundary', () => {
   });
 
   afterAll(async () => {
+    if (invitedAccountId) {
+      await prisma.passwordResetToken.deleteMany({ where: { accountId: invitedAccountId } });
+      await prisma.authSession.deleteMany({ where: { accountId: invitedAccountId } });
+      await prisma.auditLog.deleteMany({ where: { OR: [{ actorAccountId: invitedAccountId }, { entityId: invitedAccountId }] } });
+      await prisma.authCredential.deleteMany({ where: { accountId: invitedAccountId } });
+      await prisma.account.deleteMany({ where: { id: invitedAccountId } });
+    }
     if (generatedAccountId) {
       await prisma.authSession.deleteMany({ where: { accountId: generatedAccountId } });
       await prisma.auditLog.deleteMany({ where: { OR: [{ actorAccountId: generatedAccountId }, { entityId: generatedAccountId }] } });
@@ -58,6 +69,48 @@ describe('ABANMI — read-only portal and privacy boundary', () => {
     await prisma.authCredential.deleteMany({ where: { accountId } });
     await prisma.account.deleteMany({ where: { id: accountId } });
     await app.close();
+  });
+
+  it('invites by email, renews expiry without another account, activates once, and preserves existing accounts/reset', async () => {
+    const http = () => request(app.getHttpServer());
+    const adminLogin = await http().post('/api/v1/auth/login').send({ type: 'user', email: fixtures.adminEmail, password: fixtures.adminPassword }).expect(200);
+    const adminCookie = adminLogin.headers['set-cookie'][0];
+    const invitedEmail = 'e2e-abanmi-invitation@example.org';
+    const encryptionKey = process.env.EMAIL_DELIVERY_ENCRYPTION_KEY;
+    try {
+      process.env.EMAIL_DELIVERY_ENCRYPTION_KEY = '';
+      await http().post('/api/v1/accounts/abanmi').set('Cookie', adminCookie).send({ email: 'e2e-abanmi-queue-failed@example.org', invite: true }).expect(500);
+      expect(await prisma.account.count({ where: { email: 'e2e-abanmi-queue-failed@example.org' } })).toBe(0);
+    } finally { process.env.EMAIL_DELIVERY_ENCRYPTION_KEY = encryptionKey; }
+    const created = await http().post('/api/v1/accounts/abanmi').set('Cookie', adminCookie).send({ email: invitedEmail, invite: true }).expect(201);
+    invitedAccountId = created.body.accountId;
+    expect(created.body.emailQueued).toBe(true); expect(created.body.temporaryPassword).toBeUndefined();
+    await app.get(NotificationsService).processOutbox();
+    const initial = fakeEmail.lastPasswordReset!;
+    expect(initial).toMatchObject({ to: invitedEmail, invitation: true, code: expect.stringMatching(/^INV-[A-Z0-9]{32}$/) });
+    const confirm = (code: string, name = 'مدعو أبانمي') => http().post('/api/v1/auth/password-reset/confirm').send({ email: invitedEmail, code, newPassword: 'InvitedAbanmiPassword123', name });
+    await prisma.passwordResetToken.updateMany({ where: { accountId: invitedAccountId }, data: { expiresAt: new Date(0) } });
+    await confirm(initial.code).expect(400);
+    const retries = await Promise.all([1, 2].map(() => http().post('/api/v1/accounts/abanmi').set('Cookie', adminCookie).send({ email: invitedEmail, invite: true }).expect(201)));
+    expect(retries.every((retry) => retry.body.accountId === invitedAccountId)).toBe(true);
+    expect(await prisma.account.count({ where: { email: invitedEmail } })).toBe(1);
+    await app.get(NotificationsService).processOutbox();
+    const renewed = fakeEmail.lastPasswordReset!.code;
+    expect(renewed).not.toBe(initial.code);
+    await confirm(renewed, '').expect(400);
+    await confirm(renewed).expect(200);
+    const activated = await prisma.account.findUniqueOrThrow({ where: { id: invitedAccountId } });
+    expect(activated).toMatchObject({ name: 'مدعو أبانمي', role: AccountRole.ABANMI, associationId: null, mustChangePassword: false });
+    await confirm(renewed).expect(400);
+    await http().post('/api/v1/accounts/abanmi').set('Cookie', adminCookie).send({ email: invitedEmail, invite: true }).expect(409);
+    await http().post('/api/v1/accounts/abanmi').set('Cookie', adminCookie).send({ email: fixtures.adminEmail, invite: true }).expect(409);
+    const login = await http().post('/api/v1/auth/login').send({ type: 'user', email: invitedEmail, password: 'InvitedAbanmiPassword123' }).expect(200);
+    await http().get('/api/v1/association-applications').set('Cookie', login.headers['set-cookie'][0]).expect(403);
+    await http().post('/api/v1/auth/password-reset/request').send({ email: invitedEmail }).expect(200);
+    await app.get(NotificationsService).processOutbox();
+    expect(fakeEmail.lastPasswordReset!.code).toMatch(/^RST-/);
+    expect(fakeEmail.lastPasswordReset!.invitation).toBeUndefined();
+    expect((await prisma.account.findUniqueOrThrow({ where: { id: invitedAccountId } })).name).toBe('مدعو أبانمي');
   });
 
   it('returns aggregate reports and project tracking without beneficiary PII', async () => {

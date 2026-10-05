@@ -52,6 +52,30 @@ describe('Password reset durable delivery', () => {
     expect(tx.passwordResetToken.update).toHaveBeenCalledWith({ where: { id: 'candidate-id' }, data: { attemptCount: 3, consumedAt: undefined } });
     expect(tx.authCredential.update).not.toHaveBeenCalled(); expect(queued).not.toHaveBeenCalled();
   });
+  it('activates only a new ABANMI invitation and saves the invitee name through the existing reset transaction', async () => {
+    const { service, tx, account, lock } = setup();
+    Object.assign(account, { role: AccountRole.ABANMI, mustChangePassword: true, name: 'synthetic@example.org', archivedAt: null });
+    const code = `INV-${'A'.repeat(32)}`;
+    lock.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 'invite-id', account_id: account.id, token_hash: resetTokenHash(code), attempt_count: 0, expires_at: new Date(Date.now() + 60_000), consumed_at: null }]);
+    await expect(service.confirmPasswordReset('synthetic@example.org', code, 'SyntheticPassword123', 'اسم المدعو')).resolves.toEqual({ ok: true });
+    expect(tx.account.update).toHaveBeenCalledWith({ where: { id: account.id }, data: { mustChangePassword: false, name: 'اسم المدعو' } });
+    expect(tx.passwordResetToken.updateMany).toHaveBeenCalled();
+  });
+  it.each([AccountRole.ADMIN, AccountRole.ASSOCIATION])('cannot use invitation naming to mutate an existing %s account', async (role) => {
+    const { service, tx, account, lock } = setup();
+    Object.assign(account, { role, mustChangePassword: true, name: 'synthetic@example.org' });
+    const code = `INV-${'A'.repeat(32)}`;
+    lock.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 'invite-id', account_id: account.id, token_hash: resetTokenHash(code), attempt_count: 0, expires_at: new Date(Date.now() + 60_000), consumed_at: null }]);
+    await expect(service.confirmPasswordReset('synthetic@example.org', code, 'SyntheticPassword123', 'اسم آخر')).rejects.toMatchObject({ code: 'AUTH_VALIDATION_FAILED' });
+    expect(tx.account.update).not.toHaveBeenCalled(); expect(tx.authCredential.update).not.toHaveBeenCalled();
+  });
+  it('rejects a name supplied to ordinary password reset instead of renaming any account', async () => {
+    const { service, tx, lock } = setup();
+    const code = 'RST-OLDTEST1';
+    lock.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 'old-id', account_id: 'account-id', token_hash: resetTokenHash(code), attempt_count: 0, expires_at: new Date(Date.now() + 60_000), consumed_at: null }]);
+    await expect(service.confirmPasswordReset('synthetic@example.org', code, 'SyntheticPassword123', 'اسم آخر')).rejects.toMatchObject({ code: 'AUTH_VALIDATION_FAILED' });
+    expect(tx.account.update).not.toHaveBeenCalled();
+  });
   it('keeps the public response generic when the atomic delivery enqueue fails', async () => {
     const { service, tx, queued, send } = setup();
     queued.mockRejectedValue(new Error('synthetic queue unavailable'));

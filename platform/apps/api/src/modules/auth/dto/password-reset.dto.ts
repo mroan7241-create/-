@@ -1,4 +1,4 @@
-import { IsString, MinLength } from 'class-validator';
+import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class RequestPasswordResetDto {
   @IsString()
@@ -15,4 +15,10 @@ export class ConfirmPasswordResetDto {
   @IsString()
   @MinLength(1)
   newPassword!: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(120)
+  name?: string;
 }

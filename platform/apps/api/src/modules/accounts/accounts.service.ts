@@ -2,7 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { AccountRole, AccountStatus, AuthCredentialType, Prisma, prisma } from '@alzad/db';
 import { isAdminPermission, normalizeAdminPermissions } from '@alzad/shared';
 import { ApiError, authForbidden } from '../../common/api-error';
-import { generateStrongTempPassword } from '../../common/crypto.util';
+import { generateAccessCode, generateStrongTempPassword, resetTokenHash } from '../../common/crypto.util';
+import { authConfig } from '../../config/auth.config';
+import { enqueueEmail } from '../auth/email/email.service';
 import { hashSecret } from '../../common/password.util';
 import { PublicCodeService } from '../../common/public-code.service';
 import { requiredEmail, requiredText } from '../../common/validation/text.util';
@@ -125,15 +127,28 @@ export class AccountsService {
   }
 
   async createAbanmi(ctx: AuthContext, dto: CreateAbanmiAccountDto) {
-    const name = requiredText(dto.name, 'اسم المستخدم', 120);
-    const email = dto.email.trim().toLowerCase();
+    if (ctx.role !== AccountRole.ADMIN) throw authForbidden();
+    const email = requiredEmail(dto.email);
+    const name = dto.invite ? email : requiredText(dto.name, 'اسم المستخدم', 120);
     const temporaryPassword = generateStrongTempPassword();
     const secretHash = await hashSecret(temporaryPassword);
     const account = await prisma.$transaction(async (tx) => {
+      if (dto.invite) await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`abanmi-invitation:${email}`}, 0))`;
       const duplicate = await tx.authCredential.findUnique({
         where: { type_identifier: { type: AuthCredentialType.EMAIL_PASSWORD, identifier: email } },
+        ...(dto.invite ? { include: { account: true } } : {}),
       });
-      if (duplicate) throw new ApiError('ACCOUNT_EMAIL_IN_USE', 'البريد الإلكتروني مستخدم في حساب آخر', 409);
+      if (duplicate) {
+        const current = 'account' in duplicate ? duplicate.account as { id: string; role: AccountRole; status: AccountStatus; archivedAt: Date | null; name: string; mustChangePassword: boolean } : null;
+        const invited = current && current.role === AccountRole.ABANMI && current.status === AccountStatus.ACTIVE && !current.archivedAt && current.mustChangePassword && current.name === email && await tx.auditLog.findFirst({ where: { entityId: current.id, action: 'ABANMI_ACCOUNT_INVITED' } });
+        if (!dto.invite || !invited || !current) throw new ApiError('ACCOUNT_EMAIL_IN_USE', 'البريد الإلكتروني مستخدم في حساب آخر', 409);
+        await tx.$queryRaw`SELECT id FROM accounts WHERE id=${current.id}::uuid FOR UPDATE`;
+        const locked = await tx.account.findUniqueOrThrow({ where: { id: current.id } });
+        if (locked.role !== AccountRole.ABANMI || locked.status !== AccountStatus.ACTIVE || locked.archivedAt || !locked.mustChangePassword || locked.name !== email) throw new ApiError('ACCOUNT_EMAIL_IN_USE', 'الحساب مستخدم بالفعل ولا يحتاج دعوة جديدة', 409);
+        const credential = await tx.authCredential.findUniqueOrThrow({ where: { id: duplicate.id } });
+        await this.queueAbanmiInvitation(tx, ctx, current.id, email, credential.secretHash);
+        return locked;
+      }
       const publicCode = await this.publicCode.nextPublicCode(tx, 'ABN');
       const created = await tx.account.create({
         data: { publicCode, name, email, role: AccountRole.ABANMI, status: AccountStatus.ACTIVE, mustChangePassword: true },
@@ -141,9 +156,19 @@ export class AccountsService {
       await tx.authCredential.create({
         data: { accountId: created.id, type: AuthCredentialType.EMAIL_PASSWORD, identifier: email, secretHash },
       });
+      if (dto.invite) await this.queueAbanmiInvitation(tx, ctx, created.id, email, secretHash);
       return created;
     });
+    if (dto.invite) return { ok: true as const, accountId: account.id, emailQueued: true as const };
     await this.audit.log({ id: ctx.accountId, role: ctx.role, associationId: ctx.associationId }, 'ABANMI_ACCOUNT_CREATED', 'accounts', account.id);
     return { ok: true as const, accountId: account.id, temporaryPassword };
+  }
+
+  private async queueAbanmiInvitation(tx: Prisma.TransactionClient, ctx: AuthContext, accountId: string, email: string, credentialHash: string) {
+    const code = generateAccessCode('INV', 32);
+    const predecessors = await tx.passwordResetToken.findMany({ where: { accountId, consumedAt: null, expiresAt: { gt: new Date() } }, select: { id: true } });
+    const token = await tx.passwordResetToken.create({ data: { accountId, emailNormalized: email, tokenHash: resetTokenHash(code), expiresAt: new Date(Date.now() + authConfig.passwordResetTtlSeconds * 1000) } });
+    await enqueueEmail(tx, 'PASSWORD_RESET', { to: email, name: 'مستخدم أبانمي', code, invitation: true }, { type: 'reset', tokenId: token.id, accountId, credentialHash, predecessorIds: predecessors.map(({ id }) => id) });
+    await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'ABANMI_ACCOUNT_INVITED', entityType: 'accounts', entityId: accountId } });
   }
 }

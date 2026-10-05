@@ -103,7 +103,7 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'إتمام استعادة كلمة المرور برمز صالح' })
   async confirmPasswordReset(@Body() dto: ConfirmPasswordResetDto) {
-    return this.authService.confirmPasswordReset(dto.email, dto.code, dto.newPassword);
+    return this.authService.confirmPasswordReset(dto.email, dto.code, dto.newPassword, dto.name);
   }
 
   @Post('associations/:id/reset-password')

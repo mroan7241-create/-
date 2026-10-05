@@ -320,6 +320,12 @@ describe('Application V2 launch gate', () => {
     await prisma.associationApplicationDraft.update({ where: { publicCode: draft.draftCode }, data: { expiresAt: new Date(Date.now() + 60_000) } });
     const submitted = await http().post(`${path}/submit`).set(auth).send({ revision: saved.body.revision }).expect(201);
     const application = await prisma.associationApplication.findUniqueOrThrow({ where: { publicCode: submitted.body.id } });
+    const financialRead = await http().get(`/api/v1/association-applications/${application.id}/license-file?fieldKey=financialStatementsFile`).set('Cookie', adminCookie).expect(200);
+    const financialBytes = await fetch(financialRead.body.url, { signal: AbortSignal.timeout(5000) });
+    expect(Buffer.from(await financialBytes.arrayBuffer())).toEqual(PDF);
+    await http().get(`/api/v1/association-applications/${application.id}/license-file?fieldKey=financialStatementsFile`).expect(401);
+    await http().get(`/api/v1/association-applications/${application.id}/license-file?fieldKey=operationalPlanFile`).set('Cookie', adminCookie).expect(404);
+    await http().get(`/api/v1/association-applications/${application.id}/license-file?fieldKey=otherApplicationFileId`).set('Cookie', adminCookie).expect(400);
     await upload('licenseFile').expect(403);
     const info = await http().post(`/api/v1/association-applications/${application.id}/information-request`).set('Cookie', adminCookie).send({ items: [{ type: 'ATTACHMENT', key: 'licenseFile', reason: 'ترخيص أوضح' }], opId: randomUUID() }).expect(201);
     await upload('financialStatementsFile').expect(403);

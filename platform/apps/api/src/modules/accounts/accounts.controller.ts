@@ -46,7 +46,7 @@ export class AccountsController {
 
   @Post('abanmi')
   @Roles(AccountRole.ADMIN)
-  @ApiOperation({ summary: 'إنشاء حساب أبانمي للقراءة فقط — تُعاد كلمة المرور المؤقتة مرة واحدة' })
+  @ApiOperation({ summary: 'حساب أبانمي — invite=true يرسل دعوة بالبريد؛ الإنشاء السابق بالاسم يبقى متوافقًا' })
   createAbanmi(@CurrentUser() ctx: AuthContext, @Body() dto: CreateAbanmiAccountDto) {
     return this.accounts.createAbanmi(ctx, dto);
   }

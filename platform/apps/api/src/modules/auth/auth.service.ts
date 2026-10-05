@@ -284,13 +284,15 @@ export class AuthService {
       return generic;
     }
 
-    const code = generateAccessCode('RST', 8);
+    const invitation = account.role === AccountRole.ABANMI && account.mustChangePassword && account.name === email && !!await prisma.auditLog.findFirst({ where: { entityId: account.id, action: 'ABANMI_ACCOUNT_INVITED' } });
+    const code = generateAccessCode(invitation ? 'INV' : 'RST', invitation ? 32 : 8);
     try {
       await prisma.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT id FROM accounts WHERE id=${account.id}::uuid FOR UPDATE`;
         const currentCredential = await tx.authCredential.findUnique({ where: { id: credential!.id }, include: { account: { include: { association: true } } } });
         const current = currentCredential?.account;
         if (!currentCredential || !current || currentCredential.type !== AuthCredentialType.EMAIL_PASSWORD || currentCredential.identifier !== email || current.status !== AccountStatus.ACTIVE || ![AccountRole.ADMIN, AccountRole.ASSOCIATION, AccountRole.ABANMI].includes(current.role as 'ADMIN' | 'ASSOCIATION' | 'ABANMI') || (current.role === AccountRole.ASSOCIATION && current.association?.status !== AssociationStatus.ACTIVE)) return;
+        if (invitation && (current.role !== AccountRole.ABANMI || !current.mustChangePassword || current.name !== email || current.archivedAt)) return;
         const predecessors = await tx.passwordResetToken.findMany({ where: { accountId: account.id, consumedAt: null, expiresAt: { gt: new Date() } }, select: { id: true } });
         // Persist the candidate and the encrypted delivery atomically. The worker
         // consumes only these captured predecessors after confirmed SMTP acceptance.
@@ -302,7 +304,7 @@ export class AuthService {
             expiresAt: new Date(Date.now() + authConfig.passwordResetTtlSeconds * 1000),
           },
         });
-        await enqueueEmail(tx, 'PASSWORD_RESET', { to: email, name: current.name, code }, { type: 'reset', tokenId: token.id, accountId: current.id, credentialHash: currentCredential.secretHash, predecessorIds: predecessors.map(({ id }) => id) });
+        await enqueueEmail(tx, 'PASSWORD_RESET', { to: email, name: current.name, code, ...(invitation ? { invitation: true } : {}) }, { type: 'reset', tokenId: token.id, accountId: current.id, credentialHash: currentCredential.secretHash, predecessorIds: predecessors.map(({ id }) => id) });
         await tx.auditLog.create({ data: { actorAccountId: current.id, actorRole: current.role, associationId: current.associationId, action: 'PASSWORD_RESET_REQUESTED', entityType: 'accounts', entityId: current.id } });
       });
     } catch {
@@ -318,7 +320,7 @@ export class AuthService {
   // ================================================================
   // CONFIRM PASSWORD RESET
   // ================================================================
-  async confirmPasswordReset(emailRaw: string, codeRaw: string, newPassword: string): Promise<{ ok: true }> {
+  async confirmPasswordReset(emailRaw: string, codeRaw: string, newPassword: string, invitationName?: string): Promise<{ ok: true }> {
     const email = String(emailRaw || '').trim().toLowerCase();
     const code = String(codeRaw || '').trim().toUpperCase();
     await this.rateLimit.consume('password-reset-verify', email, authConfig.rateLimitPasswordResetVerify);
@@ -363,6 +365,10 @@ export class AuthService {
         return { ok: false };
       }
 
+      const invitation = code.startsWith('INV-');
+      if (invitation && (account.role !== AccountRole.ABANMI || !account.mustChangePassword || account.name !== email || account.archivedAt || !/^INV-[A-Z0-9]{32}$/.test(code) || !invitationName?.trim() || invitationName.trim().length < 2 || invitationName.trim().length > 120)) return { ok: false };
+      if (!invitation && invitationName !== undefined) return { ok: false };
+
       const finalPassword = await assertPasswordPolicy(newPassword, credential.secretHash, credential.previousSecretHash);
       const newHash = await hashSecret(finalPassword);
 
@@ -370,7 +376,7 @@ export class AuthService {
         where: { id: credential.id },
         data: { previousSecretHash: credential.secretHash, secretHash: newHash },
       });
-      await tx.account.update({ where: { id: account.id }, data: { mustChangePassword: false } });
+      await tx.account.update({ where: { id: account.id }, data: { mustChangePassword: false, ...(invitation ? { name: invitationName!.trim() } : {}) } });
       await tx.authSession.updateMany({ where: { accountId: account.id, revokedAt: null }, data: { revokedAt: new Date() } });
       await tx.passwordResetToken.updateMany({ where: { accountId: account.id, consumedAt: null }, data: { consumedAt: new Date() } });
       await enqueueEmail(tx, 'NOTICE', {

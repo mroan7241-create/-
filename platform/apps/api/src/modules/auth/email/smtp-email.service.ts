@@ -47,6 +47,15 @@ export class SmtpEmailService implements EmailService {
   }
 
   async sendPasswordResetCode(params: PasswordResetEmailParams, options?: EmailSendOptions): Promise<void> {
+    if (params.invitation) {
+      const webUrl = required('PUBLIC_WEB_URL').replace(/\/$/, '');
+      const url = `${webUrl}/forgot-password#${new URLSearchParams({ invitation: '1', email: params.to, code: params.code })}`;
+      const subject = 'دعوة إلى بوابة أبانمي — مشروع الأجهزة الكهربائية';
+      await this.send('PASSWORD_RESET', params.to, subject,
+        `دُعيت إلى بوابة أبانمي لمتابعة المشروع.\nافتح الرابط واكتب اسمك واختر كلمة مرورك:\n${url}\nالرابط مؤقت ويستخدم مرة واحدة. إذا انتهى، يمكنك طلب رابط جديد من صفحة استعادة الدخول.`,
+        layout('دعوة إلى بوابة أبانمي', `<p>دُعيت لمتابعة مشروع الأجهزة الكهربائية عبر بوابة أبانمي. اختر اسمك وكلمة مرورك بنفسك.</p><p><a href="${escapeAttribute(url)}" style="display:inline-block;background:#65102f;color:#fff;padding:12px 20px;text-decoration:none;border-radius:8px">تفعيل حسابي</a></p><p>الرابط مؤقت ويستخدم مرة واحدة. إذا انتهى، يمكنك طلب رابط جديد من صفحة استعادة الدخول.</p>`), undefined, options);
+      return;
+    }
     const subject = 'استعادة كلمة المرور — منصة مشروع الأجهزة الكهربائية';
     const code = escapeHtml(params.code);
     await this.send('PASSWORD_RESET', params.to, subject,
