@@ -15,6 +15,7 @@ const BACKUP_PREFIX = 'alzad-encrypted-backups/';
 const PART_SIZE = 8 * 1024 * 1024;
 const MAX_EMAIL_BYTES = 64 * 1024 * 1024;
 const CAPACITY_WARNING_BYTES = 48 * 1024 * 1024;
+const OBJECT_DOWNLOAD_CONCURRENCY = 4;
 const require = createRequire(new URL('../../platform/apps/api/package.json', import.meta.url));
 const missing = name => { throw new Error(`Missing or invalid backup setting: ${name}`); };
 export function configuration(raw) {
@@ -73,26 +74,45 @@ export function run(command,args,options={}) {
     child.on('close',code=>{clearTimeout(timeout);code===0?accept():reject(new Error('Backup command failed or timed out'));});
   });
 }
-export async function collectObjects(client,commands,bucket,directory,maxBytes=2*1024**3) {
+export async function collectObjects(client,commands,bucket,directory,maxBytes=4*1024**3,snapshotReferences=[]) {
   const { ListObjectsV2Command, GetObjectCommand }=commands;
   async function listing() {
     const items=[]; let token;
     do { const page=await client.send(new ListObjectsV2Command({Bucket:bucket,ContinuationToken:token})); items.push(...(page.Contents||[])); if(page.IsTruncated&&!page.NextContinuationToken) throw new Error('Incomplete storage listing'); token=page.IsTruncated?page.NextContinuationToken:undefined; } while(token);
-    return items.filter(item=>!item.Key?.startsWith(BACKUP_PREFIX)).sort((a,b)=>a.Key.localeCompare(b.Key));
+    return items.filter(item=>!(typeof item.Key==='string'&&item.Key.startsWith(BACKUP_PREFIX))).sort((a,b)=>String(a.Key??'').localeCompare(String(b.Key??'')));
   }
-  const before=await listing(); let total=0; const manifest=[];
+  const before=await listing(); let total=0;
+  if(!Number.isSafeInteger(maxBytes)||maxBytes<0) throw new Error('Backup exceeds configured size limit');
   for(const item of before) {
-    if(!item.Key||!item.ETag) throw new Error('Incomplete object metadata');
-    total+=item.Size||0; if(total>maxBytes) throw new Error('Backup exceeds configured size limit');
-    // Numeric local filenames prevent untrusted object keys from escaping the directory.
-    const filename=`object-${String(manifest.length+1).padStart(8,'0')}`;
-    const response=await client.send(new GetObjectCommand({Bucket:bucket,Key:item.Key,IfMatch:item.ETag}));
-    if(!response.Body) throw new Error('Missing object body');
-    const destination=join(directory,filename);
-    await pipeline(response.Body,createWriteStream(destination,{flags:'wx',mode:0o600}));
-    if((await stat(destination)).size!==item.Size) throw new Error('Object size mismatch');
-    manifest.push({key:item.Key,filename,bytes:item.Size,sha256:await hashFile(destination),etag:item.ETag,versionId:response.VersionId,contentType:response.ContentType});
+    if(typeof item.Key!=='string'||!item.Key||typeof item.ETag!=='string'||!item.ETag||!Number.isSafeInteger(item.Size)||item.Size<0) throw new Error('Incomplete object metadata');
+    total+=item.Size; if(!Number.isSafeInteger(total)||total>maxBytes) throw new Error('Backup exceeds configured size limit');
   }
+  const referencedKeys=new Set(snapshotReferences.filter(reference=>reference.bucket===bucket).map(reference=>reference.key));
+  const manifest=new Array(before.length);let next=0,failed=false,failure;
+  async function download() {
+    while(!failed&&next<before.length) {
+      const index=next++,item=before[index];
+      try {
+        // Assign paths from sorted listing position, never completion order or object key.
+        const filename=`object-${String(index+1).padStart(8,'0')}`;
+        let response;
+        try {response=await client.send(new GetObjectCommand({Bucket:bucket,Key:item.Key,IfMatch:item.ETag}));}
+        catch(error) {
+          const source=error&&typeof error==='object'?error:{};
+          // Provider messages/keys never enter the diagnostic wrapper or public logs.
+          throw Object.assign(new Error('Private object GET failed'),{name:source.name,code:source.code,$metadata:source.$metadata,objectIndex:index+1,objectTotal:before.length,snapshotReferenced:referencedKeys.has(item.Key)});
+        }
+        if(!response.Body) throw new Error('Missing object body');
+        const destination=join(directory,filename);
+        await pipeline(response.Body,createWriteStream(destination,{flags:'wx',mode:0o600}));
+        if((await stat(destination)).size!==item.Size) throw new Error('Object size mismatch');
+        manifest[index]={key:item.Key,filename,bytes:item.Size,sha256:await hashFile(destination),etag:item.ETag,versionId:response.VersionId,contentType:response.ContentType};
+      } catch(error) {if(!failed){failed=true;failure=error;}}
+    }
+  }
+  // Drain every already-started request/stream before rejecting, so caller cleanup cannot race a writer.
+  await Promise.all(Array.from({length:Math.min(OBJECT_DOWNLOAD_CONCURRENCY,before.length)},()=>download()));
+  if(failed) throw failure;
   const after=await listing();
   // New uploads belong to a later database snapshot. Every captured object must
   // still exist unchanged; database references are checked separately below.
@@ -181,6 +201,7 @@ export function safeBackupFailure(error) {
     ['Backup exceeds configured size limit','BACKUP_STORAGE_SIZE_LIMIT'],
     ['Object size mismatch','BACKUP_OBJECT_SIZE_MISMATCH'],
     ['Missing object body','BACKUP_OBJECT_BODY_MISSING'],
+    ['Private object GET failed','BACKUP_OBJECT_GET_FAILED'],
     ['Incomplete object metadata','BACKUP_OBJECT_METADATA_MISSING'],
     ['Incomplete storage listing','BACKUP_STORAGE_LIST_INCOMPLETE'],
     ['Database snapshot references an unavailable or mismatched private object; backup must not be reported successful','BACKUP_REFERENCE_MISMATCH'],
@@ -193,6 +214,10 @@ export function safeBackupFailure(error) {
   if(Number.isInteger(source.responseCode)&&source.responseCode>=100&&source.responseCode<=599) result.responseCode=source.responseCode;
   if(['CONN','EHLO','STARTTLS','AUTH','AUTH PLAIN','AUTH LOGIN','MAIL FROM','RCPT TO','DATA'].includes(source.command)) result.command=source.command;
   for(const field of ['bytes','limitBytes']) if(Number.isSafeInteger(source[field])&&source[field]>=0) result[field]=source[field];
+  if(Number.isSafeInteger(source.objectIndex)&&Number.isSafeInteger(source.objectTotal)&&source.objectIndex>=1&&source.objectIndex<=source.objectTotal&&source.objectTotal<=1000000) {
+    result.objectIndex=source.objectIndex;result.objectTotal=source.objectTotal;
+    if(typeof source.snapshotReferenced==='boolean') result.snapshotReferenced=source.snapshotReferenced;
+  }
   return result;
 }
 export async function backup() {
@@ -215,8 +240,8 @@ export async function backup() {
     console.log('BACKUP_STAGE: PRIVATE_OBJECTS');
     const s3=require('@aws-sdk/client-s3');
     client=new s3.S3Client({endpoint:config.OBJECT_STORAGE_ENDPOINT,region:config.OBJECT_STORAGE_REGION,forcePathStyle:String(config.OBJECT_STORAGE_FORCE_PATH_STYLE||'true')==='true',credentials:{accessKeyId:config.OBJECT_STORAGE_ACCESS_KEY,secretAccessKey:config.OBJECT_STORAGE_SECRET_KEY},maxAttempts:3});
-    const manifest=await collectObjects(client,s3,config.OBJECT_STORAGE_BUCKET,objects);
     const { referencedObjects, ...restoreSummary } = restoreVerification;
+    const manifest=await collectObjects(client,s3,config.OBJECT_STORAGE_BUCKET,objects,undefined,referencedObjects);
     const verifiedFileReferences = assertSnapshotReferences(referencedObjects,manifest,config.OBJECT_STORAGE_BUCKET);
     await writeFile(join(snapshot,'manifest.json'),JSON.stringify({format:1,id,createdAt:new Date().toISOString(),database:{file:'database.dump',sha256:await hashFile(dump),schema:'public'},restoreVerification:{...restoreSummary,verifiedFileReferences},objects:manifest,limitations:['Database-referenced objects verified against the dump, but no global atomic snapshot across database and object storage','Server roles, passwords and deployment secrets are not included']},null,2),{flag:'wx',mode:0o600});
     const archive=join(directory,'snapshot.tar.gz'),encrypted=join(directory,'backup.enc');

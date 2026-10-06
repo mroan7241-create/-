@@ -45,6 +45,111 @@ class GetCommand { constructor(input) { this.input=input; } }
 class PutCommand { constructor(input) { this.input=input; } }
 const storageCommands={ListObjectsV2Command:ListCommand,GetObjectCommand:GetCommand,PutObjectCommand:PutCommand};
 
+test('private object downloads stay bounded at four while manifest order, filenames, hashes and IfMatch remain deterministic',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  try {
+    const items=Array.from({length:9},(_,index)=>({Key:`private/${index}`,ETag:`"etag-${index}"`,Size:Buffer.byteLength(`content-${index}`)}));
+    let active=0,maximum=0,listings=0;const completed=[],requested=[];
+    const client={send:async command=>{
+      if(command instanceof ListCommand){listings++;return{Contents:[...items].reverse()};}
+      assert.equal(command instanceof GetCommand,true);const index=items.findIndex(item=>item.Key===command.input.Key);
+      assert.equal(command.input.IfMatch,items[index].ETag);requested.push(index);active++;maximum=Math.max(maximum,active);
+      return{Body:Readable.from((async function*(){
+        try {await new Promise(resolve=>setTimeout(resolve,index===0?40:index===1?20:1));yield Buffer.from(`content-${index}`);completed.push(index);}
+        finally {active--;}
+      })()),ContentType:'application/octet-stream',VersionId:`version-${index}`};
+    }};
+    const manifest=await collectObjects(client,storageCommands,'test',dir);
+    assert.equal(maximum,4);assert.equal(active,0);assert.equal(listings,2);
+    assert.deepEqual(requested,items.map((_,index)=>index));assert.notDeepEqual(completed,requested);
+    assert.deepEqual(manifest.map(item=>item.key),items.map(item=>item.Key));
+    for(let index=0;index<manifest.length;index++) {
+      const item=manifest[index],content=Buffer.from(`content-${index}`);
+      assert.equal(item.filename,`object-${String(index+1).padStart(8,'0')}`);
+      assert.deepEqual(await readFile(join(dir,item.filename)),content);
+      assert.equal(item.sha256,createHash('sha256').update(content).digest('hex'));assert.equal(item.etag,items[index].ETag);
+      assert.equal(item.versionId,`version-${index}`);
+    }
+    assert.equal(assertSnapshotReferences(items.map((item,index)=>({bucket:'test',key:item.Key,sha256:manifest[index].sha256})),manifest,'test'),items.length);
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('a failed GET stops new scheduling and drains every started stream before rejection and caller cleanup',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  const latch=()=>{let resolve;return{promise:new Promise(done=>{resolve=done;}),resolve:()=>resolve()};};
+  const ready=latch(),fail=latch(),failureRaised=latch(),drain=latch();
+  let collecting;
+  try {
+    const items=Array.from({length:9},(_,index)=>({Key:`private/${index}`,ETag:`etag-${index}`,Size:1}));
+    let settled=false,listings=0,successes=0;const requested=[],finished=[];
+    const secret='private-key@example.org https://private-storage.invalid/key?signature=secret';
+    const client={send:async command=>{
+      if(command instanceof ListCommand){listings++;return{Contents:items};}
+      const index=Number(command.input.Key.split('/').at(-1));requested.push(index);if(requested.length===4)ready.resolve();
+      if(index===0){await fail.promise;failureRaised.resolve();throw Object.assign(new Error(secret),{name:'NoSuchKey',$metadata:{httpStatusCode:404,attempts:1,requestId:secret}});}
+      return{Body:Readable.from((async function*(){try{await drain.promise;yield Buffer.from('x');}finally{finished.push(index);}})())};
+    }};
+    collecting=collectObjects(client,storageCommands,'test',dir,undefined,[{bucket:'test',key:items[0].Key}])
+      .then(manifest=>{settled=true;successes++;return{manifest};},error=>{settled=true;return{error};});
+    await ready.promise;assert.deepEqual(requested,[0,1,2,3]);fail.resolve();await failureRaised.promise;
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(settled,false,'must not reject while other started writers remain live');assert.deepEqual(requested,[0,1,2,3]);
+    drain.resolve();const result=await collecting;
+    assert.equal(successes,0);assert.equal(listings,1,'no final listing or successful backup follows a failed GET');
+    assert.deepEqual(finished.sort(),[1,2,3]);assert.deepEqual(requested,[0,1,2,3]);
+    assert.deepEqual(safeBackupFailure(result.error),{status:'BACKUP_FAILED',code:'NoSuchKey',httpStatusCode:404,attempts:1,objectIndex:1,objectTotal:9,snapshotReferenced:true});
+    assert.equal(result.error.message.includes(secret),false);assert.equal(JSON.stringify(safeBackupFailure(result.error)).includes(secret),false);
+    for(let index=1;index<=3;index++) assert.deepEqual(await readFile(join(dir,`object-${String(index+1).padStart(8,'0')}`)),Buffer.from('x'));
+  } finally {fail.resolve();drain.resolve();if(collecting)await collecting;await rm(dir,{recursive:true,force:true});}
+});
+
+test('GET failure diagnostics distinguish snapshot reference membership without keys or provider messages',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  try {
+    const key='private/synthetic-secret-key',secret='credential@example.org https://private-host/object?signature=secret';
+    for(const references of [undefined,[],[{bucket:'test',key}],[{bucket:'other',key}]]) {
+      const client={send:async command=>{if(command instanceof ListCommand)return{Contents:[{Key:key,ETag:'one',Size:1}]};throw Object.assign(new Error(secret),{name:'PreconditionFailed',code:secret,$metadata:{httpStatusCode:412,attempts:3,totalRetryDelay:5,requestId:secret}});}};
+      await assert.rejects(collectObjects(client,storageCommands,'test',dir,undefined,references),error=>{
+        const result=safeBackupFailure(error);
+        assert.deepEqual(result,{status:'BACKUP_FAILED',code:'PreconditionFailed',httpStatusCode:412,attempts:3,totalRetryDelay:5,objectIndex:1,objectTotal:1,snapshotReferenced:references?.[0]?.bucket==='test'});
+        assert.doesNotMatch(JSON.stringify(result),/synthetic-secret-key|credential@example|private-host|signature=secret/);return true;
+      });
+    }
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('invalid diagnostic bounds and arbitrary reference markers are never emitted',()=>{
+  for(const fields of [{objectIndex:0,objectTotal:1},{objectIndex:2,objectTotal:1},{objectIndex:1,objectTotal:1000001},{objectIndex:'1',objectTotal:2},{objectIndex:NaN,objectTotal:2}]) {
+    assert.deepEqual(safeBackupFailure({...fields,snapshotReferenced:true,name:'NoSuchKey'}),{status:'BACKUP_FAILED',code:'NoSuchKey'});
+  }
+  assert.deepEqual(safeBackupFailure({objectIndex:1,objectTotal:2,snapshotReferenced:'private-key',name:'NoSuchKey'}),{status:'BACKUP_FAILED',code:'NoSuchKey',objectIndex:1,objectTotal:2});
+});
+
+test('collection checks the complete listing capacity before scheduling any downloads',async()=>{
+  let gets=0;const client={send:async command=>{if(command instanceof ListCommand)return{Contents:[{Key:'first',ETag:'one',Size:2},{Key:'second',ETag:'two',Size:2}]};gets++;return{Body:Readable.from([Buffer.from('xx')])};}};
+  await assert.rejects(collectObjects(client,storageCommands,'test',tmpdir(),3),/Backup exceeds configured size limit/);assert.equal(gets,0);
+});
+
+test('the bounded four-GiB default admits the proven current volume, never truncates it, and still enforces explicit smaller limits',async()=>{
+  const items=[{Key:'private/first',ETag:'one',Size:2147483648},{Key:'private/second',ETag:'two',Size:201281532}];
+  // Fail the first synthetic GET immediately: the test needs no multi-GiB local allocation.
+  let gets=0;const client={send:async command=>{if(command instanceof ListCommand)return{Contents:items};gets++;throw Object.assign(new Error('synthetic GET stop'),{name:'NoSuchKey'});}};
+  await assert.rejects(collectObjects(client,storageCommands,'test',tmpdir()),error=>safeBackupFailure(error).code==='NoSuchKey');assert.equal(gets,2);
+  gets=0;await assert.rejects(collectObjects(client,storageCommands,'test',tmpdir(),2*1024**3),/Backup exceeds configured size limit/);assert.equal(gets,0);
+  const overLimit={send:async command=>{if(command instanceof ListCommand)return{Contents:[...items,{Key:'private/third',ETag:'three',Size:2147483648}]};gets++;}};
+  await assert.rejects(collectObjects(overLimit,storageCommands,'test',tmpdir()),/Backup exceeds configured size limit/);assert.equal(gets,0);
+});
+
+test('invalid listed object sizes and total overflow fail before any download',async()=>{
+  for(const size of [undefined,null,-1,1.5,NaN,Infinity,'1',Number.MAX_SAFE_INTEGER+1]) {
+    let gets=0;const client={send:async command=>{if(command instanceof ListCommand)return{Contents:[{Key:'private/first',ETag:'one',Size:1},{Key:'private/invalid',ETag:'two',Size:size}]};gets++;}};
+    await assert.rejects(collectObjects(client,storageCommands,'test',tmpdir()),/Incomplete object metadata/);assert.equal(gets,0);
+  }
+  let gets=0;const client={send:async command=>{if(command instanceof ListCommand)return{Contents:[{Key:'private/first',ETag:'one',Size:Number.MAX_SAFE_INTEGER},{Key:'private/second',ETag:'two',Size:1}]};gets++;}};
+  await assert.rejects(collectObjects(client,storageCommands,'test',tmpdir(),Number.MAX_SAFE_INTEGER),/Backup exceeds configured size limit/);assert.equal(gets,0);
+  for(const limit of [-1,NaN,Infinity,1.5,'4']) await assert.rejects(collectObjects(client,storageCommands,'test',tmpdir(),limit),/Backup exceeds configured size limit/);
+});
+
 test('encrypted storage upload and exact readback precede owner notification without attachments or URLs',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
   try {
