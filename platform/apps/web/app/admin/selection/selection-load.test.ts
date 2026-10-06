@@ -128,3 +128,14 @@ test('UI wiring preserves evaluation while showing the existing dossier, clears 
   assert.match(workspace, /mode=\{currentSection\}/);
   assert.equal((workspace.match(/mode="review"/g) ?? []).length, 0);
 });
+
+test('review mutations and manual refresh cannot overlap and invalidate the loading completion sequence', () => {
+  const board = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8');
+  for (const name of ['run', 'submitInfo', 'saveEligibility', 'retryRejection']) {
+    const handler = board.slice(board.indexOf(`async function ${name}(`)).split('\n  async function ')[0];
+    assert.match(handler, /if \(busyRef\.current \|\| listLoading\) return/);
+  }
+  for (const setter of ['setEligibilityTarget', 'setInfoTarget']) assert.match(board, new RegExp(`disabled=\\{busy \\|\\| listLoading\\} onClick=\\{\\(\\) => ${setter}\\(application\\)\\}`));
+  for (const dialog of ['EligibilityDialog', 'EvaluationDialog', 'InformationDialog']) assert.match(board, new RegExp(`<${dialog}[^\\n]*busy=\\{busy \\|\\| listLoading\\}`));
+  assert.match(board, /disabled=\{busy \|\| listLoading\} onClick=\{\(\) => \{ if \(!busyRef\.current && !listLoading\) void load\(\); \}\}>تحديث القائمة/);
+});
