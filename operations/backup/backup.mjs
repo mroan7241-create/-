@@ -152,7 +152,7 @@ export async function deliverStoredBackup(client,commands,bucket,encryptedPath,t
   const bytes=(await stat(encryptedPath)).size;
   if(!Number.isSafeInteger(bytes)||bytes===0) throw new Error('Invalid encrypted backup size');
   const sha256=await hashFile(encryptedPath),parts=Math.ceil(bytes/PART_SIZE),wholeHash=createHash('sha256');let totalReadbackBytes=0;
-  for(let index=0;index<parts;index++) {
+  async function deliverPart(index) {
     const start=index*PART_SIZE,end=Math.min(bytes,(index+1)*PART_SIZE)-1,partBytes=end-start+1;
     const key=`${BACKUP_PREFIX}${id}.enc${parts>1?`.part-${String(index+1).padStart(4,'0')}`:''}`;
     // Replay the exact same bounded ciphertext bytes after a transient PUT failure.
@@ -188,8 +188,17 @@ export async function deliverStoredBackup(client,commands,bucket,encryptedPath,t
       if(receivedBytes!==partBytes||createHash('sha256').update(readback).digest('hex')!==partSha256) throw new Error('Encrypted backup readback size or checksum mismatch');
       return readback;
     });
-    // Partial failed reads never contaminate the full-archive proof.
-    wholeHash.update(verified);totalReadbackBytes+=verified.length;
+    return verified;
+  }
+  // Two immutable source/readback pairs bound live payload buffers to 32 MiB.
+  for(let first=0;first<parts;first+=2) {
+    const settled=await Promise.allSettled(Array.from({length:Math.min(2,parts-first)},(_,offset)=>deliverPart(first+offset)));
+    // Drain both requests/streams before caller cleanup; never start a later batch after failure.
+    const failed=settled.find(result=>result.status==='rejected');
+    if(failed) throw failed.reason;
+    // allSettled retains input order, not completion order. Failed partial reads
+    // never enter the exact full-archive byte/hash proof.
+    for(const result of settled) {wholeHash.update(result.value);totalReadbackBytes+=result.value.length;}
   }
   if(totalReadbackBytes!==bytes||wholeHash.digest('hex')!==sha256) throw new Error('Encrypted backup aggregate size or checksum mismatch');
   const filenames=parts>1?`${id}.enc.part-0001 … ${id}.enc.part-${String(parts).padStart(4,'0')}`:`${id}.enc`;

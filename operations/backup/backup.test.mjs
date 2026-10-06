@@ -203,7 +203,7 @@ test('stored backup requires the exact owner SMTP acceptance and never overwrite
   } finally {await rm(dir,{recursive:true,force:true});}
 });
 
-for(const bytes of [8*1024*1024,8*1024*1024+1,133770175]) test(`stored delivery buffers ${bytes} bytes one verified part at a time, no larger than 8 MiB`,async()=>{
+for(const bytes of [8*1024*1024,8*1024*1024+1,133770175]) test(`stored delivery uses bounded 8-MiB parts for ${bytes} bytes independent of upload order`,async()=>{
   const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
   try {
     const path=join(dir,'large-encrypted'),file=await open(path,'w');try{await file.truncate(bytes);}finally{await file.close();}
@@ -214,8 +214,10 @@ for(const bytes of [8*1024*1024,8*1024*1024+1,133770175]) test(`stored delivery 
         puts++;assert.equal(command.input.IfNoneMatch,'*');assert.equal(command.input.ACL,undefined);
         assert.ok(command.input.ContentLength<=8*1024*1024);assert.ok(command.input.ContentLength>0);
         assert.equal(Buffer.isBuffer(command.input.Body),true);assert.equal(command.input.Body.length,command.input.ContentLength);
-        assert.equal(command.input.Key,`alzad-encrypted-backups/large-test.enc${bytes>8*1024*1024?`.part-${String(puts).padStart(4,'0')}`:''}`);
-        const uploaded=command.input.Body.length,start=(puts-1)*8*1024*1024;receivedHash.update(command.input.Body);
+        const index=bytes>8*1024*1024?Number(command.input.Key.split('.part-').at(-1))-1:0;
+        assert.ok(Number.isInteger(index)&&index>=0&&index<Math.ceil(bytes/(8*1024*1024)));
+        assert.equal(command.input.Key,`alzad-encrypted-backups/large-test.enc${bytes>8*1024*1024?`.part-${String(index+1).padStart(4,'0')}`:''}`);
+        const uploaded=command.input.Body.length,start=index*8*1024*1024;receivedHash.update(command.input.Body);
         assert.equal(uploaded,command.input.ContentLength);totalUploaded+=uploaded;stored.set(command.input.Key,{start,end:start+uploaded-1,bytes:uploaded});return{};
       }
       assert.equal(command instanceof GetCommand,true);gets++;const part=stored.get(command.input.Key);assert.ok(part);
@@ -248,6 +250,73 @@ test('stored encrypted parts reconstruct exactly and authenticate only in correc
   } finally {await rm(dir,{recursive:true,force:true});}
 });
 
+test('stored delivery has at most two active parts and hashes distinct out-of-order readbacks in original order',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  try {
+    const path=join(dir,'encrypted'),partSize=8*1024*1024,bytes=partSize*4+123,file=await open(path,'w');
+    const expected=createHash('sha256');
+    try {for(let index=0;index<5;index++){const body=Buffer.alloc(index===4?123:partSize,index+1);await file.write(body,0,body.length,index*partSize);expected.update(body);}}finally{await file.close();}
+    const stored=new Map(),completed=[],pairDone=Array.from({length:2},()=>{let resolve;return{promise:new Promise(done=>{resolve=done;}),resolve:()=>resolve()};});let active=0,maximum=0,notifications=0;
+    const client={send:async command=>{
+      const index=Number(command.input.Key.split('.part-').at(-1))-1;
+      assert.ok(index>=0&&index<5);assert.equal(command.input.Bucket,'test');
+      if(command instanceof PutCommand) {
+        if(index>=2)for(let previous=0;previous<index-index%2;previous++)assert.ok(completed.includes(previous),'a later batch must wait for both prior parts');
+        active++;maximum=Math.max(maximum,active);assert.ok(active<=2);
+        assert.equal(command.input.IfNoneMatch,'*');assert.equal(command.input.ACL,undefined);
+        assert.ok(command.input.Body.length<=partSize);assert.equal(command.input.Body[0],index+1);assert.equal(command.input.Body.at(-1),index+1);
+        stored.set(index,{start:index*partSize,end:Math.min(bytes,(index+1)*partSize)-1,bytes:command.input.ContentLength});return{};
+      }
+      assert.equal(command instanceof GetCommand,true);const part=stored.get(index);assert.ok(part);
+      return{ContentLength:part.bytes,Body:Readable.from((async function*(){
+        try {
+          if(index<4&&index%2===0)await pairDone[index/2].promise;
+          yield* createReadStream(path,{start:part.start,end:part.end});completed.push(index);
+        } finally {active--;if(index%2===1)pairDone[Math.floor(index/2)].resolve();}
+      })())};
+    }};
+    const result=await backupModule.deliverStoredBackup(client,storageCommands,'test',path,{sendMail:async()=>{
+      assert.equal(completed.length,5);assert.equal(active,0);notifications++;return{accepted:['marwanalsawi@alzaad.org.sa']};
+    }},{},'out-of-order');
+    assert.equal(maximum,2);assert.equal(result.parts,5);assert.equal(result.bytes,bytes);assert.equal(result.sha256,expected.digest('hex'));
+    assert.equal(completed[0],1);assert.ok(completed.indexOf(3)<completed.indexOf(2));assert.equal(notifications,1);
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+for(const failure of ['put','get','body','checksum']) test(`concurrent ${failure} failure drains its sibling, stops later batches, and sends no success notification`,async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  const latch=()=>{let resolve;return{promise:new Promise(done=>{resolve=done;}),resolve:()=>resolve()};};
+  const siblingReady=latch(),failureRaised=latch(),drain=latch();let collecting;
+  try {
+    const path=join(dir,'encrypted'),partSize=8*1024*1024,file=await open(path,'w');try{await file.truncate(partSize*3+1);}finally{await file.close();}
+    const puts=[],gets=[];let settled=false,notifications=0,siblingFinished=false,siblingDestroyed=false;
+    const sentinel=Object.assign(new Error('synthetic batch failure'),{$metadata:{httpStatusCode:403}});
+    async function rejectPart(){await siblingReady.promise;failureRaised.resolve();throw sentinel;}
+    const client={send:async command=>{
+      const index=Number(command.input.Key.split('.part-').at(-1))-1;
+      if(command instanceof PutCommand){puts.push(index);assert.equal(command.input.IfNoneMatch,'*');if(index===0&&failure==='put')await rejectPart();return{};}
+      assert.equal(command instanceof GetCommand,true);gets.push(index);
+      if(index===0&&failure==='get')await rejectPart();
+      const body=Readable.from((async function*(){
+        if(index===1){siblingReady.resolve();await drain.promise;try{yield* createReadStream(path,{start:partSize,end:2*partSize-1});}finally{siblingFinished=true;}return;}
+        await siblingReady.promise;
+        if(failure==='body'){failureRaised.resolve();throw sentinel;}
+        if(failure==='checksum'){failureRaised.resolve();yield Buffer.alloc(partSize,42);return;}
+        yield* createReadStream(path,{start:0,end:partSize-1});
+      })());
+      if(index===1)body.on('close',()=>{siblingDestroyed=true;});
+      return{ContentLength:partSize,Body:body};
+    }};
+    collecting=backupModule.deliverStoredBackup(client,storageCommands,'test',path,{sendMail:async()=>{notifications++;return{accepted:['marwanalsawi@alzaad.org.sa']};}},{},`batch-${failure}`)
+      .then(result=>{settled=true;return{result};},error=>{settled=true;return{error};});
+    await failureRaised.promise;await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(settled,false,'must drain the still-active sibling before rejection');assert.deepEqual([...puts].sort(),[0,1]);assert.equal(notifications,0);
+    drain.resolve();const result=await collecting;assert.ok(result.error);assert.equal(result.result,undefined);
+    if(failure==='checksum')assert.match(result.error.message,/checksum mismatch/);else assert.strictEqual(result.error,sentinel);
+    assert.equal(siblingFinished,true);assert.equal(siblingDestroyed,true);assert.deepEqual([...puts].sort(),[0,1]);assert.ok(gets.every(index=>index<2));assert.equal(notifications,0);
+  } finally {drain.resolve();siblingReady.resolve();if(collecting)await collecting;await rm(dir,{recursive:true,force:true});}
+});
+
 test('second-part upload/collision/readback failures leave existing private parts and send no success email',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
   try {
@@ -257,13 +326,15 @@ test('second-part upload/collision/readback failures leave existing private part
       const client={send:async command=>{
         if(command instanceof PutCommand){
           puts++;assert.ok(command.input.ContentLength<=8*1024*1024);assert.equal(command.input.IfNoneMatch,'*');assert.equal(command.input.ACL,undefined);
-          if(puts===2&&['upload','collision'].includes(failure))throw new Error('synthetic second-part failure');
-          const start=(puts-1)*8*1024*1024;stored.set(command.input.Key,{start,end:start+command.input.ContentLength-1,bytes:command.input.ContentLength});return{};
+          const index=Number(command.input.Key.split('.part-').at(-1))-1;
+          if(index===1&&['upload','collision'].includes(failure))throw new Error('synthetic second-part failure');
+          const start=index*8*1024*1024;stored.set(command.input.Key,{start,end:start+command.input.ContentLength-1,bytes:command.input.ContentLength});return{};
         }
         assert.equal(command instanceof GetCommand,true,'no delete or other storage command is allowed');gets++;const part=stored.get(command.input.Key);assert.ok(part);
-        if(gets===2&&failure==='missing')return{};
-        if(gets===2&&failure==='tampered')return{Body:Readable.from([Buffer.alloc(part.bytes,42)]),ContentLength:part.bytes};
-        return{Body:createReadStream(path,{start:part.start,end:part.end-(gets===2&&failure==='truncated'?1:0)}),ContentLength:part.bytes};
+        const second=command.input.Key.endsWith('.part-0002');
+        if(second&&failure==='missing')return{};
+        if(second&&failure==='tampered')return{Body:Readable.from([Buffer.alloc(part.bytes,42)]),ContentLength:part.bytes};
+        return{Body:createReadStream(path,{start:part.start,end:part.end-(second&&failure==='truncated'?1:0)}),ContentLength:part.bytes};
       }};
       await assert.rejects(backupModule.deliverStoredBackup(client,storageCommands,'test',path,{sendMail:async()=>{notifications++;return{accepted:['marwanalsawi@alzaad.org.sa']};}}, {},`second-${failure}`));
       assert.equal(puts,2,failure);assert.equal(notifications,0,failure);assert.equal(stored.size,['upload','collision'].includes(failure)?1:2,failure);
@@ -403,11 +474,11 @@ test('transient partial readback is retried without replaying PUT or polluting a
   const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
   try {
     const path=join(dir,'encrypted'),payload=Buffer.alloc(8*1024*1024+123,42);await writeFile(path,payload);
-    let puts=0,gets=0,notifications=0;const stored=new Map();
+    let puts=0,gets=0,notifications=0,partialFailed=false;const stored=new Map();
     const client={send:async command=>{
       if(command instanceof PutCommand){puts++;stored.set(command.input.Key,Buffer.from(command.input.Body));return{};}
       gets++;const part=stored.get(command.input.Key);assert.ok(part);
-      if(gets===2) return{ContentLength:part.length,Body:Readable.from((async function*(){yield part.subarray(0,20);throw Object.assign(new Error('reset during GET'),{code:'ECONNRESET'});})())};
+      if(command.input.Key.endsWith('.part-0002')&&!partialFailed) {partialFailed=true;return{ContentLength:part.length,Body:Readable.from((async function*(){yield part.subarray(0,20);throw Object.assign(new Error('reset during GET'),{code:'ECONNRESET'});})())};}
       return{Body:Readable.from([part]),ContentLength:part.length};
     }};
     const result=await backupModule.deliverStoredBackup(client,storageCommands,'test',path,{sendMail:async()=>{notifications++;return{accepted:['marwanalsawi@alzaad.org.sa']};}}, {},'partial-read');
