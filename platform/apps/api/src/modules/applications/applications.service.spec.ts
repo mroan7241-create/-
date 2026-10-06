@@ -15,8 +15,9 @@ describe('legacy evaluation and shared selection capacity', () => {
 
   function transactionFixture() {
     return {
+      account: { findUnique: jest.fn(async () => ({ role: 'ADMIN', status: 'ACTIVE', archivedAt: null, adminFullAccess: true, adminApplicationScope: null })) },
       $executeRaw: jest.fn(async (sql: TemplateStringsArray) => { void sql; return 1; }),
-      $queryRaw: jest.fn(async (): Promise<Array<{ id: string; status: ApplicationStatus }>> => [{ id: 'application', status: ApplicationStatus.UNDER_REVIEW }]),
+      $queryRaw: jest.fn(async (sql: TemplateStringsArray): Promise<Array<{ id: string; status: ApplicationStatus }>> => { void sql; return [{ id: 'application', status: ApplicationStatus.UNDER_REVIEW }]; }),
       associationApplication: {
         findUnique: jest.fn(async (): Promise<{ id: string; status: ApplicationStatus; selectionList: AssociationSelectionList; eligibilityStatus: EligibilityStatus }> => ({ id: 'application', status: ApplicationStatus.UNDER_REVIEW, selectionList: AssociationSelectionList.NONE, eligibilityStatus: EligibilityStatus.PASSED })),
         findUniqueOrThrow: jest.fn(async (): Promise<{ id: string; status: ApplicationStatus; schemaVersion: number; answers: unknown[] }> => ({ id: 'application', status: ApplicationStatus.UNDER_REVIEW, schemaVersion: 1, answers: [...LEGACY_APPLICATION_QUESTIONS] })),
@@ -59,7 +60,8 @@ describe('legacy evaluation and shared selection capacity', () => {
     await expect(service.evaluate(ctx, 'application', ratings, 'evaluate-open')).resolves.toEqual({ ok: true, score: 100 });
     expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
     expect(tx.$executeRaw.mock.calls[0][0].join('')).toContain('association-selection:electrical-appliances');
-    expect(tx.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.$queryRaw.mock.invocationCallOrder[0]);
+    expect(tx.$queryRaw.mock.calls[0][0].join('')).toContain('FOR SHARE');
+    expect(tx.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.$queryRaw.mock.invocationCallOrder[1]);
     expect(tx.associationApplication.update).toHaveBeenCalledTimes(1);
   });
 
@@ -71,7 +73,8 @@ describe('legacy evaluation and shared selection capacity', () => {
   it('serializes an eligibility decision with selection before acquiring its application row', async () => {
     await expect(service.decideEligibility(ctx, 'application', EligibilityStatus.PASSED, undefined, 'eligibility-open')).resolves.toEqual({ ok: true });
     expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
-    expect(tx.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.$queryRaw.mock.invocationCallOrder[0]);
+    expect(tx.$queryRaw.mock.calls[0][0].join('')).toContain('FOR SHARE');
+    expect(tx.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.$queryRaw.mock.invocationCallOrder[1]);
     expect(tx.associationApplication.update).toHaveBeenCalledTimes(1);
   });
 
@@ -84,7 +87,8 @@ describe('legacy evaluation and shared selection capacity', () => {
   it('serializes the retained review rejection path with selection, before locking the row', async () => {
     await expect(service.reviewApplication(ctx, 'application', 'reject', 'سبب رفض موثق', 'reject-open')).resolves.toEqual({ ok: true });
     expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
-    expect(tx.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.$queryRaw.mock.invocationCallOrder[0]);
+    expect(tx.$queryRaw.mock.calls[0][0].join('')).toContain('FOR SHARE');
+    expect(tx.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.$queryRaw.mock.invocationCallOrder[1]);
     expect(tx.associationApplication.update).toHaveBeenCalledTimes(1);
   });
 
@@ -94,30 +98,27 @@ describe('legacy evaluation and shared selection capacity', () => {
     expect(tx.associationApplication.update).not.toHaveBeenCalled();
   });
 
-  it.each([2, 3, 4])('subtracts %i existing MAIN decisions without changing them', async (existingMain) => {
+  it.each([2, 3, 4])('refuses obsolete implicit batch selection with %i existing MAIN decisions, without writes or email', async (existingMain) => {
     tx.associationApplication.count.mockResolvedValue(existingMain);
-    const remaining = Math.max(0, 3 - existingMain);
-    await expect(service.commitSelection(ctx, 3, 'select-open')).resolves.toEqual({ ok: true, main: remaining, reserve: 3 - remaining, rejected: 0 });
-    expect(tx.associationApplication.count).toHaveBeenCalledWith({ where: { selectionList: AssociationSelectionList.MAIN } });
-    expect(tx.projectParticipation.create).toHaveBeenCalledTimes(remaining);
-    const updates = tx.associationApplication.updateMany.mock.calls as unknown as Array<[{ where: { id: { in: string[] } }; data: { selectionList: string } }] >;
-    expect(updates.flatMap(([update]) => update.where.id.in)).toEqual(expect.arrayContaining(['candidate-1', 'candidate-2', 'candidate-3']));
-    expect(updates.every(([update]) => update.where.id.in.every((id) => id.startsWith('candidate-')))).toBe(true);
+    await expect(service.commitSelection(ctx, 3, 'select-open')).rejects.toMatchObject({ code: 'APPLICATION_WORKFLOW_VERSION' });
+    expect(tx.associationApplication.updateMany).not.toHaveBeenCalled();
+    expect(tx.projectParticipation.create).not.toHaveBeenCalled();
+    expect(access.sendSelectionDecision).not.toHaveBeenCalled();
   });
 
-  it('keeps MAIN capacity open when neither the setting nor the request supplies a number', async () => {
+  it('refuses obsolete implicit selection even when capacity is unlimited', async () => {
     capacity.mockResolvedValue(undefined);
-    await expect(service.commitSelection(ctx, undefined, 'select-unlimited')).resolves.toEqual({ ok: true, main: 3, reserve: 0, rejected: 0 });
-    expect(tx.projectParticipation.create).toHaveBeenCalledTimes(3);
+    await expect(service.commitSelection(ctx, undefined, 'select-unlimited')).rejects.toMatchObject({ code: 'APPLICATION_WORKFLOW_VERSION' });
+    expect(tx.projectParticipation.create).not.toHaveBeenCalled();
   });
 
-  it('enforces a later configured capacity even when the request omits a number', async () => {
-    await expect(service.commitSelection(ctx, undefined, 'select-configured')).resolves.toEqual({ ok: true, main: 1, reserve: 2, rejected: 0 });
-    expect(tx.projectParticipation.create).toHaveBeenCalledTimes(1);
+  it('refuses obsolete implicit selection when capacity is configured', async () => {
+    await expect(service.commitSelection(ctx, undefined, 'select-configured')).rejects.toMatchObject({ code: 'APPLICATION_WORKFLOW_VERSION' });
+    expect(tx.projectParticipation.create).not.toHaveBeenCalled();
   });
 
-  it('does not let a bulk request override the approved configured capacity', async () => {
-    await expect(service.commitSelection(ctx, 4, 'select-mismatch')).rejects.toMatchObject({ code: 'SELECTION_TARGET_MISMATCH' });
+  it('does not permit obsolete batch requests to override configured capacity', async () => {
+    await expect(service.commitSelection(ctx, 4, 'select-mismatch')).rejects.toMatchObject({ code: 'APPLICATION_WORKFLOW_VERSION' });
     expect(tx.associationApplication.updateMany).not.toHaveBeenCalled();
     expect(access.sendSelectionDecision).not.toHaveBeenCalled();
   });

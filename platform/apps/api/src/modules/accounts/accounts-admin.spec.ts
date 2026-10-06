@@ -35,7 +35,7 @@ describe('owner-managed named administrative accounts', () => {
   afterEach(() => jest.restoreAllMocks());
 
   it('creates a named restricted ADMIN with same-domain normalized grants and no secret audit metadata', async () => {
-    const result = await service.createAdmin(ctx, { name: 'موظف جديد', email: 'staff@example.org', adminPermissions: ['applications.evaluate'] });
+    const result = await service.createAdmin(ctx, { name: 'موظف جديد', email: 'staff@example.org', adminPermissions: ['applications.evaluate'], adminApplicationScope: { allRegions: true } });
     expect(result.accountId).toBe('new-staff');
     expect(result.temporaryPassword.length).toBeGreaterThan(10);
     expect(tx.account.create).toHaveBeenCalledWith({ data: expect.objectContaining({ name: 'موظف جديد', role: 'ADMIN', adminFullAccess: false, adminPermissions: ['applications.read', 'applications.evaluate'], mustChangePassword: true }) });
@@ -60,13 +60,25 @@ describe('owner-managed named administrative accounts', () => {
   it('removes grants on the account without storing a second session permission snapshot', async () => {
     await expect(service.updateAdmin(ctx, staff.id, { adminPermissions: [] })).resolves.toEqual({ ok: true });
     expect(tx.account.update).toHaveBeenCalledWith({ where: { id: staff.id }, data: { adminPermissions: [] } });
-    expect(tx.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ metadata: { name: staff.name, previousPermissions: ['applications.read'], adminPermissions: [] } }) });
+    expect(tx.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ metadata: expect.objectContaining({ name: staff.name, previousPermissions: ['applications.read'], adminPermissions: [] }) }) });
   });
 
   it('suspends and revokes sessions inside the audited transaction', async () => {
     await service.setAdminStatus(ctx, staff.id, 'SUSPENDED');
     expect(tx.authSession.updateMany).toHaveBeenCalledWith({ where: { accountId: staff.id, revokedAt: null }, data: { revokedAt: expect.any(Date) } });
     expect(tx.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'ADMIN_ACCOUNT_SUSPENDED' }) });
+  });
+
+  it('requires explicit scope for new accounts, rejects escalation and preserves legacy scope on unrelated edits', async () => {
+    for (const adminApplicationScope of [undefined, null, {}, { regionCodes: [] }, { regionCodes: ['0001', '0001'] }, { allRegions: true, extra: true }]) {
+      await expect(service.createAdmin(ctx, { name: 'موظف جديد', email: 'staff@example.org', adminPermissions: [], adminApplicationScope } as CreateAdminAccountDto)).rejects.toMatchObject({ code: 'ADMIN_APPLICATION_SCOPE_INVALID' });
+    }
+    expect(tx.account.create).not.toHaveBeenCalled();
+    await service.updateAdmin(ctx, staff.id, { name: 'موظف معدل' });
+    expect(tx.account.update).toHaveBeenCalledWith({ where: { id: staff.id }, data: { name: 'موظف معدل' } });
+    await service.updateAdmin(ctx, staff.id, { adminApplicationScope: { regionCodes: ['0013', '0001'] } });
+    expect(tx.account.update).toHaveBeenCalledWith({ where: { id: staff.id }, data: { adminApplicationScope: { regionCodes: ['0001', '0013'] } } });
+    await expect(service.updateAdmin(ctx, staff.id, { adminApplicationScope: null } as unknown as UpdateAdminAccountDto)).rejects.toMatchObject({ code: 'ADMIN_APPLICATION_SCOPE_INVALID' });
   });
 
   it('resets password, forces change, consumes reset tokens and revokes all sessions in one transaction', async () => {
@@ -81,7 +93,7 @@ describe('owner-managed named administrative accounts', () => {
   it('rejects privilege, role, owner and email mutation fields through the existing strict validation pipeline', async () => {
     const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true });
     for (const extra of [{ adminFullAccess: true }, { role: 'ADMIN' }, { associationId: 'association' }, { owner: true }]) {
-      await expect(pipe.transform({ name: 'موظف جديد', email: 'staff@example.org', adminPermissions: [], ...extra }, { type: 'body', metatype: CreateAdminAccountDto })).rejects.toThrow();
+      await expect(pipe.transform({ name: 'موظف جديد', email: 'staff@example.org', adminPermissions: [], adminApplicationScope: { allRegions: true }, ...extra }, { type: 'body', metatype: CreateAdminAccountDto })).rejects.toThrow();
     }
     await expect(pipe.transform({ email: 'changed@example.org' }, { type: 'body', metatype: UpdateAdminAccountDto })).rejects.toThrow();
     await expect(pipe.transform({ adminPermissions: ['unrecognized'] }, { type: 'body', metatype: UpdateAdminAccountDto })).rejects.toThrow();

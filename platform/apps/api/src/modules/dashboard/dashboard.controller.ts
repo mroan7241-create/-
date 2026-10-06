@@ -14,7 +14,7 @@ export class DashboardController {
   @Get('admin')
   @Roles(AccountRole.ADMIN)
   @ApiOperation({ summary: 'ملخص لوحة الإدارة في طلب واحد' })
-  admin() { return this.dashboard.admin(); }
+  admin(@CurrentUser() ctx: AuthContext) { return this.dashboard.admin(ctx); }
 
   @Get('association')
   @Roles(AccountRole.ASSOCIATION)

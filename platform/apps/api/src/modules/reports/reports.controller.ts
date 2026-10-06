@@ -9,6 +9,7 @@ import { ReportsService } from './reports.service';
 import { ApiError } from '../../common/api-error';
 import { ReconciliationService } from './reconciliation.service'; import { ClosureReadinessService } from './closure-readiness.service'; import { ClosureService } from './closure.service'; import { OrganizationTransitionDto, ParticipationOperationDto, ProjectTransitionDto, QualitativeReportDto, ReopenDto } from './dto/closure.dto';
 import { AbanmiReportQueryDto } from './dto/abanmi-report-query.dto';
+import { adminApplicationRegionCodes, assertAdminApplicationScope, assertAdminAssociationScope } from '../auth/admin-route-permissions';
 import { abanmiCoverage } from './abanmi-coverage.util';
 import type { Response } from 'express';
 import ExcelJS from 'exceljs';
@@ -109,13 +110,16 @@ export class ReportsController {
     return this.reports.associationReport(ctx, query);
   }
 
-  @Get('reconciliation/:associationId') @Roles(AccountRole.ADMIN,AccountRole.ASSOCIATION) reconciliationReport(@CurrentUser()ctx:AuthContext,@Param('associationId',ParseUUIDPipe)associationId:string){return this.reconciliation.reconcile(ctx.role===AccountRole.ASSOCIATION?ctx.associationId!:associationId)}
-  @Get('closure/readiness/:participationId') @Roles(AccountRole.ADMIN,AccountRole.ASSOCIATION) async closureReadiness(@CurrentUser()ctx:AuthContext,@Param('participationId',ParseUUIDPipe)id:string){if(ctx.role===AccountRole.ASSOCIATION){const p=await prisma.projectParticipation.findUnique({where:{id},select:{associationId:true}});if(!p||p.associationId!==ctx.associationId)return{ready:false,blockers:[{code:'PARTICIPATION_NOT_FOUND',count:1,severity:'BLOCKING',route:'/participations'}],generatedAt:new Date()}}return this.readiness.check(id)}
+  @Get('reconciliation/:associationId') @Roles(AccountRole.ADMIN,AccountRole.ASSOCIATION) async reconciliationReport(@CurrentUser()ctx:AuthContext,@Param('associationId',ParseUUIDPipe)associationId:string){await assertAdminAssociationScope(ctx,associationId);return this.reconciliation.reconcile(ctx.role===AccountRole.ASSOCIATION?ctx.associationId!:associationId)}
+  @Get('closure/readiness/:participationId') @Roles(AccountRole.ADMIN,AccountRole.ASSOCIATION) async closureReadiness(@CurrentUser()ctx:AuthContext,@Param('participationId',ParseUUIDPipe)id:string){if(ctx.role===AccountRole.ASSOCIATION){const p=await prisma.projectParticipation.findUnique({where:{id},select:{associationId:true}});if(!p||p.associationId!==ctx.associationId)return{ready:false,blockers:[{code:'PARTICIPATION_NOT_FOUND',count:1,severity:'BLOCKING',route:'/participations'}],generatedAt:new Date()}}else if(adminApplicationRegionCodes(ctx)!==null){const p=await prisma.projectParticipation.findUnique({where:{id},select:{application:{select:{regionOfficialCode:true}}}});assertAdminApplicationScope(ctx,p?.application?.regionOfficialCode)}return this.readiness.check(id)}
   @Post('closure/organization/generate') @Roles(AccountRole.ASSOCIATION) async generate(@CurrentUser()ctx:AuthContext,@Body()dto:ParticipationOperationDto){if(ctx.role===AccountRole.ASSOCIATION){const p=await prisma.projectParticipation.findUnique({where:{id:dto.participationId},select:{associationId:true}});if(!p||p.associationId!==ctx.associationId)throw new ApiError('PARTICIPATION_NOT_FOUND','المشاركة غير موجودة',404)}return this.closure.generate(ctx,dto.participationId,dto.opId)}
   @Patch('closure/organization/:id') @Roles(AccountRole.ASSOCIATION) qualitative(@CurrentUser()ctx:AuthContext,@Param('id',ParseUUIDPipe)id:string,@Body()dto:QualitativeReportDto){return this.closure.updateQualitative(ctx,id,dto)}
-  @Post('closure/organization/:id/transition') @Roles(AccountRole.ADMIN,AccountRole.ASSOCIATION) orgTransition(@CurrentUser()ctx:AuthContext,@Param('id',ParseUUIDPipe)id:string,@Body()dto:OrganizationTransitionDto){return this.closure.transitionOrganization(ctx,id,dto.status,dto.opId)}
-  @Post('closure/organization/:id/reopen') @Roles(AccountRole.ADMIN) reopen(@CurrentUser()ctx:AuthContext,@Param('id',ParseUUIDPipe)id:string,@Body()dto:ReopenDto){return this.closure.reopen(ctx,id,dto.reason)}
-  @Post('closure/project/generate') @Roles(AccountRole.ADMIN) project(@CurrentUser()ctx:AuthContext){return this.closure.generateProject(ctx)}
-  @Get('closure/project') @Roles(AccountRole.ADMIN) projectReport(){return this.closure.getProjectReport()}
-  @Post('closure/project/transition') @Roles(AccountRole.ADMIN) projectTransition(@CurrentUser()ctx:AuthContext,@Body()dto:ProjectTransitionDto){return this.closure.transitionProject(ctx,dto.status,dto.donorFeedbackNotes)}
+  @Post('closure/organization/:id/transition') @Roles(AccountRole.ADMIN,AccountRole.ASSOCIATION) async orgTransition(@CurrentUser()ctx:AuthContext,@Param('id',ParseUUIDPipe)id:string,@Body()dto:OrganizationTransitionDto){await this.assertClosureScope(ctx,id);return this.closure.transitionOrganization(ctx,id,dto.status,dto.opId)}
+  @Post('closure/organization/:id/reopen') @Roles(AccountRole.ADMIN) async reopen(@CurrentUser()ctx:AuthContext,@Param('id',ParseUUIDPipe)id:string,@Body()dto:ReopenDto){await this.assertClosureScope(ctx,id);return this.closure.reopen(ctx,id,dto.reason)}
+  @Post('closure/project/generate') @Roles(AccountRole.ADMIN) project(@CurrentUser()ctx:AuthContext){this.assertProjectScope(ctx);return this.closure.generateProject(ctx)}
+  @Get('closure/project') @Roles(AccountRole.ADMIN) projectReport(@CurrentUser()ctx:AuthContext){this.assertProjectScope(ctx);return this.closure.getProjectReport()}
+  @Post('closure/project/transition') @Roles(AccountRole.ADMIN) projectTransition(@CurrentUser()ctx:AuthContext,@Body()dto:ProjectTransitionDto){this.assertProjectScope(ctx);return this.closure.transitionProject(ctx,dto.status,dto.donorFeedbackNotes)}
+
+  private assertProjectScope(ctx:AuthContext){if(adminApplicationRegionCodes(ctx)!==null)throw new ApiError('ADMIN_APPLICATION_SCOPE_FORBIDDEN','التقرير الشامل للمشروع يتطلب نطاق جميع المناطق',403)}
+  private async assertClosureScope(ctx:AuthContext,id:string){if(adminApplicationRegionCodes(ctx)===null)return;const report=await prisma.organizationClosureReport.findUnique({where:{id},select:{participation:{select:{application:{select:{regionOfficialCode:true}}}}}});assertAdminApplicationScope(ctx,report?.participation.application?.regionOfficialCode)}
 }

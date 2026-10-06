@@ -7,7 +7,7 @@ import { ALLOW_MUST_CHANGE_PASSWORD_KEY } from '../decorators/allow-must-change-
 import { authConfig } from '../../../config/auth.config';
 
 describe('ADMIN permissions at the existing session boundary', () => {
-  let account: { id: string; publicCode: string; name: string; role: AccountRole; associationId: null; status: string; archivedAt: null; mustChangePassword: boolean; adminFullAccess: boolean; adminPermissions: string[] };
+  let account: { id: string; publicCode: string; name: string; role: AccountRole; associationId: null; status: string; archivedAt: null; mustChangePassword: boolean; adminFullAccess: boolean; adminPermissions: string[]; adminApplicationScope?: unknown };
   let request: { method: string; originalUrl: string; route: { path: string }; cookies: Record<string, string>; authContext?: unknown };
   let allowPassword: boolean;
   let guard: SessionAuthGuard;
@@ -53,6 +53,17 @@ describe('ADMIN permissions at the existing session boundary', () => {
     request.route.path = '/api/v1/auth/me'; allowPassword = true;
     await expect(guard.canActivate(context())).resolves.toBe(true);
     expect(request.authContext).toMatchObject({ adminFullAccess: false, adminPermissions: ['applications.read'], meSnapshot: { name: 'موظف محدد' } });
+  });
+
+  it('uses the current regional scope without a session cache and rejects malformed persisted scope', async () => {
+    account.adminPermissions = ['applications.read']; account.adminApplicationScope = { regionCodes: ['0001'] };
+    await expect(guard.canActivate(context())).resolves.toBe(true);
+    expect(request.authContext).toMatchObject({ adminApplicationScope: { regionCodes: ['0001'] } });
+    account.adminApplicationScope = { regionCodes: ['0013'] };
+    await expect(guard.canActivate(context())).resolves.toBe(true);
+    expect(request.authContext).toMatchObject({ adminApplicationScope: { regionCodes: ['0013'] } });
+    account.adminApplicationScope = { allRegions: false };
+    await expect(guard.canActivate(context())).rejects.toMatchObject({ code: 'AUTH_FORBIDDEN' });
   });
 
   it('allows full ADMIN access without expanding another role, and rejects unknown staff endpoints', async () => {

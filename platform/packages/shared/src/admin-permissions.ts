@@ -1,3 +1,18 @@
+import { OFFICIAL_GEOGRAPHIC_UNITS } from './official-geography';
+
+/** Explicit scope is mandatory for new staff; null is legacy unrestricted scope. */
+export type AdminApplicationScope = { allRegions: true } | { regionCodes: string[] };
+export const ADMIN_APPLICATION_REGIONS = OFFICIAL_GEOGRAPHIC_UNITS.filter((unit) => unit.unitType === 'REGION').map((unit) => ({ code: unit.officialCode, name: unit.nameAr, group: unit.projectScopeGroup }));
+const knownApplicationRegions = new Set(ADMIN_APPLICATION_REGIONS.map((region) => region.code));
+export function isAdminApplicationScope(value: unknown): value is AdminApplicationScope {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const input = value as Record<string, unknown>;
+  if (Object.keys(input).length !== 1) return false;
+  if (input.allRegions === true) return true;
+  return Array.isArray(input.regionCodes) && input.regionCodes.length > 0 && input.regionCodes.length <= knownApplicationRegions.size &&
+    input.regionCodes.every((code) => typeof code === 'string' && knownApplicationRegions.has(code)) && new Set(input.regionCodes).size === input.regionCodes.length;
+}
+
 /** One catalog for server authorization and the owner-managed checkbox UI. */
 export const ADMIN_PERMISSION_CATALOG = [
   { key: 'dashboard.read', label: 'عرض لوحة التحكم', group: 'نظرة عامة' },

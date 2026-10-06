@@ -82,10 +82,10 @@ describe('final operational workflows', () => {
       expect(preview.body.threshold).toBeNull();
       expect(preview.body.items.some((item: { id: string; score: number }) => item.id === application.id && item.score === 100)).toBe(true);
 
-      const commit = await http().post('/api/v1/association-applications/selection/commit').set('Cookie', adminCookie)
-        .send({ mainTargetCount: 1, opId: opId('selection') });
+      const commit = await http().post(`/api/v1/association-applications/${application.id}/selection-decision`).set('Cookie', adminCookie)
+        .send({ workflowVersion: 2, decision: 'MAIN', opId: opId('selection') });
       expect(commit.status).toBe(201);
-      expect(commit.body).toMatchObject({ ok: true, main: 1 });
+      expect(commit.body).toMatchObject({ ok: true, decision: 'MAIN', emailQueued: false });
       expect(commit.body.temporaryPassword).toBeUndefined();
 
       const participation = await prisma.projectParticipation.findUniqueOrThrow({ where: { applicationId: application.id } });

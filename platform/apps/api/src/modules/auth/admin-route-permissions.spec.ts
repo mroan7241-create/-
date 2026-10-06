@@ -1,13 +1,35 @@
 import 'reflect-metadata';
+import { jest } from '@jest/globals';
 import { RequestMethod } from '@nestjs/common';
 import { METHOD_METADATA, MODULE_METADATA, PATH_METADATA } from '@nestjs/common/constants';
-import { ADMIN_PERMISSION_CATALOG, hasAdminPermission, normalizeAdminPermissions } from '@alzad/shared';
+import { ADMIN_PERMISSION_CATALOG, hasAdminPermission, isAdminApplicationScope, normalizeAdminPermissions } from '@alzad/shared';
+import type { AuthContext } from './auth.types';
 import { AppModule } from '../../app.module';
 import { IS_PUBLIC_KEY } from '../../common/decorators/public.decorator';
 import { ROLES_KEY } from './decorators/roles.decorator';
-import { ADMIN_ROUTE_POLICIES, adminRoutePolicy } from './admin-route-permissions';
+import { ADMIN_ROUTE_POLICIES, adminApplicationScopeWhere, assertAdminApplicationScope, assertAdminApplicationScopeCurrent, adminRoutePolicy } from './admin-route-permissions';
 
 describe('restricted administrative route contracts', () => {
+  it('requires explicit valid official regions and fails closed for scoped historical requests', () => {
+    for(const value of [null,{}, {allRegions:false}, {allRegions:true,regionCodes:['0001']}, {regionCodes:[]}, {regionCodes:['0001','0001']}, {regionCodes:['0100']}, {regionCodes:['0005']}, {regionCodes:['invented']}]) expect(isAdminApplicationScope(value)).toBe(false);
+    expect(isAdminApplicationScope({allRegions:true})).toBe(true);
+    expect(isAdminApplicationScope({regionCodes:['0001','0013']})).toBe(true);
+    const ctx={role:'ADMIN',adminFullAccess:false,adminApplicationScope:{regionCodes:['0001']}} as AuthContext;
+    expect(adminApplicationScopeWhere(ctx)).toEqual({regionOfficialCode:{in:['0001']}});
+    expect(()=>assertAdminApplicationScope(ctx,'0001')).not.toThrow();
+    for(const code of [null,undefined,'0013','unknown']) expect(()=>assertAdminApplicationScope(ctx,code)).toThrow();
+    expect(adminApplicationScopeWhere({...ctx,adminApplicationScope:null})).toEqual({});
+    expect(adminApplicationScopeWhere({...ctx,adminFullAccess:true})).toEqual({});
+  });
+
+  it('locks the current account scope during writes and rejects a stale request scope after reassignment', async () => {
+    const tx = { $queryRaw: jest.fn(async () => []), account: { findUnique: jest.fn(async () => ({ role: 'ADMIN', status: 'ACTIVE', archivedAt: null, adminFullAccess: false, adminApplicationScope: { regionCodes: ['0013'] } })) } };
+    const ctx={ accountId:'01950000-0000-7000-8000-000000000002',role:'ADMIN',adminFullAccess:false,adminApplicationScope:{regionCodes:['0001']} } as AuthContext;
+    await expect(assertAdminApplicationScopeCurrent(tx as never,ctx,'0001')).rejects.toMatchObject({ code:'ADMIN_APPLICATION_SCOPE_FORBIDDEN' });
+    await expect(assertAdminApplicationScopeCurrent(tx as never,ctx,'0013')).resolves.toBeUndefined();
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+    expect((tx.$queryRaw.mock.calls[0] as unknown as [string[]])[0].join('')).toContain('FOR SHARE');
+  });
   it('classifies every non-public ADMIN-capable route in the actual module tree', () => {
     const seen = new Set<unknown>();
     const routes = new Set<string>();
@@ -45,7 +67,7 @@ describe('restricted administrative route contracts', () => {
   it('uses exact route templates and denies aliases, unregistered paths and methods', () => {
     expect(adminRoutePolicy('POST', '/api/v1/association-applications/:id/evaluation')).toBe('applications.evaluate');
     expect(adminRoutePolicy('POST', '/api/v1/association-applications/:id/review')).toBe('owner');
-    expect(adminRoutePolicy('POST', '/api/v1/association-applications/selection/commit')).toBe('owner');
+    expect(adminRoutePolicy('POST', '/api/v1/association-applications/selection/commit')).toBe('applications.select');
     expect(adminRoutePolicy('PATCH', '/api/v1/association-applications/:id/evaluation')).toBeUndefined();
     expect(adminRoutePolicy('GET', '/api/v1/unmapped')).toBeUndefined();
     expect(adminRoutePolicy('GET', undefined)).toBeUndefined();

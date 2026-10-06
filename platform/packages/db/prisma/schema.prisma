@@ -440,6 +440,7 @@ model Account {
   role              AccountRole
   adminFullAccess   Boolean       @default(false) @map("admin_full_access")
   adminPermissions  String[]      @default([]) @map("admin_permissions")
+  adminApplicationScope Json?     @map("admin_application_scope")
   associationId     String?       @map("association_id") @db.Uuid
   status            AccountStatus @default(ACTIVE)
   mustChangePassword Boolean      @default(false) @map("must_change_password")

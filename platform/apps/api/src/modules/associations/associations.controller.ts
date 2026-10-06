@@ -30,8 +30,8 @@ export class AssociationsController {
   @Get()
   @Roles(AccountRole.ADMIN)
   @ApiOperation({ summary: 'قائمة الجمعيات — ADMIN فقط، مع pagination/search/filter وعدّادات مجمَّعة' })
-  async list(@Query() query: ListAssociationsQueryDto) {
-    return this.associations.listAssociations(query);
+  async list(@CurrentUser() ctx: AuthContext, @Query() query: ListAssociationsQueryDto) {
+    return this.associations.listAssociations(query, ctx);
   }
 
   @Post()
@@ -44,8 +44,8 @@ export class AssociationsController {
   @Get(':id')
   @Roles(AccountRole.ADMIN)
   @ApiOperation({ summary: 'تفاصيل جمعية — ADMIN فقط' })
-  async detail(@Param('id', ParseUUIDPipe) id: string) {
-    return this.associations.getAssociationDetail(id);
+  async detail(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string) {
+    return this.associations.getAssociationDetail(id, ctx);
   }
 
   @Patch(':id')

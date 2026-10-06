@@ -2,7 +2,8 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { setTimeout as delay } from 'node:timers/promises';
 import { timingSafeEqual } from 'node:crypto';
 import { prisma, AccountRole, AccountStatus, AgreementStatus, AssociationStatus, AuthCredentialType } from '@alzad/db';
-import { hasCompletedParticipationCovenant, normalizeAdminPermissions, type AdminPermission } from '@alzad/shared';
+import { hasCompletedParticipationCovenant, normalizeAdminPermissions, type AdminApplicationScope, type AdminPermission } from '@alzad/shared';
+import { assertAdminAssociationScope, lockAdminApplicationScope } from './admin-route-permissions';
 import { authConfig } from '../../config/auth.config';
 import {
   delegateCredentialLookupHash,
@@ -30,7 +31,7 @@ export interface LoginResult {
   expiresAt: Date;
   /** سقف مطلق ثابت للجلسة (12h) — الـcontroller يستخدمه لعمر الكوكي، لا expiresAt المنزلق. */
   absoluteExpiresAt: Date;
-  account: { id: string; publicCode: string; name: string; role: AccountRole; associationId: string | null; mustChangePassword: boolean; covenantRequired: boolean; covenantStatus: AgreementStatus | null; adminFullAccess?: boolean; adminPermissions?: AdminPermission[] };
+  account: { id: string; publicCode: string; name: string; role: AccountRole; associationId: string | null; mustChangePassword: boolean; covenantRequired: boolean; covenantStatus: AgreementStatus | null; adminFullAccess?: boolean; adminPermissions?: AdminPermission[]; adminApplicationScope?: AdminApplicationScope | null };
 }
 
 export interface RequestMeta {
@@ -196,7 +197,7 @@ export class AuthService {
       role: ctx.role,
       associationId: ctx.associationId,
       mustChangePassword: ctx.mustChangePassword,
-      ...this.adminState({ role: ctx.role, adminFullAccess: ctx.adminFullAccess, adminPermissions: ctx.adminPermissions }),
+      ...this.adminState({ role: ctx.role, adminFullAccess: ctx.adminFullAccess, adminPermissions: ctx.adminPermissions, adminApplicationScope: ctx.adminApplicationScope }),
       covenantRequired: ctx.meSnapshot.covenantRequired,
       covenantStatus: ctx.meSnapshot.covenantStatus,
     };
@@ -214,11 +215,12 @@ export class AuthService {
     };
   }
 
-  private adminState(account: { role: AccountRole; adminFullAccess?: boolean; adminPermissions?: string[] }) {
+  private adminState(account: { role: AccountRole; adminFullAccess?: boolean; adminPermissions?: string[]; adminApplicationScope?: unknown }) {
     if (account.role !== AccountRole.ADMIN) return {};
     return {
       adminFullAccess: account.adminFullAccess === true,
       adminPermissions: normalizeAdminPermissions(account.adminPermissions),
+      adminApplicationScope: (account.adminApplicationScope ?? null) as AdminApplicationScope | null,
     };
   }
 
@@ -418,6 +420,7 @@ export class AuthService {
     await this.rateLimit.consume('reset-association-password', associationId, authConfig.rateLimitAssociationPasswordReset);
 
     const temporaryPassword = await prisma.$transaction(async (tx) => {
+      await assertAdminAssociationScope(await lockAdminApplicationScope(tx, ctx), associationId, tx);
       const account = await tx.account.findFirst({ where: { associationId, role: AccountRole.ASSOCIATION } });
       if (!account) throw new ApiError('AUTH_VALIDATION_FAILED', 'تعذر العثور على حساب دخول لهذه الجمعية', 400);
       const credential = await tx.authCredential.findFirst({ where: { accountId: account.id, type: AuthCredentialType.EMAIL_PASSWORD } });

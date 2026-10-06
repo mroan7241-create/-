@@ -1,4 +1,4 @@
-import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, ArrayUnique, IsArray, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
 import { EligibilityStatus } from '@alzad/db';
 
 export class EligibilityDecisionDto {
@@ -17,6 +17,13 @@ export class EvaluationDto {
   @IsString() opId!: string;
 }
 export class SelectionCommitDto {
-  @IsOptional() @IsInt() @Min(1) mainTargetCount?: number;
+  @IsIn([2]) workflowVersion!: 2;
+  @IsIn(['SEND_MAIN', 'DECLINE']) operation!: 'SEND_MAIN' | 'DECLINE';
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(250) @ArrayUnique() @IsUUID('all', { each: true }) applicationIds!: string[];
+  @IsOptional() @IsString() reason?: string;
+  @IsString() opId!: string;
+}
+export class SelectionSendDto {
+  @IsIn([2]) workflowVersion!: 2;
   @IsString() opId!: string;
 }

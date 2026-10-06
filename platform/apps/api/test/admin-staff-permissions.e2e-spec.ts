@@ -5,6 +5,7 @@ import { AccountRole, AccountStatus, AuthCredentialType, prisma } from '@alzad/d
 import { createTestApp } from './utils/bootstrap';
 import { hashSecret } from './utils/fixtures';
 import { assertE2eNotTargetingProduction } from './utils/production-target.guard';
+import type { AdminApplicationScope } from '@alzad/shared';
 
 /** The suite setup also verifies the database canary. Never run against production. */
 describe('owner-managed ADMIN staff permission boundary', () => {
@@ -18,6 +19,7 @@ describe('owner-managed ADMIN staff permission boundary', () => {
   const ownerPassword = 'OwnerE2eSecurePass123!';
   const staffIds: string[] = [];
   const applicationIds: string[] = [];
+  const participationIds: string[] = [];
   const http = () => request(app.getHttpServer());
   const cookie = (response: { headers: Record<string, unknown> }) => (response.headers['set-cookie'] as string[])[0].split(';')[0];
 
@@ -46,6 +48,7 @@ describe('owner-managed ADMIN staff permission boundary', () => {
     if (!app) return;
     assertE2eNotTargetingProduction();
     await prisma.idempotencyKey.deleteMany({ where: { accountId: { in: staffIds } } });
+    await prisma.projectParticipation.deleteMany({ where: { id: { in: participationIds } } });
     await prisma.associationApplication.deleteMany({ where: { id: { in: applicationIds } } });
     await prisma.auditLog.deleteMany({ where: { OR: [{ actorAccountId: { in: staffIds } }, { entityId: { in: [...staffIds, ...applicationIds] } }] } });
     await prisma.authSession.deleteMany({ where: { accountId: { in: staffIds } } });
@@ -63,17 +66,17 @@ describe('owner-managed ADMIN staff permission boundary', () => {
     await app.close();
   });
 
-  async function newStaff(adminPermissions: string[] = []) {
+  async function newStaff(adminPermissions: string[] = [], adminApplicationScope: AdminApplicationScope = { allRegions: true }) {
     const email = `admin-staff-${randomUUID()}@example.org`;
-    const created = await http().post('/api/v1/accounts/admins').set('Cookie', ownerCookie).send({ name: 'سارة موظفة التقييم', email, adminPermissions }).expect(201);
+    const created = await http().post('/api/v1/accounts/admins').set('Cookie', ownerCookie).send({ name: 'سارة موظفة التقييم', email, adminPermissions, adminApplicationScope }).expect(201);
     const id = created.body.accountId as string; staffIds.push(id);
     expect(created.body.temporaryPassword).toEqual(expect.any(String));
     const login = await http().post('/api/v1/auth/login').send({ type: 'user', email, password: created.body.temporaryPassword }).expect(200);
     return { id, email, temporaryPassword: created.body.temporaryPassword as string, cookie: cookie(login) };
   }
 
-  async function readyStaff(adminPermissions: string[]) {
-    const staff = await newStaff(adminPermissions);
+  async function readyStaff(adminPermissions: string[], adminApplicationScope: AdminApplicationScope = { allRegions: true }) {
+    const staff = await newStaff(adminPermissions, adminApplicationScope);
     const password = `StaffE2e-${randomUUID()}!`;
     await http().patch('/api/v1/auth/password').set('Cookie', staff.cookie).send({ currentPassword: staff.temporaryPassword, newPassword: password }).expect(200);
     await http().get('/api/v1/auth/me').set('Cookie', staff.cookie).expect(401);
@@ -81,9 +84,9 @@ describe('owner-managed ADMIN staff permission boundary', () => {
     return { ...staff, password, cookie: cookie(login) };
   }
 
-  async function application() {
+  async function application(regionOfficialCode: string | null = null) {
     const key = randomUUID();
-    const row = await prisma.associationApplication.create({ data: { publicCode: `STAFF-E2E-${key}`, clientRequestId: key, name: 'جمعية اختبار الصلاحيات', region: 'الرياض', city: 'الرياض', phone: `05${randomInt(10_000_000, 99_999_999)}`, email: `application-${key}@example.org`, contactName: 'ممثل اختبار', eligibilityStatus: 'PASSED', processingStartedAt: new Date() } });
+    const row = await prisma.associationApplication.create({ data: { publicCode: `STAFF-E2E-${key}`, clientRequestId: key, name: 'جمعية اختبار الصلاحيات', region: 'الرياض', regionOfficialCode, city: 'الرياض', phone: `05${randomInt(10_000_000, 99_999_999)}`, email: `application-${key}@example.org`, contactName: 'ممثل اختبار', eligibilityStatus: 'PASSED', processingStartedAt: new Date() } });
     applicationIds.push(row.id);
     return row.id;
   }
@@ -121,7 +124,7 @@ describe('owner-managed ADMIN staff permission boundary', () => {
     expect(audit.body.items).toEqual(expect.arrayContaining([expect.objectContaining({ action: 'APPLICATION_EVALUATED', actorAccount: expect.objectContaining({ name: 'سارة موظفة التقييم' }) })]));
     await http().post(`/api/v1/association-applications/${id}/selection-decision`).set('Cookie', staff.cookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(403);
     await http().patch(`/api/v1/accounts/admins/${staff.id}`).set('Cookie', ownerCookie).send({ adminPermissions: ['applications.evaluate', 'applications.select', 'activities.read'] }).expect(200);
-    await http().post(`/api/v1/association-applications/${id}/selection-decision`).set('Cookie', staff.cookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(201);
+    await http().post(`/api/v1/association-applications/${id}/selection-decision`).set('Cookie', staff.cookie).send({ decision: 'RESERVE', workflowVersion: 2, opId: randomUUID() }).expect(201);
     await http().patch(`/api/v1/accounts/admins/${staff.id}`).set('Cookie', ownerCookie).send({ adminPermissions: [] }).expect(200);
     await http().get('/api/v1/association-applications').set('Cookie', staff.cookie).expect(403);
     await http().get('/api/v1/activities').set('Cookie', staff.cookie).expect(403);
@@ -140,9 +143,55 @@ describe('owner-managed ADMIN staff permission boundary', () => {
     await http().post('/api/v1/accounts/admins').set('Cookie', staff.cookie).send({}).expect(403);
   });
 
+  it('enforces official regional scope on lists, details, files, actions, mixed bulk, reports and the same session after reassignment', async () => {
+    const staff = await readyStaff(['applications.review', 'applications.evaluate', 'applications.select', 'participations.manage', 'dashboard.read', 'reports.read', 'audit.read'], { regionCodes: ['0001'] });
+    const allowed = await application('0001'); const outside = await application('0013'); const historical = await application();
+    for (const id of [allowed,outside]) await prisma.auditLog.create({ data: { entityType:'association_applications',entityId:id,action:'REGIONAL_SCOPE_TEST',metadata:{fixture:true} } });
+    const allowedParticipation=await prisma.projectParticipation.create({data:{applicationId:allowed,status:'APPROVED_AWAITING_SETUP',activationBasis:'AGREEMENT_COMPLETED'}});
+    const outsideParticipation=await prisma.projectParticipation.create({data:{applicationId:outside,status:'APPROVED_AWAITING_SETUP',activationBasis:'AGREEMENT_COMPLETED'}});
+    participationIds.push(allowedParticipation.id,outsideParticipation.id);
+    await prisma.associationApplication.updateMany({where:{id:{in:[allowed,outside]}},data:{selectionList:'MAIN'}});
+    const participations=await http().get('/api/v1/participations').set('Cookie',staff.cookie).expect(200);
+    expect(participations.body.map((row:{id:string})=>row.id)).toContain(allowedParticipation.id);
+    expect(participations.body.map((row:{id:string})=>row.id)).not.toContain(outsideParticipation.id);
+    await http().get(`/api/v1/reports/closure/readiness/${outsideParticipation.id}`).set('Cookie',staff.cookie).expect(403);
+    await http().post(`/api/v1/participations/${outsideParticipation.id}/setup-complete`).set('Cookie',staff.cookie).send({opId:randomUUID()}).expect(403);
+    await prisma.associationApplication.updateMany({where:{id:{in:[allowed,outside]}},data:{selectionList:'NONE'}});
+    const listed = await http().get('/api/v1/association-applications?pageSize=100').set('Cookie', staff.cookie).expect(200);
+    const ids = listed.body.items.map((row: { id: string }) => row.id);
+    expect(ids).toContain(allowed); expect(ids).not.toContain(outside); expect(ids).not.toContain(historical);
+    await http().get(`/api/v1/association-applications/${allowed}`).set('Cookie', staff.cookie).expect(200);
+    for (const id of [outside, historical]) {
+      for (const suffix of ['', '/license-file', '/eligibility-evidence']) await http().get(`/api/v1/association-applications/${id}${suffix}`).set('Cookie', staff.cookie).expect(403);
+      await http().post(`/api/v1/association-applications/${id}/evaluation`).set('Cookie', staff.cookie).send(ratings()).expect(403);
+      await http().post(`/api/v1/association-applications/${id}/selection-decision`).set('Cookie', staff.cookie).send({ decision: 'RESERVE', workflowVersion: 2, opId: randomUUID() }).expect(403);
+    }
+    await prisma.associationApplication.updateMany({ where: { id: { in: [allowed, outside] } }, data: { processingStartedAt: null } });
+    await http().post('/api/v1/association-applications/processing/start').set('Cookie', staff.cookie).send({ applicationIds: [allowed, outside], opId: randomUUID() }).expect(403);
+    expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: allowed } })).processingStartedAt).toBeNull();
+    const report = await http().get('/api/v1/reports/admin').set('Cookie', staff.cookie).expect(200);
+    const reportIds = report.body.applications.map((row: { id: string }) => row.id);
+    expect(reportIds).toContain(allowed); expect(reportIds).not.toContain(outside); expect(reportIds).not.toContain(historical);
+    expect(report.body.projectClosure).toBeNull();
+    await http().get('/api/v1/reports/closure/project').set('Cookie', staff.cookie).expect(403);
+    await http().get('/api/v1/dashboard/admin').set('Cookie', staff.cookie).expect(200);
+    await http().get(`/api/v1/audit?entityId=${outside}`).set('Cookie', staff.cookie).expect(200).expect(({ body }) => expect(body.items).toEqual([]));
+    await http().get(`/api/v1/audit?entityId=${allowed}`).set('Cookie', staff.cookie).expect(200).expect(({body})=>expect(body.items).toEqual(expect.arrayContaining([expect.objectContaining({action:'REGIONAL_SCOPE_TEST'})])));
+    await http().patch(`/api/v1/accounts/admins/${staff.id}`).set('Cookie', ownerCookie).send({ adminApplicationScope: { regionCodes: ['0013'] } }).expect(200);
+    await http().get(`/api/v1/association-applications/${allowed}`).set('Cookie', staff.cookie).expect(403);
+    await http().get(`/api/v1/association-applications/${outside}`).set('Cookie', staff.cookie).expect(200);
+    await http().get('/api/v1/auth/me').set('Cookie', staff.cookie).expect(200).expect(({ body }) => expect(body.adminApplicationScope).toEqual({ regionCodes: ['0013'] }));
+  });
+
+  it('rejects missing, forged and empty scope without creating a staff account', async () => {
+    for (const adminApplicationScope of [undefined, null, {}, { regionCodes: [] }, { regionCodes: ['0001', '0001'] }, { regionCodes: ['0100'] }, { allRegions: true, regionCodes: ['0001'] }]) {
+      await http().post('/api/v1/accounts/admins').set('Cookie', ownerCookie).send({ name: 'اختبار نطاق مرفوض', email: `invalid-scope-${randomUUID()}@example.org`, adminPermissions: [], adminApplicationScope }).expect(400);
+    }
+  });
+
   it('rejects escalation fields and protects the owner account from staff-management mutations', async () => {
     for (const extra of [{ adminFullAccess: true }, { role: 'ADMIN' }, { owner: true }, { associationId: randomUUID() }]) {
-      await http().post('/api/v1/accounts/admins').set('Cookie', ownerCookie).send({ name: 'محاولة اختبار', email: `reject-${randomUUID()}@example.org`, adminPermissions: [], ...extra }).expect(400);
+      await http().post('/api/v1/accounts/admins').set('Cookie', ownerCookie).send({ name: 'محاولة اختبار', email: `reject-${randomUUID()}@example.org`, adminPermissions: [], adminApplicationScope: { allRegions: true }, ...extra }).expect(400);
     }
     await http().patch(`/api/v1/accounts/admins/${ownerId}`).set('Cookie', ownerCookie).send({ adminPermissions: [] }).expect(403);
     await http().patch(`/api/v1/accounts/admins/${ownerId}/status`).set('Cookie', ownerCookie).send({ status: 'SUSPENDED' }).expect(403);

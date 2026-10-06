@@ -14,6 +14,8 @@ import type { AuthContext } from '../auth/auth.types';
 import type { AssociationCovenantSignDto, CreateAgreementDto, CoordinatorChangeDto } from './dto/participation.dto';
 import { COVENANT_SOURCE_SHA256, COVENANT_VERSION, CovenantDocumentService, PARTY_ONE_NAME, PARTY_ONE_TITLE } from './covenant-document.service';
 import { OnboardingEmailService } from '../auth/email/onboarding-email.service';
+import { hasCovenantSignature } from '@alzad/shared';
+import { adminApplicationRegionCodes, adminApplicationScopeWhere, assertAdminApplicationScope, lockAdminApplicationScope } from '../auth/admin-route-permissions';
 
 @Injectable()
 export class ParticipationsService {
@@ -26,18 +28,23 @@ export class ParticipationsService {
   ) {}
 
   list(ctx: AuthContext) {
-    const where: Prisma.ProjectParticipationWhereInput = ctx.role === AccountRole.ADMIN ? { OR: [{ applicationId: null }, { application: { selectionList: AssociationSelectionList.MAIN } }] } : { associationId: ctx.associationId ?? '__none__' };
+    const where: Prisma.ProjectParticipationWhereInput = ctx.role === AccountRole.ADMIN ? { AND: [{ OR: [{ applicationId: null }, { application: { selectionList: AssociationSelectionList.MAIN } }] }, ...(adminApplicationRegionCodes(ctx) === null ? [] : [{ application: { is: adminApplicationScopeWhere(ctx) } }])] } : { associationId: ctx.associationId ?? '__none__' };
     return prisma.projectParticipation.findMany({ where, include: { association: true, application: true, agreements: { orderBy: { version: 'desc' } }, closureReport: true }, orderBy: { createdAt: 'desc' } });
   }
 
   createAgreement(ctx: AuthContext, participationId: string, dto: CreateAgreementDto) {
     return prisma.$transaction(async (tx) => {
-      const participation = await tx.projectParticipation.findUnique({ where: { id: participationId }, include: { application: { select: { selectionList: true } } } });
+      const participation = await this.lockAdministrativeParticipation(tx, ctx, participationId);
       if (!participation) throw new ApiError('PARTICIPATION_NOT_FOUND', 'المشاركة غير موجودة', 404);
       if (participation.application?.selectionList !== AssociationSelectionList.MAIN) throw new ApiError('PARTICIPATION_NOT_MAIN', 'لا يمكن إنشاء ميثاق لطلب غير موجود في القائمة الأساسية', 409);
       if (dto.version !== 1 || dto.templateVersion !== COVENANT_VERSION) throw new ApiError('COVENANT_VERSION_INVALID', 'الإصدار المعتمد حاليًا هو ميثاق 1.0 فقط', 400);
       const existing = await tx.participationAgreement.findUnique({ where: { participationId_version: { participationId, version: 1 } } });
-      if (existing) throw new ApiError('COVENANT_VERSION_EXISTS', 'سبق إنشاء الإصدار المعتمد من الميثاق لهذه المشاركة', 409);
+      if (existing) {
+        if (existing.status !== AgreementStatus.CANCELLED || hasCovenantSignature(existing)) throw new ApiError('COVENANT_VERSION_EXISTS', 'سبق إنشاء الإصدار المعتمد من الميثاق لهذه المشاركة', 409);
+        const reopened = await tx.participationAgreement.update({ where: { id: existing.id }, data: { status: AgreementStatus.DRAFT, partyOneSigningTokenHash: null, partyOneSigningExpiresAt: null, partyOneSigningConsumedAt: null } });
+        await audit(tx, ctx, 'AGREEMENT_UNSIGNED_REOPENED', 'participation_agreements', existing.id, { participationId });
+        return reopened;
+      }
       const agreement = await tx.participationAgreement.create({ data: {
         participationId,
         version: 1,
@@ -53,6 +60,9 @@ export class ParticipationsService {
 
   transitionAgreement(ctx: AuthContext, agreementId: string, status: AgreementStatus, _signerName: string | undefined, opId: string) {
     return prisma.$transaction(async (tx) => {
+      const link = await tx.participationAgreement.findUnique({ where: { id: agreementId }, select: { participationId: true } });
+      if (!link) throw new ApiError('AGREEMENT_NOT_FOUND', 'الاتفاقية غير موجودة', 404);
+      await this.lockAdministrativeParticipation(tx, ctx, link.participationId);
       const claim = await this.idempotency.claim<{ ok: true; status: AgreementStatus }>(tx, ctx.accountId, 'agreement-transition', opId, { agreementId, status });
       if (!claim.claimed) return claim.existingResponse!;
       await tx.$queryRaw`SELECT id FROM participation_agreements WHERE id=${agreementId}::uuid FOR UPDATE`;
@@ -74,16 +84,32 @@ export class ParticipationsService {
   async prepareSigningAccount(ctx: AuthContext, participationId: string, opId: string) {
     const scope = 'covenant-signing-account';
     const outcome = await prisma.$transaction(async (tx) => {
+      const participation = await this.lockAdministrativeParticipation(tx, ctx, participationId);
       const claim = await this.idempotency.claim<{ associationId: string; accountId: string }>(tx, ctx.accountId, scope, opId, { participationId });
       if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse! };
-      await tx.$queryRaw`SELECT id FROM project_participations WHERE id=${participationId}::uuid FOR UPDATE`;
-      const participation = await tx.projectParticipation.findUnique({ where: { id: participationId }, include: { application: true, agreements: { orderBy: { version: 'desc' }, take: 1 } } });
       const agreement = participation?.agreements[0];
       if (!participation?.application || !agreement) throw new ApiError('COVENANT_SIGNING_ACCOUNT_INVALID', 'المشاركة أو الميثاق غير متاح', 409);
       if (participation.status !== ParticipationStatus.APPROVED_AWAITING_SETUP || !participation.setupCompletedAt) throw new ApiError('PARTICIPATION_SETUP_INCOMPLETE', 'متطلبات التجهيز غير مكتملة', 409);
       if (participation.application.selectionList !== AssociationSelectionList.MAIN) throw new ApiError('PARTICIPATION_NOT_MAIN', 'لا يمكن تجهيز حساب توقيع لطلب غير موجود في القائمة الأساسية', 409);
       if (agreement.status !== AgreementStatus.SENT || agreement.templateVersion !== COVENANT_VERSION || agreement.templateSha256 !== COVENANT_SOURCE_SHA256) throw new ApiError('COVENANT_NOT_READY', 'الميثاق المعتمد غير جاهز لتوقيع الجمعية', 409);
-      if (participation.associationId) throw new ApiError('COVENANT_SIGNING_ACCOUNT_EXISTS', 'سبق إنشاء حساب التوقيع لهذه المشاركة', 409);
+      await tx.$queryRaw`SELECT id FROM participation_agreements WHERE id=${agreement.id}::uuid FOR UPDATE`;
+      if (participation.associationId) {
+        if (!agreement.associationAccountId || hasCovenantSignature(agreement)) throw new ApiError('COVENANT_SIGNING_ACCOUNT_EXISTS', 'سبق إنشاء حساب التوقيع لهذه المشاركة', 409);
+        await tx.$queryRaw`SELECT id FROM accounts WHERE id=${agreement.associationAccountId}::uuid FOR UPDATE`;
+        const existing = await tx.account.findUnique({ where: { id: agreement.associationAccountId } });
+        const corrected = await tx.auditLog.findFirst({ where: { action: 'COVENANT_RESTRICTED_ACCOUNT_SUSPENDED_BY_SELECTION', entityId: agreement.associationAccountId, metadata: { path: ['applicationId'], equals: participation.application.id } }, orderBy: { createdAt: 'desc' }, select: { metadata: true } });
+        const correctionStamp = (corrected?.metadata as { accountUpdatedAt?: string } | undefined)?.accountUpdatedAt;
+        if (!existing || existing.archivedAt || existing.role !== AccountRole.ASSOCIATION || existing.associationId !== participation.associationId || existing.status !== AccountStatus.SUSPENDED || correctionStamp !== existing.updatedAt.toISOString()) throw new ApiError('COVENANT_SIGNING_ACCOUNT_EXISTS', 'سبق إنشاء حساب التوقيع أو تغيّر إيقافه؛ يلزم مراجعة الإدارة', 409);
+        const temporaryPassword = generateStrongTempPassword();
+        const rotated = await tx.authCredential.updateMany({ where: { accountId: existing.id, type: AuthCredentialType.EMAIL_PASSWORD }, data: { secretHash: await hashSecret(temporaryPassword) } });
+        if (rotated.count !== 1) throw new ApiError('COVENANT_SIGNING_ACCOUNT_INVALID', 'بيانات حساب التوقيع غير مكتملة؛ لم يتم تفعيل الحساب', 409);
+        await tx.account.update({ where: { id: existing.id }, data: { status: AccountStatus.ACTIVE, mustChangePassword: true } });
+        await this.onboardingEmail.sendCredentials(existing.id, temporaryPassword, tx);
+        await audit(tx, ctx, 'COVENANT_RESTRICTED_ACCOUNT_REPREPARED', 'participation_agreements', agreement.id, { accountId: existing.id, associationId: participation.associationId });
+        const response = { associationId: participation.associationId, accountId: existing.id };
+        await this.idempotency.complete(tx, ctx.accountId, scope, opId, response);
+        return { replayed: false as const, response, temporaryPassword };
+      }
       const email = requiredEmail(participation.application.email);
       if (await tx.authCredential.findUnique({ where: { type_identifier: { type: AuthCredentialType.EMAIL_PASSWORD, identifier: email } } })) throw new ApiError('ASSOCIATION_EMAIL_IN_USE', 'البريد الإلكتروني مستخدم في حساب آخر الآن', 409);
       const association = await tx.association.create({ data: { publicCode: await this.codes.nextPublicCode(tx, 'ASC'), name: participation.application.name, category: participation.application.category ?? '', region: participation.application.region, city: participation.application.city, phones: [participation.application.phone], email, status: AssociationStatus.ACTIVE } });
@@ -126,9 +152,17 @@ export class ParticipationsService {
       const result = await prisma.$transaction(async (tx) => {
         const claim = await this.idempotency.claim<{ ok: true; status: AgreementStatus }>(tx, ctx.accountId, 'covenant-association-sign', dto.opId, { representativeName: dto.representativeName, representativeTitle: dto.representativeTitle });
         if (!claim.claimed) return claim.existingResponse!;
-        const participation = await tx.projectParticipation.findUnique({ where: { associationId: ctx.associationId! }, include: { agreements: { orderBy: { version: 'desc' }, take: 1 } } });
+        const linked = await tx.projectParticipation.findUnique({ where: { associationId: ctx.associationId! }, select: { id: true } });
+        if (!linked) throw new ApiError('COVENANT_NOT_FOUND', 'الميثاق غير متاح', 404);
+        const participation = await this.lockAdministrativeParticipation(tx, ctx, linked.id);
         const agreement = participation?.agreements[0];
         if (!agreement || agreement.associationAccountId !== ctx.accountId || agreement.status !== AgreementStatus.SENT) throw new ApiError('COVENANT_ALREADY_SIGNED_OR_INVALID', 'الميثاق غير قابل للتوقيع أو سبق توقيعه', 409);
+        await tx.$queryRaw`SELECT id FROM participation_agreements WHERE id=${agreement.id}::uuid FOR UPDATE`;
+        await tx.$queryRaw`SELECT id FROM accounts WHERE id=${ctx.accountId}::uuid FOR UPDATE`;
+        const activeAccount = await tx.account.findUnique({ where: { id: ctx.accountId } });
+        if (participation?.application?.selectionList !== AssociationSelectionList.MAIN || activeAccount?.status !== AccountStatus.ACTIVE || activeAccount.archivedAt) throw new ApiError('COVENANT_ALREADY_SIGNED_OR_INVALID', 'لم يعد الحساب أو الاختيار متاحًا للتوقيع', 409);
+        const currentCredential = await tx.authCredential.findFirst({ where: { accountId: ctx.accountId, type: AuthCredentialType.EMAIL_PASSWORD } });
+        if (!currentCredential || !(await verifySecret(currentCredential.secretHash, String(dto.currentPassword || '')))) throw new ApiError('COVENANT_PASSWORD_INVALID', 'كلمة المرور الحالية غير صحيحة', 400);
         await this.storage.uploadPrivateObject(objectKey, signature.buffer, validated.mime); uploaded = true;
         const file = await tx.fileObject.create({ data: { storageProvider: 's3', bucket: storageConfig.bucket, objectKey, originalName: 'association-covenant-signature', mimeType: validated.mime, sizeBytes: BigInt(signature.buffer.length), sha256: bufferSha256(signature.buffer), category: FileCategory.PARTICIPATION_AGREEMENT, uploadedById: ctx.accountId } });
         const now = new Date();
@@ -149,6 +183,9 @@ export class ParticipationsService {
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + 30 * 60_000);
     await prisma.$transaction(async (tx) => {
+      const link = await tx.participationAgreement.findUnique({ where: { id: agreementId }, select: { participationId: true } });
+      if (!link) throw new ApiError('AGREEMENT_NOT_FOUND', 'الاتفاقية غير موجودة', 404);
+      await this.lockAdministrativeParticipation(tx, ctx, link.participationId);
       await tx.$queryRaw`SELECT id FROM participation_agreements WHERE id=${agreementId}::uuid FOR UPDATE`;
       const agreement = await tx.participationAgreement.findUnique({ where: { id: agreementId } });
       if (!agreement || agreement.status !== AgreementStatus.SIGNED_BY_ORG || !agreement.orgSignatureFileId) throw new ApiError('COVENANT_PARTY_ONE_SESSION_INVALID', 'الميثاق ليس بانتظار توقيع الطرف الأول', 409);
@@ -208,6 +245,7 @@ export class ParticipationsService {
       await this.storage.uploadPrivateObject(partyKey, signature.buffer, validated.mime); uploaded.push(partyKey);
       await this.storage.uploadPrivateObject(finalKey, finalBytes, 'application/pdf'); uploaded.push(finalKey);
       const outcome = await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM project_participations WHERE id=${agreement.participationId}::uuid FOR UPDATE`;
         const claim = await this.idempotency.claim<{ ok: true; status: AgreementStatus; finalSha256: string }>(tx, agreement.createdById, 'covenant-party-one-sign', opId, { agreementId: agreement.id });
         if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse! };
         await tx.$queryRaw`SELECT id FROM participation_agreements WHERE id=${agreement.id}::uuid FOR UPDATE`;
@@ -240,11 +278,12 @@ export class ParticipationsService {
 
   async getFinalCovenantUrl(ctx: AuthContext, agreementId?: string) {
     const agreement = ctx.role === AccountRole.ADMIN && agreementId
-      ? await prisma.participationAgreement.findUnique({ where: { id: agreementId }, include: { finalFile: true } })
+      ? await prisma.participationAgreement.findUnique({ where: { id: agreementId }, include: { finalFile: true, participation: { select: { application: { select: { regionOfficialCode: true } } } } } })
       : ctx.role === AccountRole.ASSOCIATION && ctx.associationId
-        ? await prisma.participationAgreement.findFirst({ where: { participation: { associationId: ctx.associationId } }, include: { finalFile: true }, orderBy: { version: 'desc' } })
+        ? await prisma.participationAgreement.findFirst({ where: { participation: { associationId: ctx.associationId } }, include: { finalFile: true, participation: { select: { application: { select: { regionOfficialCode: true } } } } }, orderBy: { version: 'desc' } })
         : null;
     if (!agreement?.finalFile || agreement.status !== AgreementStatus.SIGNED) throw new ApiError('COVENANT_FINAL_NOT_FOUND', 'النسخة النهائية للميثاق غير متاحة', 404);
+    if (ctx.role === AccountRole.ADMIN) assertAdminApplicationScope(ctx, agreement.participation.application?.regionOfficialCode);
     return { url: await this.storage.getSignedGetUrl(agreement.finalFile.objectKey, storageConfig.licenseSignedUrlSeconds), sha256: agreement.finalSha256 };
   }
 
@@ -266,9 +305,8 @@ export class ParticipationsService {
 
   completeSetup(ctx: AuthContext, id: string, opId: string) {
     return prisma.$transaction(async (tx) => {
+      const participation = await this.lockAdministrativeParticipation(tx, ctx, id);
       const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'participation-setup', opId, { id }); if (!claim.claimed) return claim.existingResponse!;
-      await tx.$queryRaw`SELECT id FROM project_participations WHERE id=${id}::uuid FOR UPDATE`;
-      const participation = await tx.projectParticipation.findUnique({ where: { id }, include: { application: { select: { selectionList: true } }, agreements: { orderBy: { version: 'desc' }, take: 1 } } });
       if (!participation) throw new ApiError('PARTICIPATION_SETUP_INVALID', 'المشاركة غير موجودة أو ليست بانتظار التجهيز', 409);
       if (participation.setupCompletedAt) {
         const response = { ok: true as const };
@@ -288,10 +326,9 @@ export class ParticipationsService {
   async activate(ctx: AuthContext, id: string, opId: string) {
     const scope = 'participation-activate';
     const outcome = await prisma.$transaction(async (tx) => {
+      const participation = await this.lockAdministrativeParticipation(tx, ctx, id);
       const claim = await this.idempotency.claim<{ associationId: string; accountId: string }>(tx, ctx.accountId, scope, opId, { id });
       if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse! };
-      await tx.$queryRaw`SELECT id FROM project_participations WHERE id=${id}::uuid FOR UPDATE`;
-      const participation = await tx.projectParticipation.findUnique({ where: { id }, include: { application: true, agreements: { orderBy: { version: 'desc' }, take: 1 } } });
       if (!participation?.application) throw new ApiError('PARTICIPATION_NOT_ACTIVATABLE', 'المشاركة لا ترتبط بطلب جديد قابل للتفعيل', 409);
       if (participation.status !== ParticipationStatus.APPROVED_AWAITING_SETUP || !participation.setupCompletedAt) throw new ApiError('PARTICIPATION_SETUP_INCOMPLETE', 'متطلبات التجهيز غير مكتملة', 409);
       if (participation.application.selectionList !== AssociationSelectionList.MAIN) throw new ApiError('PARTICIPATION_NOT_MAIN', 'لا يمكن تفعيل طلب غير موجود في القائمة الأساسية', 409);
@@ -313,7 +350,7 @@ export class ParticipationsService {
 
   requestCoordinatorChange(ctx: AuthContext, participationId: string, dto: CoordinatorChangeDto) {
     return prisma.$transaction(async (tx) => {
-      const p = await tx.projectParticipation.findUnique({ where: { id: participationId } });
+      const p = await this.lockAdministrativeParticipation(tx, ctx, participationId);
       if (!p || (ctx.role !== AccountRole.ADMIN && p.associationId !== ctx.associationId)) throw new ApiError('PARTICIPATION_NOT_FOUND', 'المشاركة غير موجودة', 404);
       const request = await tx.coordinatorChangeRequest.create({ data: { participationId, proposedName: requiredText(dto.proposedName, 'اسم المنسق', 200), proposedPhone: requiredText(dto.proposedPhone, 'جوال المنسق', 30), proposedEmail: dto.proposedEmail?.trim() || null, proposedTitle: dto.proposedTitle?.trim() || null, reason: requiredText(dto.reason, 'سبب التغيير', 1000), requestedById: ctx.accountId } });
       await audit(tx, ctx, 'COORDINATOR_CHANGE_REQUESTED', 'coordinator_change_requests', request.id); return request;
@@ -324,12 +361,21 @@ export class ParticipationsService {
     return prisma.$transaction(async (tx) => {
       const request = await tx.coordinatorChangeRequest.findUnique({ where: { id: requestId } });
       if (!request || request.status !== CoordinatorChangeStatus.PENDING) throw new ApiError('COORDINATOR_CHANGE_INVALID', 'طلب التغيير غير موجود أو سبق البت فيه', 409);
+      await this.lockAdministrativeParticipation(tx, ctx, request.participationId);
       if (decision === CoordinatorChangeStatus.APPROVED) await tx.projectParticipation.update({ where: { id: request.participationId }, data: { coordinatorName: request.proposedName, coordinatorPhone: request.proposedPhone, coordinatorEmail: request.proposedEmail, coordinatorTitle: request.proposedTitle } });
       await tx.coordinatorChangeRequest.update({ where: { id: requestId }, data: { status: decision, decidedById: ctx.accountId, decidedAt: new Date(), decisionNotes: notes?.trim() || null } });
       await audit(tx, ctx, decision === CoordinatorChangeStatus.APPROVED ? 'COORDINATOR_CHANGE_APPROVED' : 'COORDINATOR_CHANGE_REJECTED', 'coordinator_change_requests', requestId); return { ok: true };
     });
   }
+  private async lockAdministrativeParticipation(tx: Prisma.TransactionClient, ctx: AuthContext, id: string) {
+    const scoped = await lockAdminApplicationScope(tx, ctx);
+    await tx.$queryRaw`SELECT id FROM project_participations WHERE id=${id}::uuid FOR UPDATE`;
+    const participation = await tx.projectParticipation.findUnique({ where: { id }, include: { application: true, agreements: { orderBy: { version: 'desc' } } } });
+    if (ctx.role === AccountRole.ADMIN) assertAdminApplicationScope(scoped, participation?.application?.regionOfficialCode);
+    return participation;
+  }
 }
+
 
 async function audit(tx: Prisma.TransactionClient, ctx: AuthContext, action: string, entityType: string, entityId: string, metadata?: Prisma.InputJsonObject) {
   await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, associationId: ctx.associationId ?? null, action, entityType, entityId, metadata } });

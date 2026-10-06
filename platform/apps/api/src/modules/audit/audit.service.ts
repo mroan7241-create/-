@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { prisma, AccountRole, Prisma } from '@alzad/db';
 import { normalizePagination, toPaginatedResult, type PaginatedResult, type PaginationParams } from '../../common/pagination.util';
 import type { AuthContext } from '../auth/auth.types';
+import { adminAuditScopeWhere } from '../auth/admin-route-permissions';
 
 export interface AuditActor {
   id: string;
@@ -83,6 +84,8 @@ export class AuditService {
 
     if (params.entityType) where.entityType = params.entityType;
     if (params.entityId) where.entityId = params.entityId;
+    const scopedAudit = await adminAuditScopeWhere(ctx);
+    if (Object.keys(scopedAudit).length) where.AND = [scopedAudit];
 
     const [items, total] = await prisma.$transaction([
       prisma.auditLog.findMany({

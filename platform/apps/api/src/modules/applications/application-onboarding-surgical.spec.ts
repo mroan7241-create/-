@@ -11,7 +11,7 @@ describe('public application timeline — actual state only', () => {
     const service = new ApplicationV2Service({} as never, {} as never, {} as never,
       { consume: async () => undefined } as never,
       { requireSessionDraft: async () => ({ publicCode: 'DRF-1', submittedApplication: { ...application, ...overrides } }) } as never,
-      {} as never);
+      {} as never, {} as never);
     jest.spyOn(prisma.applicationInformationRequest, 'findFirst').mockResolvedValue(request as never);
     return service.publicStatus('DRF-1', '', 'session');
   }
@@ -84,7 +84,7 @@ describe('individual selection and final evaluation guards', () => {
     const access = { sendSelectionDecision: jest.fn(async () => undefined) };
     const service = new ApplicationV2Service({} as never,
       { claim: async () => ({ claimed: true }), complete: async () => undefined } as never,
-      {} as never, {} as never, access as never, { selectionMainCapacity: async () => 1 } as never);
+      {} as never, {} as never, access as never, { selectionMainCapacity: async () => 1 } as never, {} as never);
     return { tx, service, access };
   }
   it.each([AssociationSelectionList.MAIN, AssociationSelectionList.RESERVE])('does not rewrite evaluation after %s selection', async selection => {
@@ -94,22 +94,22 @@ describe('individual selection and final evaluation guards', () => {
   });
   it('rejects a new MAIN when existing MAIN occupies capacity', async () => {
     const { service, tx, access } = fixture(AssociationSelectionList.NONE, 1);
-    await expect(service.decideSelection({ accountId: 'admin' } as never, 'app', { decision: AssociationSelectionList.MAIN, opId: 'op' })).rejects.toMatchObject({ code: 'APPLICATION_SELECTION_CAPACITY_FULL' });
+    await expect(service.decideSelection({ accountId: 'admin' } as never, 'app', { workflowVersion: 2 as const, decision: AssociationSelectionList.MAIN, opId: 'op' })).rejects.toMatchObject({ code: 'APPLICATION_SELECTION_CAPACITY_FULL' });
     expect(tx.associationApplication.update).not.toHaveBeenCalled();
     expect(access.sendSelectionDecision).not.toHaveBeenCalled();
   });
   it('same decision with a new operation id keeps actor/date/reason and sends no duplicate mail', async () => {
     const { service, tx, access } = fixture(AssociationSelectionList.MAIN, 1);
-    await expect(service.decideSelection({ accountId: 'admin' } as never, 'app', { decision: AssociationSelectionList.MAIN, reason: 'changed', opId: 'new-op' })).resolves.toMatchObject({ decision: 'MAIN', emailSent: null });
+    await expect(service.decideSelection({ accountId: 'admin' } as never, 'app', { workflowVersion: 2 as const, decision: AssociationSelectionList.MAIN, reason: 'changed', opId: 'new-op' })).resolves.toMatchObject({ decision: 'MAIN', emailSent: null });
     expect(tx.associationApplication.update).not.toHaveBeenCalled();
     expect(tx.auditLog.create).not.toHaveBeenCalled();
     expect(access.sendSelectionDecision).not.toHaveBeenCalled();
   });
   it('takes the common selection lock before reading and counts before writing the last seat', async () => {
     const { service, tx } = fixture();
-    await service.decideSelection({ accountId: 'admin' } as never, 'app', { decision: AssociationSelectionList.MAIN, opId: 'op' });
+    await service.decideSelection({ accountId: 'admin' } as never, 'app', { workflowVersion: 2 as const, decision: AssociationSelectionList.MAIN, opId: 'op' });
     expect(tx.$executeRaw).toHaveBeenCalled();
-    expect(tx.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.associationApplication.findUnique.mock.invocationCallOrder[0]!);
+    expect(tx.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.associationApplication.findUnique.mock.invocationCallOrder.at(-1)!);
     expect(tx.associationApplication.count.mock.invocationCallOrder[0]).toBeLessThan(tx.associationApplication.update.mock.invocationCallOrder[0]!);
   });
 });

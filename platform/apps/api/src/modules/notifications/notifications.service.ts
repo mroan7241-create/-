@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { EmailService, classifyEmailFailure, decryptEmailDelivery, type DecryptedEmailDelivery, type EmailDeliveryPayload, type ApplicationAccessEmailParams, type PasswordResetEmailParams, type SecurityAlertEmailParams } from '../auth/email/email.service';
 import { StorageService } from '../files/storage.service';
 import { storageConfig } from '../../config/storage.config';
+import { adminApplicationRegionCodes, adminApplicationScopeWhere } from '../auth/admin-route-permissions';
 
 const OUTBOX_BATCH_SIZE = 100;
 const OUTBOX_MAX_ATTEMPTS = 5;
@@ -43,6 +44,18 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
       : ctx.role === AccountRole.ASSOCIATION
         ? { OR: [{ accountId: ctx.accountId }, { associationId: ctx.associationId, audienceRole: AccountRole.ASSOCIATION }] }
         : { accountId: ctx.accountId };
+    if (ctx.role === AccountRole.ADMIN && adminApplicationRegionCodes(ctx) !== null) {
+      const applications = await prisma.associationApplication.findMany({ where: adminApplicationScopeWhere(ctx), select: { id: true, participation: { select: { id: true, associationId: true, agreements: { select: { id: true } } } } } });
+      const applicationIds = applications.map(row => row.id);
+      const participations = applications.flatMap(row => row.participation ? [row.participation] : []);
+      where.AND = [{ OR: [
+        { associationId: { in: participations.flatMap(row => row.associationId ? [row.associationId] : []) } },
+        { entityType: 'association_applications', entityId: { in: applicationIds } },
+        { entityType: 'project_participations', entityId: { in: participations.map(row => row.id) } },
+        { entityType: 'participation_agreements', entityId: { in: participations.flatMap(row => row.agreements.map(agreement => agreement.id)) } },
+        { accountId: ctx.accountId, associationId: null, entityType: 'accounts', entityId: ctx.accountId },
+      ] }];
+    }
     return prisma.notification.findMany({ where, orderBy: { createdAt: 'desc' }, take: 200 });
   }
 
@@ -231,6 +244,9 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
     } else if (context.type === 'covenant') {
       if (!context.agreementId || context.markerKey !== `COVENANT_COMPLETION_EMAIL:${context.agreementId}`) throw new Error('MAIL_PAYLOAD_INVALID');
       await tx.$queryRaw`SELECT id FROM participation_agreements WHERE id=${context.agreementId}::uuid FOR UPDATE`;
+    } else if (context.type === 'rejection') {
+      if (!context.applicationId) throw new Error('MAIL_PAYLOAD_INVALID');
+      await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${context.applicationId}::uuid FOR UPDATE`;
     }
   }
 

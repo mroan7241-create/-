@@ -12,9 +12,9 @@ import {
   EligibilityStatus,
   AssociationSelectionList,
   ParticipationStatus,
-  ActivationBasis,
+  AgreementStatus,
 } from '@alzad/db';
-import { APPLICATION_ATTACHMENT_LABELS, LEGACY_APPLICATION_QUESTIONS } from '@alzad/shared';
+import { APPLICATION_ATTACHMENT_LABELS, LEGACY_APPLICATION_QUESTIONS, hasCovenantSignature } from '@alzad/shared';
 import { ApiError } from '../../common/api-error';
 import { RateLimitService } from '../../common/rate-limit.service';
 import { PublicCodeService } from '../../common/public-code.service';
@@ -36,8 +36,19 @@ import { rankApplications, scoreApplication, type EvaluationInput } from './appl
 import { OnboardingEmailService } from '../auth/email/onboarding-email.service';
 import { isInformationResponseLate } from './application-v2.service';
 import { ApplicationAccessService } from './application-access.service';
+import { adminApplicationScopeWhere, assertAdminApplicationScope, assertAdminApplicationScopeCurrent, lockAdminApplicationScope } from '../auth/admin-route-permissions';
 
 const QUESTION_KEYS = LEGACY_APPLICATION_QUESTIONS.map((q) => q.key);
+function selectionEditability(
+  application: { status: ApplicationStatus; selectionList: AssociationSelectionList; resultingAssociationId: string | null; eligibilityStatus: EligibilityStatus; evaluationScore: unknown },
+  delivery: string, ctx?: AuthContext,
+  participation?: { status: ParticipationStatus; associationId: string | null; activatedAt: Date | null; closedAt: Date | null; agreements: Array<{ associationAccountId: string | null; signedByOrgAt: Date | null; signedByZaadAt: Date | null; orgSignatureFileId: string | null; partyOneSignatureFileId: string | null; fullyExecutedAt: Date | null; finalFileId: string | null; status: AgreementStatus }> },
+) {
+  const started = Boolean(participation && (participation.status !== ParticipationStatus.APPROVED_AWAITING_SETUP || participation.activatedAt || participation.closedAt || participation.agreements.some(hasCovenantSignature)));
+  const account = Boolean(application.resultingAssociationId || participation?.associationId || participation?.agreements.some(agreement => agreement.associationAccountId));
+  const ready = application.eligibilityStatus === EligibilityStatus.PASSED && application.evaluationScore != null && (application.status === ApplicationStatus.UNDER_REVIEW || (application.status === ApplicationStatus.ACCEPTED && application.selectionList !== AssociationSelectionList.NONE));
+  return { selectionEditable: ready && !started && (application.selectionList !== AssociationSelectionList.MAIN || (!account && ['NOT_REQUESTED', 'PENDING', 'FAILED'].includes(delivery))), ownerCanCorrect: ready && application.selectionList === AssociationSelectionList.MAIN && !started && ctx?.adminFullAccess === true && ctx.meSnapshot?.publicCode === 'ADM-000001' };
+}
 
 export interface SubmitApplicationInput {
   clientRequestId: string;
@@ -282,9 +293,9 @@ export class ApplicationsService {
   // ================================================================
   // ADMIN LIST
   // ================================================================
-  async listApplications(params: PaginationParams & { search?: string; status?: ApplicationStatus; eligibilityStatus?: EligibilityStatus; selectionList?: AssociationSelectionList; workflow?: 'new' | 'processing' | 'missing'; financial?: 'assets_lte_10m' | 'assets_gt_10m' | 'surplus' | 'deficit' | 'working_capital'; includeCounts?: 'true' | 'false' }): Promise<PaginatedResult<unknown> & { counts: Record<string, number> }> {
+  async listApplications(params: PaginationParams & { search?: string; status?: ApplicationStatus; eligibilityStatus?: EligibilityStatus; selectionList?: AssociationSelectionList; workflow?: 'new' | 'processing' | 'missing'; financial?: 'assets_lte_10m' | 'assets_gt_10m' | 'surplus' | 'deficit' | 'working_capital'; includeCounts?: 'true' | 'false' }, ctx?: AuthContext): Promise<PaginatedResult<unknown> & { counts: Record<string, number> }> {
     const { page, pageSize, skip, take } = normalizePagination(params);
-    const where: Prisma.AssociationApplicationWhereInput = {};
+    const where: Prisma.AssociationApplicationWhereInput = ctx ? adminApplicationScopeWhere(ctx) : {};
     if (params.status) where.status = params.status;
     if (params.eligibilityStatus) where.eligibilityStatus = params.eligibilityStatus;
     if (params.selectionList) where.selectionList = params.selectionList;
@@ -318,31 +329,42 @@ export class ApplicationsService {
       prisma.associationApplication.count({ where }),
     ]);
 
-    if (params.includeCounts === 'false') return { ...toPaginatedResult(rows.map(mapApplicationSummary), total, page, pageSize), counts: {} };
+    const selected = rows.filter(row => row.selectionApprovedAt != null || row.selectionList === AssociationSelectionList.MAIN);
+    const receipts = await this.access.selectionDeliveries(prisma, selected);
+    const participations = selected.length ? await prisma.projectParticipation.findMany({ where: { applicationId: { in: selected.map(row => row.id) } }, include: { agreements: true } }) : [];
+    const mapped = rows.map(row => {
+      const receipt = receipts.get(row.id) ?? { status: 'NOT_REQUESTED' as const };
+      return { ...mapApplicationSummary(row), selectionDelivery: receipt, ...selectionEditability(row, receipt.status, ctx, participations.find(participation => participation.applicationId === row.id)) };
+    });
+    if (params.includeCounts === 'false') return { ...toPaginatedResult(mapped, total, page, pageSize), counts: {} };
+    const scope = ctx ? adminApplicationScopeWhere(ctx) : {};
 
     const [all, fresh, processing, missing, eligible, ineligible, main, reserve] = await Promise.all([
-      prisma.associationApplication.count(),
-      prisma.associationApplication.count({ where: { processingStartedAt: null, status: ApplicationStatus.UNDER_REVIEW } }),
-      prisma.associationApplication.count({ where: { processingStartedAt: { not: null }, status: ApplicationStatus.UNDER_REVIEW } }),
-      prisma.associationApplication.count({ where: { eligibilityStatus: EligibilityStatus.NEEDS_INFO } }),
-      prisma.associationApplication.count({ where: { eligibilityStatus: EligibilityStatus.PASSED } }),
-      prisma.associationApplication.count({ where: { OR: [{ eligibilityStatus: EligibilityStatus.FAILED }, { status: ApplicationStatus.REJECTED }] } }),
-      prisma.associationApplication.count({ where: { selectionList: AssociationSelectionList.MAIN } }),
-      prisma.associationApplication.count({ where: { selectionList: AssociationSelectionList.RESERVE } }),
+      prisma.associationApplication.count({ where: scope }),
+      prisma.associationApplication.count({ where: { ...scope, processingStartedAt: null, status: ApplicationStatus.UNDER_REVIEW } }),
+      prisma.associationApplication.count({ where: { ...scope, processingStartedAt: { not: null }, status: ApplicationStatus.UNDER_REVIEW } }),
+      prisma.associationApplication.count({ where: { ...scope, eligibilityStatus: EligibilityStatus.NEEDS_INFO } }),
+      prisma.associationApplication.count({ where: { ...scope, eligibilityStatus: EligibilityStatus.PASSED, status: { not: ApplicationStatus.REJECTED } } }),
+      prisma.associationApplication.count({ where: { AND: [scope, { OR: [{ eligibilityStatus: EligibilityStatus.FAILED }, { status: ApplicationStatus.REJECTED }] }] } }),
+      prisma.associationApplication.count({ where: { ...scope, selectionList: AssociationSelectionList.MAIN } }),
+      prisma.associationApplication.count({ where: { ...scope, selectionList: AssociationSelectionList.RESERVE } }),
     ]);
-    return { ...toPaginatedResult(rows.map(mapApplicationSummary), total, page, pageSize), counts: { all, new: fresh, processing, missing, eligible, ineligible, main, reserve } };
+    return { ...toPaginatedResult(mapped, total, page, pageSize), counts: { all, new: fresh, processing, missing, eligible, ineligible, main, reserve } };
   }
 
   // ================================================================
   // ADMIN DETAIL
   // ================================================================
-  async getApplicationDetail(id: string) {
+  async getApplicationDetail(id: string, ctx?: AuthContext) {
     const application = await prisma.associationApplication.findUnique({
       where: { id },
       include: { answers: true, reviewedBy: true, eligibilityReviewedBy: { select: { id: true, name: true, publicCode: true } }, evaluatedBy: { select: { id: true, name: true, publicCode: true } }, selectionApprovedBy: { select: { id: true, name: true, publicCode: true } }, processingStartedBy: { select: { id: true, name: true, publicCode: true } }, licenseFile: true, attachments: true, informationRequests: { include: { items: true }, orderBy: { requestedAt: 'desc' } } },
     });
     if (!application) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب الانضمام غير موجود', 404);
-    return mapApplicationSummary(application);
+    if (ctx) assertAdminApplicationScope(ctx, application.regionOfficialCode);
+    const receipt = await this.access.selectionDelivery(prisma, application.id, application.selectionApprovedAt, application.selectionList);
+    const participation = await prisma.projectParticipation.findUnique({ where: { applicationId: application.id }, include: { agreements: true } });
+    return { ...mapApplicationSummary(application), selectionDelivery: receipt, ...selectionEditability(application, receipt.status, ctx, participation ?? undefined) };
   }
 
   // ================================================================
@@ -353,6 +375,7 @@ export class ApplicationsService {
     const application = await prisma.associationApplication.findUnique({ where: { id }, include: { licenseFile: true, initialBeneficiaryFile: true, attachments: { include: { file: true } } } });
     if (!application) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب الانضمام غير موجود', 404);
     const file = fieldKey === 'licenseFile' ? application.licenseFile : application.attachments.find((item) => item.fieldKey === fieldKey)?.file ?? (fieldKey === 'initialBeneficiaryFile' ? application.initialBeneficiaryFile : null);
+    assertAdminApplicationScope(ctx, application.regionOfficialCode);
     const category = fieldKey === 'licenseFile' ? FileCategory.ASSOCIATION_LICENSE : fieldKey === 'initialBeneficiaryFile' ? FileCategory.APPLICATION_INITIAL_BENEFICIARIES : FileCategory.APPLICATION_SUPPORTING_DOCUMENT;
     if (!file || file.category !== category) {
       if (fieldKey !== 'licenseFile') throw new ApiError('APPLICATION_ATTACHMENT_NOT_FOUND', 'لا يوجد هذا المرفق في الطلب', 404);
@@ -377,12 +400,14 @@ export class ApplicationsService {
     if (decision === EligibilityStatus.NEEDS_INFO) throw new ApiError('APPLICATION_INFORMATION_REQUEST_REQUIRED', 'استخدم طلب الاستكمال لتحديد النواقص وإرسالها للجمعية', 409);
     let emailQueued = false;
     const result = await prisma.$transaction(async (tx) => {
+      const scoped = await this.requireAdministrativeApplication(tx, ctx, id);
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
       const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, 'application-eligibility', opId, { id, decision, notes: notes ?? null });
       if (!claim.claimed) return claim.existingResponse!;
       const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM association_applications WHERE id=${id}::uuid FOR UPDATE`;
       if (!locked[0]) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب الانضمام غير موجود', 404);
       const application = await tx.associationApplication.findUniqueOrThrow({ where: { id }, include: { answers: true } });
+      assertAdminApplicationScope(scoped, application.regionOfficialCode);
       if (application.status !== ApplicationStatus.UNDER_REVIEW) throw new ApiError('APPLICATION_ALREADY_REVIEWED', 'سبق البتّ في هذا الطلب', 409);
       if (decision === EligibilityStatus.PASSED && await tx.applicationInformationRequest.findFirst({ where: { applicationId: id, status: 'OPEN' }, select: { id: true } })) throw new ApiError('APPLICATION_INFORMATION_PENDING', 'لا يمكن اجتياز الأهلية قبل استجابة الجمعية لطلب الاستكمال', 409);
       if (application.schemaVersion === 1 && application.answers.length !== QUESTION_KEYS.length) throw new ApiError('ELIGIBILITY_ANSWERS_INCOMPLETE', 'إجابات بوابة الأهلية غير مكتملة', 409);
@@ -399,12 +424,14 @@ export class ApplicationsService {
     let scored: ReturnType<typeof scoreApplication>;
     try { scored = scoreApplication(input); } catch { throw new ApiError('APPLICATION_EVALUATION_INVALID', 'قيم التقييم يجب أن تكون بين 0 و100', 400); }
     return prisma.$transaction(async (tx) => {
+      const scoped = await this.requireAdministrativeApplication(tx, ctx, id);
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
       const claim = await this.idempotency.claim<{ ok: true; score: number }>(tx, ctx.accountId, 'application-evaluation', opId, { id, input });
       if (!claim.claimed) return claim.existingResponse!;
       await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${id}::uuid FOR UPDATE`;
       const application = await tx.associationApplication.findUnique({ where: { id } });
       if (!application) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب الانضمام غير موجود', 404);
+      assertAdminApplicationScope(scoped, application.regionOfficialCode);
       if (application.status !== ApplicationStatus.UNDER_REVIEW || application.selectionList !== AssociationSelectionList.NONE) throw new ApiError('APPLICATION_EVALUATION_LOCKED', 'لا يمكن تعديل التقييم بعد اعتماد قرار الاختيار', 409);
       if (application.eligibilityStatus !== EligibilityStatus.PASSED) throw new ApiError('APPLICATION_NOT_ELIGIBLE', 'لا يمكن تقييم طلب قبل اجتياز بوابة الأهلية', 409);
       await tx.associationApplication.update({ where: { id }, data: { evaluationBreakdown: scored.breakdown, evaluationScore: scored.total, geographicNeedScore: null, evaluatedAt: new Date(), evaluatedById: ctx.accountId } });
@@ -413,42 +440,24 @@ export class ApplicationsService {
     });
   }
 
-  async previewSelection() {
-    const rows = await prisma.associationApplication.findMany({ where: { eligibilityStatus: EligibilityStatus.PASSED, evaluationScore: { not: null }, selectionList: AssociationSelectionList.NONE }, select: { id: true, publicCode: true, name: true, evaluationScore: true, evaluationBreakdown: true } });
+  async previewSelection(ctx?: AuthContext) {
+    const rows = await prisma.associationApplication.findMany({ where: { ...(ctx ? adminApplicationScopeWhere(ctx) : {}), status: ApplicationStatus.UNDER_REVIEW, eligibilityStatus: EligibilityStatus.PASSED, evaluationScore: { not: null }, selectionList: AssociationSelectionList.NONE }, select: { id: true, publicCode: true, name: true, evaluationScore: true, evaluationBreakdown: true } });
     const ranked = rankApplications(rows.map((row) => ({ ...row, score: Number(row.evaluationScore) })));
     return { threshold: null, items: ranked.map((item, index) => ({ ...item, rank: index + 1 })) };
   }
 
-  async resendRejection(id: string) {
-    return { ok: true as const, emailQueued: await this.onboardingEmail.sendRejection(id), emailSent: null };
+  async resendRejection(id: string, ctx?: AuthContext) {
+    return prisma.$transaction(async tx => {
+      const application = await tx.associationApplication.findUniqueOrThrow({ where: { id } });
+      if (ctx) await assertAdminApplicationScopeCurrent(tx, ctx, application.regionOfficialCode);
+      return { ok: true as const, emailQueued: await this.onboardingEmail.sendRejection(id, tx), emailSent: null };
+    });
   }
 
   async commitSelection(ctx: AuthContext, mainTargetCount: number | undefined, opId: string) {
-    if (mainTargetCount !== undefined && (!Number.isInteger(mainTargetCount) || mainTargetCount < 1)) throw new ApiError('SELECTION_TARGET_INVALID', 'عدد القائمة الأساسية غير صالح', 400);
-    return prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
-      const claim = await this.idempotency.claim<{ ok: true; main: number; reserve: number; rejected: number }>(tx, ctx.accountId, 'application-selection', opId, { mainTargetCount: mainTargetCount ?? null });
-      if (!claim.claimed) return claim.existingResponse!;
-      const configuredMainTargetCount = await this.settings.selectionMainCapacity(tx);
-      if (configuredMainTargetCount !== undefined && mainTargetCount !== undefined && mainTargetCount !== configuredMainTargetCount) throw new ApiError('SELECTION_TARGET_MISMATCH', 'عدد القائمة الأساسية لا يطابق السعة المعتمدة في إعدادات الاختيار', 409);
-      const existingMainCount = await tx.associationApplication.count({ where: { selectionList: AssociationSelectionList.MAIN } });
-      const target = configuredMainTargetCount ?? mainTargetCount;
-      const availableMainCount = target === undefined ? Infinity : Math.max(0, target - existingMainCount);
-      const rows = await tx.associationApplication.findMany({ where: { status: ApplicationStatus.UNDER_REVIEW, eligibilityStatus: EligibilityStatus.PASSED, evaluationScore: { not: null }, selectionList: AssociationSelectionList.NONE }, select: { id: true, publicCode: true, evaluationScore: true, evaluationBreakdown: true, contactName: true, coordinatorPhone: true, coordinatorEmail: true, coordinatorTitle: true, sourceDraft: { select: { id: true } } } });
-      const ranked = rankApplications(rows.map((row) => ({ ...row, score: Number(row.evaluationScore) })));
-      // Match upload/access lock order: draft first, then application writes.
-      for (const draftId of rows.flatMap((row) => row.sourceDraft ? [row.sourceDraft.id] : []).sort()) {
-        await tx.$queryRaw`SELECT id FROM association_application_drafts WHERE id=${draftId}::uuid FOR UPDATE`;
-      }
-      const main = ranked.slice(0, availableMainCount); const reserve = ranked.slice(availableMainCount); const rejected: typeof ranked = []; const now = new Date();
-      for (let i = 0; i < ranked.length; i += 1) await tx.associationApplication.update({ where: { id: ranked[i].id }, data: { evaluationRank: i + 1 } });
-      if (main.length) await tx.associationApplication.updateMany({ where: { id: { in: main.map((r) => r.id) } }, data: { selectionList: AssociationSelectionList.MAIN, status: ApplicationStatus.ACCEPTED, selectionApprovedAt: now, selectionApprovedById: ctx.accountId } });
-      if (reserve.length) await tx.associationApplication.updateMany({ where: { id: { in: reserve.map((r) => r.id) } }, data: { selectionList: AssociationSelectionList.RESERVE, status: ApplicationStatus.ACCEPTED, selectionApprovedAt: now, selectionApprovedById: ctx.accountId } });
-      for (const row of main) await tx.projectParticipation.create({ data: { applicationId: row.id, status: ParticipationStatus.APPROVED_AWAITING_SETUP, activationBasis: ActivationBasis.AGREEMENT_COMPLETED, coordinatorName: row.contactName, coordinatorPhone: row.coordinatorPhone, coordinatorEmail: row.coordinatorEmail, coordinatorTitle: row.coordinatorTitle } });
-      for (const row of rows) if (row.sourceDraft) await this.access.sendSelectionDecision(row.id, tx);
-      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_SELECTION_COMMITTED', entityType: 'association_applications', metadata: { mainIds: main.map((r) => r.id), reserveIds: reserve.map((r) => r.id), rejectedIds: [], selectionApprovedAt: now.toISOString() } } });
-      const response = { ok: true as const, main: main.length, reserve: reserve.length, rejected: rejected.length }; await this.idempotency.complete(tx, ctx.accountId, 'application-selection', opId, response); return response;
-    });
+    // Old ranked commit coupled decisions and automatic mail; it must not bypass v2.
+    void ctx; void mainTargetCount; void opId;
+    throw new ApiError('APPLICATION_WORKFLOW_VERSION', 'حدّث الصفحة لاستخدام الاختيار الداخلي والإرسال الصريح', 409);
   }
 
   private async acceptApplication(ctx: AuthContext, id: string, opId: string) {
@@ -576,6 +585,7 @@ export class ApplicationsService {
     const payload = { id, reason };
 
     const outcome = await prisma.$transaction(async (tx) => {
+      await this.requireAdministrativeApplication(tx, ctx, id);
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
       const claim = await this.idempotency.claim<{ ok: true }>(tx, ctx.accountId, scope, opId, payload);
       if (!claim.claimed) return { replayed: true as const };
@@ -606,6 +616,14 @@ export class ApplicationsService {
     }
 
     return { ok: true as const };
+  }
+
+  private async requireAdministrativeApplication(tx: Prisma.TransactionClient, ctx: AuthContext, id: string) {
+    const scoped = await lockAdminApplicationScope(tx, ctx);
+    const application = await tx.associationApplication.findUnique({ where: { id }, select: { regionOfficialCode: true } });
+    if (!application) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب الانضمام غير موجود', 404);
+    assertAdminApplicationScope(scoped, application.regionOfficialCode);
+    return scoped;
   }
 }
 

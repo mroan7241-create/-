@@ -2,29 +2,35 @@ import { Injectable } from '@nestjs/common';
 import { AccountRole, prisma } from '@alzad/db';
 import { authForbidden } from '../../common/api-error';
 import type { AuthContext } from '../auth/auth.types';
+import { adminApplicationScopeWhere, adminAssociationScopeWhere, adminAuditScopeWhere } from '../auth/admin-route-permissions';
 
 @Injectable()
 export class DashboardService {
-  async admin() {
+  async admin(ctx?: AuthContext) {
+    const applicationScope = ctx ? adminApplicationScopeWhere(ctx) : {};
+    const associationScope = ctx ? adminAssociationScopeWhere(ctx) : {};
+    const linkedScope = Object.keys(associationScope).length ? { association: { is: associationScope } } : {};
+    const auditScope = ctx ? await adminAuditScopeWhere(ctx) : {};
     const [
       pendingApplications, associationGroups, beneficiaryGroups, deviceGroups,
       receiptsAwaitingConfirmation, delegates, deliveryGroups, activities, recentOperations,
     ] = await prisma.$transaction([
       prisma.associationApplication.count({ where: {
+        ...applicationScope,
         status: 'UNDER_REVIEW',
         OR: [
           { eligibilityStatus: 'PENDING' },
           { eligibilityStatus: 'PASSED', selectionList: 'NONE' },
         ],
       } }),
-      prisma.association.groupBy({ by: ['status'], orderBy: { status: 'asc' }, where: { archivedAt: null }, _count: { _all: true as const } }),
-      prisma.beneficiary.groupBy({ by: ['reviewStatus'], orderBy: { reviewStatus: 'asc' }, where: { archivedAt: null }, _count: { _all: true as const } }),
-      prisma.deviceUnit.groupBy({ by: ['status'], orderBy: { status: 'asc' }, _count: { _all: true as const } }),
-      prisma.receiptBatch.count({ where: { status: 'AWAITING_ASSOCIATION_CONFIRMATION' } }),
-      prisma.account.count({ where: { role: 'DELEGATE', archivedAt: null } }),
-      prisma.deliveryMission.groupBy({ by: ['status'], orderBy: { status: 'asc' }, _count: { _all: true as const } }),
+      prisma.association.groupBy({ by: ['status'], orderBy: { status: 'asc' }, where: { ...associationScope, archivedAt: null }, _count: { _all: true as const } }),
+      prisma.beneficiary.groupBy({ by: ['reviewStatus'], orderBy: { reviewStatus: 'asc' }, where: { ...linkedScope, archivedAt: null }, _count: { _all: true as const } }),
+      prisma.deviceUnit.groupBy({ by: ['status'], orderBy: { status: 'asc' }, where: linkedScope, _count: { _all: true as const } }),
+      prisma.receiptBatch.count({ where: { ...linkedScope, status: 'AWAITING_ASSOCIATION_CONFIRMATION' } }),
+      prisma.account.count({ where: { ...linkedScope, role: 'DELEGATE', archivedAt: null } }),
+      prisma.deliveryMission.groupBy({ by: ['status'], orderBy: { status: 'asc' }, where: linkedScope, _count: { _all: true as const } }),
       prisma.activity.findMany({ orderBy: [{ phaseOrder: 'asc' }, { mainActivityOrder: 'asc' }, { createdAt: 'asc' }], include: { evidence: { select: { id: true, approvalStatus: true, notes: true, uploadedAt: true } } } }),
-      prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 8, include: { actorAccount: { select: { name: true, role: true, publicCode: true } } } }),
+      prisma.auditLog.findMany({ where: auditScope, orderBy: { createdAt: 'desc' }, take: 8, include: { actorAccount: { select: { name: true, role: true, publicCode: true } } } }),
     ]);
     const associations = associationGroups.reduce((sum, group) => sum + groupedCount(group), 0);
     const activeAssociations = groupedCount(associationGroups.find((group) => group.status === 'ACTIVE'));

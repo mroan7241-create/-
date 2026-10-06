@@ -12,7 +12,7 @@ import { LICENSE_FILE_MAX_BYTES } from '../files/file-validation.util';
 import { ApplicationsService } from './applications.service';
 import { ReviewApplicationDto } from './dto/submit-application.dto';
 import { ListApplicationsQueryDto } from './dto/list-applications-query.dto';
-import { EligibilityDecisionDto, EvaluationDto, SelectionCommitDto } from './dto/application-workflow.dto';
+import { EligibilityDecisionDto, EvaluationDto, SelectionCommitDto, SelectionSendDto } from './dto/application-workflow.dto';
 import { ApplicationV2Service } from './application-v2.service';
 import { ApplicationAttachmentDto, BulkStartProcessingDto, CreateApplicationDraftDto, CreateInformationRequestDto, ExchangeApplicationAccessDto, RequestApplicationAccessDto, SaveApplicationDraftDto, SelectionDecisionDto, SubmitApplicationDraftDto, SubmitInformationResponseDto } from './dto/application-v2.dto';
 import { APPLICANT_SESSION_COOKIE, ApplicationAccessService } from './application-access.service';
@@ -135,8 +135,8 @@ export class ApplicationsController {
   @Get('association-applications')
   @Roles(AccountRole.ADMIN)
   @ApiOperation({ summary: 'قائمة طلبات الانضمام — ADMIN فقط، مع pagination/search/filter' })
-  async list(@Query() query: ListApplicationsQueryDto) {
-    return this.applications.listApplications(query);
+  async list(@CurrentUser() ctx: AuthContext, @Query() query: ListApplicationsQueryDto) {
+    return this.applications.listApplications(query, ctx);
   }
 
   @Post('association-applications/processing/start')
@@ -146,8 +146,8 @@ export class ApplicationsController {
   @Get('association-applications/:id')
   @Roles(AccountRole.ADMIN)
   @ApiOperation({ summary: 'تفاصيل طلب انضمام — ADMIN فقط' })
-  async detail(@Param('id', ParseUUIDPipe) id: string) {
-    return this.applications.getApplicationDetail(id);
+  async detail(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string) {
+    return this.applications.getApplicationDetail(id, ctx);
   }
 
   @Get('association-applications/:id/license-file')
@@ -167,17 +167,17 @@ export class ApplicationsController {
   @Post('association-applications/:id/eligibility')
   @Roles(AccountRole.ADMIN)
   async eligibility(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: EligibilityDecisionDto) {
-    const evidence = await this.applicationV2.eligibilityEvidence(id);
+    const evidence = await this.applicationV2.eligibilityEvidence(id, ctx);
     return this.applications.decideEligibility(ctx, id, dto.decision, dto.notes, dto.opId, evidence);
   }
 
   @Post('association-applications/:id/eligibility/resend-rejection')
   @Roles(AccountRole.ADMIN)
-  resendRejection(@Param('id', ParseUUIDPipe) id: string) { return this.applications.resendRejection(id); }
+  resendRejection(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string) { return this.applications.resendRejection(id, ctx); }
 
   @Get('association-applications/:id/eligibility-evidence')
   @Roles(AccountRole.ADMIN)
-  eligibilityEvidence(@Param('id', ParseUUIDPipe) id: string) { return this.applicationV2.eligibilityEvidence(id); }
+  eligibilityEvidence(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string) { return this.applicationV2.eligibilityEvidence(id, ctx); }
 
   @Post('association-applications/:id/information-request')
   @Roles(AccountRole.ADMIN)
@@ -185,8 +185,8 @@ export class ApplicationsController {
 
   @Post('association-applications/:id/information-request/resend')
   @Roles(AccountRole.ADMIN)
-  async resendInformationRequest(@Param('id', ParseUUIDPipe) id: string) {
-    return { ok: true, emailQueued: await this.applicationAccess.sendNeedsInfo(id) };
+  async resendInformationRequest(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string) {
+    return { ok: true, emailQueued: await this.applicationAccess.sendNeedsInfo(id, undefined, ctx) };
   }
 
   @Post('association-applications/:id/evaluation')
@@ -201,17 +201,17 @@ export class ApplicationsController {
 
   @Post('association-applications/:id/selection-decision/resend')
   @Roles(AccountRole.ADMIN)
-  async resendSelectionDecision(@Param('id', ParseUUIDPipe) id: string) {
-    return { ok: true, emailQueued: await this.applicationAccess.sendSelectionDecision(id) };
+  async resendSelectionDecision(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: SelectionSendDto) {
+    return this.applicationV2.commitSelection(ctx, { ...dto, operation: 'SEND_MAIN', applicationIds: [id] });
   }
 
   @Post('association-applications/selection/preview')
   @Roles(AccountRole.ADMIN)
-  selectionPreview() { return this.applications.previewSelection(); }
+  selectionPreview(@CurrentUser() ctx: AuthContext) { return this.applications.previewSelection(ctx); }
 
   @Post('association-applications/selection/commit')
   @Roles(AccountRole.ADMIN)
   selectionCommit(@CurrentUser() ctx: AuthContext, @Body() dto: SelectionCommitDto) {
-    return this.applications.commitSelection(ctx, dto.mainTargetCount, dto.opId);
+    return this.applicationV2.commitSelection(ctx, dto);
   }
 }

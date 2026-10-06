@@ -1,5 +1,5 @@
-import { ArrayMaxSize, ArrayUnique, IsArray, IsEmail, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
-import { ADMIN_PERMISSION_CATALOG, type AdminPermission } from '@alzad/shared';
+import { ArrayMaxSize, ArrayUnique, IsArray, IsEmail, IsIn, IsObject, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { ADMIN_PERMISSION_CATALOG, type AdminApplicationScope, type AdminPermission } from '@alzad/shared';
 
 const keys = ADMIN_PERMISSION_CATALOG.map((item) => item.key);
 
@@ -12,6 +12,8 @@ export class CreateAdminAccountDto {
 
   @IsArray() @ArrayUnique() @ArrayMaxSize(keys.length) @IsIn(keys, { each: true })
   adminPermissions!: AdminPermission[];
+  @IsObject()
+  adminApplicationScope!: AdminApplicationScope;
 }
 
 export class UpdateAdminAccountDto {
@@ -20,6 +22,8 @@ export class UpdateAdminAccountDto {
 
   @IsOptional() @IsArray() @ArrayUnique() @ArrayMaxSize(keys.length) @IsIn(keys, { each: true })
   adminPermissions?: AdminPermission[];
+  @IsOptional() @IsObject()
+  adminApplicationScope?: AdminApplicationScope;
 }
 
 export class SetAdminAccountStatusDto {

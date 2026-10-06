@@ -20,6 +20,7 @@ function fixture() {
   };
   const tx = {
     $queryRaw: jest.fn<() => Promise<unknown>>().mockResolvedValue([{ id: participation.id }]),
+    account: { findUnique: jest.fn(async () => ({ role: AccountRole.ADMIN, status: 'ACTIVE', archivedAt: null, adminFullAccess: true, adminApplicationScope: null })) },
     projectParticipation: {
       findUnique: jest.fn<() => Promise<unknown>>().mockResolvedValue(participation),
       updateMany: jest.fn<() => Promise<unknown>>().mockResolvedValue({ count: 1 }),
@@ -39,17 +40,33 @@ function fixture() {
   return { service, tx, idem, participation };
 }
 
+describe('participation administrative region reads', () => {
+  afterEach(() => jest.restoreAllMocks());
+  it.each([undefined, { allRegions: true as const }])('preserves historical unlinked participation visibility for unrestricted scope %j', async adminApplicationScope => {
+    const { service } = fixture();
+    const read = jest.spyOn(prisma.projectParticipation, 'findMany').mockResolvedValue([]);
+    await service.list({ ...admin, adminFullAccess: false, adminApplicationScope });
+    expect(read).toHaveBeenCalledWith(expect.objectContaining({ where: { AND: [{ OR: [{ applicationId: null }, { application: { selectionList: AssociationSelectionList.MAIN } }] }] } }));
+  });
+  it('requires a linked official region for region-limited staff; historical null applications are excluded', async () => {
+    const { service } = fixture();
+    const read = jest.spyOn(prisma.projectParticipation, 'findMany').mockResolvedValue([]);
+    await service.list({ ...admin, adminFullAccess: false, adminApplicationScope: { regionCodes: ['0001'] } });
+    expect(read).toHaveBeenCalledWith(expect.objectContaining({ where: { AND: [{ OR: [{ applicationId: null }, { application: { selectionList: AssociationSelectionList.MAIN } }] }, { application: { is: { regionOfficialCode: { in: ['0001'] } } } }] } }));
+  });
+});
+
 describe('participation data-readiness ordering', () => {
   afterEach(() => jest.restoreAllMocks());
 
   it('locks the participation before checking MAIN and the sent canonical covenant', async () => {
     const { service, tx, idem, participation } = fixture();
     await expect(service.completeSetup(admin, participation.id, 'op-id')).resolves.toEqual({ ok: true });
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
     expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.projectParticipation.findUnique.mock.invocationCallOrder[0]);
     expect(tx.projectParticipation.findUnique).toHaveBeenCalledWith({
       where: { id: participation.id },
-      include: { application: { select: { selectionList: true } }, agreements: { orderBy: { version: 'desc' }, take: 1 } },
+      include: { application: true, agreements: { orderBy: { version: 'desc' } } },
     });
     expect(tx.projectParticipation.updateMany).toHaveBeenCalledWith({
       where: { id: participation.id, status: ParticipationStatus.APPROVED_AWAITING_SETUP, setupCompletedAt: null },
@@ -112,8 +129,8 @@ describe('participation data-readiness ordering', () => {
     const { service, tx, idem, participation } = fixture();
     idem.claim.mockResolvedValue({ claimed: false, existingResponse: { ok: true } });
     await expect(service.completeSetup(admin, participation.id, 'same-op')).resolves.toEqual({ ok: true });
-    expect(tx.$queryRaw).not.toHaveBeenCalled();
-    expect(tx.projectParticipation.findUnique).not.toHaveBeenCalled();
+    expect(tx.$queryRaw).toHaveBeenCalled();
+    expect(tx.projectParticipation.findUnique).toHaveBeenCalled();
     expect(tx.projectParticipation.updateMany).not.toHaveBeenCalled();
     expect(tx.auditLog.create).not.toHaveBeenCalled();
   });
@@ -129,7 +146,7 @@ describe('participation account producers queue atomically', () => {
         agreements: [{ id: 'agreement', status: signed ? AgreementStatus.SIGNED : AgreementStatus.SENT, templateVersion: COVENANT_VERSION, templateSha256: COVENANT_SOURCE_SHA256 }] })), update: jest.fn(async () => ({})) },
       authCredential: { findUnique: jest.fn(async () => null), create: jest.fn(async () => ({})) },
       association: { create: jest.fn(async () => ({ id: 'association' })) },
-      account: { create: jest.fn(async () => ({ id: 'account' })) },
+      account: { findUnique: jest.fn(async () => ({ role: AccountRole.ADMIN, status: 'ACTIVE', archivedAt: null, adminFullAccess: true, adminApplicationScope: null })), create: jest.fn(async () => ({ id: 'account' })) },
       associationApplication: { update: jest.fn(async () => ({})) },
       participationAgreement: { update: jest.fn(async () => ({})) },
       auditLog: { create: jest.fn(async () => ({})) },

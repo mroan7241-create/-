@@ -42,6 +42,10 @@ export enum ParticipationStatus {
 }
 export enum ActivationBasis { AGREEMENT_COMPLETED = 'AGREEMENT_COMPLETED', LEGACY_MIGRATION = 'LEGACY_MIGRATION', ADMIN_REOPEN = 'ADMIN_REOPEN' }
 export enum AgreementStatus { DRAFT = 'DRAFT', SENT = 'SENT', SIGNED_BY_ORG = 'SIGNED_BY_ORG', SIGNED = 'SIGNED', CANCELLED = 'CANCELLED', SUPERSEDED = 'SUPERSEDED' }
+/** Any recorded signature/final document prevents an ordinary selection reversal. */
+export function hasCovenantSignature(agreement: { signedByOrgAt?: unknown; signedByZaadAt?: unknown; orgSignatureFileId?: unknown; partyOneSignatureFileId?: unknown; fullyExecutedAt?: unknown; finalFileId?: unknown; status: string }): boolean {
+  return Boolean(agreement.signedByOrgAt || agreement.signedByZaadAt || agreement.orgSignatureFileId || agreement.partyOneSignatureFileId || agreement.fullyExecutedAt || agreement.finalFileId || agreement.status === AgreementStatus.SIGNED_BY_ORG || agreement.status === AgreementStatus.SIGNED);
+}
 
 /** Completion survives the operational/closure lifecycle; suspended and setup
  * participations remain restricted, even if an older agreement was signed. */

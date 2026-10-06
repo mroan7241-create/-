@@ -14,6 +14,8 @@ import { sha256Hex } from '../../common/crypto.util';
 import { RateLimitService } from '../../common/rate-limit.service';
 import { EmailService, enqueueEmail, decryptEmailDelivery, type EmailDeliveryPayload, type EmailDeliveryContext } from '../auth/email/email.service';
 import { applicationRequirementDescription } from '@alzad/shared';
+import type { AuthContext } from '../auth/auth.types';
+import { assertAdminApplicationScope, assertAdminApplicationScopeCurrent } from '../auth/admin-route-permissions';
 
 export const APPLICANT_SESSION_COOKIE = 'alzad_applicant_session';
 export const APPLICANT_SESSION_TTL_SECONDS = 30 * 60;
@@ -147,8 +149,8 @@ export class ApplicationAccessService {
       'متابعة طلب المشاركة — مشروع الأجهزة الكهربائية', 'تم استلام طلبك. استخدم الرابط الآمن لمتابعة حالته.', tx);
   }
 
-  async sendSelectionDecision(applicationId: string, tx?: Prisma.TransactionClient): Promise<boolean> {
-    if (!tx) return prisma.$transaction(client => this.sendSelectionDecision(applicationId, client));
+  async sendSelectionDecision(applicationId: string, tx?: Prisma.TransactionClient, ctx?: AuthContext): Promise<boolean> {
+    if (!tx) return prisma.$transaction(client => this.sendSelectionDecision(applicationId, client, ctx));
     const source = await tx.associationApplicationDraft.findFirst({ where: { submittedApplicationId: applicationId }, select: { id: true } });
     if (source) await tx.$queryRaw`SELECT id FROM association_application_drafts WHERE id=${source.id}::uuid FOR UPDATE`;
     const application = await tx.associationApplication.findUnique({
@@ -156,29 +158,73 @@ export class ApplicationAccessService {
     });
     const draft = application?.sourceDraft;
     const email = normalizeEmail(application?.email ?? '');
-    if (!application || !draft || !email || !['MAIN', 'RESERVE'].includes(application.selectionList)) throw new ApiError('APPLICATION_EMAIL_UNAVAILABLE', 'تعذر إرسال قرار الاختيار لعدم اكتمال الاختيار أو بيانات البريد', 409);
-    const intro = application.selectionList === 'MAIN'
-      ? 'تم اختيار جمعيتكم في القائمة الأساسية. يمكنكم متابعة متطلبات التهيئة عبر رابط الطلب الآمن.'
-      : 'تم اختيار جمعيتكم في قائمة الاحتياط. يمكنكم متابعة حالة الطلب عبر الرابط الآمن.';
+    if (!application || !draft || !email || application.selectionList !== 'MAIN' || application.status !== 'ACCEPTED') throw new ApiError('APPLICATION_EMAIL_UNAVAILABLE', 'يمكن إرسال الاعتماد للجمعيات الأساسية المعتمدة فقط', 409);
+    if (ctx) assertAdminApplicationScope(ctx, application.regionOfficialCode); // The explicit sender locks the actor scope once for its whole batch.
+    const delivery = await this.selectionDelivery(tx, application.id, application.selectionApprovedAt);
+    if (['PENDING', 'ACCEPTED', 'UNKNOWN'].includes(delivery.status)) throw new ApiError('APPLICATION_SELECTION_EMAIL_EXISTS', 'سبق طلب إرسال الاعتماد أو تعذر إثبات نتيجة إرساله؛ لا تُنشأ رسالة مكررة', 409);
+    const intro = 'تم اختيار جمعيتكم في القائمة الأساسية. يمكنكم متابعة متطلبات التهيئة عبر رابط الطلب الآمن.';
     return this.issueAndSend(email, [{ id: draft.id, publicCode: draft.publicCode, displayCode: application.publicCode, status: draft.status, name: application.name, needsInfo: false }],
       'قرار اختيار الجمعية — مشروع الأجهزة الكهربائية', intro, tx, { applicationId, selectionList: application.selectionList as 'MAIN' | 'RESERVE', selectionApprovedAt: application.selectionApprovedAt?.toISOString() ?? null });
   }
 
-  async cancelUnsentMainDecision(tx: Prisma.TransactionClient, applicationId: string, draftId: string, selectionApprovedAt: Date | null) {
+  async selectionDelivery(tx: Prisma.TransactionClient | typeof prisma, applicationId: string, selectionApprovedAt: Date | null, selectionList = 'MAIN'): Promise<{ status: 'NOT_REQUESTED' | 'PENDING' | 'ACCEPTED' | 'FAILED' | 'UNKNOWN'; requestedAt?: string }> {
+    return (await this.selectionDeliveries(tx, [{ id: applicationId, selectionApprovedAt, selectionList }])).get(applicationId)!;
+  }
+
+  async selectionDeliveries(tx: Prisma.TransactionClient | typeof prisma, applications: Array<{ id: string; selectionApprovedAt: Date | null; selectionList?: string }>) {
+    type Receipt = { status: 'NOT_REQUESTED' | 'PENDING' | 'ACCEPTED' | 'FAILED' | 'UNKNOWN'; requestedAt?: string };
+    const result = new Map<string, Receipt>();
+    if (!applications.length) return result;
+    const ids = applications.map(application => application.id);
+    const records = await tx.auditLog.findMany({ where: { action: 'APPLICATION_ACCESS_EMAIL_QUEUED', OR: ids.map(id => ({ metadata: { path: ['applicationId'], equals: id } })) }, select: { metadata: true, createdAt: true } });
+    const eventIds = records.flatMap(record => typeof (record.metadata as { eventId?: unknown })?.eventId === 'string' ? [(record.metadata as { eventId: string }).eventId] : []);
+    const events = await tx.outboxEvent.findMany({ where: { id: { in: eventIds } } });
+    const origins = await tx.auditLog.findMany({ where: { action: 'APPLICATION_SELECTION_DECIDED', entityId: { in: ids }, metadata: { path: ['workflowVersion'], equals: 2 } }, select: { entityId: true, metadata: true } });
+    for (const application of applications) {
+      if (application.selectionList && application.selectionList !== 'MAIN') { result.set(application.id, { status: 'NOT_REQUESTED' }); continue; }
+      let matched = false, failed = false;
+      let receipt: Receipt | undefined;
+      for (const record of records.filter(record => (record.metadata as { applicationId?: string; selectionList?: string })?.applicationId === application.id && (record.metadata as { selectionList?: string }).selectionList === 'MAIN')) {
+      const id = (record.metadata as { eventId?: unknown })?.eventId;
+      if (typeof id !== 'string') { receipt = { status: 'UNKNOWN' }; break; }
+      const event = events.find(event => event.id === id);
+      if (!event) { receipt = { status: 'UNKNOWN' }; break; }
+      let delivery;
+      try { delivery = decryptEmailDelivery(event.id, event.payload as unknown as EmailDeliveryPayload); } catch { receipt = { status: 'UNKNOWN' }; break; }
+      if (delivery.context.type !== 'access' || delivery.context.expected?.selectionApprovedAt !== (application.selectionApprovedAt?.toISOString() ?? null)) continue;
+      matched = true;
+      const phase = (event.payload as unknown as EmailDeliveryPayload).phase;
+      if (phase === 'SMTP_ACCEPTED' || event.status === OutboxEventStatus.PROCESSED) { receipt = { status: 'ACCEPTED', requestedAt: record.createdAt.toISOString() }; continue; }
+      if (phase === 'SMTP_STARTED') { receipt = { status: 'UNKNOWN', requestedAt: record.createdAt.toISOString() }; break; }
+      if (event.status === OutboxEventStatus.FAILED) failed = true;
+      else if (receipt?.status !== 'ACCEPTED') receipt = { status: 'PENDING', requestedAt: record.createdAt.toISOString() };
+      }
+      const stamp = application.selectionApprovedAt?.toISOString() ?? null;
+      const internal = origins.some(origin => origin.entityId === application.id && (origin.metadata as { selectionApprovedAt?: string })?.selectionApprovedAt === stamp);
+      result.set(application.id, receipt ?? (matched && failed ? { status: 'FAILED' } : { status: internal ? 'NOT_REQUESTED' : 'UNKNOWN' }));
+    }
+    return result;
+  }
+
+  async cancelUnsentMainDecision(tx: Prisma.TransactionClient, applicationId: string, draftId: string, selectionApprovedAt: Date | null, ownerCorrection = false) {
     const blocked = () => new ApiError('APPLICATION_SELECTION_EMAIL_STARTED', 'لا يمكن النقل إلى الاحتياط بعد بدء إشعار الأساسية، أو عند تعذر إثبات أنه لم يُرسل', 409);
-    if (!selectionApprovedAt) throw blocked();
+    if (!selectionApprovedAt && !ownerCorrection) throw blocked();
     // A resend must never make a historical MAIN decision eligible for reversal.
     // Only the original decision transaction can write this exact decision stamp.
-    const origin = await tx.auditLog.findFirst({ where: { entityType: 'association_applications', AND: [
+    const origin = selectionApprovedAt ? await tx.auditLog.findFirst({ where: { entityType: 'association_applications', AND: [
       { metadata: { path: ['selectionApprovedAt'], equals: selectionApprovedAt.toISOString() } },
       { OR: [
         { action: 'APPLICATION_SELECTION_DECIDED', entityId: applicationId, metadata: { path: ['decision'], equals: 'MAIN' } },
         { action: 'APPLICATION_SELECTION_COMMITTED', metadata: { path: ['mainIds'], array_contains: [applicationId] } },
       ] },
-    ] }, select: { id: true } });
-    if (!origin) throw blocked();
+    ] }, select: { id: true, metadata: true } }) : null;
+    if (!origin && !ownerCorrection) throw blocked();
+    const internalDecision = (origin?.metadata as { workflowVersion?: number } | undefined)?.workflowVersion === 2;
     const records = await tx.auditLog.findMany({ where: { action: 'APPLICATION_ACCESS_EMAIL_QUEUED', entityId: draftId, AND: [{ metadata: { path: ['applicationId'], equals: applicationId } }, { metadata: { path: ['selectionList'], equals: 'MAIN' } }] }, select: { metadata: true } });
-    if (!records.length) throw blocked(); // Historical SMTP outcomes have no reliable decision-specific receipt.
+    if (!records.length) {
+      if (ownerCorrection || internalDecision) return;
+      throw blocked(); // Historical SMTP outcomes have no reliable decision-specific receipt.
+    }
     const ids = records.map(record => (record.metadata as { eventId?: unknown })?.eventId);
     if (ids.some(id => typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))) throw blocked();
     let currentDecisionTracked = false;
@@ -186,20 +232,24 @@ export class ApplicationAccessService {
       await tx.$queryRaw`SELECT id FROM outbox_events WHERE id=${id}::uuid FOR UPDATE`;
       const event = await tx.outboxEvent.findUnique({ where: { id } });
       const payload = event?.payload as unknown as EmailDeliveryPayload;
-      if (!event || event.type !== OutboxEventType.EMAIL_DELIVERY || payload?.phase !== 'READY' || event.status === OutboxEventStatus.PROCESSED || (event.status === OutboxEventStatus.FAILED && !event.lastError) || (event.lastError && !['MAIL_TEMPORARY_FAILURE', 'MAIL_STATE_UNAVAILABLE', 'MAIL_STATE_INVALID', 'MAIL_EXPIRED', 'MAIL_ATTACHMENT_INVALID', 'MAIL_CONFIGURATION_INVALID', 'MAIL_DELIVERY_REJECTED'].includes(event.lastError))) throw blocked();
+      if (!event || event.type !== OutboxEventType.EMAIL_DELIVERY) throw blocked();
       let delivery;
       try { delivery = decryptEmailDelivery(event.id, payload); } catch { throw blocked(); }
       const context = delivery.context;
       if (context.type !== 'access' || context.expected?.applicationId !== applicationId || context.expected.selectionList !== 'MAIN' || !Array.isArray(context.draftTokens) || !context.draftTokens.length || context.draftTokens.some(token => !token || typeof token.id !== 'string' || !token.id || token.draftId !== draftId)) throw blocked();
-      if (context.expected.selectionApprovedAt === selectionApprovedAt.toISOString()) currentDecisionTracked = true;
+      if (!ownerCorrection && context.expected.selectionApprovedAt !== selectionApprovedAt?.toISOString()) continue;
+      if (ownerCorrection && ['SMTP_STARTED', 'SMTP_ACCEPTED'].includes(payload.phase)) continue; // Never undo an in-flight or definite SMTP result.
+      if (payload.phase !== 'READY' || event.status === OutboxEventStatus.PROCESSED || (event.status === OutboxEventStatus.FAILED && !event.lastError) || (event.lastError && !['MAIL_TEMPORARY_FAILURE', 'MAIL_STATE_UNAVAILABLE', 'MAIL_STATE_INVALID', 'MAIL_EXPIRED', 'MAIL_ATTACHMENT_INVALID', 'MAIL_CONFIGURATION_INVALID', 'MAIL_DELIVERY_REJECTED'].includes(event.lastError))) throw blocked();
+      if (context.expected.selectionApprovedAt === selectionApprovedAt?.toISOString()) currentDecisionTracked = true;
       const cancelled = await tx.outboxEvent.updateMany({ where: { id: event.id, status: event.status, lockedAt: event.lockedAt, payload: { path: ['phase'], equals: 'READY' } }, data: { status: OutboxEventStatus.FAILED, failedAt: new Date(), lockedAt: null, lastError: 'MAIL_STATE_INVALID' } });
       if (cancelled.count !== 1) throw blocked();
       await tx.applicationAccessToken.updateMany({ where: { id: { in: context.draftTokens.map(token => token.id) }, draftId, consumedAt: null }, data: { consumedAt: new Date() } });
     }
-    if (!currentDecisionTracked) throw blocked(); // Caller transaction rolls back all cancellations.
+    if (!currentDecisionTracked && !ownerCorrection && !internalDecision) throw blocked(); // Caller transaction rolls back all cancellations.
   }
 
-  async sendNeedsInfo(applicationId: string, tx?: Prisma.TransactionClient): Promise<boolean> {
+  async sendNeedsInfo(applicationId: string, tx?: Prisma.TransactionClient, ctx?: AuthContext): Promise<boolean> {
+    if (!tx) return prisma.$transaction(client => this.sendNeedsInfo(applicationId, client, ctx));
     const application = await (tx ?? prisma).associationApplication.findUnique({
       where: { id: applicationId },
       include: {
@@ -210,6 +260,7 @@ export class ApplicationAccessService {
     const draft = application?.sourceDraft;
     const email = normalizeEmail(application?.email ?? draft?.contactEmail ?? '');
     if (!application || !draft || !email || !application.informationRequests.length) throw new ApiError('APPLICATION_EMAIL_UNAVAILABLE', 'لا يوجد بريد رسمي صالح أو مسودة مرتبطة لإرسال رابط الاستكمال', 409);
+    if (ctx) await assertAdminApplicationScopeCurrent(tx, ctx, application.regionOfficialCode);
     const request = application.informationRequests[0]!;
     const details = request.items.map((item, index) => `${index + 1}. ${applicationRequirementDescription(item.type, item.key, item.reason)}`).join('\n');
     const note = request.note?.trim();

@@ -4,6 +4,7 @@ import { ApiError, authForbidden } from '../../common/api-error';
 import type { AuthContext } from '../auth/auth.types';
 import type { AssociationReportQueryDto } from './dto/association-report-query.dto';
 import type { AbanmiReportQueryDto } from './dto/abanmi-report-query.dto';
+import { adminApplicationRegionCodes, adminApplicationScopeWhere, adminAssociationScopeWhere, assertAdminAssociationScope } from '../auth/admin-route-permissions';
 
 const DAY_MS = 86_400_000;
 
@@ -28,6 +29,8 @@ async function reportQuery<T>(section: string, query: Promise<T>): Promise<T> {
 export class ReportsService {
   async abanmiReport(ctx: AuthContext, query: AbanmiReportQueryDto) {
     if (ctx.role !== AccountRole.ABANMI && ctx.role !== AccountRole.ADMIN) throw authForbidden();
+    const regionScoped = adminApplicationRegionCodes(ctx) !== null;
+    if (query.associationId) await assertAdminAssociationScope(ctx, query.associationId);
     const from = query.from ? new Date(`${query.from}T00:00:00.000Z`) : undefined;
     const to = query.to ? new Date(`${query.to}T23:59:59.999Z`) : undefined;
     if ((from && !Number.isFinite(from.getTime())) || (to && !Number.isFinite(to.getTime())) || (from && to && from > to)) {
@@ -37,7 +40,7 @@ export class ReportsService {
       throw new ApiError('REPORT_PERIOD_TOO_LONG', 'الحد الأقصى لفترة التقرير 366 يومًا', HttpStatus.BAD_REQUEST);
     }
     const associations = await prisma.association.findMany({
-      where: { archivedAt: null, ...(query.associationId ? { id: query.associationId } : {}), ...(query.region ? { region: query.region } : {}) },
+      where: { ...adminAssociationScopeWhere(ctx), archivedAt: null, ...(query.associationId ? { id: query.associationId } : {}), ...(query.region ? { region: query.region } : {}) },
       select: { id: true, publicCode: true, name: true, region: true, city: true, status: true },
       orderBy: [{ region: 'asc' }, { name: 'asc' }],
     });
@@ -60,6 +63,7 @@ export class ReportsService {
       // Organization-level review facts only: no contact details, answers, or attachments.
       prisma.associationApplication.findMany({
         where: {
+          ...adminApplicationScopeWhere(ctx),
           ...(query.associationId ? { resultingAssociationId: query.associationId } : {}),
           ...(query.region ? { region: query.region } : {}),
           ...(createdAt ? { submittedAt: createdAt } : {}),
@@ -99,7 +103,8 @@ export class ReportsService {
       deliveryAndExecution: deliveries,
       participation: participations,
       associationClosure: closures,
-      projectClosure, activities,
+      projectClosure: regionScoped ? null : projectClosure, activities,
+      regionalScopeApplied: regionScoped,
       procurement: { purchaseOrders, shipments, receipts },
       allocations,
       privacy: { beneficiaryPiiIncluded: false },

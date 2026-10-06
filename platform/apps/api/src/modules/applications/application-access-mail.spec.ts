@@ -45,13 +45,14 @@ describe('Applicant access durable email producer', () => {
   });
   it('binds a selection notice to the exact committed application and selection', async () => {
     const { service, tx, queued, lock } = setup();
-    const findApplication = jest.fn<(...args: unknown[]) => Promise<object>>().mockResolvedValue({ id: 'application-id', publicCode: 'APP-TEST', email: 'synthetic@example.org', name: 'synthetic', selectionList: 'RESERVE', sourceDraft: { id: 'draft-id', publicCode: 'DRF-TEST', status: 'SUBMITTED' } });
+    const findApplication = jest.fn<(...args: unknown[]) => Promise<object>>().mockResolvedValue({ id: 'application-id', publicCode: 'APP-TEST', email: 'synthetic@example.org', name: 'synthetic', selectionList: 'MAIN', status: 'ACCEPTED', selectionApprovedAt: null, sourceDraft: { id: 'draft-id', publicCode: 'DRF-TEST', status: 'SUBMITTED' } });
     const client = { ...tx, associationApplication: { findUnique: findApplication } };
+    jest.spyOn(service, 'selectionDelivery').mockResolvedValue({ status: 'NOT_REQUESTED' });
     await expect(service.sendSelectionDecision('application-id', client as unknown as Prisma.TransactionClient)).resolves.toBe(true);
     const { data } = queued.mock.calls[0]![0] as { data: { id: string; payload: mail.EmailDeliveryPayload } };
-    expect(mail.decryptEmailDelivery(data.id, data.payload).context).toEqual(expect.objectContaining({ type: 'access', expected: { applicationId: 'application-id', selectionList: 'RESERVE', selectionApprovedAt: null } }));
+    expect(mail.decryptEmailDelivery(data.id, data.payload).context).toEqual(expect.objectContaining({ type: 'access', expected: { applicationId: 'application-id', selectionList: 'MAIN', selectionApprovedAt: null } }));
     expect(lock.mock.invocationCallOrder[0]).toBeLessThan(findApplication.mock.invocationCallOrder[0]!);
-    expect(tx.auditLog.createMany).toHaveBeenCalledWith(expect.objectContaining({ data: [expect.objectContaining({ metadata: expect.objectContaining({ eventId: data.id, applicationId: 'application-id', selectionList: 'RESERVE' }) })] }));
+    expect(tx.auditLog.createMany).toHaveBeenCalledWith(expect.objectContaining({ data: [expect.objectContaining({ metadata: expect.objectContaining({ eventId: data.id, applicationId: 'application-id', selectionList: 'MAIN' }) })] }));
   });
   it('binds the completion notice to the exact open information request', async () => {
     const { service, tx, queued } = setup();
@@ -83,12 +84,12 @@ describe('Unsent MAIN selection email cancellation', () => {
       .mockImplementation(async ({ where, data }) => { Object.assign(rows.get(where.id)!, data); return { count: 1 }; });
     const revoke = jest.fn<(...args: unknown[]) => Promise<{ count: number }>>().mockResolvedValue({ count: 1 });
     const tx = { auditLog: { findMany: records, findFirst: jest.fn<(...args: unknown[]) => Promise<object | null>>().mockResolvedValue({ id: 'original-decision' }) }, $queryRaw: lock,
-      outboxEvent: { findUnique: async ({ where }: { where: { id: string } }) => rows.get(where.id) ?? null, updateMany: update },
+      outboxEvent: { findMany: async () => [...rows.values()], findUnique: async ({ where }: { where: { id: string } }) => rows.get(where.id) ?? null, updateMany: update },
       applicationAccessToken: { updateMany: revoke } };
     const send = jest.fn<(...args: unknown[]) => Promise<void>>().mockResolvedValue(undefined);
     const service = new ApplicationAccessService({ consume: async () => undefined } as unknown as RateLimitService, { sendApplicationAccess: send } as unknown as mail.EmailService);
     const cancel = () => service.cancelUnsentMainDecision(tx as unknown as Prisma.TransactionClient, applicationId, draftId, decisionAt);
-    return { cancel, tx, records, lock, update, revoke, send, rows };
+    return { cancel, service, tx, records, lock, update, revoke, send, rows };
   }
   async function expectBlocked(current: ReturnType<typeof setup>) {
     await expect(current.cancel()).rejects.toMatchObject({ code: 'APPLICATION_SELECTION_EMAIL_STARTED' });
@@ -139,6 +140,21 @@ describe('Unsent MAIN selection email cancellation', () => {
     const current = setup(); current.tx.auditLog.findFirst.mockResolvedValue(null);
     await expectBlocked(current);
     expect(current.records).not.toHaveBeenCalled(); expect(current.lock).not.toHaveBeenCalled();
+  });
+  it('allows a newly recorded internal MAIN with no queued notice', async () => {
+    const current = setup([], []);
+    current.tx.auditLog.findFirst.mockResolvedValue({ id: 'internal-decision', metadata: { workflowVersion: 2 } });
+    await expect(current.cancel()).resolves.toBeUndefined(); expect(current.update).not.toHaveBeenCalled();
+  });
+  it('does not confuse an earlier accepted SMTP receipt with a later unsent internal MAIN', async () => {
+    const old = event(firstId, { type: 'access', draftTokens: [{ id: 'old-candidate', draftId, predecessorIds: [] }], expected: { applicationId, selectionList: 'MAIN', selectionApprovedAt: new Date(decisionAt.getTime() - 1000).toISOString() } });
+    old.payload.phase = 'SMTP_ACCEPTED'; old.status = OutboxEventStatus.PROCESSED;
+    const current = setup([old]); current.tx.auditLog.findFirst.mockResolvedValue({ id: 'internal-decision', metadata: { workflowVersion: 2 } });
+    await expect(current.cancel()).resolves.toBeUndefined(); expect(current.update).not.toHaveBeenCalled(); expect(current.revoke).not.toHaveBeenCalled();
+  });
+  it('never describes a legacy MAIN without a decision stamp as not requested', async () => {
+    const current = setup([], []);
+    await expect(current.service.selectionDelivery(current.tx as unknown as Prisma.TransactionClient, applicationId, null)).resolves.toMatchObject({ status: 'UNKNOWN' });
   });
   it('requires proof of the original individual or bulk MAIN decision at its exact stored time', async () => {
     const current = setup(); await current.cancel();

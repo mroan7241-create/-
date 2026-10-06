@@ -31,7 +31,7 @@ describe('applicant credential lifetime and authorization', () => {
     const service = new ApplicationV2Service(
       { nextPublicCode: async () => draftCode } as unknown as PublicCodeService,
       {} as IdempotencyService, {} as StorageService, rateLimit, access,
-      { assertApplicationIntakeOpen: async () => undefined } as unknown as SettingsService,
+      { assertApplicationIntakeOpen: async () => undefined } as unknown as SettingsService, {} as never,
     );
     const result = await service.createDraft();
     if (!('sessionToken' in result)) throw new Error('Expected draft credentials');

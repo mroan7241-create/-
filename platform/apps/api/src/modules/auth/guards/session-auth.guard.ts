@@ -2,7 +2,7 @@ import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { AccountRole, AgreementStatus, ParticipationStatus, prisma } from '@alzad/db';
-import { hasAdminPermission, hasCompletedParticipationCovenant, normalizeAdminPermissions } from '@alzad/shared';
+import { hasAdminPermission, hasCompletedParticipationCovenant, isAdminApplicationScope, normalizeAdminPermissions } from '@alzad/shared';
 import { adminRoutePolicy } from '../admin-route-permissions';
 import { authConfig } from '../../../config/auth.config';
 import { sha256Hex } from '../../../common/crypto.util';
@@ -58,6 +58,7 @@ export class SessionAuthGuard implements CanActivate {
     const account = session.account;
     if (account.status !== 'ACTIVE') throw authSessionExpired();
     if (account.archivedAt) throw authSessionExpired();
+    if (account.role === AccountRole.ADMIN && !account.adminFullAccess && account.adminApplicationScope != null && !isAdminApplicationScope(account.adminApplicationScope)) throw authForbidden();
     if (account.associationId && account.association && account.association.status !== 'ACTIVE') {
       throw authSessionExpired();
     }
@@ -143,6 +144,7 @@ export class SessionAuthGuard implements CanActivate {
       mustChangePassword: account.mustChangePassword,
       adminFullAccess: account.role === AccountRole.ADMIN && account.adminFullAccess === true,
       adminPermissions: account.role === AccountRole.ADMIN ? normalizeAdminPermissions(account.adminPermissions) : [],
+      adminApplicationScope: account.role === AccountRole.ADMIN ? account.adminApplicationScope as AuthContext['adminApplicationScope'] : undefined,
       ...(covenantStateChecked ? { meSnapshot: {
         publicCode: account.publicCode,
         name: account.name,

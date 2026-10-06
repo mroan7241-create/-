@@ -25,7 +25,7 @@ describe('draft autosave submission race', () => {
     };
     const access = { requireSessionDraft: async () => authorized } as unknown as ApplicationAccessService;
     const service = new ApplicationV2Service({} as PublicCodeService, {} as IdempotencyService, {} as StorageService,
-      { consume: async () => undefined } as unknown as RateLimitService, access, {} as SettingsService);
+      { consume: async () => undefined } as unknown as RateLimitService, access, {} as SettingsService, {} as never);
     const read = jest.spyOn(prisma.associationApplicationDraft, 'findUniqueOrThrow').mockResolvedValue({} as never);
     // Simulate submission/expiry after requireDraft has read its ACTIVE snapshot.
     // A DB-style conditional write succeeds only if every supplied guard matches.

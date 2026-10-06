@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { ASSOCIATION_SIZE_OPTIONS } from '@alzad/shared';
+import { ASSOCIATION_SIZE_OPTIONS, hasCovenantSignature } from '@alzad/shared';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
   ApplicationDraftStatus,
@@ -12,6 +12,7 @@ import {
   GeographicUnitType,
   ParticipationStatus,
   ActivationBasis,
+  AccountRole, AccountStatus, AgreementStatus, OutboxEventStatus, OutboxEventType,
   Prisma,
   prisma,
 } from '@alzad/db';
@@ -36,6 +37,10 @@ import type {
 } from './dto/application-v2.dto';
 import { ApplicationAccessService } from './application-access.service';
 import { SettingsService, applicationIntakeStatus } from '../settings/settings.service';
+import { OnboardingEmailService } from '../auth/email/onboarding-email.service';
+import { decryptEmailDelivery, type EmailDeliveryPayload } from '../auth/email/email.service';
+import { assertAdminApplicationScope, lockAdminApplicationScope } from '../auth/admin-route-permissions';
+import type { SelectionCommitDto } from './dto/application-workflow.dto';
 
 const DRAFT_TTL_DAYS = 45;
 const ALLOWED_ATTACHMENT_KEYS = new Set([
@@ -57,6 +62,7 @@ export class ApplicationV2Service {
     private readonly rateLimit: RateLimitService,
     private readonly access: ApplicationAccessService,
     private readonly settings: SettingsService,
+    private readonly onboardingEmail: OnboardingEmailService,
   ) {}
 
   intakeStatus() { return this.settings.applicationIntakeStatus(); }
@@ -315,14 +321,22 @@ export class ApplicationV2Service {
   }
 
   async bulkStartProcessing(ctx: AuthContext, dto: BulkStartProcessingDto) {
-    const ids = [...new Set(dto.applicationIds)].slice(0, 250);
+    const ids = [...new Set(dto.applicationIds)];
+    if (ids.length > 250) throw new ApiError('APPLICATION_SELECTION_LIMIT', 'يمكن بدء مراجعة 250 طلبًا كحد أقصى للعملية الواحدة', 400);
     if (!ids.length) throw new ApiError('APPLICATION_SELECTION_EMPTY', 'حدد طلبًا واحدًا على الأقل', 400);
     return prisma.$transaction(async (tx) => {
+      const scoped = await lockAdminApplicationScope(tx, ctx);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM association_applications WHERE id IN (${Prisma.join(ids.map(id => Prisma.sql`${id}::uuid`))}) ORDER BY id FOR UPDATE`);
+      const rows = await tx.associationApplication.findMany({ where: { id: { in: ids } }, select: { id: true, regionOfficialCode: true, status: true } });
+      if (rows.length !== ids.length) throw new ApiError('APPLICATION_NOT_FOUND', 'أحد الطلبات المحددة غير موجود', 404);
+      for (const row of rows) {
+        assertAdminApplicationScope(scoped, row.regionOfficialCode);
+        if (row.status !== ApplicationStatus.UNDER_REVIEW) throw new ApiError('APPLICATION_NOT_REVIEWABLE', 'أحد الطلبات المحددة لم يعد قيد المراجعة', 409);
+      }
       const claim = await this.idempotency.claim<{ ok: true; started: number; alreadyStarted: number }>(tx, ctx.accountId, 'application-start-processing-bulk', dto.opId, { ids: [...ids].sort() });
       if (!claim.claimed) return claim.existingResponse!;
-      const found = await tx.associationApplication.count({ where: { id: { in: ids } } });
-      if (found !== ids.length) throw new ApiError('APPLICATION_NOT_FOUND', 'أحد الطلبات المحددة غير موجود', 404);
-      const updated = await tx.associationApplication.updateMany({ where: { id: { in: ids }, processingStartedAt: null }, data: { processingStartedAt: new Date(), processingStartedById: ctx.accountId } });
+      const updated = await tx.associationApplication.updateMany({ where: { id: { in: ids }, status: ApplicationStatus.UNDER_REVIEW, processingStartedAt: null }, data: { processingStartedAt: new Date(), processingStartedById: ctx.accountId } });
       await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_PROCESSING_STARTED_BULK', entityType: 'association_applications', metadata: { applicationIds: ids, started: updated.count } } });
       const response = { ok: true as const, started: updated.count, alreadyStarted: ids.length - updated.count };
       await this.idempotency.complete(tx, ctx.accountId, 'application-start-processing-bulk', dto.opId, response);
@@ -337,6 +351,7 @@ export class ApplicationV2Service {
     let emailQueued = false;
     let newlyRequested = false;
     const response = await prisma.$transaction(async (tx) => {
+      const scoped = await this.requireAdministrativeApplication(tx, ctx, applicationId);
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
       const claim = await this.idempotency.claim<{ ok: true; requestId: string }>(tx, ctx.accountId, 'application-information-request', dto.opId, { applicationId, items: dto.items, note: dto.note ?? null, deadline });
       if (!claim.claimed) return claim.existingResponse!;
@@ -345,6 +360,7 @@ export class ApplicationV2Service {
       await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${applicationId}::uuid FOR UPDATE`;
       const application = await tx.associationApplication.findUnique({ where: { id: applicationId }, include: { sourceDraft: { select: { id: true } } } });
       if (!application || application.status !== ApplicationStatus.UNDER_REVIEW) throw new ApiError('APPLICATION_NOT_REVIEWABLE', 'الطلب غير متاح للاستكمال', 409);
+      assertAdminApplicationScope(scoped, application.regionOfficialCode);
       if (application.schemaVersion !== 2 || !application.sourceDraft) throw new ApiError('APPLICATION_INFORMATION_UNSUPPORTED', 'هذا الطلب السابق لا يدعم الاستكمال الإلكتروني؛ لا يمكن إرسال رابط لا يعمل', 409);
       const open = await tx.applicationInformationRequest.findFirst({ where: { applicationId, status: ApplicationInformationRequestStatus.OPEN } });
       if (open) throw new ApiError('APPLICATION_INFORMATION_REQUEST_OPEN', 'يوجد طلب استكمال مفتوح بالفعل', 409);
@@ -372,9 +388,10 @@ export class ApplicationV2Service {
     return { ...response, emailQueued, emailSent: emailQueued || !newlyRequested ? null : false };
   }
 
-  async eligibilityEvidence(applicationId: string) {
+  async eligibilityEvidence(applicationId: string, ctx?: AuthContext) {
     const application = await prisma.associationApplication.findUnique({ where: { id: applicationId }, include: { attachments: true, informationRequests: true } });
     if (!application) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب المشاركة غير موجود', 404);
+    if (ctx) assertAdminApplicationScope(ctx, application.regionOfficialCode);
     if (application.schemaVersion === 1) return { schemaVersion: 1, checks: [], summary: 'يتطلب طلب V1 مراجعة بشرية وفق بياناته التاريخية' };
     return buildEligibilityEvidence(asMap(application.v2Payload), new Set(application.attachments.map((item) => item.fieldKey)), application.informationRequests.length);
   }
@@ -383,12 +400,14 @@ export class ApplicationV2Service {
     const ratings: EvaluationInput = pickRatings(dto);
     const scored = scoreApplication(ratings);
     return prisma.$transaction(async (tx) => {
+      const scoped = await this.requireAdministrativeApplication(tx, ctx, applicationId);
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
       const claim = await this.idempotency.claim<{ ok: true; score: number }>(tx, ctx.accountId, 'application-evaluation', dto.opId, { applicationId, ratings, overrideReason: dto.overrideReason ?? null });
       if (!claim.claimed) return claim.existingResponse!;
       await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${applicationId}::uuid FOR UPDATE`;
       const application = await tx.associationApplication.findUnique({ where: { id: applicationId }, include: { attachments: true, informationRequests: true } });
       if (!application || application.eligibilityStatus !== EligibilityStatus.PASSED) throw new ApiError('APPLICATION_NOT_ELIGIBLE', 'لا يمكن تقييم طلب قبل اجتياز الأهلية', 409);
+      assertAdminApplicationScope(scoped, application.regionOfficialCode);
       if (application.status !== ApplicationStatus.UNDER_REVIEW || application.selectionList !== AssociationSelectionList.NONE) throw new ApiError('APPLICATION_EVALUATION_FINALIZED', 'لا يمكن تعديل التقييم بعد اعتماد قرار الاختيار', 409);
       const evidence = application.schemaVersion === 2 ? buildEvaluationEvidence(asMap(application.v2Payload), new Set(application.attachments.map((item) => item.fieldKey)), application.informationRequests) : { legacy: true };
       await tx.associationApplication.update({ where: { id: applicationId }, data: { evaluationBreakdown: { ...scored.breakdown, overrideReason: dto.overrideReason?.trim() || null }, evaluationEvidence: evidence, evaluationScore: scored.total, evaluatedAt: new Date(), evaluatedById: ctx.accountId } });
@@ -400,51 +419,120 @@ export class ApplicationV2Service {
   }
 
   async decideSelection(ctx: AuthContext, applicationId: string, dto: SelectionDecisionDto) {
-    let emailQueued = false;
-    let newlyDecided = false;
-    const result = await prisma.$transaction(async (tx) => {
+    if (dto.workflowVersion !== 2) throw new ApiError('APPLICATION_WORKFLOW_VERSION', 'حدّث الصفحة لاستخدام إجراءات الاختيار والإرسال المنفصلة', 409);
+    return prisma.$transaction(async (tx) => {
+      const scoped = await this.requireAdministrativeApplication(tx, ctx, applicationId);
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
-      const claim = await this.idempotency.claim<{ ok: true; decision: AssociationSelectionList }>(tx, ctx.accountId, 'application-selection-decision', dto.opId, { applicationId, decision: dto.decision, reason: dto.reason ?? null });
+      const claim = await this.idempotency.claim<{ ok: true; decision: AssociationSelectionList | 'DECLINED'; emailQueued: boolean; emailSent: null }>(tx, ctx.accountId, 'application-selection-decision-v2', dto.opId, { applicationId, decision: dto.decision, reason: dto.reason ?? null, ownerCorrection: dto.ownerCorrection === true });
       if (!claim.claimed) return claim.existingResponse!;
-      const sourceDraft = await tx.associationApplicationDraft.findFirst({ where: { submittedApplicationId: applicationId }, select: { id: true } });
-      if (sourceDraft) await tx.$queryRaw`SELECT id FROM association_application_drafts WHERE id=${sourceDraft.id}::uuid FOR UPDATE`;
-      const participationRow = await tx.projectParticipation.findUnique({ where: { applicationId }, select: { id: true } });
-      if (participationRow) await tx.$queryRaw`SELECT id FROM project_participations WHERE id=${participationRow.id}::uuid FOR UPDATE`;
-      await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${applicationId}::uuid FOR UPDATE`;
-      const application = await tx.associationApplication.findUnique({ where: { id: applicationId } });
-      if (!application || application.eligibilityStatus !== EligibilityStatus.PASSED || application.evaluationScore == null) throw new ApiError('APPLICATION_SELECTION_NOT_READY', 'يجب اجتياز الأهلية وإكمال التقييم أولًا', 409);
-      if (application.selectionList === dto.decision) {
-        const response = { ok: true as const, decision: dto.decision };
-        await this.idempotency.complete(tx, ctx.accountId, 'application-selection-decision', dto.opId, response);
-        return response;
-      }
-      if (application.selectionList === AssociationSelectionList.NONE && application.status !== ApplicationStatus.UNDER_REVIEW) throw new ApiError('APPLICATION_SELECTION_NOT_READY', 'لا يمكن اعتماد اختيار جديد لطلب لم يعد قيد المراجعة', 409);
-      if (application.selectionList === AssociationSelectionList.MAIN && dto.decision === AssociationSelectionList.RESERVE) {
-        const participation = await tx.projectParticipation.findUnique({ where: { applicationId }, include: { agreements: true } });
-        if (application.resultingAssociationId || (participation && (participation.status !== ParticipationStatus.APPROVED_AWAITING_SETUP || participation.associationId || participation.activatedAt || participation.closedAt || participation.agreements.some(agreement => agreement.associationAccountId || agreement.signedByOrgAt || agreement.signedByZaadAt || agreement.orgSignatureFileId || agreement.partyOneSignatureFileId || agreement.fullyExecutedAt || agreement.finalFileId || ['SIGNED_BY_ORG', 'SIGNED'].includes(agreement.status))))) throw new ApiError('APPLICATION_MAIN_ALREADY_STARTED', 'لا يمكن النقل إلى الاحتياط بعد إنشاء حساب التوقيع أو بدء التوقيع أو التفعيل', 409);
-        if (!sourceDraft) throw new ApiError('APPLICATION_SELECTION_EMAIL_STARTED', 'تعذر إثبات عدم إرسال إشعار الأساسية للطلب التاريخي؛ القرار السابق محفوظ', 409);
-        await this.access.cancelUnsentMainDecision(tx, applicationId, sourceDraft.id, application.selectionApprovedAt);
-      }
-      if (dto.decision === AssociationSelectionList.MAIN) {
-        const capacity = await this.settings.selectionMainCapacity(tx);
-        if (capacity !== undefined) {
-          const existingMain = await tx.associationApplication.count({ where: { selectionList: AssociationSelectionList.MAIN } });
-          if (existingMain >= capacity) throw new ApiError('APPLICATION_SELECTION_CAPACITY_FULL', 'اكتملت السعة المعتمدة للجمعيات الأساسية', 409);
-        }
-      }
-      const now = new Date();
-      await tx.associationApplication.update({ where: { id: applicationId }, data: { selectionList: dto.decision, selectionReason: dto.reason?.trim() || null, status: ApplicationStatus.ACCEPTED, selectionApprovedAt: now, selectionApprovedById: ctx.accountId } });
-      if (dto.decision === AssociationSelectionList.MAIN) {
-        await tx.projectParticipation.upsert({ where: { applicationId }, update: {}, create: { applicationId, status: ParticipationStatus.APPROVED_AWAITING_SETUP, activationBasis: ActivationBasis.AGREEMENT_COMPLETED, coordinatorName: application.contactName, coordinatorPhone: application.coordinatorPhone, coordinatorEmail: application.coordinatorEmail, coordinatorTitle: application.coordinatorTitle } });
-      }
-      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_SELECTION_DECIDED', entityType: 'association_applications', entityId: applicationId, metadata: { previousDecision: application.selectionList, decision: dto.decision, reason: dto.reason ?? null, selectionApprovedAt: now.toISOString() } } });
-      const response = { ok: true as const, decision: dto.decision };
-      if (sourceDraft) emailQueued = await this.access.sendSelectionDecision(applicationId, tx);
-      await this.idempotency.complete(tx, ctx.accountId, 'application-selection-decision', dto.opId, response);
-      newlyDecided = true;
+      const response = await this.changeSelection(tx, scoped, applicationId, dto);
+      await this.idempotency.complete(tx, ctx.accountId, 'application-selection-decision-v2', dto.opId, response);
       return response;
     });
-    return { ...result, emailQueued, emailSent: emailQueued || !newlyDecided ? null : false };
+  }
+
+  async commitSelection(ctx: AuthContext, dto: SelectionCommitDto) {
+    if (dto.workflowVersion !== 2 || !['SEND_MAIN', 'DECLINE'].includes(dto.operation)) throw new ApiError('APPLICATION_WORKFLOW_VERSION', 'حدّث الصفحة لاستخدام الإرسال المحدد', 409);
+    const ids = [...new Set(dto.applicationIds)].sort();
+    if (!ids.length || ids.length > 250) throw new ApiError('APPLICATION_SELECTION_LIMIT', 'حدد من طلب واحد إلى 250 طلبًا للعملية', 400);
+    return prisma.$transaction(async tx => {
+      const scoped = await lockAdminApplicationScope(tx, ctx);
+      const targets = await tx.associationApplication.findMany({ where: { id: { in: ids } }, select: { id: true, regionOfficialCode: true } });
+      if (targets.length !== ids.length) throw new ApiError('APPLICATION_NOT_FOUND', 'أحد الطلبات المحددة غير موجود', 404);
+      for (const target of targets) assertAdminApplicationScope(scoped, target.regionOfficialCode);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
+      const claim = await this.idempotency.claim<{ ok: true; queued: number }>(tx, ctx.accountId, 'application-selection-send-v2', dto.opId, { operation: dto.operation, ids, reason: dto.reason ?? null });
+      if (!claim.claimed) return claim.existingResponse!;
+      // Acquire every draft before any application/outbox lock, matching the mail worker.
+      const drafts = await tx.associationApplicationDraft.findMany({ where: { submittedApplicationId: { in: ids } }, select: { id: true }, orderBy: { id: 'asc' } });
+      for (const draft of drafts) await tx.$queryRaw`SELECT id FROM association_application_drafts WHERE id=${draft.id}::uuid FOR UPDATE`;
+      let queued = 0;
+      for (const id of ids) {
+        if (dto.operation === 'DECLINE') {
+          const result = await this.changeSelection(tx, scoped, id, { workflowVersion: 2, decision: 'DECLINED', reason: dto.reason, opId: dto.opId });
+          if (result.emailQueued) queued += 1;
+        } else if (await this.access.sendSelectionDecision(id, tx, scoped)) queued += 1;
+      }
+      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_SELECTION_SEND_REQUESTED', entityType: 'association_applications', metadata: { applicationIds: ids, operation: dto.operation, queued, workflowVersion: 2 } } });
+      const response = { ok: true as const, queued };
+      await this.idempotency.complete(tx, ctx.accountId, 'application-selection-send-v2', dto.opId, response);
+      return response;
+    }, { timeout: 30_000 });
+  }
+
+  private async changeSelection(tx: Prisma.TransactionClient, ctx: AuthContext, applicationId: string, dto: SelectionDecisionDto) {
+    const sourceDraft = await tx.associationApplicationDraft.findFirst({ where: { submittedApplicationId: applicationId }, select: { id: true } });
+    if (sourceDraft) await tx.$queryRaw`SELECT id FROM association_application_drafts WHERE id=${sourceDraft.id}::uuid FOR UPDATE`;
+    const participationRow = await tx.projectParticipation.findUnique({ where: { applicationId }, select: { id: true } });
+    if (participationRow) await tx.$queryRaw`SELECT id FROM project_participations WHERE id=${participationRow.id}::uuid FOR UPDATE`;
+    await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${applicationId}::uuid FOR UPDATE`;
+    const application = await tx.associationApplication.findUnique({ where: { id: applicationId } });
+    if (!application || application.eligibilityStatus !== EligibilityStatus.PASSED || application.evaluationScore == null || ![ApplicationStatus.UNDER_REVIEW, ApplicationStatus.ACCEPTED].includes(application.status as 'UNDER_REVIEW' | 'ACCEPTED') || (application.status === ApplicationStatus.ACCEPTED && application.selectionList === AssociationSelectionList.NONE)) throw new ApiError('APPLICATION_SELECTION_NOT_READY', 'يجب اجتياز الأهلية وإكمال التقييم، ولا يمكن إعادة اختيار طلب مرفوض نهائيًا أو تجاوز تهيئة قبول سابق', 409);
+    assertAdminApplicationScope(ctx, application.regionOfficialCode);
+    if (dto.decision === application.selectionList) return { ok: true as const, decision: dto.decision, emailQueued: false, emailSent: null };
+    if (dto.ownerCorrection) {
+      const actor = await tx.account.findUnique({ where: { id: ctx.accountId } });
+      if (actor?.publicCode !== 'ADM-000001' || actor.role !== AccountRole.ADMIN || actor.status !== AccountStatus.ACTIVE || actor.archivedAt || !actor.adminFullAccess) throw new ApiError('APPLICATION_OWNER_REQUIRED', 'التصحيح الاستثنائي متاح للمالك فقط', 403);
+      requiredText(dto.reason, 'سبب التصحيح الاستثنائي', 1000);
+    }
+    if (dto.decision === 'DECLINED') requiredText(dto.reason, 'سبب عدم القبول النهائي', 1000);
+    if (application.selectionList === AssociationSelectionList.MAIN && dto.decision !== AssociationSelectionList.MAIN) {
+      const participation = await tx.projectParticipation.findUnique({ where: { applicationId }, include: { agreements: true } });
+      if (participation && (participation.status !== ParticipationStatus.APPROVED_AWAITING_SETUP || participation.activatedAt || participation.closedAt || participation.agreements.some(hasCovenantSignature))) throw new ApiError('APPLICATION_MAIN_ALREADY_STARTED', 'لا يمكن التراجع بعد أي توقيع أو تفعيل؛ الميثاق والتاريخ محفوظان', 409);
+      const hasAccount = Boolean(application.resultingAssociationId || participation?.associationId || participation?.agreements.some(agreement => agreement.associationAccountId));
+      if (hasAccount && !dto.ownerCorrection) throw new ApiError('APPLICATION_MAIN_ALREADY_STARTED', 'يلزم التصحيح الاستثنائي للمالك بعد إنشاء حساب التوقيع', 409);
+      if (!sourceDraft && !dto.ownerCorrection) throw new ApiError('APPLICATION_SELECTION_EMAIL_STARTED', 'تعذر إثبات عدم إرسال إشعار الطلب التاريخي', 409);
+      if (sourceDraft) await this.access.cancelUnsentMainDecision(tx, applicationId, sourceDraft.id, application.selectionApprovedAt, dto.ownerCorrection);
+      if (participation && dto.ownerCorrection) {
+        for (const agreement of [...participation.agreements].sort((a, b) => a.id.localeCompare(b.id))) {
+          await tx.$queryRaw`SELECT id FROM participation_agreements WHERE id=${agreement.id}::uuid FOR UPDATE`;
+          const current = await tx.participationAgreement.findUniqueOrThrow({ where: { id: agreement.id } });
+          if (hasCovenantSignature(current)) throw new ApiError('APPLICATION_MAIN_ALREADY_STARTED', 'سبق بدء التوقيع؛ لا يمكن إجراء التصحيح', 409);
+          if (current.associationAccountId) await this.suspendRestrictedAccount(tx, ctx, current.associationAccountId, applicationId);
+          await tx.participationAgreement.update({ where: { id: current.id }, data: { status: AgreementStatus.CANCELLED, partyOneSigningTokenHash: null, partyOneSigningExpiresAt: null, partyOneSigningConsumedAt: new Date() } });
+        }
+        await tx.projectParticipation.update({ where: { id: participation.id }, data: { setupCompletedAt: null, setupCompletedById: null } });
+      }
+    }
+    if (dto.decision === AssociationSelectionList.MAIN) {
+      const capacity = await this.settings.selectionMainCapacity(tx);
+      if (capacity !== undefined && await tx.associationApplication.count({ where: { selectionList: AssociationSelectionList.MAIN } }) >= capacity) throw new ApiError('APPLICATION_SELECTION_CAPACITY_FULL', 'اكتملت السعة المعتمدة للجمعيات الأساسية', 409);
+    }
+    // Decision receipts bind to an exact stamp, including two decisions in the same millisecond.
+    const now = new Date(Math.max(Date.now(), (application.selectionApprovedAt?.getTime() ?? 0) + 1));
+    const selectionList = dto.decision === 'DECLINED' ? AssociationSelectionList.NONE : dto.decision;
+    await tx.associationApplication.update({ where: { id: applicationId }, data: { selectionList, selectionReason: dto.reason?.trim() || null, status: dto.decision === 'DECLINED' ? ApplicationStatus.REJECTED : dto.decision === AssociationSelectionList.NONE ? ApplicationStatus.UNDER_REVIEW : ApplicationStatus.ACCEPTED, rejectReason: dto.decision === 'DECLINED' ? dto.reason!.trim() : null, selectionApprovedAt: now, selectionApprovedById: ctx.accountId } });
+    if (dto.decision === AssociationSelectionList.MAIN) await tx.projectParticipation.upsert({ where: { applicationId }, update: {}, create: { applicationId, status: ParticipationStatus.APPROVED_AWAITING_SETUP, activationBasis: ActivationBasis.AGREEMENT_COMPLETED, coordinatorName: application.contactName, coordinatorPhone: application.coordinatorPhone, coordinatorEmail: application.coordinatorEmail, coordinatorTitle: application.coordinatorTitle } });
+    await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_SELECTION_DECIDED', entityType: 'association_applications', entityId: applicationId, metadata: { previousDecision: application.selectionList, decision: dto.decision, reason: dto.reason ?? null, ownerCorrection: dto.ownerCorrection === true, selectionApprovedAt: now.toISOString(), workflowVersion: 2 } } });
+    const emailQueued = dto.decision === 'DECLINED' ? await this.onboardingEmail.sendRejection(applicationId, tx) : false;
+    return { ok: true as const, decision: dto.decision, emailQueued, emailSent: null };
+  }
+
+  private async suspendRestrictedAccount(tx: Prisma.TransactionClient, ctx: AuthContext, accountId: string, applicationId: string) {
+    await tx.$queryRaw`SELECT id FROM accounts WHERE id=${accountId}::uuid FOR UPDATE`;
+    const account = await tx.account.findUniqueOrThrow({ where: { id: accountId } });
+    if (account.role !== AccountRole.ASSOCIATION) throw new ApiError('APPLICATION_ACCOUNT_INVALID', 'الحساب المرتبط ليس حساب توقيع جمعية', 409);
+    const now = new Date();
+    const suspended = await tx.account.update({ where: { id: accountId }, data: { status: AccountStatus.SUSPENDED } });
+    await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'COVENANT_RESTRICTED_ACCOUNT_SUSPENDED_BY_SELECTION', entityType: 'accounts', entityId: accountId, metadata: { applicationId, accountUpdatedAt: suspended.updatedAt.toISOString() } } });
+    await tx.authSession.updateMany({ where: { accountId, revokedAt: null }, data: { revokedAt: now } });
+    await tx.passwordResetToken.updateMany({ where: { accountId, consumedAt: null }, data: { consumedAt: now } });
+    const candidates = await tx.outboxEvent.findMany({ where: { type: OutboxEventType.EMAIL_DELIVERY, status: { not: OutboxEventStatus.PROCESSED }, payload: { path: ['phase'], equals: 'READY' } }, orderBy: { id: 'asc' } });
+    for (const candidate of candidates) {
+      let context;
+      try { context = decryptEmailDelivery(candidate.id, candidate.payload as unknown as EmailDeliveryPayload).context; } catch { continue; }
+      if (!['credentials', 'reset'].includes(context.type) || !('accountId' in context) || context.accountId !== accountId) continue;
+      await tx.$queryRaw`SELECT id FROM outbox_events WHERE id=${candidate.id}::uuid FOR UPDATE`;
+      await tx.outboxEvent.updateMany({ where: { id: candidate.id, payload: { path: ['phase'], equals: 'READY' } }, data: { status: OutboxEventStatus.FAILED, failedAt: now, lockedAt: null, lastError: 'MAIL_STATE_INVALID' } });
+    }
+  }
+
+  private async requireAdministrativeApplication(tx: Prisma.TransactionClient, ctx: AuthContext, applicationId: string) {
+    const scoped = await lockAdminApplicationScope(tx, ctx);
+    const application = await tx.associationApplication.findUnique({ where: { id: applicationId }, select: { regionOfficialCode: true } });
+    if (!application) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب الانضمام غير موجود', 404);
+    assertAdminApplicationScope(scoped, application.regionOfficialCode);
+    return scoped;
   }
 
   private async requireAttachmentMutation(tx: Prisma.TransactionClient, draftId: string, fieldKey: string) {
@@ -666,13 +754,13 @@ export function isInformationResponseLate(deadline: Date | null, submittedAt: Da
   const end = Date.UTC(deadline.getUTCFullYear(), deadline.getUTCMonth(), deadline.getUTCDate() + 1) - 3 * 60 * 60 * 1000;
   return (submittedAt ?? now).getTime() >= end;
 }
-function publicApplicationStage(application: { status: ApplicationStatus; processingStartedAt: Date | null; eligibilityStatus: EligibilityStatus; selectionList: AssociationSelectionList }, needsInfo: boolean) { if (needsInfo || application.eligibilityStatus === EligibilityStatus.NEEDS_INFO) return 'NEEDS_INFO'; if (application.selectionList === AssociationSelectionList.MAIN) return 'MAIN'; if (application.selectionList === AssociationSelectionList.RESERVE) return 'RESERVE'; if (application.eligibilityStatus === EligibilityStatus.FAILED || application.status === ApplicationStatus.REJECTED) return 'INELIGIBLE'; if (application.eligibilityStatus === EligibilityStatus.PASSED) return 'EVALUATION'; if (application.processingStartedAt) return 'PROCESSING'; return 'RECEIVED'; }
+function publicApplicationStage(application: { status: ApplicationStatus; processingStartedAt: Date | null; eligibilityStatus: EligibilityStatus; selectionList: AssociationSelectionList }, needsInfo: boolean) { if (application.status === ApplicationStatus.REJECTED && application.eligibilityStatus === EligibilityStatus.PASSED) return 'DECLINED'; if (needsInfo || application.eligibilityStatus === EligibilityStatus.NEEDS_INFO) return 'NEEDS_INFO'; if (application.selectionList === AssociationSelectionList.MAIN) return 'MAIN'; if (application.selectionList === AssociationSelectionList.RESERVE) return 'RESERVE'; if (application.eligibilityStatus === EligibilityStatus.FAILED || application.status === ApplicationStatus.REJECTED) return 'INELIGIBLE'; if (application.eligibilityStatus === EligibilityStatus.PASSED) return 'EVALUATION'; if (application.processingStartedAt) return 'PROCESSING'; return 'RECEIVED'; }
 function timeline(stage: string, request?: { status: ApplicationInformationRequestStatus; submittedAt: Date | null } | null, evaluated = false) {
-  const order = ['DRAFT','RECEIVED','PROCESSING','NEEDS_INFO','EVALUATION','MAIN','RESERVE','INELIGIBLE'].filter(item =>
-    (!['MAIN','RESERVE','INELIGIBLE'].includes(item) || item === stage)
+  const order = ['DRAFT','RECEIVED','PROCESSING','NEEDS_INFO','EVALUATION','MAIN','RESERVE','INELIGIBLE','DECLINED'].filter(item =>
+    (!['MAIN','RESERVE','INELIGIBLE','DECLINED'].includes(item) || item === stage)
     && (item !== 'NEEDS_INFO' || request?.status === ApplicationInformationRequestStatus.OPEN || Boolean(request?.submittedAt) || stage === 'NEEDS_INFO')
     && (item !== 'EVALUATION' || stage !== 'INELIGIBLE' || evaluated));
-  const labels: Record<string,string> = { DRAFT:'مسودة محفوظة',RECEIVED:'تم استلام الطلب',PROCESSING:'جاري المعالجة',NEEDS_INFO:request?.submittedAt ? 'تم إرسال الاستكمال — أعيد للمراجعة' : 'مطلوب استكمال',EVALUATION:'قيد التقييم والمفاضلة',MAIN:'تم اعتماد المشاركة',RESERVE:'قائمة احتياطية',INELIGIBLE:'غير مستوفٍ' };
+  const labels: Record<string,string> = { DRAFT:'مسودة محفوظة',RECEIVED:'تم استلام الطلب',PROCESSING:'جاري المعالجة',NEEDS_INFO:request?.submittedAt ? 'تم إرسال الاستكمال — أعيد للمراجعة' : 'مطلوب استكمال',EVALUATION:'قيد التقييم والمفاضلة',MAIN:'تم اعتماد المشاركة',RESERVE:'قائمة احتياطية',INELIGIBLE:'غير مستوفٍ',DECLINED:'نعتذر عن عدم قبول الطلب' };
   const current = order.indexOf(stage);
   return order.map((item,index) => ({ key:item,label:labels[item],state:item === stage ? 'CURRENT' : item === 'NEEDS_INFO' && request?.submittedAt ? 'COMPLETED' : index < current ? 'COMPLETED' : 'UPCOMING' }));
 }

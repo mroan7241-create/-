@@ -144,14 +144,13 @@ describe('Application V2 launch gate', () => {
     expect(invalidated.evaluationEvidence).toBeNull();
     await http().post(`/api/v1/association-applications/track/${created.body.draftCode}/information/${reevaluationRequest.body.requestId}`).set(applicantAccess).send({ payload: { organization: { notes: 'وصف مصحح بعد التقييم' } }, opId: randomUUID() }).expect(201);
     await http().post(`/api/v1/association-applications/${row.id}/eligibility`).set('Cookie', adminCookie).send({ decision: 'PASSED', opId: randomUUID() }).expect(201);
-    await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(409).expect(({ body }) => expect(body.error.code).toBe('APPLICATION_SELECTION_NOT_READY'));
+    await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ workflowVersion: 2 as const, decision: 'RESERVE', opId: randomUUID() }).expect(409).expect(({ body }) => expect(body.error.code).toBe('APPLICATION_SELECTION_NOT_READY'));
     await http().post(`/api/v1/association-applications/${row.id}/evaluation`).set('Cookie', adminCookie).send({ operationalReadiness: 5, technicalCapability: 4, previousExperience: 3, integrityTransparency: 5, participationCommitment: 4, sustainabilityImpact: 5, opId: randomUUID() }).expect(201);
-    await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(201);
     await flushEmail();
-    expect(fakeEmail.lastApplicationAccess?.subject).toContain('قرار اختيار الجمعية');
-    expect(fakeEmail.lastApplicationAccess?.intro).toContain('قائمة الاحتياط');
-    expect(fakeEmail.lastApplicationAccess?.items[0]?.code).toBe(submitted.body.id);
-    expect(fakeEmail.lastApplicationAccess?.items[0]?.url).toContain('/apply/access?token=');
+    const emailBeforeSelection = fakeEmail.lastApplicationAccess;
+    await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ workflowVersion: 2 as const, decision: 'RESERVE', opId: randomUUID() }).expect(201);
+    await flushEmail();
+    expect(fakeEmail.lastApplicationAccess).toEqual(emailBeforeSelection);
     const final = await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id }, include: { participation: true, sourceDraft: true } });
     expect(final.selectionList).toBe('RESERVE'); expect(final.participation).toBeNull(); expect(final.sourceDraft?.resumeTokenHash).not.toBe(created.body.resumeToken);
     const capacityKey = 'selection.mainTargetCount';
@@ -159,27 +158,29 @@ describe('Application V2 launch gate', () => {
     try {
       await prisma.systemSetting.deleteMany({ where: { key: capacityKey } });
       const reserveEmail = fakeEmail.lastApplicationAccess;
-      await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'MAIN', opId: randomUUID() }).expect(201);
+      await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ workflowVersion: 2 as const, decision: 'MAIN', opId: randomUUID() }).expect(201);
       const beforeSend = await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id }, include: { participation: true, sourceDraft: true } });
       expect(beforeSend.selectionList).toBe('MAIN'); expect(beforeSend.participation).not.toBeNull();
       expect(fakeEmail.lastApplicationAccess).toEqual(reserveEmail);
-      const queuedMain = await prisma.auditLog.findFirstOrThrow({ where: { action: 'APPLICATION_ACCESS_EMAIL_QUEUED', entityId: final.sourceDraft!.id, metadata: { path: ['selectionList'], equals: 'MAIN' } }, orderBy: { createdAt: 'desc' } });
-      const mainEventId = (queuedMain.metadata as { eventId: string }).eventId;
-      const mainEvent = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: mainEventId } });
       const queueFailure = jest.spyOn(app.get(ApplicationAccessService), 'sendSelectionDecision').mockRejectedValueOnce(new Error('synthetic queue unavailable'));
       try {
-        await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(500);
+        await http().post('/api/v1/association-applications/selection/commit').set('Cookie', adminCookie).send({ workflowVersion: 2, operation: 'SEND_MAIN', applicationIds: [row.id], opId: randomUUID() }).expect(500);
       } finally { queueFailure.mockRestore(); }
       expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id } })).selectionList).toBe('MAIN');
-      expect(await prisma.outboxEvent.findUniqueOrThrow({ where: { id: mainEventId } })).toEqual(mainEvent);
-      await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(201);
+      expect(await prisma.auditLog.count({ where: { action: 'APPLICATION_ACCESS_EMAIL_QUEUED', entityId: final.sourceDraft!.id, metadata: { path: ['selectionList'], equals: 'MAIN' } } })).toBe(0);
+      await http().post('/api/v1/association-applications/selection/commit').set('Cookie', adminCookie).send({ workflowVersion: 2, operation: 'SEND_MAIN', applicationIds: [row.id], opId: randomUUID() }).expect(201);
+      const queuedMain = await prisma.auditLog.findFirstOrThrow({ where: { action: 'APPLICATION_ACCESS_EMAIL_QUEUED', entityId: final.sourceDraft!.id, metadata: { path: ['selectionList'], equals: 'MAIN' } }, orderBy: { createdAt: 'desc' } });
+      const mainEventId = (queuedMain.metadata as { eventId: string }).eventId;
+      await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ workflowVersion: 2 as const, decision: 'RESERVE', opId: randomUUID() }).expect(201);
       const downgraded = await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id }, include: { participation: true } });
       expect(downgraded.selectionList).toBe('RESERVE'); expect(downgraded.participation?.id).toBe(beforeSend.participation?.id);
       await flushEmail();
-      expect(fakeEmail.lastApplicationAccess?.intro).toContain('قائمة الاحتياط');
+      expect(fakeEmail.lastApplicationAccess).toEqual(reserveEmail);
+      expect((await prisma.outboxEvent.findUniqueOrThrow({ where: { id: mainEventId } })).status).toBe('FAILED');
       const capacity = await prisma.associationApplication.count({ where: { selectionList: 'MAIN' } }) + 1;
       await prisma.systemSetting.create({ data: { key: capacityKey, value: capacity } });
-      await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'MAIN', opId: randomUUID() }).expect(201);
+      await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ workflowVersion: 2 as const, decision: 'MAIN', opId: randomUUID() }).expect(201);
+      await http().post('/api/v1/association-applications/selection/commit').set('Cookie', adminCookie).send({ workflowVersion: 2, operation: 'SEND_MAIN', applicationIds: [row.id], opId: randomUUID() }).expect(201);
       let release!: () => void, started!: () => void;
       const smtpBlocked = new Promise<void>(resolve => { release = resolve; });
       const smtpStarted = new Promise<void>(resolve => { started = resolve; });
@@ -188,16 +189,16 @@ describe('Application V2 launch gate', () => {
       const worker = flushEmail();
       try {
         await smtpStarted;
-        await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(409);
+        await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ workflowVersion: 2 as const, decision: 'RESERVE', opId: randomUUID() }).expect(409);
         expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id } })).selectionList).toBe('MAIN');
       } finally { release(); await worker; sending.mockRestore(); }
       expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: row.id }, include: { participation: true } })).participation).not.toBeNull();
       const previousSelectionUrl = fakeEmail.lastApplicationAccess?.items[0]?.url;
-      await http().post(`/api/v1/association-applications/${row.id}/selection-decision/resend`).set('Cookie', adminCookie).expect(201);
+      await http().post(`/api/v1/association-applications/${row.id}/selection-decision/resend`).set('Cookie', adminCookie).send({ workflowVersion: 2, opId: randomUUID() }).expect(409);
       await flushEmail();
       expect(fakeEmail.lastApplicationAccess?.intro).toContain('القائمة الأساسية');
-      expect(fakeEmail.lastApplicationAccess?.items[0]?.url).not.toBe(previousSelectionUrl);
-      await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'RESERVE', opId: randomUUID() }).expect(409);
+      expect(fakeEmail.lastApplicationAccess?.items[0]?.url).toBe(previousSelectionUrl);
+      await http().post(`/api/v1/association-applications/${row.id}/selection-decision`).set('Cookie', adminCookie).send({ workflowVersion: 2 as const, decision: 'RESERVE', opId: randomUUID() }).expect(409);
     } finally {
       if (previousCapacity) {
         const value = previousCapacity.value === null ? Prisma.JsonNull : previousCapacity.value as Prisma.InputJsonValue;

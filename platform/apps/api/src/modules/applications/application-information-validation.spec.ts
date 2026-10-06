@@ -46,7 +46,7 @@ function fixture(fields = ['finance.governanceScore'], files: string[] = []) {
   });
   const access = { requireSessionDraft: async () => ({ submittedApplicationId: applicationId }) } as unknown as ApplicationAccessService;
   const service = new ApplicationV2Service({} as PublicCodeService, {} as IdempotencyService, {} as StorageService,
-    { consume: async () => undefined } as unknown as RateLimitService, access, {} as SettingsService);
+    { consume: async () => undefined } as unknown as RateLimitService, access, {} as SettingsService, {} as never);
   const submit = (payload: Record<string, unknown>) => service.submitInformation('DRF-000001', '', request.id, { payload, opId: 'operation-id' }, 's'.repeat(43));
   return { submit, tx, request, storedFiles, requestedAt, applicationId };
 }

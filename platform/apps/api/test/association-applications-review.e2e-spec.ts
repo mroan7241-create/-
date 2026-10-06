@@ -63,7 +63,7 @@ describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
       .set('Cookie', cookie)
       .send({ decision: 'reject', opId, ...(reason === undefined ? {} : { reason }) });
 
-  it.each(['bulk', 'individual'])('concurrent bulk and %s selections share the remaining seat and preserve the prior MAIN decision', async (contender) => {
+  it.each(['first', 'second'])('concurrent individual selections (%s starts first) protect the last seat without automatic reserve/email', async (contender) => {
     const existing = await createApplication();
     const first = await createApplication();
     const second = await createApplication();
@@ -75,24 +75,34 @@ describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
       await prisma.associationApplication.update({ where: { id: existing.id }, data: { status: ApplicationStatus.ACCEPTED, selectionList: 'MAIN', selectionApprovedAt: new Date('2026-09-01T00:00:00Z') } });
       const priorDecision = await prisma.associationApplication.findUniqueOrThrow({ where: { id: existing.id } });
       const firstOp = randomUUID();
-      const select = (opId: string) => http().post('/api/v1/association-applications/selection/commit').set('Cookie', adminCookie).send({ mainTargetCount: 2, opId });
-      const competing = contender === 'bulk' ? select(randomUUID()) : http().post(`/api/v1/association-applications/${second.id}/selection-decision`).set('Cookie', adminCookie).send({ decision: 'MAIN', opId: randomUUID() });
-      const results = await Promise.all([select(firstOp), competing]);
-      expect(results[0].status).toBe(201);
-      expect(contender === 'bulk' ? [201] : [201, 409]).toContain(results[1].status);
-      if (results[1].status === 409) expect(results[1].body.error.code).toBe('APPLICATION_SELECTION_CAPACITY_FULL');
-      expect(await prisma.associationApplication.count({ where: { id: { in: [first.id, second.id] }, selectionList: 'RESERVE' } })).toBe(1);
+      const secondOp = randomUUID();
+      const candidates = contender === 'first' ? [first, second] : [second, first];
+      const operations = [firstOp, secondOp];
+      const select = (id: string, opId: string) => http().post(`/api/v1/association-applications/${id}/selection-decision`).set('Cookie', adminCookie).send({ workflowVersion: 2, decision: 'MAIN', opId });
+      const results = await Promise.all(candidates.map((candidate, i) => select(candidate.id, operations[i])));
+      expect(results.map(result => result.status).sort()).toEqual([201, 409]);
+      expect(results.find(result => result.status === 409)!.body.error.code).toBe('APPLICATION_SELECTION_CAPACITY_FULL');
+      expect(results.find(result => result.status === 201)!.body.emailQueued).toBe(false);
+      expect(await prisma.associationApplication.count({ where: { id: { in: [first.id, second.id] }, selectionList: 'NONE' } })).toBe(1);
       expect(await prisma.associationApplication.count({ where: { selectionList: 'MAIN' } })).toBe(2);
       expect(await prisma.associationApplication.findUniqueOrThrow({ where: { id: existing.id } })).toEqual(priorDecision);
-      const replay = await select(firstOp);
+      const winner = results.findIndex(result => result.status === 201);
+      const replay = await select(candidates[winner].id, operations[winner]);
       expect(replay.status).toBe(201);
-      expect(replay.body).toEqual(results[0].body);
+      expect(replay.body).toEqual(results[winner].body);
       expect(await prisma.projectParticipation.count({ where: { applicationId: { in: ids } } })).toBe(1);
     } finally {
       await prisma.projectParticipation.deleteMany({ where: { applicationId: { in: ids } } });
       if (originalSetting) await prisma.systemSetting.update({ where: { key: originalSetting.key }, data: { value: originalSetting.value as Prisma.InputJsonValue } });
       else await prisma.systemSetting.deleteMany({ where: { key: 'selection.mainTargetCount' } });
     }
+  });
+
+  it('rejects old implicit ranked commit without changing any decision', async () => {
+    const application = await createApplication();
+    await prisma.associationApplication.update({ where: { id: application.id }, data: { eligibilityStatus: EligibilityStatus.PASSED, evaluationScore: 90 } });
+    await http().post('/api/v1/association-applications/selection/commit').set('Cookie', adminCookie).send({ mainTargetCount: 2, opId: randomUUID() }).expect(400);
+    expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: application.id } })).selectionList).toBe('NONE');
   });
 
   // ————————————————————————————————————————

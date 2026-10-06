@@ -17,6 +17,7 @@ import {
 } from '../applications/application-reference.util';
 import { associationOrderBy, type AssociationSortField } from './association-sort.util';
 import type { AuthContext } from '../auth/auth.types';
+import { adminApplicationRegionCodes, adminAssociationScopeWhere, assertAdminAssociationScope, lockAdminApplicationScope } from '../auth/admin-route-permissions';
 
 export interface CreateAssociationInput {
   name: string;
@@ -55,9 +56,10 @@ export class AssociationsService {
 
   async listAssociations(
     params: PaginationParams & { search?: string; status?: AssociationStatus; sortBy?: AssociationSortField; sortDir?: 'asc' | 'desc' },
+    ctx?: AuthContext,
   ): Promise<PaginatedResult<unknown>> {
     const { page, pageSize, skip, take } = normalizePagination(params);
-    const where: Prisma.AssociationWhereInput = {};
+    const where: Prisma.AssociationWhereInput = ctx ? adminAssociationScopeWhere(ctx) : {};
     if (params.status) where.status = params.status;
     if (params.search) {
       const q = params.search.trim();
@@ -104,7 +106,8 @@ export class AssociationsService {
     );
   }
 
-  async getAssociationDetail(id: string) {
+  async getAssociationDetail(id: string, ctx?: AuthContext) {
+    if (ctx) await assertAdminAssociationScope(ctx, id);
     const association = await prisma.association.findUnique({ where: { id } });
     if (!association) throw new ApiError('ASSOCIATION_NOT_FOUND', 'الجمعية غير موجودة', 404);
 
@@ -121,6 +124,8 @@ export class AssociationsService {
   // ADMIN — إنشاء مباشر (saveAssociation Legacy — بلا payload.id)
   // ================================================================
   async createAssociation(ctx: AuthContext, input: CreateAssociationInput) {
+    // Direct creation has no application/official-region association to authorize.
+    if (adminApplicationRegionCodes(ctx) !== null) throw new ApiError('ADMIN_APPLICATION_SCOPE_FORBIDDEN', 'الإنشاء المباشر خارج مسار طلب الانضمام يحتاج حسابًا غير مقيد بالمناطق', 403);
     const name = requiredText(input.name, 'اسم الجمعية', 150);
     const email = requiredEmail(input.email);
     const phone = normalizeSaudiPhone(input.phone);
@@ -152,6 +157,7 @@ export class AssociationsService {
     };
 
     const outcome = await prisma.$transaction(async (tx) => {
+      if (adminApplicationRegionCodes(await lockAdminApplicationScope(tx, ctx)) !== null) throw new ApiError('ADMIN_APPLICATION_SCOPE_FORBIDDEN', 'الإنشاء المباشر خارج مسار طلب الانضمام يحتاج حسابًا غير مقيد بالمناطق', 403);
       const claim = await this.idempotency.claim<{ associationId: string; accountId: string }>(tx, ctx.accountId, 'association-create', input.opId, payload);
       if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse! };
 
@@ -197,6 +203,7 @@ export class AssociationsService {
   // ADMIN — تعديل (saveAssociation Legacy — payload.id موجود)
   // ================================================================
   async updateAssociation(ctx: AuthContext, id: string, input: UpdateAssociationInput) {
+    await assertAdminAssociationScope(ctx, id);
     const before = await prisma.association.findUnique({ where: { id } });
     if (!before) throw new ApiError('ASSOCIATION_NOT_FOUND', 'الجمعية غير موجودة', 404);
 
@@ -233,6 +240,7 @@ export class AssociationsService {
     // (نافذة وصول لحساب موقوف) أو العكس. الآن الاثنان داخل معاملة واحدة
     // بنفس عميل tx: إمّا يثبتان معًا أو لا يثبت أيّهما.
     await prisma.$transaction(async (tx) => {
+      await assertAdminAssociationScope(await lockAdminApplicationScope(tx, ctx), id, tx);
       await tx.association.update({ where: { id }, data });
       if (deactivating) {
         await revokeAssociationSessions(tx, id);

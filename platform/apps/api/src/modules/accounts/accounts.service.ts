@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { AccountRole, AccountStatus, AuthCredentialType, Prisma, prisma } from '@alzad/db';
-import { isAdminPermission, normalizeAdminPermissions } from '@alzad/shared';
+import { isAdminApplicationScope, isAdminPermission, normalizeAdminPermissions } from '@alzad/shared';
 import { ApiError, authForbidden } from '../../common/api-error';
 import { generateAccessCode, generateStrongTempPassword, resetTokenHash } from '../../common/crypto.util';
 import { authConfig } from '../../config/auth.config';
@@ -37,11 +37,16 @@ export class AccountsService {
     return account;
   }
 
+  private applicationScope(input: unknown): Prisma.InputJsonObject {
+    if (!isAdminApplicationScope(input)) throw new ApiError('ADMIN_APPLICATION_SCOPE_INVALID', 'حدد جميع المناطق أو منطقة واحدة أو عدة مناطق صحيحة دون تكرار', 400);
+    return 'allRegions' in input ? { allRegions: true } : { regionCodes: [...input.regionCodes].sort() };
+  }
+
   async listAdmins(ctx: AuthContext) {
     await this.assertOwner(ctx);
     const accounts = await prisma.account.findMany({
       where: { role: AccountRole.ADMIN, archivedAt: null },
-      select: { id: true, publicCode: true, name: true, email: true, status: true, lastLoginAt: true, createdAt: true, mustChangePassword: true, adminFullAccess: true, adminPermissions: true },
+      select: { id: true, publicCode: true, name: true, email: true, status: true, lastLoginAt: true, createdAt: true, mustChangePassword: true, adminFullAccess: true, adminPermissions: true, adminApplicationScope: true },
       orderBy: { createdAt: 'asc' },
     });
     return accounts.map((account) => ({ ...account, adminPermissions: normalizeAdminPermissions(account.adminPermissions) }));
@@ -52,6 +57,7 @@ export class AccountsService {
     const name = requiredText(dto.name, 'اسم الموظف', 120);
     const email = requiredEmail(dto.email);
     const adminPermissions = this.permissions(dto.adminPermissions);
+    const adminApplicationScope = this.applicationScope(dto.adminApplicationScope);
     const temporaryPassword = generateStrongTempPassword();
     const secretHash = await hashSecret(temporaryPassword);
     try {
@@ -60,9 +66,9 @@ export class AccountsService {
         const duplicate = await tx.authCredential.findUnique({ where: { type_identifier: { type: AuthCredentialType.EMAIL_PASSWORD, identifier: email } } });
         if (duplicate) throw new ApiError('ACCOUNT_EMAIL_IN_USE', 'البريد الإلكتروني مستخدم في حساب آخر', 409);
         const publicCode = await this.publicCode.nextPublicCode(tx, 'ADM');
-        const created = await tx.account.create({ data: { publicCode, name, email, role: AccountRole.ADMIN, status: AccountStatus.ACTIVE, mustChangePassword: true, adminFullAccess: false, adminPermissions } });
+        const created = await tx.account.create({ data: { publicCode, name, email, role: AccountRole.ADMIN, status: AccountStatus.ACTIVE, mustChangePassword: true, adminFullAccess: false, adminPermissions, adminApplicationScope } });
         await tx.authCredential.create({ data: { accountId: created.id, type: AuthCredentialType.EMAIL_PASSWORD, identifier: email, secretHash } });
-        await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'ADMIN_ACCOUNT_CREATED', entityType: 'accounts', entityId: created.id, metadata: { name, adminPermissions } } });
+        await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'ADMIN_ACCOUNT_CREATED', entityType: 'accounts', entityId: created.id, metadata: { name, adminPermissions, adminApplicationScope } } });
         return created;
       });
       return { ok: true as const, accountId: account.id, temporaryPassword };
@@ -77,11 +83,12 @@ export class AccountsService {
     const data: Prisma.AccountUpdateInput = {};
     if (dto.name !== undefined) data.name = requiredText(dto.name, 'اسم الموظف', 120);
     if (dto.adminPermissions !== undefined) data.adminPermissions = this.permissions(dto.adminPermissions);
+    if (dto.adminApplicationScope !== undefined) data.adminApplicationScope = this.applicationScope(dto.adminApplicationScope);
     await prisma.$transaction(async (tx) => {
       await this.assertOwner(ctx, tx);
       const previous = await this.staff(tx, id);
       await tx.account.update({ where: { id }, data });
-      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'ADMIN_ACCOUNT_UPDATED', entityType: 'accounts', entityId: id, metadata: { name: dto.name ?? previous.name, previousPermissions: previous.adminPermissions, adminPermissions: dto.adminPermissions === undefined ? previous.adminPermissions : this.permissions(dto.adminPermissions) } } });
+      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'ADMIN_ACCOUNT_UPDATED', entityType: 'accounts', entityId: id, metadata: { name: dto.name ?? previous.name, previousPermissions: previous.adminPermissions, adminPermissions: dto.adminPermissions === undefined ? previous.adminPermissions : this.permissions(dto.adminPermissions), previousApplicationScope: previous.adminApplicationScope, adminApplicationScope: dto.adminApplicationScope === undefined ? previous.adminApplicationScope : this.applicationScope(dto.adminApplicationScope) } } });
     });
     return { ok: true as const };
   }

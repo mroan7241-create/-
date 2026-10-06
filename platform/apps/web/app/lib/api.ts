@@ -1,4 +1,5 @@
-import { APPLICATION_UPLOAD_MAX_BYTES, APPLICATION_UPLOAD_SIZE_MESSAGE, type AdminPermission } from '@alzad/shared';
+import { APPLICATION_UPLOAD_MAX_BYTES, APPLICATION_UPLOAD_SIZE_MESSAGE, type AdminApplicationScope, type AdminPermission } from '@alzad/shared';
+export type { AdminApplicationScope } from '@alzad/shared';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001/api/v1';
 
@@ -195,6 +196,9 @@ export interface ApplicationSummary {
   evaluationBreakdown: Record<string, unknown> | null;
   attachmentKeys: string[];
   hasInitialBeneficiaryFile?: boolean;
+  selectionDelivery?: { status: 'NOT_REQUESTED' | 'PENDING' | 'ACCEPTED' | 'FAILED' | 'UNKNOWN'; requestedAt?: string | null };
+  selectionEditable?: boolean;
+  ownerCanCorrect?: boolean;
   latestInformationRequest: ApplicationInformationRequest | null;
 }
 
@@ -236,7 +240,7 @@ export interface ApplicationTrackView {
   draftCode?: string;
   revision?: number;
   id?: string;
-  stage: 'DRAFT' | 'RECEIVED' | 'PROCESSING' | 'NEEDS_INFO' | 'EVALUATION' | 'MAIN' | 'RESERVE' | 'INELIGIBLE';
+  stage: 'DRAFT' | 'RECEIVED' | 'PROCESSING' | 'NEEDS_INFO' | 'EVALUATION' | 'MAIN' | 'RESERVE' | 'INELIGIBLE' | 'DECLINED';
   submittedAt?: string;
   timeline: Array<{ key: string; label: string; state: 'COMPLETED' | 'CURRENT' | 'UPCOMING' }>;
   needsInfo?: ApplicationInformationRequest | null;
@@ -261,8 +265,10 @@ export function startApplicationProcessing(applicationIds: string[]) { return ap
 export function getApplicationEligibilityEvidence(id: string) { return apiFetch<Record<string, unknown>>(`/association-applications/${id}/eligibility-evidence`); }
 export function requestApplicationInformation(id: string, input: { note?: string; deadline?: string; items: Array<{ type: 'FIELD' | 'ATTACHMENT'; key: string; reason: string }> }): Promise<{ ok: true; requestId: string; emailQueued?: boolean; emailSent: boolean | null }> { return apiFetch(`/association-applications/${id}/information-request`, { method: 'POST', body: JSON.stringify({ ...input, opId: newOpId() }) }); }
 export function resendApplicationInformation(id: string) { return apiFetch<{ ok: true; emailQueued: boolean }>(`/association-applications/${id}/information-request/resend`, { method: 'POST' }); }
-export function decideApplicationSelection(id: string, decision: 'MAIN' | 'RESERVE', reason?: string): Promise<{ ok: true; decision: 'MAIN' | 'RESERVE'; emailQueued?: boolean; emailSent: boolean | null }> { return apiFetch(`/association-applications/${id}/selection-decision`, { method: 'POST', body: JSON.stringify({ decision, reason, opId: newOpId() }) }); }
-export function resendApplicationSelection(id: string) { return apiFetch<{ ok: true; emailQueued: boolean }>(`/association-applications/${id}/selection-decision/resend`, { method: 'POST' }); }
+export type InternalSelectionDecision = 'MAIN' | 'RESERVE' | 'NONE' | 'DECLINED';
+export function decideApplicationSelection(id: string, decision: InternalSelectionDecision, reason?: string, ownerCorrection?: boolean): Promise<{ ok: true; decision: InternalSelectionDecision; emailQueued?: boolean; emailSent: boolean | null }> { return apiFetch(`/association-applications/${id}/selection-decision`, { method: 'POST', body: JSON.stringify({ decision, reason, ownerCorrection, workflowVersion: 2, opId: newOpId() }) }); }
+export function commitApplicationSelection(operation: 'SEND_MAIN' | 'DECLINE', applicationIds: string[], reason?: string) { return apiFetch<{ ok: true; emailQueued?: boolean; queued?: number }>(`/association-applications/selection/commit`, { method: 'POST', body: JSON.stringify({ operation, applicationIds, reason, workflowVersion: 2, opId: newOpId() }) }); }
+export function resendApplicationSelection(id: string) { return apiFetch<{ ok: true; emailQueued: boolean }>(`/association-applications/${id}/selection-decision/resend`, { method: 'POST', body: JSON.stringify({ workflowVersion: 2, opId: newOpId() }) }); }
 
 export interface ApplicationPublicStatus {
   ok: true;
@@ -308,6 +314,7 @@ export interface CurrentUser {
   mustChangePassword: boolean;
   adminFullAccess?: boolean;
   adminPermissions?: AdminPermission[];
+  adminApplicationScope?: AdminApplicationScope | null;
   covenantRequired: boolean;
   covenantStatus: 'DRAFT' | 'SENT' | 'SIGNED_BY_ORG' | 'SIGNED' | 'CANCELLED' | 'SUPERSEDED' | null;
 }
@@ -327,11 +334,12 @@ export interface AdminAccountSummary {
   mustChangePassword: boolean;
   adminFullAccess: boolean;
   adminPermissions: AdminPermission[];
+  adminApplicationScope?: AdminApplicationScope | null;
 }
 
 export function listAdminAccounts(): Promise<AdminAccountSummary[]> { return apiFetch('/accounts/admins'); }
-export function createAdminAccount(input: { name: string; email: string; adminPermissions: AdminPermission[] }): Promise<{ ok: true; accountId: string; temporaryPassword: string }> { return apiFetch('/accounts/admins', { method: 'POST', body: JSON.stringify(input) }); }
-export function updateAdminAccount(id: string, input: { name?: string; adminPermissions?: AdminPermission[] }): Promise<{ ok: true }> { return apiFetch(`/accounts/admins/${id}`, { method: 'PATCH', body: JSON.stringify(input) }); }
+export function createAdminAccount(input: { name: string; email: string; adminPermissions: AdminPermission[]; adminApplicationScope: AdminApplicationScope }): Promise<{ ok: true; accountId: string; temporaryPassword: string }> { return apiFetch('/accounts/admins', { method: 'POST', body: JSON.stringify(input) }); }
+export function updateAdminAccount(id: string, input: { name?: string; adminPermissions?: AdminPermission[]; adminApplicationScope?: AdminApplicationScope }): Promise<{ ok: true }> { return apiFetch(`/accounts/admins/${id}`, { method: 'PATCH', body: JSON.stringify(input) }); }
 export function setAdminAccountStatus(id: string, status: 'ACTIVE' | 'SUSPENDED'): Promise<{ ok: true }> { return apiFetch(`/accounts/admins/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }); }
 export function resetAdminAccountPassword(id: string): Promise<{ ok: true; temporaryPassword: string }> { return apiFetch(`/accounts/admins/${id}/reset-password`, { method: 'POST' }); }
 
@@ -962,7 +970,6 @@ export function decideApplicationEligibility(id: string, decision: 'PASSED' | 'F
 export function resendApplicationRejection(id: string): Promise<{ ok: true; emailQueued?: boolean; emailSent: boolean | null }> { return apiFetch(`/association-applications/${id}/eligibility/resend-rejection`, { method: 'POST' }); }
 export function evaluateApplication(id: string, scores: { operationalReadiness: number; technicalCapability: number; previousExperience: number; integrityTransparency: number; participationCommitment: number; sustainabilityImpact: number }) { return apiFetch(`/association-applications/${id}/evaluation`, { method: 'POST', body: JSON.stringify({ ...scores, opId: newOpId() }) }); }
 export function previewApplicationSelection(): Promise<{ threshold: number | null; items: WorkflowRecord[] }> { return apiFetch('/association-applications/selection/preview', { method: 'POST' }); }
-export function commitApplicationSelection(mainTargetCount?: number) { return apiFetch('/association-applications/selection/commit', { method: 'POST', body: JSON.stringify({ mainTargetCount, opId: newOpId() }) }); }
 
 export function failDelivery(missionId: string, failureReason: DeliveryFailureReason, notes?: string): Promise<{ ok: true; attemptId: string }> {
   return apiFetch(`/deliveries/${missionId}/fail`, { method: 'POST', body: JSON.stringify({ failureReason, notes, opId: newOpId() }) });

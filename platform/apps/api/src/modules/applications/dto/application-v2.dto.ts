@@ -1,4 +1,4 @@
-import { IsArray, IsEmail, IsIn, IsInt, IsObject, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsEmail, IsIn, IsInt, IsObject, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
 import { AssociationSelectionList, ApplicationInformationItemType } from '@alzad/db';
 
 export class CreateApplicationDraftDto {
@@ -62,7 +62,9 @@ export class EvaluationV2Dto {
 }
 
 export class SelectionDecisionDto {
-  @IsIn([AssociationSelectionList.MAIN, AssociationSelectionList.RESERVE]) decision!: AssociationSelectionList;
+  @IsIn([AssociationSelectionList.MAIN, AssociationSelectionList.RESERVE, AssociationSelectionList.NONE, 'DECLINED']) decision!: AssociationSelectionList | 'DECLINED';
+  @IsIn([2]) workflowVersion!: 2;
+  @IsOptional() @IsBoolean() ownerCorrection?: boolean;
   @IsOptional() @IsString() reason?: string;
   @IsString() opId!: string;
 }

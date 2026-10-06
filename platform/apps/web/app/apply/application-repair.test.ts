@@ -298,8 +298,11 @@ test('financial indicators distinguish surplus, deficit and current liabilities 
 test('financial analysis is visible to admin assessors, not to applicants', () => {
   const applicant = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8');
   const admin = readFileSync(new URL('../admin/applications/page.tsx', import.meta.url), 'utf8');
+  const detail = readFileSync(new URL('../admin/applications/application-detail.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(applicant, /FinancialSummary/);
-  assert.match(admin, /<FinancialSummary finance=\{application\.v2Payload\?\.finance\}/);
+  assert.match(admin, /import \{ ApplicationDetail[^}]*\} from '\.\/application-detail'/);
+  assert.match(admin, /<ApplicationDetail\s/);
+  assert.match(detail, /<FinancialSummary finance=\{application\.v2Payload\?\.finance\}/);
 });
 
 test('Covenant preparation actions appear only for MAIN selections with no sent agreement', () => {
