@@ -133,34 +133,63 @@ export function assertSnapshotReferences(references, manifest, bucket) {
 }
 export async function deliverStoredBackup(client,commands,bucket,encryptedPath,transport,from,id) {
   if(typeof id!=='string'||! /^[A-Za-z0-9][A-Za-z0-9_-]{0,119}$/.test(id)) throw new Error('Invalid backup identifier');
+  // Each send already has the SDK's bounded retry budget. At most three sends
+  // (nine wire attempts) per stage, and never retry invariant/auth/not-found errors.
+  async function retryPart(operation) {
+    for(let attempt=1;attempt<=3;attempt++) {
+      try {return await operation();}
+      catch(error) {
+        const status=error?.$metadata?.httpStatusCode;
+        const permanent=['AccessDenied','InvalidAccessKeyId','SignatureDoesNotMatch','ExpiredToken','InvalidToken','AuthorizationHeaderMalformed','NoSuchBucket','NoSuchKey','NotFound','InvalidRequest','InvalidArgument','InvalidDigest','BadDigest','MissingContentLength','XAmzContentSHA256Mismatch'].includes(error?.name);
+        const transient=!permanent&&(status!==undefined?Number.isInteger(status)&&status>=500&&status<=599:
+          ['ECONNRESET','ETIMEDOUT','EPIPE','ECONNREFUSED','ECONNABORTED','EAI_AGAIN','ENETUNREACH'].includes(error?.code)||
+          ['TimeoutError','RequestTimeout','SlowDown','InternalError','InternalServerError','ServiceUnavailable'].includes(error?.name));
+        if(!transient||attempt===3) throw error;
+        await new Promise(resolve=>setTimeout(resolve,attempt*100));
+      }
+    }
+  }
   const bytes=(await stat(encryptedPath)).size;
   if(!Number.isSafeInteger(bytes)||bytes===0) throw new Error('Invalid encrypted backup size');
   const sha256=await hashFile(encryptedPath),parts=Math.ceil(bytes/PART_SIZE),wholeHash=createHash('sha256');let totalReadbackBytes=0;
   for(let index=0;index<parts;index++) {
     const start=index*PART_SIZE,end=Math.min(bytes,(index+1)*PART_SIZE)-1,partBytes=end-start+1;
     const key=`${BACKUP_PREFIX}${id}.enc${parts>1?`.part-${String(index+1).padStart(4,'0')}`:''}`;
-    const localHash=createHash('sha256');let localBytes=0;
-    for await(const chunk of createReadStream(encryptedPath,{start,end})) {localBytes+=chunk.length;localHash.update(chunk);}
+    // Replay the exact same bounded ciphertext bytes after a transient PUT failure.
+    const body=Buffer.allocUnsafe(partBytes);let localBytes=0;
+    for await(const chunk of createReadStream(encryptedPath,{start,end})) {
+      if(localBytes+chunk.length>partBytes) throw new Error('Encrypted backup source part size mismatch');
+      chunk.copy(body,localBytes);localBytes+=chunk.length;
+    }
     if(localBytes!==partBytes) throw new Error('Encrypted backup source part size mismatch');
-    const partSha256=localHash.digest('hex');
+    const partSha256=createHash('sha256').update(body).digest('hex');
     console.log('BACKUP_STAGE: ENCRYPTED_BACKUP_UPLOAD');
-    const body=createReadStream(encryptedPath,{start,end});
-    try {
-      await client.send(new commands.PutObjectCommand({Bucket:bucket,Key:key,Body:body,ContentLength:partBytes,ContentType:'application/octet-stream',IfNoneMatch:'*'}));
-    } finally { body.destroy(); }
-    console.log('BACKUP_STAGE: ENCRYPTED_BACKUP_READBACK');
-    const response=await client.send(new commands.GetObjectCommand({Bucket:bucket,Key:key}));
-    if(!response.Body) throw new Error('Missing encrypted backup readback');
-    const hash=createHash('sha256');let receivedBytes=0;
-    try {
-      for await(const chunk of response.Body) {
-        receivedBytes+=chunk.length;
-        if(receivedBytes>partBytes) throw new Error('Encrypted backup readback size mismatch');
-        hash.update(chunk);wholeHash.update(chunk);
+    await retryPart(async()=>{
+      try {await client.send(new commands.PutObjectCommand({Bucket:bucket,Key:key,Body:body,ContentLength:partBytes,ContentType:'application/octet-stream',IfNoneMatch:'*'}));}
+      catch(error) {
+        // A previous attempt may have committed before the connection broke.
+        // Never overwrite: accept 412 only provisionally, pending exact readback.
+        if(error?.$metadata?.httpStatusCode!==412) throw error;
       }
-    } finally { response.Body.destroy?.(); }
-    if(receivedBytes!==partBytes||(response.ContentLength!==undefined&&response.ContentLength!==partBytes)||hash.digest('hex')!==partSha256) throw new Error('Encrypted backup readback size or checksum mismatch');
-    totalReadbackBytes+=receivedBytes;
+    });
+    console.log('BACKUP_STAGE: ENCRYPTED_BACKUP_READBACK');
+    const verified=await retryPart(async()=>{
+      const response=await client.send(new commands.GetObjectCommand({Bucket:bucket,Key:key}));
+      if(!response.Body) throw new Error('Missing encrypted backup readback');
+      const readback=Buffer.allocUnsafe(partBytes);let receivedBytes=0;
+      try {
+        if(response.ContentLength!==undefined&&response.ContentLength!==partBytes) throw new Error('Encrypted backup readback size or checksum mismatch');
+        for await(const chunk of response.Body) {
+          if(!Buffer.isBuffer(chunk)&&!(chunk instanceof Uint8Array)) throw new Error('Invalid encrypted backup readback');
+          if(receivedBytes+chunk.length>partBytes) throw new Error('Encrypted backup readback size mismatch');
+          readback.set(chunk,receivedBytes);receivedBytes+=chunk.length;
+        }
+      } finally {response.Body.destroy?.();}
+      if(receivedBytes!==partBytes||createHash('sha256').update(readback).digest('hex')!==partSha256) throw new Error('Encrypted backup readback size or checksum mismatch');
+      return readback;
+    });
+    // Partial failed reads never contaminate the full-archive proof.
+    wholeHash.update(verified);totalReadbackBytes+=verified.length;
   }
   if(totalReadbackBytes!==bytes||wholeHash.digest('hex')!==sha256) throw new Error('Encrypted backup aggregate size or checksum mismatch');
   const filenames=parts>1?`${id}.enc.part-0001 … ${id}.enc.part-${String(parts).padStart(4,'0')}`:`${id}.enc`;
