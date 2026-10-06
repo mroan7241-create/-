@@ -39,7 +39,7 @@ export default function AdminReportsPage() {
       <ReportTable title="التخصيص" headers={['الجمعية', 'الحالة', 'العدد']} rows={report.allocations.map(row => [associationName(report, row.associationId), reportValueLabel(row.status), row._count._all])} />
       <ReportTable title="التخصيص والتسليم" headers={['الجمعية', 'الحالة', 'العدد']} rows={report.deliveryAndExecution.map(row => [associationName(report, row.associationId), reportValueLabel(row.status), row._count._all])} />
       <ReportTable title="حالة تنفيذ الجمعيات والإغلاق" headers={['الجمعية', 'الحالة', 'تاريخ الإغلاق']} rows={report.associationClosure.map(row => [associationName(report, row.participation.associationId ?? ''), reportValueLabel(row.status), row.closedAt ? new Date(row.closedAt).toLocaleDateString('ar-SA') : '—'])} />
-      <ReportTable title="تقدم أنشطة المشروع" headers={['المرحلة', 'النشاط', 'الحالة', 'الإنجاز']} rows={report.activities.map(row => [row.phaseName, row.mainActivityName, reportValueLabel(row.status), `${row.completionPercent}%`])} />
+      <ReportTable title="تقدم أنشطة المشروع" headers={['المرحلة', 'النشاط', 'الحالة', 'الإنجاز']} rows={report.activities.map(row => [row.phaseName, `${row.mainActivityName}${row.subActivityName ? ` — ${row.subActivityName}` : ''}`, reportValueLabel(row.status), `${row.completionPercent}%`])} />
       <p className="zad-section-meta2">أُنشئ التقرير: {new Date(report.generatedAt).toLocaleString('ar-SA')} — لا يتضمن بيانات الاتصال أو العناوين التفصيلية للمستفيدين.</p>
     </div>}
   </AppShell>;

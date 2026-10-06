@@ -559,18 +559,122 @@ test('local snapshot failure diagnostics distinguish fixed invariant errors with
   assert.deepEqual(safeBackupFailure(new Error('Storage changed during backup; key=secret')),{status:'BACKUP_FAILED',code:'UNKNOWN'});
 });
 
-test('stored delivery logs only fixed upload, readback and notification stage markers',async()=>{
+test('stored delivery logs fixed markers and safe storage proof before notification',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-')),originalLog=console.log,logs=[];
   try {
     console.log=(...values)=>logs.push(values);
     const path=join(dir,'encrypted'),payload=Buffer.from('encrypted fixture');await writeFile(path,payload);
     const client={send:async command=>{if(command instanceof PutCommand)return{};return{Body:Readable.from([payload]),ContentLength:payload.length};}};
     await backupModule.deliverStoredBackup(client,storageCommands,'private-bucket',path,{sendMail:async()=>({accepted:['marwanalsawi@alzaad.org.sa']})},{address:'private-sender@example.org'},'private-id');
-    assert.deepEqual(logs,[['BACKUP_STAGE: ENCRYPTED_BACKUP_UPLOAD'],['BACKUP_STAGE: ENCRYPTED_BACKUP_READBACK'],['BACKUP_STAGE: BACKUP_EMAIL_NOTIFICATION']]);
+    assert.deepEqual(logs,[['BACKUP_STAGE: ENCRYPTED_BACKUP_UPLOAD'],['BACKUP_STAGE: ENCRYPTED_BACKUP_READBACK'],[JSON.stringify({status:'BACKUP_STORAGE_VERIFIED',id:'private-id',parts:1,bytes:payload.length,sha256:createHash('sha256').update(payload).digest('hex'),storageVerified:true})],['BACKUP_STAGE: BACKUP_EMAIL_NOTIFICATION']]);
+    assert.doesNotMatch(JSON.stringify(logs),/private-bucket|private-sender@example/);
     logs.length=0;
     await assert.rejects(backupModule.deliverStoredBackup({send:async()=>{throw new Error('private error');}},storageCommands,'private-bucket',path,{}, {},'private-id'));
     assert.deepEqual(logs,[['BACKUP_STAGE: ENCRYPTED_BACKUP_UPLOAD']]);
   } finally {console.log=originalLog;await rm(dir,{recursive:true,force:true});}
+});
+
+test('explicit temporary final DATA rejection retries only the same notice, never storage, and preserves proof before mail',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-')),originalLog=console.log,logs=[];
+  try {
+    console.log=(...values)=>logs.push(values);
+    const path=join(dir,'encrypted'),payload=Buffer.from('encrypted notice fixture');await writeFile(path,payload);
+    let puts=0,gets=0;const messages=[];
+    const client={send:async command=>{if(command instanceof PutCommand){puts++;return{};}gets++;return{Body:Readable.from([payload]),ContentLength:payload.length};}};
+    const transport={sendMail:async message=>{
+      messages.push(message);
+      const proof=logs.map(values=>values[0]).find(value=>typeof value==='string'&&value.startsWith('{'));
+      assert.deepEqual(JSON.parse(proof),{status:'BACKUP_STORAGE_VERIFIED',id:'notice-retry',parts:1,bytes:payload.length,sha256:createHash('sha256').update(payload).digest('hex'),storageVerified:true});
+      if(messages.length<3)throw Object.assign(new Error('private SMTP response'),{code:'EMESSAGE',command:'DATA',responseCode:messages.length===1?451:450});
+      return{accepted:['marwanalsawi@alzaad.org.sa']};
+    }};
+    const result=await backupModule.deliverStoredBackup(client,storageCommands,'private-bucket',path,transport,{},'notice-retry');
+    assert.equal(messages.length,3);assert.deepEqual(messages[1],messages[0]);assert.deepEqual(messages[2],messages[0]);
+    assert.equal(logs.filter(values=>typeof values[0]==='string'&&values[0].includes('BACKUP_STORAGE_VERIFIED')).length,1);
+    assert.equal(puts,1);assert.equal(gets,1);assert.equal(result.storageVerified,true);
+    assert.equal(logs.filter(values=>values[0]==='BACKUP_STAGE: BACKUP_EMAIL_RETRY').length,2);
+    assert.doesNotMatch(JSON.stringify(logs),/private-bucket|private SMTP response/);
+  } finally {console.log=originalLog;await rm(dir,{recursive:true,force:true});}
+});
+
+test('persistent temporary DATA refusal stops at three notice attempts with intact storage proof',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-')),originalLog=console.log,logs=[];
+  try {
+    console.log=(...values)=>logs.push(values);
+    const path=join(dir,'encrypted'),payload=Buffer.from('encrypted fixture');await writeFile(path,payload);
+    let storageCalls=0,mailCalls=0;const sentinel=Object.assign(new Error('private refusal'),{code:'EMESSAGE',command:'DATA',responseCode:451});
+    const client={send:async command=>{storageCalls++;return command instanceof PutCommand?{}:{Body:Readable.from([payload]),ContentLength:payload.length};}};
+    await assert.rejects(backupModule.deliverStoredBackup(client,storageCommands,'test',path,{sendMail:async()=>{mailCalls++;throw sentinel;}},{},'notice-limit'),error=>error===sentinel);
+    assert.equal(mailCalls,3);assert.equal(storageCalls,2);
+    assert.ok(logs.some(values=>typeof values[0]==='string'&&values[0].includes('BACKUP_STORAGE_VERIFIED')));
+    assert.doesNotMatch(JSON.stringify(logs),/private refusal/);
+  } finally {console.log=originalLog;await rm(dir,{recursive:true,force:true});}
+});
+
+test('permanent, ambiguous, malformed, authentication and non-final SMTP failures are never retried',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  try {
+    const path=join(dir,'encrypted'),payload=Buffer.from('encrypted fixture');await writeFile(path,payload);
+    for(const fields of [
+      {code:'EMESSAGE',command:'DATA',responseCode:550},
+      {code:'EMESSAGE',command:'DATA',responseCode:250},
+      {code:'EMESSAGE',command:'DATA',responseCode:399},
+      {code:'EMESSAGE',command:'DATA',responseCode:500},
+      {code:'EMESSAGE',command:'DATA',responseCode:451.5},
+      {code:'EMESSAGE',command:'DATA',responseCode:'451'},
+      {code:'EMESSAGE',command:'DATA',responseCode:NaN},
+      {code:'EMESSAGE',command:'DATA'},
+      {code:'EMESSAGE',command:'RCPT TO',responseCode:451},
+      {code:'EENVELOPE',command:'DATA',responseCode:451},
+      {code:'ECONNECTION',command:'CONN',responseCode:451},
+      {code:'EAUTH',command:'AUTH',responseCode:454},
+      {code:'ETIMEDOUT',command:'DATA',responseCode:451},
+      {code:'ECONNRESET',command:'DATA'},
+      {code:'ESOCKET',command:'DATA',responseCode:451},
+    ]) {
+      let storageCalls=0,mailCalls=0;const sentinel=Object.assign(new Error('private failure'),fields);
+      const client={send:async command=>{storageCalls++;return command instanceof PutCommand?{}:{Body:Readable.from([payload]),ContentLength:payload.length};}};
+      await assert.rejects(backupModule.deliverStoredBackup(client,storageCommands,'test',path,{sendMail:async()=>{mailCalls++;throw sentinel;}},{},'no-unsafe-retry'),error=>error===sentinel);
+      assert.equal(mailCalls,1);assert.equal(storageCalls,2);
+    }
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('notice succeeds on its second attempt without recapture or readback replay',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  try {
+    const path=join(dir,'encrypted'),payload=Buffer.from('encrypted fixture');await writeFile(path,payload);
+    let storageCalls=0,sends=0;const client={send:async command=>{storageCalls++;return command instanceof PutCommand?{}:{Body:Readable.from([payload]),ContentLength:payload.length};}};
+    const result=await backupModule.deliverStoredBackup(client,storageCommands,'test',path,{sendMail:async()=>{
+      if(++sends===1)throw Object.assign(new Error('temporary final refusal'),{code:'EMESSAGE',command:'DATA',responseCode:451});
+      return{accepted:['marwanalsawi@alzaad.org.sa']};
+    }},{},'second-attempt');
+    assert.equal(sends,2);assert.equal(storageCalls,2);assert.equal(result.storageVerified,true);
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('a corrupt readback never records successful storage proof or attempts SMTP',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-')),originalLog=console.log,logs=[];
+  try {
+    console.log=(...values)=>logs.push(values);
+    const path=join(dir,'encrypted'),payload=Buffer.from('encrypted fixture');await writeFile(path,payload);
+    let sends=0;const client={send:async command=>command instanceof PutCommand?{}:{Body:Readable.from([Buffer.alloc(payload.length,42)]),ContentLength:payload.length}};
+    await assert.rejects(backupModule.deliverStoredBackup(client,storageCommands,'test',path,{sendMail:async()=>{sends++;}},{},'corrupt-readback'),/checksum mismatch/);
+    assert.equal(sends,0);assert.equal(logs.some(values=>typeof values[0]==='string'&&values[0].includes('BACKUP_STORAGE_VERIFIED')),false);
+  } finally {console.log=originalLog;await rm(dir,{recursive:true,force:true});}
+});
+
+test('accepted notice is sent once and an empty or wrong recipient result is not retryable',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'alzad-backup-test-'));
+  try {
+    const path=join(dir,'encrypted'),payload=Buffer.from('encrypted fixture');await writeFile(path,payload);
+    for(const accepted of [['marwanalsawi@alzaad.org.sa'],[],['other@example.org']]) {
+      let sends=0;const client={send:async command=>command instanceof PutCommand?{}:{Body:Readable.from([payload]),ContentLength:payload.length}};
+      const operation=backupModule.deliverStoredBackup(client,storageCommands,'test',path,{sendMail:async()=>{sends++;return{accepted};}},{},'accept-once');
+      if(accepted[0]==='marwanalsawi@alzaad.org.sa')await operation;else await assert.rejects(operation,/not accepted/);
+      assert.equal(sends,1);
+    }
+  } finally {await rm(dir,{recursive:true,force:true});}
 });
 
 test('restore verification is networkless, never receives Production settings, and cleans only its own container',async()=>{

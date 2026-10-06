@@ -201,12 +201,26 @@ export async function deliverStoredBackup(client,commands,bucket,encryptedPath,t
     for(const result of settled) {wholeHash.update(result.value);totalReadbackBytes+=result.value.length;}
   }
   if(totalReadbackBytes!==bytes||wholeHash.digest('hex')!==sha256) throw new Error('Encrypted backup aggregate size or checksum mismatch');
+  // Storage proof survives a later SMTP failure; never log keys, URLs or secrets.
+  console.log(JSON.stringify({status:'BACKUP_STORAGE_VERIFIED',id,parts,bytes,sha256,storageVerified:true}));
   const filenames=parts>1?`${id}.enc.part-0001 … ${id}.enc.part-${String(parts).padStart(4,'0')}`:`${id}.enc`;
   const text=`تم حفظ نسخة احتياطية مشفّرة والتحقق من حجمها وبصمتها في مساحة التخزين الخاصة الحالية.\nمعرّف النسخة: ${id}\nعدد الأجزاء: ${parts}\nأسماء الملفات بالترتيب: ${filenames}\nالحجم بالبايت: ${bytes}\nSHA256 للملف المشفّر الكامل بعد جمع الأجزاء بالترتيب: ${sha256}\nاحتفظ بجميع الأجزاء المطابقة لهذا المعرّف.\nيشمل مخطط public وبياناته وملفات التخزين الخاص. لا يشمل أسرار التشغيل أو كلمات مرور أدوار PostgreSQL. يلزم مفتاح الاستعادة المنفصل لفكها.\nهذا إشعار فقط، بلا مرفقات أو روابط تنزيل.`;
   console.log('BACKUP_STAGE: BACKUP_EMAIL_NOTIFICATION');
-  const result=await transport.sendMail({from,to:RECIPIENT,subject:`إشعار حفظ النسخة الاحتياطية المشفّرة — ${id}`,text,html:`<div dir="rtl" style="text-align:right;font-family:Tahoma,Arial">${text.replaceAll('\n','<br>')}</div>`});
-  if(!result.accepted?.some(address=>String(address).toLowerCase()===RECIPIENT)) throw new Error('Backup recipient was not accepted by SMTP');
-  return {id,parts,bytes,sha256,storageVerified:true};
+  const message={from,to:RECIPIENT,subject:`إشعار حفظ النسخة الاحتياطية المشفّرة — ${id}`,text,html:`<div dir="rtl" style="text-align:right;font-family:Tahoma,Arial">${text.replaceAll('\n','<br>')}</div>`};
+  for(let attempt=1;attempt<=3;attempt++) {
+    try {
+      const result=await transport.sendMail(message);
+      if(!result.accepted?.some(address=>String(address).toLowerCase()===RECIPIENT)) throw new Error('Backup recipient was not accepted by SMTP');
+      return {id,parts,bytes,sha256,storageVerified:true};
+    } catch(error) {
+      // Nodemailer labels the explicit final DATA refusal EMESSAGE. A reset or
+      // timeout may follow acceptance: never replay those ambiguous outcomes.
+      const temporaryRefusal=error?.code==='EMESSAGE'&&error?.command==='DATA'&&Number.isInteger(error?.responseCode)&&error.responseCode>=400&&error.responseCode<500;
+      if(!temporaryRefusal||attempt===3) throw error;
+      console.log('BACKUP_STAGE: BACKUP_EMAIL_RETRY');
+      await new Promise(resolve=>setTimeout(resolve,attempt*1000));
+    }
+  }
 }
 export async function sendParts(transport,encryptedPath,from,id) {
   const size=(await stat(encryptedPath)).size,parts=Math.ceil(size/PART_SIZE),sha256=await hashFile(encryptedPath);
