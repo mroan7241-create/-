@@ -65,9 +65,9 @@ describe('selection V2 internal decisions, delivery and unsigned owner correctio
     await prisma.passwordResetToken.deleteMany({ where: { accountId: { in: accountIds } } });
     await prisma.authCredential.deleteMany({ where: { accountId: { in: accountIds } } });
     await prisma.fileObject.deleteMany({ where: { id: { in: fileIds } } });
+    await prisma.idempotencyKey.deleteMany({ where: { OR: [{ key: { startsWith: prefix } }, { accountId: { in: accountIds } }] } });
     await prisma.account.deleteMany({ where: { id: { in: accountIds } } });
     await prisma.association.deleteMany({ where: { id: { in: associationIds } } });
-    await prisma.idempotencyKey.deleteMany({ where: { key: { startsWith: prefix } } });
     await prisma.auditLog.deleteMany({ where: { OR: [{ actorAccountId: owner.accountId }, { entityId: { in: [...applicationIds, ...drafts.map(row => row.id), ...agreements.map(row => row.id)] } }] } });
     if (ownerCreated) await prisma.account.delete({ where: { id: owner.accountId } });
     else if (ownerPrevious) await prisma.account.update({ where: { id: owner.accountId }, data: ownerPrevious });
