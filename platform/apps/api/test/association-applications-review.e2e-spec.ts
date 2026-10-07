@@ -63,6 +63,42 @@ describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
       .set('Cookie', cookie)
       .send({ decision: 'reject', opId, ...(reason === undefined ? {} : { reason }) });
 
+  it('different evaluations proceed concurrently but still exclude selection and serialize the same application row', async () => {
+    const first = await createApplication();
+    const second = await createApplication();
+    await prisma.associationApplication.updateMany({ where: { id: { in: [first.id, second.id] } }, data: { eligibilityStatus: EligibilityStatus.PASSED } });
+    const ratings = { operationalReadiness: 5, technicalCapability: 4, previousExperience: 3, integrityTransparency: 4, participationCommitment: 5, sustainabilityImpact: 3 };
+    let release!: () => void, ready!: () => void;
+    const held = new Promise<void>(resolve => { ready = resolve; });
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const holder = prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${first.id}::uuid FOR UPDATE`;
+      ready(); await barrier;
+    }, { timeout: 15000 });
+    await held;
+    let firstCompleted = false;
+    const firstRequest = http().post(`/api/v1/association-applications/${first.id}/evaluation`).set('Cookie', adminCookie).send({ ...ratings, opId: randomUUID() }).then(result => { firstCompleted = true; return result; });
+    try {
+      let shared = false;
+      for (let attempt = 0; attempt < 60 && !shared; attempt++) {
+        const locks = await prisma.$queryRaw<Array<{ shared: boolean }>>`SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype='advisory' AND mode='ShareLock' AND granted AND objid=(hashtext('association-selection:electrical-appliances')::bigint & 4294967295)::oid) AS shared`;
+        shared = locks[0].shared;
+        if (!shared) await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      expect(shared).toBe(true);
+      const exclusive = await prisma.$transaction(tx => tx.$queryRaw<Array<{ acquired: boolean }>>`SELECT pg_try_advisory_xact_lock(hashtext('association-selection:electrical-appliances')) AS acquired`);
+      expect(exclusive[0].acquired).toBe(false);
+      const independent = await http().post(`/api/v1/association-applications/${second.id}/evaluation`).set('Cookie', adminCookie).send({ ...ratings, opId: randomUUID() });
+      expect(independent.status).toBe(201);
+      expect(firstCompleted).toBe(false);
+      expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: first.id } })).evaluationScore).toBeNull();
+    } finally {
+      release(); await holder;
+      expect((await firstRequest).status).toBe(201);
+    }
+    expect(await prisma.auditLog.count({ where: { action: 'APPLICATION_EVALUATED', entityId: { in: [first.id, second.id] } } })).toBe(2);
+  });
+
   it.each(['first', 'second'])('concurrent individual selections (%s starts first) protect the last seat without automatic reserve/email', async (contender) => {
     const existing = await createApplication();
     const first = await createApplication();

@@ -401,7 +401,8 @@ export class ApplicationV2Service {
     const scored = scoreApplication(ratings);
     return prisma.$transaction(async (tx) => {
       const scoped = await this.requireAdministrativeApplication(tx, ctx, applicationId);
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
+      // Independent evaluations may share the gate; selection keeps its exclusive gate.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock_shared(hashtext('association-selection:electrical-appliances'))`;
       const claim = await this.idempotency.claim<{ ok: true; score: number }>(tx, ctx.accountId, 'application-evaluation', dto.opId, { applicationId, ratings, overrideReason: dto.overrideReason ?? null });
       if (!claim.claimed) return claim.existingResponse!;
       await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${applicationId}::uuid FOR UPDATE`;

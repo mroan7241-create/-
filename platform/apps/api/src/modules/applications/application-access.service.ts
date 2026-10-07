@@ -175,7 +175,11 @@ export class ApplicationAccessService {
     type Receipt = { status: 'NOT_REQUESTED' | 'PENDING' | 'ACCEPTED' | 'FAILED' | 'UNKNOWN'; requestedAt?: string };
     const result = new Map<string, Receipt>();
     if (!applications.length) return result;
-    const ids = applications.map(application => application.id);
+    // Non-MAIN receipts are always NOT_REQUESTED; do not scan mail history for them.
+    const relevant = applications.filter(application => !application.selectionList || application.selectionList === 'MAIN');
+    for (const application of applications) if (application.selectionList && application.selectionList !== 'MAIN') result.set(application.id, { status: 'NOT_REQUESTED' });
+    if (!relevant.length) return result;
+    const ids = relevant.map(application => application.id);
     const records = await tx.auditLog.findMany({ where: { action: 'APPLICATION_ACCESS_EMAIL_QUEUED', OR: ids.map(id => ({ metadata: { path: ['applicationId'], equals: id } })) }, select: { metadata: true, createdAt: true } });
     const eventIds = records.flatMap(record => typeof (record.metadata as { eventId?: unknown })?.eventId === 'string' ? [(record.metadata as { eventId: string }).eventId] : []);
     const events = await tx.outboxEvent.findMany({ where: { id: { in: eventIds } } });

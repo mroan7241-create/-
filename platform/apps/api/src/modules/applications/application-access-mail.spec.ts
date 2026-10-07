@@ -4,6 +4,34 @@ import { ApplicationAccessService } from './application-access.service';
 import * as mail from '../auth/email/email.service';
 import type { RateLimitService } from '../../common/rate-limit.service';
 
+describe('selection receipt reads avoid irrelevant mail queries', () => {
+  it('returns unchanged NONE/RESERVE receipts without any database read', async () => {
+    const read = jest.fn(async () => []);
+    const client = { auditLog: { findMany: read }, outboxEvent: { findMany: read } };
+    const service = new ApplicationAccessService({} as never, {} as never);
+    const receipts = await service.selectionDeliveries(client as unknown as Prisma.TransactionClient, [
+      { id: 'none', selectionList: 'NONE', selectionApprovedAt: null },
+      { id: 'reserve', selectionList: 'RESERVE', selectionApprovedAt: new Date() },
+    ]);
+    expect([...receipts]).toEqual([['none', { status: 'NOT_REQUESTED' }], ['reserve', { status: 'NOT_REQUESTED' }]]);
+    expect(read).not.toHaveBeenCalled();
+  });
+  it('queries only MAIN and historical unspecified selections while preserving all receipts', async () => {
+    const read = jest.fn(async () => []);
+    const client = { auditLog: { findMany: read }, outboxEvent: { findMany: read } };
+    const service = new ApplicationAccessService({} as never, {} as never);
+    const receipts = await service.selectionDeliveries(client as unknown as Prisma.TransactionClient, [
+      { id: 'none', selectionList: 'NONE', selectionApprovedAt: null },
+      { id: 'main', selectionList: 'MAIN', selectionApprovedAt: null },
+      { id: 'legacy', selectionApprovedAt: null },
+    ]);
+    expect(receipts.get('none')).toEqual({ status: 'NOT_REQUESTED' });
+    expect(receipts.get('main')).toEqual({ status: 'UNKNOWN' });
+    expect(receipts.get('legacy')).toEqual({ status: 'UNKNOWN' });
+    expect(JSON.stringify(read.mock.calls)).not.toContain('none');
+  });
+});
+
 describe('Applicant access durable email producer', () => {
   afterEach(() => jest.restoreAllMocks());
   function setup() {

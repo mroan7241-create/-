@@ -425,7 +425,8 @@ export class ApplicationsService {
     try { scored = scoreApplication(input); } catch { throw new ApiError('APPLICATION_EVALUATION_INVALID', 'قيم التقييم يجب أن تكون بين 0 و100', 400); }
     return prisma.$transaction(async (tx) => {
       const scoped = await this.requireAdministrativeApplication(tx, ctx, id);
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
+      // Independent evaluations may share the gate; selection keeps its exclusive gate.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock_shared(hashtext('association-selection:electrical-appliances'))`;
       const claim = await this.idempotency.claim<{ ok: true; score: number }>(tx, ctx.accountId, 'application-evaluation', opId, { id, input });
       if (!claim.claimed) return claim.existingResponse!;
       await tx.$queryRaw`SELECT id FROM association_applications WHERE id=${id}::uuid FOR UPDATE`;
