@@ -37,6 +37,10 @@ export class AccountsController {
   @Roles(AccountRole.ADMIN)
   resetAdminPassword(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string) { return this.accounts.resetAdminPassword(ctx, id); }
 
+  @Post('admins/:id/invitation')
+  @Roles(AccountRole.ADMIN)
+  sendAdminInvitation(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string) { return this.accounts.sendAdminInvitation(ctx, id); }
+
   @Get('abanmi')
   @Roles(AccountRole.ADMIN)
   @ApiOperation({ summary: 'حسابات بوابة أبانمي — ADMIN فقط' })

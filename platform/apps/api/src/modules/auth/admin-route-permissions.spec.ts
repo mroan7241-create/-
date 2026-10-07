@@ -68,6 +68,8 @@ describe('restricted administrative route contracts', () => {
     expect(adminRoutePolicy('POST', '/api/v1/association-applications/:id/evaluation')).toBe('applications.evaluate');
     expect(adminRoutePolicy('POST', '/api/v1/association-applications/:id/review')).toBe('owner');
     expect(adminRoutePolicy('POST', '/api/v1/association-applications/selection/commit')).toBe('applications.select');
+    expect(adminRoutePolicy('POST', '/api/v1/accounts/admins/:id/invitation')).toBe('owner');
+    expect(adminRoutePolicy('GET', '/api/v1/accounts/admins/:id/invitation')).toBeUndefined();
     expect(adminRoutePolicy('PATCH', '/api/v1/association-applications/:id/evaluation')).toBeUndefined();
     expect(adminRoutePolicy('GET', '/api/v1/unmapped')).toBeUndefined();
     expect(adminRoutePolicy('GET', undefined)).toBeUndefined();

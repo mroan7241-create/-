@@ -69,9 +69,10 @@ export class AccountsService {
         const created = await tx.account.create({ data: { publicCode, name, email, role: AccountRole.ADMIN, status: AccountStatus.ACTIVE, mustChangePassword: true, adminFullAccess: false, adminPermissions, adminApplicationScope } });
         await tx.authCredential.create({ data: { accountId: created.id, type: AuthCredentialType.EMAIL_PASSWORD, identifier: email, secretHash } });
         await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'ADMIN_ACCOUNT_CREATED', entityType: 'accounts', entityId: created.id, metadata: { name, adminPermissions, adminApplicationScope } } });
+        await this.queueAccountInvitation(tx, ctx, created.id, email, secretHash, name);
         return created;
       });
-      return { ok: true as const, accountId: account.id, temporaryPassword };
+      return { ok: true as const, accountId: account.id, temporaryPassword, emailQueued: true as const };
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ApiError('ACCOUNT_EMAIL_IN_USE', 'البريد الإلكتروني مستخدم في حساب آخر', 409);
       throw error;
@@ -125,6 +126,26 @@ export class AccountsService {
     return { ok: true as const, temporaryPassword };
   }
 
+  async sendAdminInvitation(ctx: AuthContext, id: string) {
+    await this.assertOwner(ctx);
+    await prisma.$transaction(async (tx) => {
+      await this.assertOwner(ctx, tx);
+      // Serialize resends with each other and with activation/password changes.
+      await tx.$queryRaw`SELECT id FROM accounts WHERE id=${id}::uuid FOR UPDATE`;
+      const account = await this.staff(tx, id);
+      if (account.status !== AccountStatus.ACTIVE || !account.mustChangePassword || account.lastLoginAt) {
+        throw new ApiError('ADMIN_INVITATION_NOT_AVAILABLE', 'الدعوة متاحة للموظف النشط الذي لم يسجّل دخولًا بعد؛ للحساب المستخدم توجد إعادة تعيين كلمة المرور', 409);
+      }
+      const email = requiredEmail(account.email);
+      const credential = await tx.authCredential.findFirst({ where: { accountId: id, type: AuthCredentialType.EMAIL_PASSWORD, identifier: email } });
+      if (!credential) throw new ApiError('ADMIN_CREDENTIAL_NOT_FOUND', 'بيانات دخول الموظف غير موجودة', 409);
+      const recent = await tx.auditLog.findFirst({ where: { entityType: 'accounts', entityId: id, action: 'ADMIN_ACCOUNT_INVITED', createdAt: { gt: new Date(Date.now() - 60_000) } }, select: { id: true } });
+      if (recent) throw new ApiError('ADMIN_INVITATION_RECENT', 'تم تجهيز دعوة مؤخرًا؛ انتظر دقيقة قبل إعادة إرسالها', 429);
+      await this.queueAccountInvitation(tx, ctx, id, email, credential.secretHash, account.name);
+    });
+    return { ok: true as const, emailQueued: true as const };
+  }
+
   listAbanmi() {
     return prisma.account.findMany({
       where: { role: AccountRole.ABANMI, archivedAt: null },
@@ -153,7 +174,7 @@ export class AccountsService {
         const locked = await tx.account.findUniqueOrThrow({ where: { id: current.id } });
         if (locked.role !== AccountRole.ABANMI || locked.status !== AccountStatus.ACTIVE || locked.archivedAt || !locked.mustChangePassword || locked.name !== email) throw new ApiError('ACCOUNT_EMAIL_IN_USE', 'الحساب مستخدم بالفعل ولا يحتاج دعوة جديدة', 409);
         const credential = await tx.authCredential.findUniqueOrThrow({ where: { id: duplicate.id } });
-        await this.queueAbanmiInvitation(tx, ctx, current.id, email, credential.secretHash);
+        await this.queueAccountInvitation(tx, ctx, current.id, email, credential.secretHash);
         return locked;
       }
       const publicCode = await this.publicCode.nextPublicCode(tx, 'ABN');
@@ -163,7 +184,7 @@ export class AccountsService {
       await tx.authCredential.create({
         data: { accountId: created.id, type: AuthCredentialType.EMAIL_PASSWORD, identifier: email, secretHash },
       });
-      if (dto.invite) await this.queueAbanmiInvitation(tx, ctx, created.id, email, secretHash);
+      if (dto.invite) await this.queueAccountInvitation(tx, ctx, created.id, email, secretHash);
       return created;
     });
     if (dto.invite) return { ok: true as const, accountId: account.id, emailQueued: true as const };
@@ -171,11 +192,12 @@ export class AccountsService {
     return { ok: true as const, accountId: account.id, temporaryPassword };
   }
 
-  private async queueAbanmiInvitation(tx: Prisma.TransactionClient, ctx: AuthContext, accountId: string, email: string, credentialHash: string) {
-    const code = generateAccessCode('INV', 32);
+  private async queueAccountInvitation(tx: Prisma.TransactionClient, ctx: AuthContext, accountId: string, email: string, credentialHash: string, adminName?: string) {
+    const isAdmin = adminName !== undefined;
+    const code = generateAccessCode(isAdmin ? 'RST' : 'INV', 32);
     const predecessors = await tx.passwordResetToken.findMany({ where: { accountId, consumedAt: null, expiresAt: { gt: new Date() } }, select: { id: true } });
     const token = await tx.passwordResetToken.create({ data: { accountId, emailNormalized: email, tokenHash: resetTokenHash(code), expiresAt: new Date(Date.now() + authConfig.passwordResetTtlSeconds * 1000) } });
-    await enqueueEmail(tx, 'PASSWORD_RESET', { to: email, name: 'مستخدم أبانمي', code, invitation: true }, { type: 'reset', tokenId: token.id, accountId, credentialHash, predecessorIds: predecessors.map(({ id }) => id) });
-    await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'ABANMI_ACCOUNT_INVITED', entityType: 'accounts', entityId: accountId } });
+    await enqueueEmail(tx, 'PASSWORD_RESET', { to: email, name: adminName ?? 'مستخدم أبانمي', code, ...(isAdmin ? { adminInvitation: true } : { invitation: true }) }, { type: 'reset', tokenId: token.id, accountId, credentialHash, predecessorIds: predecessors.map(({ id }) => id) });
+    await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: isAdmin ? 'ADMIN_ACCOUNT_INVITED' : 'ABANMI_ACCOUNT_INVITED', entityType: 'accounts', entityId: accountId } });
   }
 }

@@ -58,6 +58,7 @@ export const ADMIN_ROUTE_POLICIES: Readonly<Record<string, AdminPermission | 'se
   'GET /accounts/admins': 'owner', 'POST /accounts/admins': 'owner',
   'PATCH /accounts/admins/:id': 'owner', 'PATCH /accounts/admins/:id/status': 'owner',
   'POST /accounts/admins/:id/reset-password': 'owner',
+  'POST /accounts/admins/:id/invitation': 'owner',
   'GET /accounts/abanmi': 'abanmi.manage', 'POST /accounts/abanmi': 'abanmi.manage',
   'POST /auth/associations/:id/reset-password': 'associations.manage',
   'GET /dashboard/admin': 'dashboard.read',

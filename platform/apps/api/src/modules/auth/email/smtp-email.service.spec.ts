@@ -42,6 +42,22 @@ describe('SMTP Arabic layout and completed Covenant attachment', () => {
     expect(sent.attachments[1]).toEqual({ filename: 'covenant-test.pdf', content: pdf, contentType: 'application/pdf' });
   });
 
+  it('sends a named administration invitation with a single-use fragment and no temporary password', async () => {
+    const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ accepted: ['staff@example.org'] });
+    jest.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail } as never);
+    const code = `RST-${'A'.repeat(32)}`;
+    await new SmtpEmailService().sendPasswordResetCode({ to: 'staff@example.org', name: '<موظف>', code, adminInvitation: true });
+    const sent = sendMail.mock.calls[0]![0] as { html: string; text: string; subject: string };
+    expect(sent.subject).toContain('دعوة'); expect(sent.subject).toContain('الإدارة');
+    expect(sent.html).toContain('cid:alzad-approved-logo'); expect(sent.html).toContain('&lt;موظف&gt;');
+    expect(sent.html).not.toContain('اكتب اسمك');
+    const url = new URL(sent.text.split('\n').find((line) => line.startsWith('https://'))!);
+    expect(url.search).toBe(''); expect(url.pathname).toBe('/forgot-password');
+    expect(new URLSearchParams(url.hash.slice(1)).get('invitation')).toBe('admin');
+    expect(new URLSearchParams(url.hash.slice(1)).get('code')).toBe(code);
+    expect(JSON.stringify(jest.mocked(Logger.prototype.log).mock.calls)).not.toContain(code);
+  });
+
   it.each([{ accepted: [] }, { accepted: ['other@example.org'] }, { accepted: ['test@example.org.attacker.invalid'] }])('rejects SMTP acceptance that excludes the exact requested recipient', async ({ accepted }) => {
     const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ accepted });
     jest.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail } as never);

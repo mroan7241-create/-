@@ -6,7 +6,7 @@ import { AppShell } from '../../components/AppShell';
 import { ConfirmDialog, type ConfirmDialogProps } from '../../components/ConfirmDialog';
 import { PROJECT_GROUP_LABELS } from '../selection/selection-groups';
 import { useRoleGuard } from '../../lib/use-role-guard';
-import { ACCOUNT_STATUS_LABELS, ApiClientError, createAdminAccount, getApplicationGeography, listAdminAccounts, resetAdminAccountPassword, setAdminAccountStatus, updateAdminAccount, type AdminAccountSummary } from '../../lib/api';
+import { ACCOUNT_STATUS_LABELS, ApiClientError, createAdminAccount, getApplicationGeography, listAdminAccounts, resetAdminAccountPassword, sendAdminAccountInvitation, setAdminAccountStatus, updateAdminAccount, type AdminAccountSummary } from '../../lib/api';
 import { cardStyle, errorStyle, inputStyle, labelStyle, ltrStyle, modalOverlayStyle, modalStyle, mutedStyle, primaryButtonStyle, secondaryButtonStyle, statusBadgeStyle, successStyle, tableStyle, tdStyle, thStyle } from '../../lib/ui';
 
 export default function AdminAccountsPage() {
@@ -37,22 +37,29 @@ export default function AdminAccountsPage() {
     } });
   }
 
+  function sendInvitation(account: AdminAccountSummary) {
+    setConfirmation({ title: 'إرسال دعوة الدخول', message: `إرسال دعوة إلى «${account.name}» على ${account.email} ليختار كلمة مروره ويدخل بصلاحياته المحددة. هذا لا يغيّر كلمة مروره الحالية أو صلاحياته.`, confirmLabel: 'إرسال الدعوة', onConfirm: async () => {
+      try { await sendAdminAccountInvitation(account.id); setConfirmation(null); setMessage('تم تجهيز دعوة الدخول للإرسال بالبريد. يمكن إعادة إرسالها بعد دقيقة إذا لزم؛ تجهيز الإرسال لا يثبت وصولها إلى صندوق المستلم.'); }
+      catch (reason) { setMessage(readError(reason)); }
+    } });
+  }
+
   if (loading || !user) return null;
   return <AppShell user={user}>
     <div className="workflow-row"><h1>حسابات الإدارة</h1><button type="button" style={primaryButtonStyle} onClick={() => setEditing('new')}>إضافة موظف إدارة</button></div>
     <p style={mutedStyle}>كل موظف يستخدم حسابه باسمه وصلاحياته المحددة. إدارة هذه الحسابات متاحة لمدير المنصة فقط.</p>
     {message && <p role={message.startsWith('تم') ? 'status' : 'alert'} style={message.startsWith('تم') ? successStyle : errorStyle}>{message}</p>}
     <section style={{ ...cardStyle, padding: 0, overflowX: 'auto' }}><table style={tableStyle}><thead><tr><th style={thStyle}>الاسم</th><th style={thStyle}>الرمز</th><th style={thStyle}>البريد</th><th style={thStyle}>الحالة</th><th style={thStyle}>الصلاحيات</th><th style={thStyle}>آخر دخول</th><th style={thStyle}>الإجراءات</th></tr></thead><tbody>
-      {accounts.map((account) => <tr key={account.id}><td style={tdStyle}>{account.name}</td><td style={{ ...tdStyle, ...ltrStyle }}>{account.publicCode}</td><td style={{ ...tdStyle, ...ltrStyle }}>{account.email}</td><td style={tdStyle}><span style={statusBadgeStyle(account.status === 'ACTIVE' ? 'good' : 'bad')}>{ACCOUNT_STATUS_LABELS[account.status]}</span></td><td style={tdStyle}>{account.adminFullAccess ? 'مدير المنصة — جميع الصلاحيات' : `${account.adminPermissions.length} صلاحية`}</td><td style={tdStyle}>{account.lastLoginAt ? new Date(account.lastLoginAt).toLocaleString('ar-SA') : 'لم يسجّل دخولًا'}</td><td style={tdStyle}>{account.adminFullAccess || account.publicCode === 'ADM-000001' ? <span style={mutedStyle}>حساب المدير محمي</span> : <div className="button-row"><button type="button" style={secondaryButtonStyle} onClick={() => setEditing(account)}>تعديل الصلاحيات</button><button type="button" style={secondaryButtonStyle} onClick={() => toggleStatus(account)}>{account.status === 'ACTIVE' ? 'تعطيل' : 'تفعيل'}</button><button type="button" style={secondaryButtonStyle} onClick={() => resetPassword(account)}>إعادة تعيين كلمة المرور</button></div>}</td></tr>)}
+      {accounts.map((account) => <tr key={account.id}><td style={tdStyle}>{account.name}</td><td style={{ ...tdStyle, ...ltrStyle }}>{account.publicCode}</td><td style={{ ...tdStyle, ...ltrStyle }}>{account.email}</td><td style={tdStyle}><span style={statusBadgeStyle(account.status === 'ACTIVE' ? 'good' : 'bad')}>{ACCOUNT_STATUS_LABELS[account.status]}</span></td><td style={tdStyle}>{account.adminFullAccess ? 'مدير المنصة — جميع الصلاحيات' : `${account.adminPermissions.length} صلاحية`}</td><td style={tdStyle}>{account.lastLoginAt ? new Date(account.lastLoginAt).toLocaleString('ar-SA') : 'لم يسجّل دخولًا'}</td><td style={tdStyle}>{account.adminFullAccess || account.publicCode === 'ADM-000001' ? <span style={mutedStyle}>حساب المدير محمي</span> : <div className="button-row"><button type="button" style={secondaryButtonStyle} onClick={() => setEditing(account)}>تعديل الصلاحيات</button><button type="button" style={secondaryButtonStyle} onClick={() => toggleStatus(account)}>{account.status === 'ACTIVE' ? 'تعطيل' : 'تفعيل'}</button>{account.status === 'ACTIVE' && account.mustChangePassword && !account.lastLoginAt && <button type="button" style={secondaryButtonStyle} onClick={() => sendInvitation(account)}>إرسال / إعادة إرسال دعوة الدخول</button>}<button type="button" style={secondaryButtonStyle} onClick={() => resetPassword(account)}>إعادة تعيين كلمة المرور</button></div>}</td></tr>)}
       {!accounts.length && <tr><td colSpan={7} style={tdStyle}>لا توجد حسابات للعرض.</td></tr>}
     </tbody></table></section>
-    {editing && <AdminAccountForm account={editing === 'new' ? null : editing} onClose={() => setEditing(null)} onSaved={(name, email, password) => { setEditing(null); setMessage(password ? 'تم إنشاء حساب الموظف.' : 'تم حفظ الاسم والصلاحيات؛ تُطبّق الصلاحيات الجديدة على الطلب التالي.'); if (password) setCredential({ name, email, password }); void load(); }} />}
+    {editing && <AdminAccountForm account={editing === 'new' ? null : editing} onClose={() => setEditing(null)} onSaved={(name, email, password, emailQueued) => { setEditing(null); setMessage(emailQueued ? 'تم إنشاء حساب الموظف وتجهيز دعوة الدخول للإرسال إلى بريده، ليختار كلمة مروره بنفسه.' : password ? 'تم إنشاء حساب الموظف.' : 'تم حفظ الاسم والصلاحيات؛ تُطبّق الصلاحيات الجديدة على الطلب التالي.'); if (password) setCredential({ name, email, password }); void load(); }} />}
     {credential && <div style={modalOverlayStyle} role="dialog" aria-modal="true" aria-labelledby="admin-credentials-title"><section style={{ ...modalStyle, maxWidth: 520 }}><h2 id="admin-credentials-title">بيانات دخول مؤقتة — {credential.name}</h2><p>تظهر كلمة المرور مرة واحدة فقط. احفظها وسلّمها للموظف؛ يلزم تغييرها عند أول دخول.</p><p>البريد: <b dir="ltr">{credential.email}</b></p><p>كلمة المرور المؤقتة: <b dir="ltr">{credential.password}</b></p><div className="button-row"><button type="button" style={secondaryButtonStyle} onClick={() => void navigator.clipboard.writeText(`البريد: ${credential.email}\nكلمة المرور المؤقتة: ${credential.password}`)}>نسخ بيانات الدخول</button><button type="button" style={primaryButtonStyle} onClick={() => setCredential(null)}>حفظت البيانات — إغلاق</button></div></section></div>}
     {confirmation && <ConfirmDialog {...confirmation} onCancel={() => setConfirmation(null)} />}
   </AppShell>;
 }
 
-function AdminAccountForm({ account, onClose, onSaved }: { account: AdminAccountSummary | null; onClose: () => void; onSaved: (name: string, email: string, password?: string) => void }) {
+function AdminAccountForm({ account, onClose, onSaved }: { account: AdminAccountSummary | null; onClose: () => void; onSaved: (name: string, email: string, password?: string, emailQueued?: boolean) => void }) {
   const [name, setName] = useState(account?.name ?? '');
   const [email, setEmail] = useState(account?.email ?? '');
   const [permissions, setPermissions] = useState<AdminPermission[]>(account?.adminPermissions ?? []);
@@ -83,12 +90,13 @@ function AdminAccountForm({ account, onClose, onSaved }: { account: AdminAccount
       if (scopeMode === 'unset' || (scopeMode === 'selected' && !regionCodes.length)) { setError('حدد جميع المناطق أو اختر منطقة واحدة أو عدة مناطق.'); return; }
       const adminApplicationScope: AdminApplicationScope | undefined = scopeMode === 'legacy' ? undefined : scopeMode === 'all' ? { allRegions: true } : { regionCodes };
       if (account) { await updateAdminAccount(account.id, { name: name.trim(), adminPermissions: permissions, ...(adminApplicationScope ? { adminApplicationScope } : {}) }); onSaved(name, email); }
-      else if (adminApplicationScope) { const result = await createAdminAccount({ name: name.trim(), email: email.trim(), adminPermissions: permissions, adminApplicationScope }); onSaved(name, email.trim().toLowerCase(), result.temporaryPassword); }
+      else if (adminApplicationScope) { const result = await createAdminAccount({ name: name.trim(), email: email.trim(), adminPermissions: permissions, adminApplicationScope }); onSaved(name, email.trim().toLowerCase(), result.emailQueued ? undefined : result.temporaryPassword, result.emailQueued); }
     } catch (reason) { setError(readError(reason)); }
     finally { setBusy(false); }
   }
   return <div style={modalOverlayStyle} role="dialog" aria-modal="true" aria-labelledby="admin-account-form-title"><form onSubmit={save} style={{ ...modalStyle, maxWidth: 760 }}><div className="workflow-row"><h2 id="admin-account-form-title">{account ? `تعديل — ${account.name}` : 'إضافة موظف إدارة'}</h2><button type="button" style={secondaryButtonStyle} disabled={busy} onClick={onClose}>إغلاق</button></div><div className="form-grid"><label style={labelStyle}>اسم الموظف<input required minLength={2} maxLength={120} value={name} onChange={(event) => setName(event.target.value)} style={inputStyle} /></label><label style={labelStyle}>البريد الإلكتروني<input required type="email" disabled={!!account} value={email} onChange={(event) => setEmail(event.target.value)} style={{ ...inputStyle, ...ltrStyle }} /></label></div>
     <p style={mutedStyle}>صلاحية تنفيذ الإجراء تضيف قراءة قسمه. إلغاء قراءة قسم يُلغي إجراءاته. دون أي صلاحيات لا يمكن فتح أقسام الإدارة.</p>
+    {!account && <p style={mutedStyle}>عند الحفظ تُجهّز دعوة الدخول تلقائيًا إلى بريد الموظف؛ يختار كلمة مروره بنفسه من الرابط المؤقت.</p>}
     <fieldset style={cardStyle}>
       <legend>نطاق المناطق لطلبات الانضمام والمشاركات المرتبطة</legend>
       <label style={labelStyle}>نطاق الموظف<select required value={scopeMode} onChange={(event) => setScopeMode(event.target.value as typeof scopeMode)} style={inputStyle}><option value="unset" disabled>اختر نطاقًا صريحًا</option>{account?.adminApplicationScope == null && account && <option value="legacy">إبقاء النطاق السابق دون تغيير</option>}<option value="all">جميع المناطق</option><option value="selected">منطقة واحدة أو عدة مناطق</option></select></label>

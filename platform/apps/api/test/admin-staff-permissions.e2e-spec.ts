@@ -6,10 +6,13 @@ import { createTestApp } from './utils/bootstrap';
 import { hashSecret } from './utils/fixtures';
 import { assertE2eNotTargetingProduction } from './utils/production-target.guard';
 import type { AdminApplicationScope } from '@alzad/shared';
+import { FakeEmailService } from '../src/modules/auth/email/fake-email.service';
+import { NotificationsService } from '../src/modules/notifications/notifications.service';
 
 /** The suite setup also verifies the database canary. Never run against production. */
 describe('owner-managed ADMIN staff permission boundary', () => {
   let app: INestApplication;
+  let fakeEmail: FakeEmailService;
   let ownerId: string;
   let ownerCookie: string;
   let ownerCreated = false;
@@ -25,7 +28,7 @@ describe('owner-managed ADMIN staff permission boundary', () => {
 
   beforeAll(async () => {
     assertE2eNotTargetingProduction();
-    ({ app } = await createTestApp());
+    ({ app, fakeEmail } = await createTestApp());
     const existing = await prisma.account.findUnique({ where: { publicCode: 'ADM-000001' } });
     if (existing) {
       ownerPrevious = { status: existing.status, mustChangePassword: existing.mustChangePassword, adminFullAccess: existing.adminFullAccess, lastLoginAt: existing.lastLoginAt };
@@ -92,6 +95,51 @@ describe('owner-managed ADMIN staff permission boundary', () => {
   }
 
   const ratings = () => ({ operationalReadiness: 5, technicalCapability: 4, previousExperience: 3, integrityTransparency: 5, participationCommitment: 4, sustainabilityImpact: 5, opId: randomUUID() });
+
+  it('atomically invites staff, serializes resends, activates once and preserves named regional grants', async () => {
+    const email = `admin-invited-${randomUUID()}@example.org`;
+    const payload = { name: 'فيصل موظف اختبار', email, adminPermissions: ['applications.evaluate'], adminApplicationScope: { regionCodes: ['0001'] } };
+    const encryptionKey = process.env.EMAIL_DELIVERY_ENCRYPTION_KEY;
+    try {
+      process.env.EMAIL_DELIVERY_ENCRYPTION_KEY = '';
+      await http().post('/api/v1/accounts/admins').set('Cookie', ownerCookie).send(payload).expect(500);
+      expect(await prisma.account.count({ where: { email } })).toBe(0);
+      expect(await prisma.authCredential.count({ where: { identifier: email } })).toBe(0);
+    } finally { process.env.EMAIL_DELIVERY_ENCRYPTION_KEY = encryptionKey; }
+    const created = await http().post('/api/v1/accounts/admins').set('Cookie', ownerCookie).send(payload).expect(201);
+    const id = created.body.accountId as string; staffIds.push(id);
+    expect(created.body.emailQueued).toBe(true);
+    const original = await prisma.account.findUniqueOrThrow({ where: { id } });
+    const credential = await prisma.authCredential.findFirstOrThrow({ where: { accountId: id } });
+    await app.get(NotificationsService).processOutbox();
+    expect(fakeEmail.lastPasswordReset).toMatchObject({ to: email, name: payload.name, adminInvitation: true, code: expect.stringMatching(/^RST-[A-Z0-9]{32}$/) });
+    const originalCode = fakeEmail.lastPasswordReset!.code;
+    const invite = () => http().post(`/api/v1/accounts/admins/${id}/invitation`).set('Cookie', ownerCookie);
+    await invite().expect(429);
+    await prisma.auditLog.updateMany({ where: { entityId: id, action: 'ADMIN_ACCOUNT_INVITED' }, data: { createdAt: new Date(Date.now() - 120_000) } });
+    const retries = await Promise.all([invite(), invite()]);
+    expect(retries.map((result) => result.status).sort()).toEqual([201, 429]);
+    expect((await prisma.authCredential.findUniqueOrThrow({ where: { id: credential.id } })).secretHash).toBe(credential.secretHash);
+    expect(await prisma.account.findUniqueOrThrow({ where: { id } })).toEqual(original);
+    expect(await prisma.passwordResetToken.count({ where: { accountId: id, consumedAt: null } })).toBe(2);
+    await app.get(NotificationsService).processOutbox();
+    const code = fakeEmail.lastPasswordReset!.code;
+    expect(code).not.toBe(originalCode);
+    const confirm = (token: string, extra = {}) => http().post('/api/v1/auth/password-reset/confirm').send({ email, code: token, newPassword: 'StaffInviteSecurePass123!', ...extra });
+    await confirm(originalCode).expect(400);
+    await confirm(code, { name: 'اسم بديل غير مسموح' }).expect(400);
+    await confirm(code).expect(200);
+    await confirm(code).expect(400);
+    const activated = await prisma.account.findUniqueOrThrow({ where: { id } });
+    expect(activated).toMatchObject({ name: payload.name, role: AccountRole.ADMIN, mustChangePassword: false, adminFullAccess: false, adminPermissions: original.adminPermissions, adminApplicationScope: original.adminApplicationScope });
+    await invite().expect(409);
+    const login = await http().post('/api/v1/auth/login').send({ type: 'user', email, password: 'StaffInviteSecurePass123!' }).expect(200);
+    const staffCookie = cookie(login);
+    await http().get('/api/v1/association-applications').set('Cookie', staffCookie).expect(200);
+    await http().get('/api/v1/accounts/admins').set('Cookie', staffCookie).expect(403);
+    await http().post(`/api/v1/accounts/admins/${id}/invitation`).set('Cookie', staffCookie).expect(403);
+    await http().post(`/api/v1/accounts/admins/${ownerId}/invitation`).set('Cookie', ownerCookie).expect(403);
+  }, 60_000);
 
   it('uses existing temporary-password flow, defaults to no grants, and exposes no stored credentials', async () => {
     const staff = await newStaff();

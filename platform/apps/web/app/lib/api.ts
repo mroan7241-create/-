@@ -338,10 +338,11 @@ export interface AdminAccountSummary {
 }
 
 export function listAdminAccounts(): Promise<AdminAccountSummary[]> { return apiFetch('/accounts/admins'); }
-export function createAdminAccount(input: { name: string; email: string; adminPermissions: AdminPermission[]; adminApplicationScope: AdminApplicationScope }): Promise<{ ok: true; accountId: string; temporaryPassword: string }> { return apiFetch('/accounts/admins', { method: 'POST', body: JSON.stringify(input) }); }
+export function createAdminAccount(input: { name: string; email: string; adminPermissions: AdminPermission[]; adminApplicationScope: AdminApplicationScope }): Promise<{ ok: true; accountId: string; temporaryPassword: string; emailQueued?: true }> { return apiFetch('/accounts/admins', { method: 'POST', body: JSON.stringify(input) }); }
 export function updateAdminAccount(id: string, input: { name?: string; adminPermissions?: AdminPermission[]; adminApplicationScope?: AdminApplicationScope }): Promise<{ ok: true }> { return apiFetch(`/accounts/admins/${id}`, { method: 'PATCH', body: JSON.stringify(input) }); }
 export function setAdminAccountStatus(id: string, status: 'ACTIVE' | 'SUSPENDED'): Promise<{ ok: true }> { return apiFetch(`/accounts/admins/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }); }
 export function resetAdminAccountPassword(id: string): Promise<{ ok: true; temporaryPassword: string }> { return apiFetch(`/accounts/admins/${id}/reset-password`, { method: 'POST' }); }
+export function sendAdminAccountInvitation(id: string): Promise<{ ok: true; emailQueued: true }> { return apiFetch(`/accounts/admins/${id}/invitation`, { method: 'POST' }); }
 
 export function logout(): Promise<{ ok: true }> {
   return apiFetch('/auth/logout', { method: 'POST' });

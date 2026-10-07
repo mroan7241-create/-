@@ -4,11 +4,12 @@ import { AccountRole, prisma } from '@alzad/db';
 import { AccountsService } from './accounts.service';
 import { CreateAdminAccountDto, UpdateAdminAccountDto } from './dto/admin-account.dto';
 import type { AuthContext } from '../auth/auth.types';
+import { decryptEmailDelivery, type EmailDeliveryPayload } from '../auth/email/email.service';
 
 describe('owner-managed named administrative accounts', () => {
   const ctx = { accountId: 'owner-id', role: AccountRole.ADMIN, associationId: null } as AuthContext;
   let owner: { publicCode: string; role: AccountRole; status: string; archivedAt: null; adminFullAccess: boolean };
-  let staff: { id: string; publicCode: string; name: string; adminFullAccess: boolean; adminPermissions: string[] };
+  let staff: { id: string; publicCode: string; name: string; email: string; status: string; mustChangePassword: boolean; lastLoginAt: Date | null; adminFullAccess: boolean; adminPermissions: string[] };
   let tx: ReturnType<typeof client>;
   let service: AccountsService;
   function client() {
@@ -20,13 +21,15 @@ describe('owner-managed named administrative accounts', () => {
       },
       authCredential: { findUnique: jest.fn(async () => null), create: jest.fn(async () => ({})), findFirst: jest.fn(async () => ({ id: 'credential-id', secretHash: 'old-hash' })), update: jest.fn(async () => ({})) },
       authSession: { updateMany: jest.fn(async () => ({ count: 2 })) },
-      passwordResetToken: { updateMany: jest.fn(async () => ({ count: 1 })) },
-      auditLog: { create: jest.fn(async () => ({})) },
+      passwordResetToken: { updateMany: jest.fn(async () => ({ count: 1 })), findMany: jest.fn(async () => [{ id: 'previous-token' }]), create: jest.fn(async () => ({ id: 'new-token' })) },
+      outboxEvent: { create: jest.fn(async (input: unknown) => input) },
+      auditLog: { create: jest.fn(async () => ({})), findFirst: jest.fn(async (): Promise<{ id: string } | null> => null) },
+      $queryRaw: jest.fn(async () => []),
     };
   }
   beforeEach(() => {
     owner = { publicCode: 'ADM-000001', role: AccountRole.ADMIN, status: 'ACTIVE', archivedAt: null, adminFullAccess: true };
-    staff = { id: 'staff-id', publicCode: 'ADM-000002', name: 'موظف اختبار', adminFullAccess: false, adminPermissions: ['applications.read'] };
+    staff = { id: 'staff-id', publicCode: 'ADM-000002', name: 'موظف اختبار', email: 'staff@example.org', status: 'ACTIVE', mustChangePassword: true, lastLoginAt: null, adminFullAccess: false, adminPermissions: ['applications.read'] };
     tx = client();
     jest.spyOn(prisma.account, 'findUnique').mockImplementation((async () => owner) as never);
     jest.spyOn(prisma, '$transaction').mockImplementation((async (callback: (client: unknown) => Promise<unknown>) => callback(tx)) as never);
@@ -47,6 +50,50 @@ describe('owner-managed named administrative accounts', () => {
     owner.publicCode = 'ADM-000010';
     await expect(service.updateAdmin(ctx, staff.id, { name: 'محاولة' })).rejects.toMatchObject({ code: 'AUTH_FORBIDDEN' });
     expect(tx.account.update).not.toHaveBeenCalled();
+  });
+
+  it('atomically queues a secure named staff invitation on creation without exposing it in audit', async () => {
+    const result = await service.createAdmin(ctx, { name: 'موظف جديد', email: 'STAFF@example.org', adminPermissions: ['applications.evaluate'], adminApplicationScope: { regionCodes: ['0001'] } });
+    expect(result).toMatchObject({ emailQueued: true });
+    expect(tx.outboxEvent.create).toHaveBeenCalledTimes(1);
+    const event = (tx.outboxEvent.create.mock.calls[0]![0] as { data: { id: string; payload: EmailDeliveryPayload } }).data;
+    const delivery = decryptEmailDelivery(event.id, event.payload);
+    expect(delivery).toMatchObject({ kind: 'PASSWORD_RESET', params: { to: 'staff@example.org', name: 'موظف جديد', adminInvitation: true }, context: { type: 'reset', accountId: 'new-staff', tokenId: 'new-token', predecessorIds: ['previous-token'] } });
+    const code = (delivery.params as { code: string }).code;
+    expect(code).toMatch(/^RST-[A-Z0-9]{32}$/);
+    expect(JSON.stringify(tx.auditLog.create.mock.calls)).not.toContain(code);
+    expect(JSON.stringify(event.payload)).not.toContain(code);
+    expect(tx.passwordResetToken.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('resends only an unactivated staff invitation under an account lock, preserving credentials, grants, sessions and prior links', async () => {
+    await expect(service.sendAdminInvitation(ctx, staff.id)).resolves.toEqual({ ok: true, emailQueued: true });
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(tx.account.update).not.toHaveBeenCalled();
+    expect(tx.authCredential.update).not.toHaveBeenCalled();
+    expect(tx.authSession.updateMany).not.toHaveBeenCalled();
+    expect(tx.passwordResetToken.updateMany).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'ADMIN_ACCOUNT_INVITED', entityId: staff.id }) });
+    const event = (tx.outboxEvent.create.mock.calls[0]![0] as { data: { id: string; payload: EmailDeliveryPayload } }).data;
+    expect(decryptEmailDelivery(event.id, event.payload)).toMatchObject({ params: { adminInvitation: true, to: staff.email, name: staff.name }, context: { accountId: staff.id, credentialHash: 'old-hash', predecessorIds: ['previous-token'] } });
+  });
+
+  it.each(['owner', 'suspended', 'already-activated', 'already-logged-in', 'missing-credential', 'recent-invitation'])('does not queue an invitation for %s', async (reason) => {
+    if (reason === 'owner') { staff.publicCode = 'ADM-000001'; staff.adminFullAccess = true; }
+    if (reason === 'suspended') staff.status = 'SUSPENDED';
+    if (reason === 'already-activated') staff.mustChangePassword = false;
+    if (reason === 'already-logged-in') staff.lastLoginAt = new Date();
+    if (reason === 'missing-credential') tx.authCredential.findFirst.mockResolvedValue(null as never);
+    if (reason === 'recent-invitation') tx.auditLog.findFirst.mockResolvedValue({ id: 'recent' });
+    await expect(service.sendAdminInvitation(ctx, staff.id)).rejects.toBeDefined();
+    expect(tx.outboxEvent.create).not.toHaveBeenCalled();
+    expect(tx.authCredential.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects invitation requests from another administrator', async () => {
+    owner.publicCode = 'ADM-000010';
+    await expect(service.sendAdminInvitation(ctx, staff.id)).rejects.toMatchObject({ code: 'AUTH_FORBIDDEN' });
+    expect(tx.$queryRaw).not.toHaveBeenCalled();
   });
 
   it.each(['update', 'status', 'reset'])('protects the owner against %s through staff management', async (operation) => {

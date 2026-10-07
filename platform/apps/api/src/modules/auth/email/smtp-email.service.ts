@@ -47,9 +47,15 @@ export class SmtpEmailService implements EmailService {
   }
 
   async sendPasswordResetCode(params: PasswordResetEmailParams, options?: EmailSendOptions): Promise<void> {
-    if (params.invitation) {
+    if (params.invitation || params.adminInvitation) {
       const webUrl = required('PUBLIC_WEB_URL').replace(/\/$/, '');
-      const url = `${webUrl}/forgot-password#${new URLSearchParams({ invitation: '1', email: params.to, code: params.code })}`;
+      const url = `${webUrl}/forgot-password#${new URLSearchParams({ invitation: params.adminInvitation ? 'admin' : '1', email: params.to, code: params.code })}`;
+      if (params.adminInvitation) {
+        await this.send('PASSWORD_RESET', params.to, 'دعوة إلى حساب الإدارة — منصة مشروع الأجهزة الكهربائية',
+          `مرحبًا ${params.name}\nتم تجهيز حساب الإدارة الخاص بك على منصة جمعية الزاد.\nالبريد المستخدم للدخول: ${params.to}\nافتح الرابط واختر كلمة مرورك، ثم سجّل الدخول بصلاحياتك المحددة:\n${url}\nالرابط مؤقت ويستخدم مرة واحدة. إذا انتهى، يمكنك طلب رمز جديد من صفحة استعادة الدخول.`,
+          layout(`مرحبًا ${escapeHtml(params.name)}`, `<p>تم تجهيز حساب الإدارة الخاص بك على منصة جمعية الزاد، بصلاحياتك المحددة.</p><p>البريد المستخدم للدخول: <span dir="ltr">${escapeHtml(params.to)}</span></p><p>اختر كلمة مرورك بنفسك، ثم سجّل الدخول.</p><p><a href="${escapeAttribute(url)}" style="display:inline-block;background:#65102f;color:#fff;padding:12px 20px;text-decoration:none;border-radius:8px">تفعيل حساب الإدارة</a></p><p>الرابط مؤقت ويستخدم مرة واحدة. إذا انتهى، يمكنك طلب رمز جديد من صفحة استعادة الدخول.</p>`), undefined, options);
+        return;
+      }
       const subject = 'دعوة إلى بوابة أبانمي — مشروع الأجهزة الكهربائية';
       await this.send('PASSWORD_RESET', params.to, subject,
         `دُعيت إلى بوابة أبانمي لمتابعة المشروع.\nافتح الرابط واكتب اسمك واختر كلمة مرورك:\n${url}\nالرابط مؤقت ويستخدم مرة واحدة. إذا انتهى، يمكنك طلب رابط جديد من صفحة استعادة الدخول.`,

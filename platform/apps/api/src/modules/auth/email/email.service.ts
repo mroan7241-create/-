@@ -69,6 +69,7 @@ export interface PasswordResetEmailParams {
   name: string;
   code: string;
   invitation?: boolean;
+  adminInvitation?: boolean;
 }
 
 export interface SecurityAlertEmailParams {
