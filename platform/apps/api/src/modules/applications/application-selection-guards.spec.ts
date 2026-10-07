@@ -47,6 +47,15 @@ describe('final selection and information-request serialization', () => {
 
   const information = { items: [{ type: ApplicationInformationItemType.FIELD, key: 'organization.notes', reason: 'صحح الوصف' }], opId: 'request-information' };
 
+  it('allows a bounded selection transaction budget without changing its exclusive gate or internal-only decision', async () => {
+    await expect(service.decideSelection(ctx, record.id, { workflowVersion: 2, decision: AssociationSelectionList.RESERVE, opId: 'bounded-selection' })).resolves.toMatchObject({ emailQueued: false });
+    expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), { timeout: 15_000 });
+    expect(tx.$executeRaw).toHaveBeenCalledWith(expect.arrayContaining(["SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))"]));
+    expect(access.sendSelectionDecision).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).toHaveBeenCalled();
+    expect(idempotency.complete).toHaveBeenCalled();
+  });
+
   it('reads the committed final decision after acquiring the application row, and does not reset its evaluation', async () => {
     afterRowLock = () => { record.status = ApplicationStatus.ACCEPTED; record.selectionList = AssociationSelectionList.MAIN; };
     await expect(service.requestInformation(ctx, record.id, information)).rejects.toMatchObject({ code: 'APPLICATION_NOT_REVIEWABLE' });

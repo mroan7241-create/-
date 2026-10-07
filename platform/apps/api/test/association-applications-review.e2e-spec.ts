@@ -99,6 +99,35 @@ describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
     expect(await prisma.auditLog.count({ where: { action: 'APPLICATION_EVALUATED', entityId: { in: [first.id, second.id] } } })).toBe(2);
   });
 
+  it('selection waiting beyond five seconds still commits decision and audit atomically without email', async () => {
+    const application = await createApplication();
+    fakeEmail.reset();
+    await prisma.associationApplication.update({ where: { id: application.id }, data: { eligibilityStatus: EligibilityStatus.PASSED, evaluationScore: 90 } });
+    let release!: () => void, ready!: () => void;
+    const held = new Promise<void>(resolve => { ready = resolve; });
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const holder = prisma.$transaction(async tx => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
+      ready(); await barrier;
+    }, { timeout: 15000 });
+    await held;
+    let completed = false;
+    const selection = http().post(`/api/v1/association-applications/${application.id}/selection-decision`).set('Cookie', adminCookie).send({ workflowVersion: 2, decision: 'RESERVE', opId: randomUUID() }).then(response => { completed = true; return response; });
+    try {
+      await new Promise(resolve => setTimeout(resolve, 6000));
+      expect(completed).toBe(false);
+    } finally {
+      release(); await holder;
+    }
+    const response = await selection;
+    expect(response.status).toBe(201);
+    expect(response.body).toMatchObject({ decision: 'RESERVE', emailQueued: false });
+    expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: application.id } })).selectionList).toBe('RESERVE');
+    expect(await prisma.auditLog.count({ where: { action: 'APPLICATION_SELECTION_DECIDED', entityId: application.id } })).toBe(1);
+    expect(fakeEmail.lastSecurityAlert).toBeNull();
+    expect(fakeEmail.lastApplicationAccess).toBeNull();
+  });
+
   it.each(['first', 'second'])('concurrent individual selections (%s starts first) protect the last seat without automatic reserve/email', async (contender) => {
     const existing = await createApplication();
     const first = await createApplication();

@@ -429,7 +429,7 @@ export class ApplicationV2Service {
       const response = await this.changeSelection(tx, scoped, applicationId, dto);
       await this.idempotency.complete(tx, ctx.accountId, 'application-selection-decision-v2', dto.opId, response);
       return response;
-    });
+    }, { timeout: 15_000 });
   }
 
   async commitSelection(ctx: AuthContext, dto: SelectionCommitDto) {
