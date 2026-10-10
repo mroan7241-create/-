@@ -2,11 +2,46 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 // Node 24's type-stripping runner needs the explicit TypeScript extension.
 // @ts-ignore -- standalone node --test import
-import { fetchPagedItems, fetchAffectedItems } from './selection-load.ts';
+import { fetchPagedItems, fetchAffectedItems, resolveCurrentRead } from './selection-load.ts';
 // @ts-ignore -- standalone node --test import
 import { regionApplications, filterApplications, applicationCityKey, groupApplications, selectionGroup } from './selection-groups.ts';
 import { readFileSync } from 'node:fs';
 import type { ApplicationSummary, GeographicUnit } from '../../lib/api';
+
+test('list loading requests a typed lightweight projection and hydrates every editable dialog', () => {
+  const board = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8');
+  assert.match(board, /useState<ApplicationListItem\[\]>/);
+  assert.equal((board.match(/includeCounts=false&view=list/g) ?? []).length, 2);
+  assert.match(board, /async function openApplication\(/);
+  assert.match(board, /apiFetch<ApplicationSummary>\(`\/association-applications\/\$\{application.id\}`\)/);
+  for (const kind of ['eligibility', 'evaluation', 'information', 'detail']) {
+    assert.match(board, new RegExp(`openApplication\\('${kind}', application\\)`));
+  }
+  assert.match(board, /\(\) => sequence === detailSequence.current/);
+  assert.match(board, /full.id !== application.id/);
+  assert.match(board, /detailSequence.current\+\+/);
+  assert.match(board, /onOpenFile=\{\(\) => setDetailTarget\(evaluationTarget\)\}/);
+  assert.match(board, /resolveCurrentRead\(Promise.all\(/);
+  assert.match(board, /kind === 'eligibility' \? getApplicationEligibilityEvidence\(application.id\)/);
+  assert.match(board, /<EligibilityDialog application=\{eligibilityTarget\} evidence=\{eligibilityEvidence\}/);
+});
+
+test('a cancelled or obsolete detail read cannot open its record after another read', async () => {
+  let sequence = 1;
+  let release!: (value: string) => void;
+  const first = resolveCurrentRead(new Promise<string>(resolve => { release = resolve; }), () => sequence === 1);
+  sequence = 2;
+  assert.equal(await resolveCurrentRead(Promise.resolve('second'), () => sequence === 2), 'second');
+  release('first');
+  assert.equal(await first, null);
+  const cancelled = resolveCurrentRead(Promise.resolve('private account detail'), () => sequence === 2);
+  sequence = 3; // Cancellation, unmount, or a different authenticated account/scope.
+  assert.equal(await cancelled, null);
+});
+
+test('detail read failure stays a failure and cannot produce editable placeholder data', async () => {
+  await assert.rejects(resolveCurrentRead(Promise.reject(new Error('forbidden')), () => true), /forbidden/);
+});
 
 test('region filter hides only other regions, counts all pages and preserves order/source', async () => {
   const all = await fetchPagedItems(async (page) => ({ items: [{ id: page, region: page === 2 ? 'القصيم' : 'الرياض' }], totalPages: 3 }));
@@ -135,7 +170,7 @@ test('review mutations and manual refresh cannot overlap and invalidate the load
     const handler = board.slice(board.indexOf(`async function ${name}(`)).split('\n  async function ')[0];
     assert.match(handler, /if \(busyRef\.current \|\| listLoading\) return/);
   }
-  for (const setter of ['setEligibilityTarget', 'setInfoTarget']) assert.match(board, new RegExp(`disabled=\\{busy \\|\\| listLoading\\} onClick=\\{\\(\\) => ${setter}\\(application\\)\\}`));
+  for (const kind of ['eligibility', 'information']) assert.ok(board.includes(`disabled={busy || listLoading} onClick={() => void openApplication('${kind}', application)}`));
   for (const dialog of ['EligibilityDialog', 'EvaluationDialog', 'InformationDialog']) assert.match(board, new RegExp(`<${dialog}[^\\n]*busy=\\{busy \\|\\| listLoading\\}`));
   assert.match(board, /disabled=\{busy \|\| listLoading\} onClick=\{\(\) => \{ if \(!busyRef\.current && !listLoading\) void load\(\); \}\}>تحديث القائمة/);
 });
@@ -155,7 +190,7 @@ test('eligibility save is internal while rejection email requires a separate con
 test('internal failed eligibility can reopen the existing review dialog without implicit pass or mail', () => {
   const board = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8');
   assert.match(board, /const reviewable = group !== 'NEW' && application.status === 'UNDER_REVIEW'/);
-  assert.match(board, /canReview && reviewable && application.eligibilityStatus !== 'NEEDS_INFO' && <button[^\n]*onClick=\{\(\) => setEligibilityTarget\(application\)\}/);
+  assert.ok(board.includes("canReview && reviewable && application.eligibilityStatus !== 'NEEDS_INFO' && <button style={secondaryButtonStyle} disabled={busy || listLoading} onClick={() => void openApplication('eligibility', application)}"));
   assert.match(board, /application.eligibilityStatus === 'FAILED' \? 'مراجعة وتعديل القرار' : 'الأهلية والأدلة'/);
   assert.match(board, /useState<EligibilityDecision>\(application.eligibilityStatus === 'PENDING' \? 'PASSED' : application.eligibilityStatus\)/);
   assert.match(board, /useState\(application.eligibilityNotes \?\? ''\)/);

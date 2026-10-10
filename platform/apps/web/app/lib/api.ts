@@ -202,6 +202,14 @@ export interface ApplicationSummary {
   latestInformationRequest: ApplicationInformationRequest | null;
 }
 
+/** List projection only. Fetch the full authorized detail before opening editable forms. */
+export type ApplicationListItem = Pick<ApplicationSummary,
+  'id' | 'publicCode' | 'name' | 'region' | 'city' | 'regionOfficialCode' | 'governorateOfficialCode' |
+  'status' | 'eligibilityStatus' | 'selectionList' | 'processingStartedAt' | 'submittedAt' |
+  'selectionApprovedAt' | 'resultingAssociationId' | 'evaluationScore' | 'evaluationRank' |
+  'schemaVersion' | 'financialPriority' | 'selectionDelivery' | 'selectionEditable' | 'ownerCanCorrect'
+> & { latestInformationRequest: Pick<ApplicationInformationRequest, 'status'> | null };
+
 export interface GeographicUnit {
   officialCode: string;
   nameAr: string;

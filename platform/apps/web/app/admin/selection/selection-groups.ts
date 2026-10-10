@@ -41,7 +41,7 @@ export function groupApplications<T extends Parameters<typeof selectionGroup>[0]
   return applications.filter((application) => filter === 'ALL' || (filter === 'ACTION' ? actionableGroups.includes(selectionGroup(application)) : selectionGroup(application) === filter));
 }
 
-export function selectionGroup(application: Pick<ApplicationSummary, 'eligibilityStatus' | 'selectionList' | 'processingStartedAt'> & { status?: ApplicationSummary['status']; latestInformationRequest?: ApplicationSummary['latestInformationRequest'] }): Exclude<SelectionGroup, 'ACTION' | 'ALL'> {
+export function selectionGroup(application: Pick<ApplicationSummary, 'eligibilityStatus' | 'selectionList' | 'processingStartedAt'> & { status?: ApplicationSummary['status']; latestInformationRequest?: Partial<NonNullable<ApplicationSummary['latestInformationRequest']>> | null }): Exclude<SelectionGroup, 'ACTION' | 'ALL'> {
   if (application.eligibilityStatus === 'FAILED') return 'FAILED';
   if (application.status === 'REJECTED') return 'DECLINED';
   if (application.eligibilityStatus === 'NEEDS_INFO') return 'NEEDS_INFO';

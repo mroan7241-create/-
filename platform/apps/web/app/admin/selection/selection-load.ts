@@ -1,3 +1,9 @@
+/** Ignore a completed read after cancellation, unmount, or a changed account/scope. No cached data. */
+export async function resolveCurrentRead<T>(read: Promise<T>, isCurrent: () => boolean): Promise<T | null> {
+  const result = await read;
+  return isCurrent() ? result : null;
+}
+
 export async function fetchPagedItems<T>(
   fetchPage: (page: number) => Promise<{ items: T[]; totalPages: number }>,
   concurrency = 4,
