@@ -142,14 +142,15 @@ export function SelectionBoard({ user, showHeader = false, mode = 'all' }: { use
     if (busyRef.current || listLoading) return;
     busyRef.current = true; setBusy(true); setMessage('جارٍ حفظ قرار الأهلية…');
     try {
-      const result = await decideApplicationEligibility(eligibilityTarget.id, decision, notes);
-      setMessage(result.emailQueued ? 'حُفظ قرار عدم الاجتياز ورسالة إشعاره للإرسال.' : decision === 'FAILED' && result.emailSent === false ? 'حُفظ قرار عدم الاجتياز، لكن تعذّر تجهيز البريد. راجع سجل إرسال البريد.' : decision === 'PASSED' ? 'تم اجتياز الأهلية. أكمل التقييم والاختيار في المرحلة الثانية.' : 'تم حفظ قرار الأهلية.');
+      await decideApplicationEligibility(eligibilityTarget.id, decision, notes);
+      setMessage(decision === 'FAILED' ? 'تم حفظ قرار عدم الاجتياز داخليًا دون إرسال بريد للجمعية.' : decision === 'PASSED' ? 'تم اجتياز الأهلية. أكمل التقييم والاختيار في المرحلة الثانية.' : 'تم حفظ قرار الأهلية.');
       setEligibilityTarget(null); await refreshAffected([eligibilityTarget.id], 'تم حفظ قرار الأهلية.');
     } catch (reason) { setMessage(readError(reason)); }
     finally { busyRef.current = false; setBusy(false); }
   }
   async function retryRejection(application: ApplicationSummary) {
     if (busyRef.current || listLoading) return;
+    if (!window.confirm(`سيُرسل إشعار عدم الاجتياز إلى جمعية «${application.name}». هل تؤكد إرسال البريد؟`)) return;
     busyRef.current = true;
     setBusy(true); setMessage('');
     try { const result = await resendApplicationRejection(application.id); setMessage(result.emailQueued ? 'حُفظ إشعار عدم الاجتياز للإرسال.' : result.emailSent ? 'تم إرسال إشعار عدم الاجتياز للجمعية.' : 'تعذّر تجهيز البريد. راجع سجل إرسال البريد.'); }
@@ -204,7 +205,7 @@ export function SelectionBoard({ user, showHeader = false, mode = 'all' }: { use
             {canReview && reviewable && !['FAILED', 'NEEDS_INFO'].includes(application.eligibilityStatus) && <button style={secondaryButtonStyle} disabled={busy || listLoading} onClick={() => setEligibilityTarget(application)}>الأهلية والأدلة</button>}
             {canReview && reviewable && application.schemaVersion === 2 && !['FAILED', 'NEEDS_INFO'].includes(application.eligibilityStatus) && <button style={secondaryButtonStyle} disabled={busy || listLoading} onClick={() => setInfoTarget(application)}>طلب استكمال وإرسال بريد</button>}
             {canReview && application.eligibilityStatus === 'NEEDS_INFO' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void run(() => resendApplicationInformation(application.id), 'حُفظ بريد الاستكمال للإرسال.', [application.id], true)}>إعادة إرسال البريد</button>}
-            {canReview && application.eligibilityStatus === 'FAILED' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void retryRejection(application)}>إعادة إرسال عدم الاجتياز</button>}
+            {canReview && application.eligibilityStatus === 'FAILED' && <button style={secondaryButtonStyle} disabled={busy} onClick={() => void retryRejection(application)}>إرسال إشعار عدم الاجتياز</button>}
             {canEvaluate && application.eligibilityStatus === 'PASSED' && application.status !== 'REJECTED' && application.selectionList === 'NONE' && <button style={secondaryButtonStyle} disabled={busy || listLoading} onClick={() => setEvaluationTarget(application)}>التقييم 1–5</button>}
             {application.evaluationScore != null && <span className="status-pill">{application.evaluationScore}/100</span>}
           </div>

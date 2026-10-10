@@ -24,24 +24,40 @@ describe('Application V2 launch gate', () => {
     return result;
   }
 
-  it('failed eligibility sends its real outcome once, after commit, without creating an account', async () => {
+  it('keeps failed eligibility internal, including replay, and sends only on an explicit notification request', async () => {
     const suffix = randomUUID();
     const application = await prisma.associationApplication.create({ data: { schemaVersion: 2, publicCode: `${PREFIX}${suffix}`, clientRequestId: suffix, name: `${PREFIX}عدم اجتياز اصطناعي`, region: 'الرياض', city: 'الرياض', email: `ineligible-${suffix}@example.org`, phone: '0550000000', contactName: 'ممثل تجريبي', v2Payload: {}, pledgeAccepted: true } });
     const opId = randomUUID();
     const route = `/api/v1/association-applications/${application.id}/eligibility`;
     const input = { decision: 'FAILED', notes: 'متطلبات أهلية غير مكتملة', opId };
-    await http().post(route).set('Cookie', adminCookie).send(input).expect(201);
+    const queuedBefore = await prisma.outboxEvent.count();
+    const decision = await http().post(route).set('Cookie', adminCookie).send(input).expect(201);
+    expect(decision.body).toEqual({ ok: true, emailQueued: false, emailSent: null });
+    expect(await prisma.outboxEvent.count()).toBe(queuedBefore);
     await flushEmail();
     const persisted = await prisma.associationApplication.findUniqueOrThrow({ where: { id: application.id } });
     expect(persisted.eligibilityStatus).toBe('FAILED');
     expect(persisted.resultingAssociationId).toBeNull();
-    expect(fakeEmail.lastSecurityAlert?.to).toBe(application.email);
-    expect(fakeEmail.lastSecurityAlert?.body).toContain('متطلبات أهلية غير مكتملة');
-    fakeEmail.lastSecurityAlert = null;
-    await http().post(route).set('Cookie', adminCookie).send(input).expect(201);
+    expect(persisted.eligibilityNotes).toBe(input.notes);
+    expect(persisted.eligibilityReviewedById).toBeTruthy();
+    expect(persisted.status).toBe('UNDER_REVIEW');
+    expect(fakeEmail.lastSecurityAlert).toBeNull();
+    expect(fakeEmail.lastApplicationAccess).toBeNull();
+    const replay = await http().post(route).set('Cookie', adminCookie).send(input).expect(201);
+    expect(replay.body).toEqual(decision.body);
+    expect(await prisma.outboxEvent.count()).toBe(queuedBefore);
     await flushEmail();
     expect(fakeEmail.lastSecurityAlert).toBeNull();
+    expect(await prisma.auditLog.count({ where: { entityId: application.id, action: 'APPLICATION_ELIGIBILITY_DECIDED' } })).toBe(1);
+    expect(await prisma.auditLog.count({ where: { entityId: application.id, action: 'APPLICATION_REJECTION_EMAIL_SENT' } })).toBe(0);
+    const explicit = await http().post(`${route}/resend-rejection`).set('Cookie', adminCookie).expect(201);
+    expect(explicit.body).toMatchObject({ ok: true, emailQueued: true });
+    expect(fakeEmail.lastSecurityAlert).toBeNull();
+    await flushEmail();
+    expect(fakeEmail.lastSecurityAlert?.to).toBe(application.email);
+    expect(fakeEmail.lastSecurityAlert?.body).toContain(input.notes);
     expect(await prisma.auditLog.count({ where: { entityId: application.id, action: 'APPLICATION_REJECTION_EMAIL_SENT' } })).toBe(1);
+    expect((await prisma.associationApplication.findUniqueOrThrow({ where: { id: application.id } })).resultingAssociationId).toBeNull();
   });
 
   beforeAll(async () => { await startTestStorage(); ({ app, fakeEmail } = await createTestApp()); fixtures = await seedTestFixtures(); }, 60_000);

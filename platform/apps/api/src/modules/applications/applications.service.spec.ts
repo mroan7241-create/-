@@ -65,9 +65,18 @@ describe('legacy evaluation and shared selection capacity', () => {
     expect(tx.associationApplication.update).toHaveBeenCalledTimes(1);
   });
 
-  it('queues an ineligibility notice in the same decision transaction', async () => {
-    await expect(service.decideEligibility(ctx, 'application', EligibilityStatus.FAILED, 'سبب', 'eligibility-mail')).resolves.toEqual({ ok: true, emailQueued: true, emailSent: null });
+  it.each([1, 2])('keeps failed eligibility internal for schema %i, without preparing rejection mail', async (schemaVersion) => {
+    tx.associationApplication.findUniqueOrThrow.mockResolvedValue({ id: 'application', status: ApplicationStatus.UNDER_REVIEW, schemaVersion, answers: [...LEGACY_APPLICATION_QUESTIONS] });
+    await expect(service.decideEligibility(ctx, 'application', EligibilityStatus.FAILED, 'سبب', 'eligibility-internal')).resolves.toEqual({ ok: true, emailQueued: false, emailSent: null });
+    expect(tx.associationApplication.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ eligibilityStatus: EligibilityStatus.FAILED, eligibilityNotes: 'سبب', eligibilityReviewedById: ctx.accountId, selectionList: AssociationSelectionList.NONE, evaluationScore: null }) }));
+    expect(tx.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: 'APPLICATION_ELIGIBILITY_DECIDED', metadata: expect.objectContaining({ decision: EligibilityStatus.FAILED }) }) }));
+    expect(onboarding.sendRejection).not.toHaveBeenCalled();
+  });
+
+  it('retains explicit rejection notification separately from the internal eligibility decision', async () => {
+    await expect(service.resendRejection('application', ctx)).resolves.toEqual({ ok: true, emailQueued: true, emailSent: null });
     expect(onboarding.sendRejection).toHaveBeenCalledWith('application', tx);
+    expect(tx.associationApplication.update).not.toHaveBeenCalled();
   });
 
   it('serializes an eligibility decision with selection before acquiring its application row', async () => {

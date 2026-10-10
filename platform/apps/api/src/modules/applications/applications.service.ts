@@ -398,7 +398,6 @@ export class ApplicationsService {
   async decideEligibility(ctx: AuthContext, id: string, decision: EligibilityStatus, notes: string | undefined, opId: string, evidence?: unknown) {
     if (decision === EligibilityStatus.PENDING) throw new ApiError('ELIGIBILITY_DECISION_INVALID', 'قرار الأهلية غير صالح', 400);
     if (decision === EligibilityStatus.NEEDS_INFO) throw new ApiError('APPLICATION_INFORMATION_REQUEST_REQUIRED', 'استخدم طلب الاستكمال لتحديد النواقص وإرسالها للجمعية', 409);
-    let emailQueued = false;
     const result = await prisma.$transaction(async (tx) => {
       const scoped = await this.requireAdministrativeApplication(tx, ctx, id);
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('association-selection:electrical-appliances'))`;
@@ -413,10 +412,10 @@ export class ApplicationsService {
       if (application.schemaVersion === 1 && application.answers.length !== QUESTION_KEYS.length) throw new ApiError('ELIGIBILITY_ANSWERS_INCOMPLETE', 'إجابات بوابة الأهلية غير مكتملة', 409);
       await tx.associationApplication.update({ where: { id }, data: { eligibilityStatus: decision, eligibilityNotes: notes?.trim() || null, eligibilityEvidence: evidence == null ? undefined : evidence as Prisma.InputJsonValue, eligibilityReviewedAt: new Date(), eligibilityReviewedById: ctx.accountId, ...(decision !== EligibilityStatus.PASSED ? { evaluationBreakdown: Prisma.DbNull, evaluationScore: null, evaluationRank: null, selectionList: AssociationSelectionList.NONE } : {}) } });
       await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'APPLICATION_ELIGIBILITY_DECIDED', entityType: 'association_applications', entityId: id, metadata: { decision, notes: notes ?? null, evidence: evidence ?? null } as Prisma.InputJsonValue } });
-      if (decision === EligibilityStatus.FAILED) emailQueued = await this.onboardingEmail.sendRejection(id, tx);
       const response = { ok: true as const }; await this.idempotency.complete(tx, ctx.accountId, 'application-eligibility', opId, response); return response;
     });
-    if (decision === EligibilityStatus.FAILED) return { ...result, emailQueued, emailSent: null };
+    // Eligibility is an internal review; rejection mail requires the explicit notification action.
+    if (decision === EligibilityStatus.FAILED) return { ...result, emailQueued: false, emailSent: null };
     return result;
   }
 

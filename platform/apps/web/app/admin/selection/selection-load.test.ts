@@ -139,3 +139,15 @@ test('review mutations and manual refresh cannot overlap and invalidate the load
   for (const dialog of ['EligibilityDialog', 'EvaluationDialog', 'InformationDialog']) assert.match(board, new RegExp(`<${dialog}[^\\n]*busy=\\{busy \\|\\| listLoading\\}`));
   assert.match(board, /disabled=\{busy \|\| listLoading\} onClick=\{\(\) => \{ if \(!busyRef\.current && !listLoading\) void load\(\); \}\}>تحديث القائمة/);
 });
+
+test('eligibility save is internal while rejection email requires a separate confirmed action', () => {
+  const board = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8');
+  const save = board.slice(board.indexOf('async function saveEligibility('), board.indexOf('async function retryRejection('));
+  assert.match(save, /await decideApplicationEligibility/);
+  assert.match(save, /تم حفظ قرار عدم الاجتياز داخليًا دون إرسال بريد للجمعية/);
+  assert.doesNotMatch(save, /resendApplicationRejection|emailQueued|emailSent/);
+  const send = board.slice(board.indexOf('async function retryRejection('), board.indexOf('const groups ='));
+  assert.match(send, /if \(!window\.confirm\(/);
+  assert.ok(send.indexOf('window.confirm') < send.indexOf('resendApplicationRejection'));
+  assert.match(board, />إرسال إشعار عدم الاجتياز<\/button>/);
+});
