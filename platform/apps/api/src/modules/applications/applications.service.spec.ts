@@ -23,7 +23,7 @@ describe('legacy evaluation and shared selection capacity', () => {
         findUniqueOrThrow: jest.fn(async (): Promise<{ id: string; status: ApplicationStatus; schemaVersion: number; answers: unknown[] }> => ({ id: 'application', status: ApplicationStatus.UNDER_REVIEW, schemaVersion: 1, answers: [...LEGACY_APPLICATION_QUESTIONS] })),
         count: jest.fn(async () => 2),
         findMany: jest.fn(async () => [1, 2, 3].map((value) => ({ id: `candidate-${value}`, publicCode: `APP-00000${value}`, evaluationScore: 100 - value, evaluationBreakdown: null }))),
-        update: jest.fn(async () => ({})),
+        update: jest.fn(async (input: { data: Record<string, unknown> }) => { void input; return {}; }),
         updateMany: jest.fn(async () => ({ count: 1 })),
       },
       projectParticipation: { create: jest.fn(async () => ({})) },
@@ -77,6 +77,25 @@ describe('legacy evaluation and shared selection capacity', () => {
     await expect(service.resendRejection('application', ctx)).resolves.toEqual({ ok: true, emailQueued: true, emailSent: null });
     expect(onboarding.sendRejection).toHaveBeenCalledWith('application', tx);
     expect(tx.associationApplication.update).not.toHaveBeenCalled();
+  });
+
+  it('corrects internal failed eligibility through the existing decision path without mail or restoring old scores', async () => {
+    tx.associationApplication.findUniqueOrThrow.mockResolvedValue({ id: 'application', status: ApplicationStatus.UNDER_REVIEW, schemaVersion: 2, answers: [], eligibilityStatus: EligibilityStatus.FAILED } as never);
+    await expect(service.decideEligibility(ctx, 'application', EligibilityStatus.PASSED, 'تصحيح قرار داخلي', 'eligibility-correction')).resolves.toEqual({ ok: true });
+    const data = tx.associationApplication.update.mock.calls[0][0].data;
+    expect(data).toMatchObject({ eligibilityStatus: EligibilityStatus.PASSED, eligibilityNotes: 'تصحيح قرار داخلي', eligibilityReviewedById: ctx.accountId });
+    expect(data).not.toHaveProperty('evaluationScore');
+    expect(data).not.toHaveProperty('selectionList');
+    expect(tx.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: 'APPLICATION_ELIGIBILITY_DECIDED', actorAccountId: ctx.accountId, metadata: expect.objectContaining({ decision: EligibilityStatus.PASSED }) }) }));
+    expect(onboarding.sendRejection).not.toHaveBeenCalled();
+  });
+
+  it.each([ApplicationStatus.ACCEPTED, ApplicationStatus.REJECTED])('does not reopen final %s requests by correcting failed eligibility', async (status) => {
+    tx.associationApplication.findUniqueOrThrow.mockResolvedValue({ id: 'application', status, schemaVersion: 2, answers: [] });
+    await expect(service.decideEligibility(ctx, 'application', EligibilityStatus.PASSED, 'تصحيح', 'eligibility-final-correction')).rejects.toMatchObject({ code: 'APPLICATION_ALREADY_REVIEWED' });
+    expect(tx.associationApplication.update).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+    expect(onboarding.sendRejection).not.toHaveBeenCalled();
   });
 
   it('serializes an eligibility decision with selection before acquiring its application row', async () => {

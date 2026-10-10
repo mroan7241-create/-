@@ -151,3 +151,13 @@ test('eligibility save is internal while rejection email requires a separate con
   assert.ok(send.indexOf('window.confirm') < send.indexOf('resendApplicationRejection'));
   assert.match(board, />إرسال إشعار عدم الاجتياز<\/button>/);
 });
+
+test('internal failed eligibility can reopen the existing review dialog without implicit pass or mail', () => {
+  const board = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8');
+  assert.match(board, /const reviewable = group !== 'NEW' && application.status === 'UNDER_REVIEW'/);
+  assert.match(board, /canReview && reviewable && application.eligibilityStatus !== 'NEEDS_INFO' && <button[^\n]*onClick=\{\(\) => setEligibilityTarget\(application\)\}/);
+  assert.match(board, /application.eligibilityStatus === 'FAILED' \? 'مراجعة وتعديل القرار' : 'الأهلية والأدلة'/);
+  assert.match(board, /useState<EligibilityDecision>\(application.eligibilityStatus === 'PENDING' \? 'PASSED' : application.eligibilityStatus\)/);
+  assert.match(board, /useState\(application.eligibilityNotes \?\? ''\)/);
+  assert.match(board, /onSubmit=\{saveEligibility\}/);
+});

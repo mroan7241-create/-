@@ -50,6 +50,21 @@ describe('Application V2 launch gate', () => {
     expect(fakeEmail.lastSecurityAlert).toBeNull();
     expect(await prisma.auditLog.count({ where: { entityId: application.id, action: 'APPLICATION_ELIGIBILITY_DECIDED' } })).toBe(1);
     expect(await prisma.auditLog.count({ where: { entityId: application.id, action: 'APPLICATION_REJECTION_EMAIL_SENT' } })).toBe(0);
+    const correction = { decision: 'PASSED', notes: 'تصحيح عدم الاجتياز بعد مراجعة الأدلة', opId: randomUUID() };
+    await http().post(route).set('Cookie', adminCookie).send(correction).expect(201);
+    await http().post(route).set('Cookie', adminCookie).send(correction).expect(201);
+    // Replaying the earlier FAILED operation must not undo the later correction.
+    await http().post(route).set('Cookie', adminCookie).send(input).expect(201);
+    const corrected = await prisma.associationApplication.findUniqueOrThrow({ where: { id: application.id } });
+    expect(corrected).toMatchObject({ status: 'UNDER_REVIEW', eligibilityStatus: 'PASSED', eligibilityNotes: correction.notes, eligibilityReviewedById: persisted.eligibilityReviewedById, selectionList: 'NONE', evaluationScore: null, resultingAssociationId: null });
+    expect(await prisma.outboxEvent.count()).toBe(queuedBefore);
+    expect(await prisma.auditLog.count({ where: { entityId: application.id, action: 'APPLICATION_ELIGIBILITY_DECIDED' } })).toBe(2);
+    await flushEmail();
+    expect(fakeEmail.lastSecurityAlert).toBeNull();
+    // A subsequent manual FAILED decision also remains internal; explicit mail still works.
+    await http().post(route).set('Cookie', adminCookie).send({ ...input, opId: randomUUID() }).expect(201);
+    expect(await prisma.outboxEvent.count()).toBe(queuedBefore);
+    expect(await prisma.auditLog.count({ where: { entityId: application.id, action: 'APPLICATION_ELIGIBILITY_DECIDED' } })).toBe(3);
     const explicit = await http().post(`${route}/resend-rejection`).set('Cookie', adminCookie).expect(201);
     expect(explicit.body).toMatchObject({ ok: true, emailQueued: true });
     expect(fakeEmail.lastSecurityAlert).toBeNull();
