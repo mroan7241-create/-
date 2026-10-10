@@ -208,6 +208,10 @@ describe('owner-managed ADMIN staff permission boundary', () => {
     const listed = await http().get('/api/v1/association-applications?pageSize=100').set('Cookie', staff.cookie).expect(200);
     const ids = listed.body.items.map((row: { id: string }) => row.id);
     expect(ids).toContain(allowed); expect(ids).not.toContain(outside); expect(ids).not.toContain(historical);
+    const compact = await http().get('/api/v1/association-applications?pageSize=100&view=list').set('Cookie', staff.cookie).expect(200);
+    expect(compact.body.items.map((item: { id: string }) => item.id)).toEqual(ids);
+    expect(compact.body.total).toBe(listed.body.total);
+    expect(compact.body.counts).toEqual(listed.body.counts);
     await http().get(`/api/v1/association-applications/${allowed}`).set('Cookie', staff.cookie).expect(200);
     for (const id of [outside, historical]) {
       for (const suffix of ['', '/license-file', '/eligibility-evidence']) await http().get(`/api/v1/association-applications/${id}${suffix}`).set('Cookie', staff.cookie).expect(403);

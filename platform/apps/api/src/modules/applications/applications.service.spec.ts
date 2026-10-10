@@ -4,6 +4,86 @@ import { LEGACY_APPLICATION_QUESTIONS } from '@alzad/shared';
 import type { AuthContext } from '../auth/auth.types';
 import { ApplicationsService } from './applications.service';
 
+describe('application list projection compatibility', () => {
+  const date = new Date('2026-10-10T09:00:00Z');
+  const row = {
+    id: 'application', publicCode: 'APP-000001', name: 'جمعية اختبار', category: null, sector: null,
+    region: 'الرياض', city: 'الرياض', phone: '0500000000', email: null, contactName: 'منسق', notes: null,
+    licenseNumber: '1', licenseExpiryDate: date, status: ApplicationStatus.UNDER_REVIEW, rejectReason: null,
+    resultingAssociationId: null, submittedAt: date, reviewedAt: null, pledgeAccepted: true, pledgeAcceptedAt: date,
+    eligibilityStatus: EligibilityStatus.PASSED, selectionList: AssociationSelectionList.NONE,
+    selectionApprovedAt: null, processingStartedAt: date, schemaVersion: 2, evaluationScore: 90, evaluationRank: 1,
+    regionOfficialCode: '0001', governorateOfficialCode: '0100', centerOfficialCode: null,
+    currentAssets: 12_000_000, currentLiabilities: null, financialResult: null, netWorkingCapital: null,
+    v2Payload: { privateDetail: 'detail only' }, eligibilityNotes: 'مستوفية', evaluationBreakdown: { raw: {} },
+    answers: [], attachments: [{ fieldKey: 'strategicPlan' }], licenseFile: { id: 'license' },
+    informationRequests: [{ id: 'info', status: 'SUBMITTED', note: 'ملاحظة', deadline: null, requestedAt: date, submittedAt: date, items: [] }],
+  };
+  const access = { selectionDeliveries: jest.fn(async () => new Map()) };
+  const service = () => new ApplicationsService({} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never, access as never);
+
+  beforeEach(() => {
+    access.selectionDeliveries.mockReset().mockResolvedValue(new Map());
+    jest.spyOn(prisma.associationApplication, 'findMany').mockImplementation((async (args: { select?: Record<string, unknown> }) => {
+      if (!args.select) return [row];
+      return [Object.fromEntries(Object.keys(args.select).map((key) => [key, key === 'informationRequests' ? row.informationRequests.map(({ status }) => ({ status })) : row[key as keyof typeof row]]))];
+    }) as never);
+    jest.spyOn(prisma.associationApplication, 'count').mockResolvedValue(1);
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  it('uses a minimal select and never represents missing application details as empty answers', async () => {
+    const result = await service().listApplications({ view: 'list', includeCounts: 'false' } as never);
+    const query = jest.mocked(prisma.associationApplication.findMany).mock.calls[0][0];
+    expect(query).toHaveProperty('select');
+    expect(query).not.toHaveProperty('include');
+    for (const key of ['v2Payload', 'answers', 'attachments', 'licenseFile', 'reviewedBy', 'eligibilityEvidence', 'evaluationEvidence', 'evaluationBreakdown']) {
+      expect(query?.select).not.toHaveProperty(key);
+      expect(result.items[0]).not.toHaveProperty(key);
+    }
+    expect(result.items[0]).toMatchObject({ id: row.id, evaluationScore: 90, financialPriority: 'HIGHER_CAPACITY_LOWER_AID_PRIORITY', latestInformationRequest: { status: 'SUBMITTED' }, selectionEditable: true });
+    expect(result.counts).toEqual({});
+  });
+
+  it('preserves each list field against the existing full response without changing its default contract', async () => {
+    const full = (await service().listApplications({ includeCounts: 'false' })).items[0] as Record<string, unknown>;
+    const compact = (await service().listApplications({ view: 'list', includeCounts: 'false' } as never)).items[0] as Record<string, unknown>;
+    expect(full).toHaveProperty('v2Payload', row.v2Payload);
+    expect(full).toHaveProperty('attachmentKeys', ['strategicPlan']);
+    for (const [key, value] of Object.entries(compact)) {
+      if (key === 'latestInformationRequest') expect(value).toEqual({ status: (full.latestInformationRequest as { status: string }).status });
+      else expect(value).toEqual(full[key]);
+    }
+  });
+
+  it('keeps pagination and filters on the scoped query for list reads', async () => {
+    await service().listApplications({ view: 'list', includeCounts: 'false', page: 2, pageSize: 100, eligibilityStatus: EligibilityStatus.PASSED } as never);
+    expect(prisma.associationApplication.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 100, take: 100, where: expect.objectContaining({ eligibilityStatus: 'PASSED' }), orderBy: { submittedAt: 'desc' } }));
+    expect(prisma.associationApplication.count).toHaveBeenCalledWith({ where: { eligibilityStatus: 'PASSED' } });
+  });
+
+  it('applies the same server-side region scope to the compact rows and their total', async () => {
+    const ctx = { accountId: 'staff', role: AccountRole.ADMIN, adminFullAccess: false, adminApplicationScope: { regionCodes: ['0001'] } } as AuthContext;
+    await service().listApplications({ view: 'list', includeCounts: 'false' }, ctx);
+    expect(prisma.associationApplication.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { regionOfficialCode: { in: ['0001'] } } }));
+    expect(prisma.associationApplication.count).toHaveBeenCalledWith({ where: { regionOfficialCode: { in: ['0001'] } } });
+  });
+
+  it.each(['NOT_REQUESTED', 'PENDING', 'ACCEPTED', 'FAILED', 'UNKNOWN'])('retains selection protection for MAIN delivery %s', async (status) => {
+    const selected = { ...row, status: ApplicationStatus.ACCEPTED, selectionList: AssociationSelectionList.MAIN, selectionApprovedAt: date };
+    jest.mocked(prisma.associationApplication.findMany).mockImplementation((async (args: { select?: Record<string, unknown> }) => {
+      if (!args.select) return [selected];
+      return [Object.fromEntries(Object.keys(args.select).map(key => [key, key === 'informationRequests' ? [{ status: 'SUBMITTED' }] : selected[key as keyof typeof selected]]))];
+    }) as never);
+    access.selectionDeliveries.mockResolvedValue(new Map([[row.id, { status }]]));
+    jest.spyOn(prisma.projectParticipation, 'findMany').mockResolvedValue([]);
+    const full = (await service().listApplications({ includeCounts: 'false' })).items[0] as Record<string, unknown>;
+    const compact = (await service().listApplications({ view: 'list', includeCounts: 'false' })).items[0] as Record<string, unknown>;
+    expect(compact.selectionEditable).toBe(['NOT_REQUESTED', 'PENDING', 'FAILED'].includes(status));
+    for (const key of ['selectionDelivery', 'selectionEditable', 'ownerCanCorrect']) expect(compact[key]).toEqual(full[key]);
+  });
+});
+
 describe('legacy evaluation and shared selection capacity', () => {
   const ctx = { accountId: '10000000-0000-4000-8000-000000000001', role: AccountRole.ADMIN, associationId: null } as AuthContext;
   const ratings = { operationalReadiness: 5, technicalCapability: 5, previousExperience: 5, integrityTransparency: 5, participationCommitment: 5, sustainabilityImpact: 5 };

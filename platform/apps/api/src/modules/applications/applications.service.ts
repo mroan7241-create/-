@@ -39,6 +39,25 @@ import { ApplicationAccessService } from './application-access.service';
 import { adminApplicationScopeWhere, assertAdminApplicationScope, assertAdminApplicationScopeCurrent, lockAdminApplicationScope } from '../auth/admin-route-permissions';
 
 const QUESTION_KEYS = LEGACY_APPLICATION_QUESTIONS.map((q) => q.key);
+const APPLICATION_LIST_SELECT = {
+  id: true, publicCode: true, name: true, region: true, city: true,
+  regionOfficialCode: true, governorateOfficialCode: true, status: true,
+  eligibilityStatus: true, selectionList: true, processingStartedAt: true,
+  submittedAt: true, selectionApprovedAt: true, resultingAssociationId: true,
+  evaluationScore: true, evaluationRank: true, currentAssets: true, schemaVersion: true,
+  informationRequests: { select: { status: true }, orderBy: { requestedAt: 'desc' }, take: 1 },
+} satisfies Prisma.AssociationApplicationSelect;
+
+function applicationFinancialPriority(assets: Prisma.Decimal | number | null | undefined) {
+  return assets == null ? null : Number(assets) > 10_000_000 ? 'HIGHER_CAPACITY_LOWER_AID_PRIORITY' : 'STANDARD_PRIORITY_REVIEW';
+}
+
+function mapApplicationListItem(row: Prisma.AssociationApplicationGetPayload<{ select: typeof APPLICATION_LIST_SELECT }>) {
+  const { currentAssets, informationRequests, ...item } = row;
+  return { ...item, evaluationScore: row.evaluationScore == null ? null : Number(row.evaluationScore),
+    financialPriority: applicationFinancialPriority(currentAssets), latestInformationRequest: informationRequests[0] ?? null };
+}
+
 function selectionEditability(
   application: { status: ApplicationStatus; selectionList: AssociationSelectionList; resultingAssociationId: string | null; eligibilityStatus: EligibilityStatus; evaluationScore: unknown },
   delivery: string, ctx?: AuthContext,
@@ -293,7 +312,7 @@ export class ApplicationsService {
   // ================================================================
   // ADMIN LIST
   // ================================================================
-  async listApplications(params: PaginationParams & { search?: string; status?: ApplicationStatus; eligibilityStatus?: EligibilityStatus; selectionList?: AssociationSelectionList; workflow?: 'new' | 'processing' | 'missing'; financial?: 'assets_lte_10m' | 'assets_gt_10m' | 'surplus' | 'deficit' | 'working_capital'; includeCounts?: 'true' | 'false' }, ctx?: AuthContext): Promise<PaginatedResult<unknown> & { counts: Record<string, number> }> {
+  async listApplications(params: PaginationParams & { search?: string; status?: ApplicationStatus; eligibilityStatus?: EligibilityStatus; selectionList?: AssociationSelectionList; workflow?: 'new' | 'processing' | 'missing'; financial?: 'assets_lte_10m' | 'assets_gt_10m' | 'surplus' | 'deficit' | 'working_capital'; includeCounts?: 'true' | 'false'; view?: 'list' }, ctx?: AuthContext): Promise<PaginatedResult<unknown> & { counts: Record<string, number> }> {
     const { page, pageSize, skip, take } = normalizePagination(params);
     const where: Prisma.AssociationApplicationWhereInput = ctx ? adminApplicationScopeWhere(ctx) : {};
     if (params.status) where.status = params.status;
@@ -318,23 +337,27 @@ export class ApplicationsService {
       ];
     }
 
-    const [rows, total] = await Promise.all([
-      prisma.associationApplication.findMany({
+    const readRows = params.view === 'list'
+      ? prisma.associationApplication.findMany({ where, select: APPLICATION_LIST_SELECT, orderBy: { submittedAt: 'desc' }, skip, take })
+        .then(rows => rows.map(row => ({ row, summary: mapApplicationListItem(row) })))
+      : prisma.associationApplication.findMany({
         where,
         include: { answers: true, reviewedBy: true, eligibilityReviewedBy: { select: { id: true, name: true, publicCode: true } }, evaluatedBy: { select: { id: true, name: true, publicCode: true } }, selectionApprovedBy: { select: { id: true, name: true, publicCode: true } }, processingStartedBy: { select: { id: true, name: true, publicCode: true } }, licenseFile: true, attachments: true, informationRequests: { include: { items: true }, orderBy: { requestedAt: 'desc' }, take: 1 } },
         orderBy: { submittedAt: 'desc' },
         skip,
         take,
-      }),
+      }).then(rows => rows.map(row => ({ row, summary: mapApplicationSummary(row) })));
+    const [entries, total] = await Promise.all([
+      readRows,
       prisma.associationApplication.count({ where }),
     ]);
 
-    const selected = rows.filter(row => row.selectionApprovedAt != null || row.selectionList === AssociationSelectionList.MAIN);
+    const selected = entries.map(({ row }) => row).filter(row => row.selectionApprovedAt != null || row.selectionList === AssociationSelectionList.MAIN);
     const receipts = await this.access.selectionDeliveries(prisma, selected);
     const participations = selected.length ? await prisma.projectParticipation.findMany({ where: { applicationId: { in: selected.map(row => row.id) } }, include: { agreements: true } }) : [];
-    const mapped = rows.map(row => {
+    const mapped = entries.map(({ row, summary }) => {
       const receipt = receipts.get(row.id) ?? { status: 'NOT_REQUESTED' as const };
-      return { ...mapApplicationSummary(row), selectionDelivery: receipt, ...selectionEditability(row, receipt.status, ctx, participations.find(participation => participation.applicationId === row.id)) };
+      return { ...summary, selectionDelivery: receipt, ...selectionEditability(row, receipt.status, ctx, participations.find(participation => participation.applicationId === row.id)) };
     });
     if (params.includeCounts === 'false') return { ...toPaginatedResult(mapped, total, page, pageSize), counts: {} };
     const scope = ctx ? adminApplicationScopeWhere(ctx) : {};
@@ -812,7 +835,7 @@ function mapApplicationSummary(row: {
     currentLiabilities: row.currentLiabilities == null ? null : Number(row.currentLiabilities),
     financialResult: row.financialResult == null ? null : Number(row.financialResult),
     netWorkingCapital: row.netWorkingCapital == null ? null : Number(row.netWorkingCapital),
-    financialPriority: row.currentAssets == null ? null : Number(row.currentAssets) > 10_000_000 ? 'HIGHER_CAPACITY_LOWER_AID_PRIORITY' : 'STANDARD_PRIORITY_REVIEW',
+    financialPriority: applicationFinancialPriority(row.currentAssets),
     eligibilityEvidence: row.eligibilityEvidence ?? null,
     evaluationEvidence: row.evaluationEvidence ?? null,
     evaluationBreakdown: row.evaluationBreakdown ?? null,

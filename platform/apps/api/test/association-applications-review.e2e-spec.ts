@@ -63,6 +63,24 @@ describe('NODE-2 — مراجعة طلبات الانضمام (ADMIN)', () => {
       .set('Cookie', cookie)
       .send({ decision: 'reject', opId, ...(reason === undefined ? {} : { reason }) });
 
+  it('list projection preserves full-list ordering, totals and row facts, while details remain complete', async () => {
+    const first = await createApplication();
+    await createApplication();
+    const full = await http().get('/api/v1/association-applications?includeCounts=false&pageSize=1').set('Cookie', adminCookie).expect(200);
+    const compact = await http().get('/api/v1/association-applications?includeCounts=false&pageSize=1&view=list').set('Cookie', adminCookie).expect(200);
+    for (const key of ['total', 'totalPages', 'page', 'pageSize', 'counts']) expect(compact.body[key]).toEqual(full.body[key]);
+    for (const [key, value] of Object.entries(compact.body.items[0])) expect(value).toEqual(full.body.items[0][key]);
+    for (const key of ['answers', 'v2Payload', 'attachmentKeys', 'eligibilityEvidence', 'evaluationBreakdown']) expect(compact.body.items[0]).not.toHaveProperty(key);
+    expect(JSON.stringify(compact.body).length).toBeLessThan(JSON.stringify(full.body).length);
+    const secondPage = await http().get('/api/v1/association-applications?includeCounts=false&pageSize=1&page=2&view=list').set('Cookie', adminCookie).expect(200);
+    expect(new Set([...compact.body.items, ...secondPage.body.items].map((item: { id: string }) => item.id)).size).toBe(2);
+    const detail = await http().get(`/api/v1/association-applications/${first.id}`).set('Cookie', adminCookie).expect(200);
+    expect(detail.body).toHaveProperty('answers');
+    expect(detail.body).toHaveProperty('attachmentKeys');
+    await http().get('/api/v1/association-applications?view=unexpected').set('Cookie', adminCookie).expect(400);
+    await http().get('/api/v1/association-applications?view=list').expect(401);
+  });
+
   it('different evaluations proceed concurrently but still exclude selection and serialize the same application row', async () => {
     const first = await createApplication();
     const second = await createApplication();
