@@ -3,6 +3,7 @@ import type { ApplicationSummary } from '../../lib/api';
 import { fetchPagedItems } from '../selection/selection-load.ts';
 
 export function fileCityKey(app: ApplicationSummary) { return `${app.regionOfficialCode ?? app.region}:${app.centerOfficialCode ?? app.governorateOfficialCode ?? ''}:${app.city}`; }
+export function fileRegionKey(app: ApplicationSummary) { return app.regionOfficialCode || app.region || ''; }
 export async function loadFileApplications(fetchPage: (page: number) => Promise<{ items: ApplicationSummary[]; total: number; totalPages: number }>) {
   let expected: number | null = null;
   const items = await fetchPagedItems(async page => {
@@ -15,25 +16,36 @@ export async function loadFileApplications(fetchPage: (page: number) => Promise<
   return items;
 }
 
-export interface FileFilters { search: string; status: string; workflow: string; city: string; sector: string }
+export interface FileFilters { search: string; status: string; workflow: string; city: string; sector: string; region?: string }
 export function applicationSectors(application: ApplicationSummary): string[] {
   const organization = application.v2Payload?.organization as Record<string, unknown> | undefined;
   const values = Array.isArray(organization?.sectors) ? organization.sectors : (application.sector ?? '').split(/[,،;؛]/);
   return [...new Set([...values, organization?.sectorOther].filter((value): value is string => typeof value === 'string' && !!value.trim()).map(value => value.trim()))];
 }
-export function fileFilterOptions(applications: readonly ApplicationSummary[]) {
+export function selectableSectors(application: ApplicationSummary, allowed?: readonly string[]) {
+  const values = applicationSectors(application);
+  if (!allowed) return values;
+  return [...new Set(values.map(value => allowed.includes(value) && value !== 'أخرى' ? value : 'أخرى'))];
+}
+export function fileFilterOptions(applications: readonly ApplicationSummary[], region = '', allowed?: readonly string[]) {
   const cities = new Map<string, string>();
-  for (const app of applications) if (app.city?.trim()) cities.set(fileCityKey(app), `${app.city} — ${app.region}`);
+  const regions = new Map<string, string>();
+  for (const app of applications) {
+    if (app.region?.trim()) regions.set(fileRegionKey(app), app.region);
+    if (app.city?.trim() && (!region || fileRegionKey(app) === region)) cities.set(fileCityKey(app), `${app.city} — ${app.region}`);
+  }
   return {
+    regions: [...regions].map(([value, label]) => ({ value, label })).sort((a,b) => a.label.localeCompare(b.label, 'ar')),
     cities: [...cities].map(([value, label]) => ({ value, label })).sort((a,b) => a.label.localeCompare(b.label, 'ar')),
-    sectors: [...new Set(applications.flatMap(applicationSectors))].sort((a,b) => a.localeCompare(b, 'ar')),
+    sectors: [...new Set(applications.flatMap(app => selectableSectors(app, allowed)))].sort((a,b) => a === b ? 0 : a === 'أخرى' ? 1 : b === 'أخرى' ? -1 : a.localeCompare(b, 'ar')),
   };
 }
-export function filterFileApplications(applications: readonly ApplicationSummary[], filters: FileFilters): ApplicationSummary[] {
+export function filterFileApplications(applications: readonly ApplicationSummary[], filters: FileFilters, allowed?: readonly string[]): ApplicationSummary[] {
   const q = filters.search.trim().toLocaleLowerCase('ar');
   return applications.filter(app => (!filters.status || app.status === filters.status)
+    && (!filters.region || fileRegionKey(app) === filters.region)
     && (!filters.city || fileCityKey(app) === filters.city)
-    && (!filters.sector || applicationSectors(app).includes(filters.sector))
+    && (!filters.sector || selectableSectors(app, allowed).includes(filters.sector))
     && (!q || [app.name, app.publicCode, app.email, app.contactName, app.licenseNumber].some(value => value?.toLocaleLowerCase('ar').includes(q)))
     && (!filters.workflow || (filters.workflow === 'new' ? !app.processingStartedAt : filters.workflow === 'processing' ? !!app.processingStartedAt : app.eligibilityStatus === 'NEEDS_INFO')));
 }

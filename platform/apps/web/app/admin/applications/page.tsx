@@ -6,6 +6,7 @@ import {
   ApiClientError,
   apiFetch,
   startApplicationProcessing,
+  getReferenceData,
   type ApplicationStatus,
   type ApplicationSummary,
   type Paginated,
@@ -50,6 +51,8 @@ export default function AdminApplicationsPage() {
   const [fileApplications, setFileApplications] = useState<ApplicationSummary[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
   const [loadedAccessKey, setLoadedAccessKey] = useState('');
+  const [referenceSectors, setReferenceSectors] = useState<string[]>([]);
+  const [region, setRegion] = useState('');
   const [city, setCity] = useState('');
   const [sector, setSector] = useState('');
   const [page, setPage] = useState(1);
@@ -72,25 +75,25 @@ export default function AdminApplicationsPage() {
   const currentSection = visibleSections.some(({ key }) => key === activeSection) ? activeSection : visibleSections[0]?.key;
   const canReadApplications = canAdmin(user, 'applications.read');
   const accessKey = JSON.stringify([user?.id, user?.adminApplicationScope, user?.adminPermissions, user?.adminFullAccess]);
-  const options = useMemo(() => fileFilterOptions(loadedAccessKey === accessKey ? fileApplications : []), [fileApplications, loadedAccessKey, accessKey]);
+  const options = useMemo(() => fileFilterOptions(loadedAccessKey === accessKey ? fileApplications : [], region, referenceSectors), [fileApplications, loadedAccessKey, accessKey, region, referenceSectors]);
   const data = useMemo(() => {
     if (loadedAccessKey !== accessKey || filesLoading) return null;
-    const filters = { search, status, city, sector, workflow };
-    const base = filterFileApplications(fileApplications, { ...filters, workflow: '' });
+    const filters = { search, status, region, city, sector, workflow };
+    const base = filterFileApplications(fileApplications, { ...filters, workflow: '' }, referenceSectors);
     const filtered = filterFileApplications(base, { search: '', status: '', city: '', sector: '', workflow });
     const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
     const currentPage = Math.min(page, totalPages);
     return { items: filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE), page: currentPage, pageSize: PAGE_SIZE, totalPages, total: filtered.length,
       counts: { all: base.length, new: base.filter(a => !a.processingStartedAt).length, processing: base.filter(a => !!a.processingStartedAt).length, missing: base.filter(a => a.eligibilityStatus === 'NEEDS_INFO').length } };
-  }, [fileApplications, loadedAccessKey, accessKey, filesLoading, search, status, city, sector, workflow, page]);
+  }, [fileApplications, loadedAccessKey, accessKey, filesLoading, search, status, region, city, sector, workflow, page, referenceSectors]);
 
   const load = useCallback(async () => {
     const sequence = ++loadSequence.current;
     setListError(null); setFilesLoading(true); setLoadedAccessKey(''); setSelected(null); setChecked([]);
     try {
       // Existing authorized GET only: read complete pages once, then filter before pagination.
-      const result = await loadFileApplications(page => apiFetch<Paginated<ApplicationSummary>>(`/association-applications?page=${page}&pageSize=100&includeCounts=false`));
-      if (sequence === loadSequence.current) { setFileApplications(result); setLoadedAccessKey(accessKey); }
+      const [result, reference] = await Promise.all([loadFileApplications(page => apiFetch<Paginated<ApplicationSummary>>(`/association-applications?page=${page}&pageSize=100&includeCounts=false`)), getReferenceData()]);
+      if (sequence === loadSequence.current) { setFileApplications(result); setReferenceSectors(reference.associationSectors); setLoadedAccessKey(accessKey); }
       return sequence === loadSequence.current;
     } catch (err) {
       if (sequence === loadSequence.current) setListError(err instanceof ApiClientError ? err.message : 'تعذّر تحميل قائمة الطلبات.');
@@ -105,9 +108,9 @@ export default function AdminApplicationsPage() {
     return invalidateReads;
   }, [canReadApplications, accessKey, load, currentSection, invalidateReads]);
 
-  useEffect(() => { setFileApplications([]); setLoadedAccessKey(''); setSelected(null); setChecked([]); setCity(''); setSector(''); setPage(1); }, [accessKey]);
+  useEffect(() => { setFileApplications([]); setLoadedAccessKey(''); setSelected(null); setChecked([]); setRegion(''); setCity(''); setSector(''); setPage(1); }, [accessKey]);
 
-  useEffect(() => { setChecked([]); setSelected(null); }, [page, search, status, workflow, city, sector, currentSection]);
+  useEffect(() => { setChecked([]); setSelected(null); }, [page, search, status, workflow, region, city, sector, currentSection]);
 
   useEffect(() => {
     if (!initialQueryParam('search') || !data?.items.length) return;
@@ -166,8 +169,9 @@ export default function AdminApplicationsPage() {
           بحث (اسم/رقم الطلب/بريد/مسؤول/ترخيص)
           <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} style={inputStyle} />
         </label>
+        <label style={{ ...labelStyle, flex: '1 1 220px', minWidth: 0 }}>المنطقة<select style={inputStyle} value={region} disabled={filesLoading || !data} onChange={e => { setRegion(e.target.value); setCity(''); setPage(1); }}><option value="">جميع المناطق</option>{options.regions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         <label style={{ ...labelStyle, flex: '1 1 220px' }}>المدينة / المحافظة<select style={inputStyle} value={city} disabled={filesLoading || !data} onChange={e => { setCity(e.target.value); setPage(1); }}><option value="">جميع المدن والمحافظات</option>{options.cities.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-        <label style={{ ...labelStyle, flex: '1 1 220px' }}>مجال العمل<select style={inputStyle} value={sector} disabled={filesLoading || !data} onChange={e => { setSector(e.target.value); setPage(1); }}><option value="">جميع المجالات</option>{options.sectors.map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+        <label style={{ ...labelStyle, flex: '1 1 220px', minWidth: 0 }}>مجال العمل<select style={{ ...inputStyle, minWidth: 0, maxWidth: '100%' }} value={sector} disabled={filesLoading || !data} onChange={e => { setSector(e.target.value); setPage(1); }}><option value="">جميع المجالات</option>{options.sectors.map(value => <option key={value} value={value}>{value}</option>)}</select></label>
         <label style={{ ...labelStyle, flex: '0 1 200px' }}>
           الحالة
           <select
@@ -189,7 +193,7 @@ export default function AdminApplicationsPage() {
         <button type="submit" style={primaryButtonStyle}>
           بحث
         </button>
-        <button type="button" style={secondaryButtonStyle} onClick={() => { setSearchInput(''); setSearch(''); setStatus(''); setWorkflow(''); setCity(''); setSector(''); setPage(1); }}>مسح الفلاتر</button>
+        <button type="button" style={secondaryButtonStyle} onClick={() => { setSearchInput(''); setSearch(''); setStatus(''); setWorkflow(''); setRegion(''); setCity(''); setSector(''); setPage(1); }}>مسح الفلاتر</button>
         <button type="button" style={secondaryButtonStyle} disabled={filesLoading || processing} onClick={() => void load()}>تحديث القائمة</button>
       </form>
       {filesLoading && <p role="status">جارٍ تحميل جميع الطلبات قبل الفرز…</p>}

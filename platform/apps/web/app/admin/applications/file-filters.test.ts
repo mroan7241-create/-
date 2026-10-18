@@ -1,11 +1,29 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 // @ts-ignore -- standalone Node type-stripping runner.
-import { applicationSectors, fileCityKey, fileFilterOptions, filterFileApplications, loadFileApplications, savedEvaluationRows } from './file-filters.ts';
+import { applicationSectors, fileCityKey, fileRegionKey, fileFilterOptions, filterFileApplications, loadFileApplications, savedEvaluationRows } from './file-filters.ts';
 import type { ApplicationSummary } from '../../lib/api';
 
 const app = (patch: Partial<ApplicationSummary> = {}) => ({ id: 'a', publicCode: 'APP-000001', name: 'جمعية', sector: null, city: 'المركز', region: 'الرياض', regionOfficialCode: '01', governorateOfficialCode: '011', status: 'ACCEPTED', eligibilityStatus: 'PASSED', selectionList: 'RESERVE', processingStartedAt: '2026-10-10', ...patch } as ApplicationSummary);
 const empty = { search: '', status: '', workflow: '', city: '', sector: '' };
+
+test('reference dropdown names only; free text grouped as Other at the end without losing applications', () => {
+  const allowed=['رعاية الأيتام','التنمية المجتمعية','أخرى'];
+  const list=[app({sector:'رعاية الأيتام'}),app({id:'b',sector:'وصف حر طويل'}),app({id:'c',v2Payload:{organization:{sectors:['التنمية المجتمعية','أخرى'],sectorOther:'علمية'}}})];
+  assert.deepEqual(fileFilterOptions(list,'',allowed).sectors,['التنمية المجتمعية','رعاية الأيتام','أخرى']);
+  assert.deepEqual(filterFileApplications(list,{...empty,sector:'أخرى'},allowed).map(a=>a.id),['b','c']);
+  assert.equal(filterFileApplications(list,empty,allowed).length,3);
+});
+
+test('region includes all its cities, city is optional, and city options follow the region', () => {
+  const a=app({city:'الرياض'}), b=app({id:'b',city:'الخرج',governorateOfficialCode:'012'}), c=app({id:'c',city:'بريدة',region:'القصيم',regionOfficialCode:'04'});
+  const list=[a,b,c];
+  assert.deepEqual(filterFileApplications(list,{...empty,region:fileRegionKey(a)}),[a,b]);
+  assert.deepEqual(filterFileApplications(list,{...empty,region:fileRegionKey(a),city:fileCityKey(b)}),[b]);
+  assert.equal(fileFilterOptions(list,fileRegionKey(a)).cities.length,2);
+  assert.equal(fileFilterOptions(list,fileRegionKey(a)).regions.length,2);
+  assert.equal(filterFileApplications(list,{...empty,region:''}).length,3);
+});
 test('field filter includes every named sector and legacy multiple fields without mutating data', () => {
   const modern = app({ v2Payload: { organization: { sectors: ['التعليم', 'البحث العلمي'], sectorOther: 'خدمة العلماء' } } });
   assert.deepEqual(applicationSectors(modern), ['التعليم','البحث العلمي','خدمة العلماء']);
