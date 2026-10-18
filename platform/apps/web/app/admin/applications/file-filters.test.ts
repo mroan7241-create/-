@@ -1,0 +1,43 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+// @ts-ignore -- standalone Node type-stripping runner.
+import { applicationSectors, fileCityKey, fileFilterOptions, filterFileApplications, loadFileApplications, savedEvaluationRows } from './file-filters.ts';
+import type { ApplicationSummary } from '../../lib/api';
+
+const app = (patch: Partial<ApplicationSummary> = {}) => ({ id: 'a', publicCode: 'APP-000001', name: 'جمعية', sector: null, city: 'المركز', region: 'الرياض', regionOfficialCode: '01', governorateOfficialCode: '011', status: 'ACCEPTED', eligibilityStatus: 'PASSED', selectionList: 'RESERVE', processingStartedAt: '2026-10-10', ...patch } as ApplicationSummary);
+const empty = { search: '', status: '', workflow: '', city: '', sector: '' };
+test('field filter includes every named sector and legacy multiple fields without mutating data', () => {
+  const modern = app({ v2Payload: { organization: { sectors: ['التعليم', 'البحث العلمي'], sectorOther: 'خدمة العلماء' } } });
+  assert.deepEqual(applicationSectors(modern), ['التعليم','البحث العلمي','خدمة العلماء']);
+  assert.deepEqual(applicationSectors(app({ sector: 'التعليم، التنمية المجتمعية' })), ['التعليم','التنمية المجتمعية']);
+  const list = Object.freeze([modern, app({ id:'b' })]);
+  assert.deepEqual(filterFileApplications(list, { ...empty, sector:'البحث العلمي' }).map(a=>a.id), ['a']);
+  assert.equal(filterFileApplications(list, empty).length, 2);
+});
+test('same city name in two regions remains distinct and all conditions intersect', () => {
+  const a = app({ name: 'ثمرات', sector:'التعليم' });
+  const b = app({ id:'b', region:'القصيم', regionOfficialCode:'04', governorateOfficialCode:'041', sector:'التعليم' });
+  assert.equal(fileFilterOptions([a,b]).cities.length, 2);
+  assert.deepEqual(filterFileApplications([a,b], { ...empty, city:fileCityKey(a), sector:'التعليم', search:'ثمرات', status:'ACCEPTED', workflow:'processing' }), [a]);
+  assert.equal(filterFileApplications([a,b], { ...empty, city:fileCityKey(b), search:'ثمرات' }).length, 0);
+});
+test('filter works beyond the first page; missing fields survive All', async () => {
+  const source = Array.from({length:319},(_,i)=>app({id:String(i),sector:i===318?'البحث العلمي':null}));
+  const requested:number[]=[];
+  const all = await loadFileApplications(async page => { requested.push(page);return {items:source.slice((page-1)*100,page*100),total:319,totalPages:4}; });
+  assert.deepEqual(requested.sort(),[1,2,3,4]);
+  assert.equal(filterFileApplications(all,{...empty,sector:'البحث العلمي'})[0].id,'318');
+  assert.equal(filterFileApplications(all,empty).length,319);
+});
+test('incomplete or changing paged reads are never presented as complete results', async () => {
+  await assert.rejects(loadFileApplications(async()=>({items:[app()],total:2,totalPages:1})),/لم تكتمل/);
+  await assert.rejects(loadFileApplications(async page=>({items:[app({id:String(page)})],total:page===1?2:3,totalPages:2})),/تغيرت/);
+});
+test('saved scores never default to 1 and missing contributions remain missing', () => {
+  const criteria=[{key:'operationalReadiness',label:'التشغيل',weight:30}];
+  assert.equal(savedEvaluationRows(app(),criteria)[0].score,null);
+  const saved=app({evaluationBreakdown:{raw:{operationalReadiness:3},weighted:{operationalReadiness:18}}});
+  assert.equal(savedEvaluationRows(saved,criteria)[0].score,3);
+  assert.equal(savedEvaluationRows(saved,criteria)[0].points,18);
+  assert.equal(savedEvaluationRows(app({evaluationBreakdown:{raw:{operationalReadiness:0}}}),criteria)[0].score,null);
+});
