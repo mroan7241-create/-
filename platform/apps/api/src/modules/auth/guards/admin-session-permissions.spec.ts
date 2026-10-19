@@ -74,4 +74,18 @@ describe('ADMIN permissions at the existing session boundary', () => {
     account.role = AccountRole.ABANMI;
     await expect(guard.canActivate(context())).rejects.toMatchObject({ code: 'AUTH_FORBIDDEN' });
   });
+
+  it('allows only explicit new ABANMI reads, never a wildcard or mutation', async () => {
+    account.role = AccountRole.ABANMI;
+    for (const path of ['/reports/abanmi/explore', '/reports/abanmi/activities', '/reports/abanmi/records/beneficiaries/11111111-1111-4111-8111-111111111111', '/reports/abanmi/delivery-evidence/11111111-1111-4111-8111-111111111111/photo']) {
+      request.method = 'GET'; request.originalUrl = `/api/v1${path}`;
+      await expect(guard.canActivate(context())).resolves.toBe(true);
+      request.method = 'POST'; await expect(guard.canActivate(context())).rejects.toMatchObject({ code: 'AUTH_FORBIDDEN' });
+    }
+    request.method = 'GET';
+    for (const path of ['/reports/abanmi/arbitrary', '/reports/abanmi/records/accounts/11111111-1111-4111-8111-111111111111', '/files/private', '/beneficiaries']) {
+      request.originalUrl = `/api/v1${path}`;
+      await expect(guard.canActivate(context())).rejects.toMatchObject({ code: 'AUTH_FORBIDDEN' });
+    }
+  });
 });

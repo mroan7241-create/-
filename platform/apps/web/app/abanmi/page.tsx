@@ -1,70 +1,34 @@
 'use client';
-
-import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { AlertTriangle, Building2, CheckCircle2, Clock3, Package, Truck, Users } from 'lucide-react';
-import { AppShell } from '../components/AppShell';
-import { ErrorState, LoadingState } from '../components/States';
-import { getAbanmiReport, type AbanmiReport } from '../lib/api';
+import { useMemo } from 'react';
+import { Building2, Users, Package, Truck, ClipboardList, ArrowUpLeft } from 'lucide-react';
+import { useAbanmi } from './portal-context';
+import { activityOverview, exploreHref } from './portal-model';
 import { analyzeAbanmi, APPLICATION_STAGE_LABELS, type ApplicationStage } from '../lib/abanmi-analytics';
-import { reportValueLabel } from '../lib/report-labels';
-import { useRoleGuard } from '../lib/use-role-guard';
-import { cardStyle, primaryButtonStyle, tableStyle, tdStyle, thStyle } from '../lib/ui';
 
 export default function AbanmiDashboardPage() {
-  const { user, loading } = useRoleGuard(['ABANMI']);
-  const [report, setReport] = useState<AbanmiReport | null>(null);
-  const [error, setError] = useState('');
-  useEffect(() => { if (user) getAbanmiReport().then(setReport).catch(() => setError('تعذّر تحميل لوحة المشروع.')); }, [user]);
+  const { report } = useAbanmi();
   const metrics = useMemo(() => report ? analyzeAbanmi(report) : null, [report]);
-  if (loading || !user) return null;
-  return <AppShell user={user}>
-    <header className="zad-hero2"><div className="zad-hero2-text"><h1>لوحة مشروع الأجهزة الكهربائية</h1><div className="zad-hero2-fresh">صورة مباشرة للتقديم والتنفيذ ومواطن المتابعة</div></div></header>
-    {error && <ErrorState message={error} />}{!report && !error && <LoadingState />}
-    {report && metrics && <>
-      <section className="executive-meta">
-        <div><span>حالة المشروع</span><strong>{report.projectClosure?.status === 'CLOSED' ? 'مغلق' : 'قيد التنفيذ'}</strong></div>
-        <div><span>المرحلة الحالية</span><strong>{metrics.currentStage}</strong></div>
-        <div><span>طلبات الانضمام</span><strong>{metrics.applications.length}</strong></div>
-        <div><span>الجمعيات المشاركة</span><strong>{report.overall.associations}</strong></div>
-        <div><span>المناطق المغطاة</span><strong>{report.byRegion.length}</strong></div>
-        <div><span>آخر تحديث للبيانات</span><strong>{new Date(report.generatedAt).toLocaleString('ar-SA')}</strong></div>
-      </section>
-
-      <SectionTitle>من التقديم إلى الاختيار</SectionTitle>
-      <div className="abanmi-stage-grid">{(Object.keys(APPLICATION_STAGE_LABELS) as ApplicationStage[]).map((stage) => <Link key={stage} className="abanmi-stage-card" href={`/abanmi/reports?stage=${stage}#applications`}><strong>{metrics.stages[stage]}</strong><span>{APPLICATION_STAGE_LABELS[stage]}</span><small>عرض الجمعيات ←</small></Link>)}</div>
-
-      <SectionTitle>المؤشرات الرئيسية</SectionTitle>
-      <div className="zad-modules2 abanmi-module-grid">
-        <Kpi icon={Building2} title="الجمعيات المشاركة" value={report.overall.associations} details={`نشطة ${metrics.activeAssociations} · تحتاج انتباه ${metrics.attentionAssociations}`} href="/abanmi/reports#associations" />
-        <Kpi icon={Users} title="المستفيدون" value={report.overall.beneficiaries} details={`معتمدون ${metrics.approvedBeneficiaries} · قيد المراجعة ${metrics.pendingBeneficiaries} · مرفوضون ${metrics.rejectedBeneficiaries}`} href="/abanmi/reports#beneficiaries" />
-        <Kpi icon={Package} title="الاحتياجات المعتمدة" value={metrics.approvedNeeds} details={`بانتظار القرار ${metrics.pendingNeeds} · مرفوضة ${metrics.rejectedNeeds} · تغطية التسليم ${metrics.progressPercent === null ? '—' : `${metrics.progressPercent}٪`}`} href="/abanmi/reports#needs" />
-        <Kpi icon={Truck} title="التسليمات" value={report.overall.deliveries} details={`مغلقة ${metrics.closedDeliveries} · بانتظار اعتماد ${metrics.pendingApprovalDeliveries} · متعذرة ${metrics.failedDeliveries}`} href="/abanmi/reports#deliveries" />
-      </div>
-
-      <SectionTitle>قراءة تنفيذية</SectionTitle>
-      <section className="abanmi-insights" aria-label="قراءة المؤشرات">{metrics.insights.map((insight) => <p key={insight}>{insight}</p>)}</section>
-
-      <SectionTitle>رحلة تنفيذ المشروع</SectionTitle>
-      <div className="journey-grid">{metrics.journey.map((stage) => <article key={stage.label} style={cardStyle}><span className="journey-state" data-tone={stage.done > 0 ? 'active' : 'neutral'}>{stage.done > 0 ? <CheckCircle2 size={18} /> : <Clock3 size={18} />}{stage.label}</span><strong>{stage.done}</strong><small>{stage.caption}</small></article>)}</div>
-
-      <SectionTitle>تنبيهات التنفيذ</SectionTitle>
-      <section style={cardStyle}>{metrics.alerts.length ? metrics.alerts.map((alert) => <div className="executive-alert" key={alert.label}><AlertTriangle size={18} /><strong>{alert.count}</strong><span>{alert.label}</span><small>{alert.action}</small></div>) : <p className="no-critical"><CheckCircle2 size={20} /> لا توجد تعثرات حرجة حاليًا</p>}</section>
-
-      <SectionTitle>ملخص الجمعيات</SectionTitle>
-      <p className="zad-section-meta2">اضغط اسم الجمعية لعرض تقدمها واحتياجاتها وتسليماتها.</p>
-      <div className="table-scroll"><table style={tableStyle}><thead><tr><th style={thStyle}>الجمعية</th><th style={thStyle}>المنطقة</th><th style={thStyle}>المستفيدون</th><th style={thStyle}>الاحتياجات المعتمدة</th><th style={thStyle}>الأجهزة</th><th style={thStyle}>تم التسليم</th><th style={thStyle}>التقدم</th><th style={thStyle}>الحالة</th></tr></thead><tbody>{metrics.associations.map((row) => <tr key={row.id}><td style={tdStyle}><Link href={`/abanmi/reports?associationId=${row.id}#analysis`}>{row.name}</Link></td><td style={tdStyle}>{row.region}</td><td style={tdStyle}>{row.beneficiaries}</td><td style={tdStyle}>{row.approvedNeeds}</td><td style={tdStyle}>{row.devices}</td><td style={tdStyle}>{row.delivered}</td><td style={tdStyle}>{row.progressPercent === null ? '—' : `${row.progressPercent}٪`}</td><td style={tdStyle}>{reportValueLabel(row.status)}</td></tr>)}</tbody></table></div>
-
-      <SectionTitle>التغطية الإقليمية</SectionTitle>
-      <div className="zad-summary-strip2">{metrics.regions.length ? metrics.regions.map((row) => <Link className="zad-sum-card2 abanmi-region-link" key={row.region} href={`/abanmi/reports?region=${encodeURIComponent(row.region)}#analysis`}><b className="zad-sv2b">{row.associations}</b><span className="zad-sl2b">{row.region}</span><small>{row.beneficiaries} مستفيد · {row.approvedNeeds} احتياج معتمد · {row.delivered} جهاز مسلّم</small><small>عرض تحليل المنطقة ←</small></Link>) : <p>لا توجد بيانات مناطق ضمن النطاق الحالي.</p>}</div>
-
-      <SectionTitle>متابعة مراحل المشروع</SectionTitle>
-      <div className="table-scroll"><table style={tableStyle}><thead><tr><th style={thStyle}>المرحلة</th><th style={thStyle}>النشاط</th><th style={thStyle}>الإنجاز</th><th style={thStyle}>الحالة</th></tr></thead><tbody>{report.activities.map((activity) => <tr key={activity.id}><td style={tdStyle}>{activity.phaseName}</td><td style={tdStyle}>{activity.mainActivityName}{activity.subActivityName ? ` — ${activity.subActivityName}` : ''}</td><td style={tdStyle}>{activity.completionPercent}٪</td><td style={tdStyle}>{reportValueLabel(activity.status)}</td></tr>)}</tbody></table></div>
-
-      <div className="button-row" style={{ marginTop: 24 }}><Link style={{ ...primaryButtonStyle, textDecoration: 'none' }} href="/abanmi/reports">فتح التقارير والتصدير</Link></div>
-    </>}
-  </AppShell>;
+  if (!report || !metrics) return null;
+  const activity = activityOverview(report.activities);
+  const count = (rows: Array<{ _count: { _all: number } }>) => rows.reduce((n, r) => n + r._count._all, 0);
+  const cards = [
+    { title: 'الجمعيات المشاركة', value: report.overall.associations, icon: Building2, href: exploreHref('associations'), note: 'التوقيع والمستفيدون ورحلة الأجهزة' },
+    { title: 'المستفيدون', value: report.overall.beneficiaries, icon: Users, href: exploreHref('beneficiaries'), note: 'القرار والاحتياجات والتسليم لكل رمز مستفيد' },
+    { title: 'الاحتياجات المعتمدة', value: metrics.approvedNeeds, icon: Package, href: exploreHref('needs', { status: 'APPROVED' }), note: 'أنواع الأجهزة وحالة تنفيذ الاحتياجات' },
+    { title: 'التسليمات', value: report.overall.deliveries, icon: Truck, href: exploreHref('deliveries'), note: 'الحالة والمحاولات وشواهد التسليم' },
+    { title: 'محاضر الاستلام', value: count(report.procurement.receipts), icon: ClipboardList, href: exploreHref('receipts'), note: 'ما أُرسل وما استُلم والكميات والفروقات' },
+    { title: 'الأجهزة المسلّمة', value: metrics.deliveredDevices, icon: Package, href: exploreHref('inventory', { status: 'DELIVERED' }), note: 'التوزيع حسب الجمعية ونوع الجهاز' },
+  ];
+  return <>
+    <header className="ab-hero"><div><span className="ab-eyebrow">مشروع الأجهزة الكهربائية</span><h1>المشروع، بصورة أوضح.</h1><p>متابعة الجمعيات والتنفيذ والشواهد. افتح أي مؤشر للاطلاع على تفاصيله.</p></div><Link className="ab-hero-link" href="/abanmi/activities">متابعة الأنشطة <ArrowUpLeft size={20} /></Link></header>
+    <section className="ab-kpis" aria-label="مؤشرات المشروع">{cards.map(({ icon: Icon, ...card }) => <Link className="ab-kpi" href={card.href} key={card.title}><div><span className="ab-icon"><Icon size={21} /></span><ArrowUpLeft size={18} /></div><strong>{card.value.toLocaleString('ar-SA')}</strong><h2>{card.title}</h2><p>{card.note}</p></Link>)}</section>
+    <section className="ab-section"><div className="ab-heading"><div><span className="ab-eyebrow">من التقديم إلى الاختيار</span><h2>رحلة انضمام الجمعيات</h2></div><Link href={exploreHref('applications')}>جميع الطلبات ←</Link></div><div className="ab-stages">{(Object.keys(APPLICATION_STAGE_LABELS) as ApplicationStage[]).map(stage => <Link key={stage} href={exploreHref('applications', { stage })}><strong>{metrics.stages[stage]}</strong><span>{APPLICATION_STAGE_LABELS[stage]}</span></Link>)}</div></section>
+    <section className="ab-section"><div className="ab-heading"><div><span className="ab-eyebrow">القراءة التنفيذية</span><h2>ما الذي يحتاج متابعة؟</h2></div></div><div className="ab-executive"><article><span>التنفيذ</span><Link className="ab-big-link" href={exploreHref('needs', { status: 'APPROVED' })}>{metrics.progressPercent === null ? 'لا تتوفر نسبة بعد' : `${metrics.progressPercent}٪`}</Link><p>تغطية الاحتياجات المعتمدة بالأجهزة المسلّمة، وليست قياسًا للالتزام الزمني.</p><Link href={exploreHref('needs')}>تفاصيل الاحتياجات ←</Link></article><article><span>الأنشطة الجارية</span><Link className="ab-big-link" href="/abanmi/activities?status=current">{activity.current.length}</Link><p>{activity.current[0] ? activity.current[0].subActivityName ?? activity.current[0].mainActivityName : 'لا توجد أنشطة بحالة جارٍ أو متأخر.'}</p><Link href="/abanmi/activities">المنجز والقادم والشواهد ←</Link></article><article><span>المتابعة التشغيلية</span><strong>{metrics.alerts.length ? 'توجد حالات تحتاج متابعة' : 'لا حالات مرصودة'}</strong><p>المؤشرات مستقلة وقد تتداخل؛ لا نجمعها باعتبارها حالات فريدة.</p><Link href={exploreHref('deliveries')}>تفاصيل التسليمات ←</Link></article></div>
+      {metrics.alerts.length > 0 && <div className="ab-alerts">{metrics.alerts.map(item => <Link key={item.label} href={item.label.includes('محاضر') ? exploreHref('receipts', { status: 'RECEIVED_WITH_DISCREPANCIES' }) : item.label.includes('تالفة') ? exploreHref('inventory', { status: 'DAMAGED' }) : exploreHref('deliveries', { status: item.label.includes('متعذرة') ? 'DELIVERY_FAILED' : item.label.includes('إرجاع') ? 'PENDING_RETURN_APPROVAL' : 'PENDING_DELIVERY_APPROVAL' })}><b>{item.count}</b><span>{item.label}</span><small>{item.action}</small></Link>)}</div>}
+    </section>
+    <section className="ab-section"><div className="ab-heading"><h2>مراحل التنفيذ</h2></div><div className="ab-stages">{metrics.journey.map((stage, i) => <Link key={stage.label} href={exploreHref((['participation', 'beneficiaries', 'purchaseOrders', 'receipts', 'allocations', 'deliveries', 'closure'] as const)[i], { status: i === 1 ? 'APPROVED' : i === 4 ? 'ACTIVE' : i === 5 ? 'COMPLETED' : i === 6 ? 'CLOSED' : '' })}><strong>{stage.done}</strong><span>{stage.label}</span><small>{stage.caption}</small></Link>)}</div></section>
+    <section className="ab-section"><div className="ab-heading"><h2>التغطية حسب المنطقة</h2><Link href={exploreHref('associations')}>عرض الجمعيات ←</Link></div><div className="ab-regions">{metrics.regions.map(row => <Link key={row.region} href={exploreHref('associations', { region: row.region })}><span>{row.region}</span><strong>{row.associations}</strong><small>جمعية مشاركة · {row.delivered} جهاز مسلّم</small></Link>)}</div>{!metrics.regions.length && <p className="ab-empty">لا توجد جمعيات مشاركة ضمن البيانات الحالية. طلبات الانضمام متاحة في قسمها أعلاه.</p>}</section>
+    <div className="ab-report-entry"><div><h2>تحتاج نسخة رسمية؟</h2><p>التقارير والتصدير في قسم مستقل، بتحديد المنطقة والجمعية والفترة.</p></div><Link className="ab-primary" href="/abanmi/reports">التقارير والتصدير</Link></div>
+  </>;
 }
-
-function SectionTitle({ children }: { children: React.ReactNode }) { return <div className="zad-section-head2"><div className="zad-framed-title2"><div className="zad-rule2" /><h2>{children}</h2></div></div>; }
-function Kpi({ icon: Icon, title, value, details, href }: { icon: typeof Building2; title: string; value: number; details: string; href: string }) { return <Link className="zad-module2 abanmi-kpi-link" href={href}><div className="zad-module2-head"><span className="zad-module2-icon"><Icon size={18} /></span><strong>{title}</strong></div><div className="zad-primary-block2"><span className="zad-fig2">{value}</span><small>{details}</small></div><span className="abanmi-detail-cue">عرض التفاصيل ←</span></Link>; }

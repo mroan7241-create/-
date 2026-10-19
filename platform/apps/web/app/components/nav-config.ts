@@ -68,7 +68,8 @@ export const NAV_ITEMS: NavItem[] = [
 
   { href: '/abanmi', label: 'لوحة المشروع', icon: LayoutDashboard, roles: ['ABANMI'], available: true, group: 'نظرة عامة' },
   { href: '/abanmi/reports', label: 'التقارير', icon: FileBarChart, roles: ['ABANMI'], available: true, group: 'المتابعة' },
-  { href: '/abanmi/activities', label: 'متابعة المشروع', icon: TrendingUp, roles: ['ABANMI'], available: false, group: 'المتابعة' },
+  { href: '/abanmi/explore', label: 'الجمعيات والتنفيذ', icon: Building2, roles: ['ABANMI'], available: true, group: 'المتابعة' },
+  { href: '/abanmi/activities', label: 'متابعة المشروع', icon: TrendingUp, roles: ['ABANMI'], available: true, group: 'المتابعة' },
 ];
 
 export function navForRole(role: CurrentUser['role'], user?: CurrentUser): NavItem[] {

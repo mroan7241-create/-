@@ -2,13 +2,13 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { AppShell } from '../../components/AppShell';
 import { ErrorState, LoadingState } from '../../components/States';
 import { OfficialReportHeader } from '../../components/OfficialReportHeader';
 import { downloadAbanmiReport, getAbanmiReport, type AbanmiReport } from '../../lib/api';
 import { analyzeAbanmi, applicationStage, APPLICATION_STAGE_LABELS, type ApplicationStage } from '../../lib/abanmi-analytics';
 import { reportValueLabel } from '../../lib/report-labels';
-import { useRoleGuard } from '../../lib/use-role-guard';
+import { useAbanmi } from '../portal-context';
+import { exploreHref } from '../portal-model';
 import { cardStyle, inputStyle, labelStyle, primaryButtonStyle, secondaryButtonStyle } from '../../lib/ui';
 import { fetchScopedReport, type ReportFilters } from './report-scope';
 
@@ -18,7 +18,7 @@ const stages = Object.keys(APPLICATION_STAGE_LABELS) as ApplicationStage[];
 const total = (rows: Array<{ _count: { _all: number } }>) => rows.reduce((sum, row) => sum + row._count._all, 0);
 
 export default function AbanmiReportsPage() {
-  const { user, loading } = useRoleGuard(['ABANMI']);
+  const { report: baseReport } = useAbanmi();
   const [catalog, setCatalog] = useState<AbanmiReport | null>(null);
   const [report, setReport] = useState<AbanmiReport | null>(null);
   const [filters, setFilters] = useState<Filters>(emptyFilters);
@@ -28,8 +28,15 @@ export default function AbanmiReportsPage() {
   const [printRequested, setPrintRequested] = useState(false);
   const [error, setError] = useState('');
 
+  function rememberScope(next: Filters, stage: ApplicationStage | '' = selectedStage) {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(next)) if (value) query.set(key, value);
+    if (stage) query.set('stage', stage);
+    window.history.replaceState(null, '', `/abanmi/reports${query.size ? `?${query}` : ''}`);
+  }
+
   useEffect(() => {
-    if (!user) return;
+    if (!baseReport) return;
     let cancelled = false;
     const params = new URLSearchParams(window.location.search);
     const initial = { from: params.get('from') ?? '', to: params.get('to') ?? '', associationId: params.get('associationId') ?? '', region: params.get('region') ?? '' };
@@ -37,13 +44,13 @@ export default function AbanmiReportsPage() {
     setFilters(initial);
     setApplied(initial);
     setSelectedStage(stages.includes(stage as ApplicationStage) ? stage as ApplicationStage : '');
-    const baseRequest = getAbanmiReport();
+    const baseRequest = Promise.resolve(baseReport);
     const filteredRequest = Object.values(initial).some(Boolean) ? fetchScopedReport(initial, getAbanmiReport) : baseRequest;
     Promise.all([baseRequest, filteredRequest]).then(([base, filtered]) => {
       if (!cancelled) { setCatalog(base); setReport(filtered); }
     }).catch(() => { if (!cancelled) setError('تعذّر تحميل التقرير.'); });
     return () => { cancelled = true; };
-  }, [user]);
+  }, [baseReport]);
 
   useEffect(() => {
     if (!report || !window.location.hash) return;
@@ -55,23 +62,26 @@ export default function AbanmiReportsPage() {
   useEffect(() => {
     if (!printRequested || !report) return;
     // Printing after commit ensures the PDF contains the newly filtered report.
-    const frame = requestAnimationFrame(() => {
-      window.print();
-      setPrintRequested(false);
-      setBusy(false);
-    });
-    return () => cancelAnimationFrame(frame);
+    let cancelled = false;
+    void (async () => {
+      await document.fonts.ready;
+      const images = Array.from(document.querySelectorAll<HTMLImageElement>('.abanmi-report-print img'));
+      await Promise.all(images.map(image => image.decode().catch(() => undefined)));
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      if (!cancelled) { window.print(); setPrintRequested(false); setBusy(false); }
+    })();
+    return () => { cancelled = true; };
   }, [printRequested, report]);
 
   const analysis = useMemo(() => report ? analyzeAbanmi(report) : null, [report]);
-  if (loading || !user) return null;
+  if (!baseReport) return null;
 
   async function load(nextFilters = filters) {
     if (busy) return;
     setBusy(true); setError('');
     try {
       const next = await fetchScopedReport(nextFilters, getAbanmiReport);
-      setReport(next); setApplied(nextFilters); setSelectedStage('');
+      setReport(next); setApplied(nextFilters); setSelectedStage(''); rememberScope(nextFilters, '');
     } catch { setError('تعذّر تطبيق المرشحات؛ بقي التقرير السابق دون تغيير.'); }
     finally { setBusy(false); }
   }
@@ -82,7 +92,7 @@ export default function AbanmiReportsPage() {
     setBusy(true); setError('');
     try {
       const next = await fetchScopedReport(selected, getAbanmiReport);
-      setFilters(selected); setApplied(selected); setReport(next);
+      setFilters(selected); setApplied(selected); setReport(next); rememberScope(selected);
       setPrintRequested(true);
     } catch {
       setError('تعذّر تجهيز PDF بالنطاق المختار؛ لم تُطبع بيانات من منطقة أخرى.');
@@ -95,7 +105,8 @@ export default function AbanmiReportsPage() {
   const visibleApplications = analysis?.applications.filter((row) => !selectedStage || applicationStage(row) === selectedStage) ?? [];
 
   const regionOptions = [...new Set([...(catalog?.byRegion.map((row) => row.region) ?? []), ...(catalog?.applications?.map((row) => row.region) ?? [])])].sort();
-  return <AppShell user={user}><div className="abanmi-report-page">
+  return <div className="abanmi-report-page">
+    <Link className="ab-back" href="/abanmi">← لوحة المشروع</Link>
     <header className="zad-hero2"><div className="zad-hero2-text"><h1>تقرير تقدم المشروع</h1><div className="zad-hero2-fresh">تحليل التقديم والاحتياجات والتنفيذ حسب الجمعية أو المنطقة</div></div></header>
     <section className="abanmi-print-controls" style={{ ...cardStyle, marginBottom: 20 }}>
       <div className="form-grid">
@@ -125,12 +136,12 @@ export default function AbanmiReportsPage() {
       <section className="abanmi-report-section" aria-label="تفسير المؤشرات"><h2>ماذا تقول الأرقام؟</h2><div className="abanmi-insights">{analysis.insights.map((insight) => <p key={insight}>{insight}</p>)}</div></section>
 
       <section id="applications" className="abanmi-report-section"><h2>تقديم الجمعيات والاختيار</h2><p>طلبات الانضمام ليست هي عدد الجمعيات المشاركة؛ تُحسب المشاركة بعد إنشاء الجمعية في المنصة.</p>
-        <div className="abanmi-stage-grid">{stages.map((stage) => <button type="button" key={stage} className="abanmi-stage-card" aria-pressed={selectedStage === stage} onClick={() => setSelectedStage(selectedStage === stage ? '' : stage)}><strong>{analysis.stages[stage]}</strong><span>{APPLICATION_STAGE_LABELS[stage]}</span><small>{selectedStage === stage ? 'إظهار الجميع' : 'عرض الأسماء'}</small></button>)}</div>
+        <div className="abanmi-stage-grid">{stages.map((stage) => <button type="button" key={stage} className="abanmi-stage-card" aria-pressed={selectedStage === stage} onClick={() => { const next = selectedStage === stage ? '' : stage; setSelectedStage(next); rememberScope(applied, next); }}><strong>{analysis.stages[stage]}</strong><span>{APPLICATION_STAGE_LABELS[stage]}</span><small>{selectedStage === stage ? 'إظهار الجميع' : 'عرض الأسماء'}</small></button>)}</div>
         <ReportTable title={selectedStage ? APPLICATION_STAGE_LABELS[selectedStage] : 'جميع الطلبات'} headers={['الطلب', 'الجمعية المتقدمة', 'المنطقة', 'مرحلة الطلب', 'تاريخ التقديم']} rows={visibleApplications.map((row) => [row.publicCode, row.name, row.region, APPLICATION_STAGE_LABELS[applicationStage(row)], new Date(row.submittedAt).toLocaleDateString('ar-SA')])} />
       </section>
 
       <section id="associations" className="abanmi-report-section"><h2>تقدم الجمعيات المشاركة</h2><p>التقدم = الأجهزة المسلّمة ÷ الاحتياجات المعتمدة لكل جمعية، وليس تقييمًا لسرعتها الزمنية.</p>
-        <div className="table-scroll"><table><thead><tr><th>الجمعية</th><th>المنطقة</th><th>المستفيدون</th><th>الاحتياجات</th><th>الأجهزة</th><th>المسلّم</th><th>التقدم</th><th>الحالة</th></tr></thead><tbody>{analysis.associations.length ? analysis.associations.map((row) => <tr key={row.id}><td><Link className="abanmi-print-link" href={`/abanmi/reports?associationId=${row.id}#analysis`}>{row.name}</Link></td><td>{row.region}</td><td>{row.beneficiaries}</td><td>{row.approvedNeeds}</td><td>{row.devices}</td><td>{row.delivered}</td><td>{row.progressPercent === null ? '—' : `${row.progressPercent}٪`}</td><td>{row.failedDeliveries ? `${row.failedDeliveries} تسليم متعذر` : reportValueLabel(row.status)}</td></tr>) : <tr><td colSpan={8}>لا توجد جمعيات ضمن النطاق المحدد.</td></tr>}</tbody></table></div>
+        <div className="table-scroll"><table><thead><tr><th>الجمعية</th><th>المنطقة</th><th>المستفيدون</th><th>الاحتياجات</th><th>الأجهزة</th><th>المسلّم</th><th>التقدم</th><th>الحالة</th></tr></thead><tbody>{analysis.associations.length ? analysis.associations.map((row) => <tr key={row.id}><td><Link className="abanmi-print-link" href={exploreHref('associations', { record: row.id })}>{row.name}</Link></td><td>{row.region}</td><td>{row.beneficiaries}</td><td>{row.approvedNeeds}</td><td>{row.devices}</td><td>{row.delivered}</td><td>{row.progressPercent === null ? '—' : `${row.progressPercent}٪`}</td><td>{row.failedDeliveries ? `${row.failedDeliveries} تسليم متعذر` : reportValueLabel(row.status)}</td></tr>) : <tr><td colSpan={8}>لا توجد جمعيات ضمن النطاق المحدد.</td></tr>}</tbody></table></div>
       </section>
 
       <section id="beneficiaries" className="abanmi-report-section"><h2>مراجعة المستفيدين</h2><div className="abanmi-report-metrics"><Metric label="معتمدون" value={analysis.approvedBeneficiaries} /><Metric label="قيد المراجعة" value={analysis.pendingBeneficiaries} /><Metric label="مرفوضون" value={analysis.rejectedBeneficiaries} /></div><p>هذه أعداد مجمعة فقط؛ لا يعرض التقرير أسماء المستفيدين أو بيانات اتصالهم.</p></section>
@@ -142,10 +153,10 @@ export default function AbanmiReportsPage() {
         {analysis.alerts.length ? <div className="abanmi-report-alerts">{analysis.alerts.map((alert) => <p key={alert.label}><strong>{alert.count} {alert.label}</strong><span>{alert.action}</span></p>)}</div> : <p>لا تظهر تعثرات تشغيلية في المؤشرات المتاحة.</p>}
         <ReportTable title="تفصيل مهمات التسليم" headers={['الجمعية', 'الحالة', 'العدد']} rows={report.deliveryAndExecution.map((row) => [associationName(report, row.associationId), reportValueLabel(row.status), row._count._all])} />
       </section>
-      {!applied.associationId && <section className="abanmi-report-section"><h2>المناطق</h2><div className="abanmi-region-grid">{analysis.regions.map((row) => <article key={row.region}><Link className="abanmi-print-link" href={`/abanmi/reports?region=${encodeURIComponent(row.region)}#analysis`}>{row.region}</Link><strong>{row.associations} جمعيات</strong><span>{row.beneficiaries} مستفيد · {row.approvedNeeds} احتياج · {row.delivered} مسلّم</span><small>التغطية: {row.progressPercent === null ? '—' : `${row.progressPercent}٪`}</small></article>)}</div></section>}
+      {!applied.associationId && <section className="abanmi-report-section"><h2>المناطق</h2><div className="abanmi-region-grid">{analysis.regions.map((row) => <article key={row.region}><Link className="abanmi-print-link" href={exploreHref('associations', { region: row.region })}>{row.region}</Link><strong>{row.associations} جمعيات</strong><span>{row.beneficiaries} مستفيد · {row.approvedNeeds} احتياج · {row.delivered} مسلّم</span><small>التغطية: {row.progressPercent === null ? '—' : `${row.progressPercent}٪`}</small></article>)}</div></section>}
       <section className="abanmi-report-method"><h2>أساس القراءة</h2><p>نسبة التغطية هي عدد الأجهزة المسلّمة إلى الاحتياجات المعتمدة، بحد أقصى ١٠٠٪. لا تصف هذه النسبة سرعة الجمعية أو تأخرها؛ يلزم هدف زمني معتمد للمقارنة. عند تحديد فترة، تُصفّى الطلبات والمستفيدون والاحتياجات ومهمات التسليم بتاريخ إنشاء سجلاتها، بينما حالة الجمعيات والأجهزة لقطة وقت إعداد التقرير.</p><p>المصدر: سجلات منصة جمعية الزاد. أُعدّ التقرير في {new Date(report.generatedAt).toLocaleString('ar-SA')}.</p></section>
     </div>}
-  </div></AppShell>;
+  </div>;
 }
 
 function Metric({ label, value }: { label: string; value: number }) { return <div className="abanmi-report-metric"><strong>{value}</strong><span>{label}</span></div>; }

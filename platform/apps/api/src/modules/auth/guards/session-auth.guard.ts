@@ -76,7 +76,8 @@ export class SessionAuthGuard implements CanActivate {
     // portal resources plus session/password lifecycle endpoints are reachable.
     if (account.role === 'ABANMI') {
       const path = request.originalUrl.split('?')[0];
-      const approvedRead = request.method === 'GET' && /\/(auth\/me|activities|reports\/abanmi(?:\/export\.xlsx)?)$/.test(path);
+      const approvedRead = request.method === 'GET' && (/\/(auth\/me|activities|reports\/abanmi(?:\/export\.xlsx)?)$/.test(path) ||
+        /^\/api\/v1\/reports\/abanmi\/(explore|activities|records\/(receipts|deliveries|beneficiaries|associations|applications)\/[0-9a-f-]{36}|activity-evidence\/[0-9a-f-]{36}|delivery-evidence\/[0-9a-f-]{36}\/(photo|signature))$/i.test(path));
       const approvedSessionWrite =
         (request.method === 'POST' && /\/auth\/logout$/.test(path)) ||
         (request.method === 'PATCH' && /\/auth\/password$/.test(path));
