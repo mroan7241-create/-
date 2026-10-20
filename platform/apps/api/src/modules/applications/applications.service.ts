@@ -34,7 +34,8 @@ import { normalizePagination, toPaginatedResult, type PaginatedResult, type Pagi
 import { SettingsService } from '../settings/settings.service';
 import { rankApplications, scoreApplication, type EvaluationInput } from './application-evaluation.util';
 import { OnboardingEmailService } from '../auth/email/onboarding-email.service';
-import { isInformationResponseLate } from './application-v2.service';
+import { currentEligibilityEvidence, isInformationResponseLate } from './application-v2.service';
+import { APPLICATION_INDEX_LIMIT, assertCompleteIndex, readApplicationFileIndex } from './application-file-index';
 import { ApplicationAccessService } from './application-access.service';
 import { adminApplicationScopeWhere, assertAdminApplicationScope, assertAdminApplicationScopeCurrent, lockAdminApplicationScope } from '../auth/admin-route-permissions';
 
@@ -312,6 +313,34 @@ export class ApplicationsService {
   // ================================================================
   // ADMIN LIST
   // ================================================================
+  async applicationIndex(ctx: AuthContext, kind: 'selection' | 'files') {
+    if (ctx.role !== AccountRole.ADMIN) throw new ApiError('AUTH_FORBIDDEN', 'غير مسموح', 403);
+    if (kind === 'files') {
+      const items = await readApplicationFileIndex(ctx);
+      return { items, total: items.length, readAt: new Date().toISOString() };
+    }
+    const rows = await prisma.associationApplication.findMany({ where: adminApplicationScopeWhere(ctx), select: APPLICATION_LIST_SELECT,
+      orderBy: [{ submittedAt: 'desc' }, { id: 'desc' }], take: APPLICATION_INDEX_LIMIT + 1 });
+    assertCompleteIndex(rows);
+    const states = await this.selectionStates(rows, ctx);
+    const items = rows.map(row => ({ ...mapApplicationListItem(row), ...states.get(row.id) }));
+    return { items, total: items.length, readAt: new Date().toISOString() };
+  }
+
+  private async selectionStates(rows: Array<{ id: string; status: ApplicationStatus; eligibilityStatus: EligibilityStatus; selectionList: AssociationSelectionList; selectionApprovedAt: Date | null; resultingAssociationId: string | null; evaluationScore: unknown }>, ctx?: AuthContext) {
+    const selected = rows.filter(row => row.selectionApprovedAt != null || row.selectionList === AssociationSelectionList.MAIN);
+    // Independent reads overlap, with no unbounded per-application requests.
+    const [receipts, participations] = await Promise.all([
+      this.access.selectionDeliveries(prisma, selected),
+      selected.length ? prisma.projectParticipation.findMany({ where: { applicationId: { in: selected.map(row => row.id) } }, include: { agreements: true } }) : Promise.resolve([]),
+    ]);
+    const byApplication = new Map(participations.map(row => [row.applicationId, row]));
+    return new Map(rows.map(row => {
+      const receipt = receipts.get(row.id) ?? { status: 'NOT_REQUESTED' as const };
+      return [row.id, { selectionDelivery: receipt, ...selectionEditability(row, receipt.status, ctx, byApplication.get(row.id)) }];
+    }));
+  }
+
   async listApplications(params: PaginationParams & { search?: string; status?: ApplicationStatus; eligibilityStatus?: EligibilityStatus; selectionList?: AssociationSelectionList; workflow?: 'new' | 'processing' | 'missing'; financial?: 'assets_lte_10m' | 'assets_gt_10m' | 'surplus' | 'deficit' | 'working_capital'; includeCounts?: 'true' | 'false'; view?: 'list' }, ctx?: AuthContext): Promise<PaginatedResult<unknown> & { counts: Record<string, number> }> {
     const { page, pageSize, skip, take } = normalizePagination(params);
     const where: Prisma.AssociationApplicationWhereInput = ctx ? adminApplicationScopeWhere(ctx) : {};
@@ -352,13 +381,8 @@ export class ApplicationsService {
       prisma.associationApplication.count({ where }),
     ]);
 
-    const selected = entries.map(({ row }) => row).filter(row => row.selectionApprovedAt != null || row.selectionList === AssociationSelectionList.MAIN);
-    const receipts = await this.access.selectionDeliveries(prisma, selected);
-    const participations = selected.length ? await prisma.projectParticipation.findMany({ where: { applicationId: { in: selected.map(row => row.id) } }, include: { agreements: true } }) : [];
-    const mapped = entries.map(({ row, summary }) => {
-      const receipt = receipts.get(row.id) ?? { status: 'NOT_REQUESTED' as const };
-      return { ...summary, selectionDelivery: receipt, ...selectionEditability(row, receipt.status, ctx, participations.find(participation => participation.applicationId === row.id)) };
-    });
+    const states = await this.selectionStates(entries.map(({ row }) => row), ctx);
+    const mapped = entries.map(({ row, summary }) => ({ ...summary, ...states.get(row.id) }));
     if (params.includeCounts === 'false') return { ...toPaginatedResult(mapped, total, page, pageSize), counts: {} };
     const scope = ctx ? adminApplicationScopeWhere(ctx) : {};
 
@@ -378,16 +402,26 @@ export class ApplicationsService {
   // ================================================================
   // ADMIN DETAIL
   // ================================================================
-  async getApplicationDetail(id: string, ctx?: AuthContext) {
+  async getApplicationDetail(id: string, ctx?: AuthContext, view?: 'list' | 'review') {
+    if (view === 'list') {
+      const row = await prisma.associationApplication.findUnique({ where: { id }, select: APPLICATION_LIST_SELECT });
+      if (!row) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب الانضمام غير موجود', 404);
+      if (ctx) assertAdminApplicationScope(ctx, row.regionOfficialCode);
+      const states = await this.selectionStates([row], ctx);
+      return { ...mapApplicationListItem(row), ...states.get(row.id) };
+    }
     const application = await prisma.associationApplication.findUnique({
       where: { id },
       include: { answers: true, reviewedBy: true, eligibilityReviewedBy: { select: { id: true, name: true, publicCode: true } }, evaluatedBy: { select: { id: true, name: true, publicCode: true } }, selectionApprovedBy: { select: { id: true, name: true, publicCode: true } }, processingStartedBy: { select: { id: true, name: true, publicCode: true } }, licenseFile: true, attachments: true, informationRequests: { include: { items: true }, orderBy: { requestedAt: 'desc' } } },
     });
     if (!application) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب الانضمام غير موجود', 404);
     if (ctx) assertAdminApplicationScope(ctx, application.regionOfficialCode);
-    const receipt = await this.access.selectionDelivery(prisma, application.id, application.selectionApprovedAt, application.selectionList);
-    const participation = await prisma.projectParticipation.findUnique({ where: { applicationId: application.id }, include: { agreements: true } });
-    return { ...mapApplicationSummary(application), selectionDelivery: receipt, ...selectionEditability(application, receipt.status, ctx, participation ?? undefined) };
+    const [receipt, participation] = await Promise.all([
+      this.access.selectionDelivery(prisma, application.id, application.selectionApprovedAt, application.selectionList),
+      prisma.projectParticipation.findUnique({ where: { applicationId: application.id }, include: { agreements: true } }),
+    ]);
+    return { ...mapApplicationSummary(application), selectionDelivery: receipt, ...selectionEditability(application, receipt.status, ctx, participation ?? undefined),
+      ...(view === 'review' ? { currentEligibilityEvidence: currentEligibilityEvidence(application) } : {}) };
   }
 
   // ================================================================

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Put, Query, Req, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Header, Headers, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Put, Query, Req, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -11,7 +11,7 @@ import { ApiError } from '../../common/api-error';
 import { LICENSE_FILE_MAX_BYTES } from '../files/file-validation.util';
 import { ApplicationsService } from './applications.service';
 import { ReviewApplicationDto } from './dto/submit-application.dto';
-import { ListApplicationsQueryDto } from './dto/list-applications-query.dto';
+import { ApplicationDetailQueryDto, ApplicationIndexQueryDto, ListApplicationsQueryDto } from './dto/list-applications-query.dto';
 import { EligibilityDecisionDto, EvaluationDto, SelectionCommitDto, SelectionSendDto } from './dto/application-workflow.dto';
 import { ApplicationV2Service } from './application-v2.service';
 import { ApplicationAttachmentDto, BulkStartProcessingDto, CreateApplicationDraftDto, CreateInformationRequestDto, ExchangeApplicationAccessDto, RequestApplicationAccessDto, SaveApplicationDraftDto, SelectionDecisionDto, SubmitApplicationDraftDto, SubmitInformationResponseDto } from './dto/application-v2.dto';
@@ -143,11 +143,19 @@ export class ApplicationsController {
   @Roles(AccountRole.ADMIN)
   startProcessing(@CurrentUser() ctx: AuthContext, @Body() dto: BulkStartProcessingDto) { return this.applicationV2.bulkStartProcessing(ctx, dto); }
 
+  @Get('association-applications/index')
+  @Roles(AccountRole.ADMIN)
+  @Header('Cache-Control', 'private, no-store')
+  index(@CurrentUser() ctx: AuthContext, @Query() query: ApplicationIndexQueryDto) {
+    return this.applications.applicationIndex(ctx, query.kind ?? 'selection');
+  }
+
   @Get('association-applications/:id')
   @Roles(AccountRole.ADMIN)
   @ApiOperation({ summary: 'تفاصيل طلب انضمام — ADMIN فقط' })
-  async detail(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string) {
-    return this.applications.getApplicationDetail(id, ctx);
+  @Header('Cache-Control', 'private, no-store')
+  async detail(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Query() query: ApplicationDetailQueryDto) {
+    return this.applications.getApplicationDetail(id, ctx, query.view);
   }
 
   @Get('association-applications/:id/license-file')

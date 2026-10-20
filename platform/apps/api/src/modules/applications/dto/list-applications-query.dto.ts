@@ -45,3 +45,15 @@ export class ListApplicationsQueryDto extends PaginationQueryDto {
   @IsIn(['assets_lte_10m', 'assets_gt_10m', 'surplus', 'deficit', 'working_capital'])
   financial?: 'assets_lte_10m' | 'assets_gt_10m' | 'surplus' | 'deficit' | 'working_capital';
 }
+
+export class ApplicationIndexQueryDto {
+  @IsOptional()
+  @IsIn(['selection', 'files'])
+  kind?: 'selection' | 'files';
+}
+
+export class ApplicationDetailQueryDto {
+  @IsOptional()
+  @IsIn(['list', 'review'])
+  view?: 'list' | 'review';
+}

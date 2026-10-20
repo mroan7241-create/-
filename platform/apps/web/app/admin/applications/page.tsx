@@ -9,6 +9,8 @@ import {
   getReferenceData,
   type ApplicationStatus,
   type ApplicationSummary,
+  type ApplicationFileItem,
+  type ApplicationIndex,
   type Paginated,
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
@@ -19,7 +21,8 @@ import { WorkflowHub } from '../../components/WorkflowHub';
 import styles from './applications.module.css';
 import { ApplicationDetail, eligibilityLabel, selectionLabel } from './application-detail';
 import { initialQueryParam } from '../../lib/query';
-import { fileFilterOptions, filterFileApplications, loadFileApplications } from './file-filters';
+import { fileFilterOptions, filterFileApplications } from './file-filters';
+import { readApplicationIndex, resolveCurrentRead } from '../selection/selection-load';
 import {
   cardStyle,
   errorStyle,
@@ -27,6 +30,8 @@ import {
   labelStyle,
   ltrStyle,
   mutedStyle,
+  modalOverlayStyle,
+  modalStyle,
   primaryButtonStyle,
   secondaryButtonStyle,
   statusBadgeStyle,
@@ -48,7 +53,7 @@ const WORKSPACE_SECTIONS: Array<{ key: WorkspaceSection; title: string; descript
 export default function AdminApplicationsPage() {
   const { user, loading: guardLoading } = useRoleGuard(['ADMIN']);
 
-  const [fileApplications, setFileApplications] = useState<ApplicationSummary[]>([]);
+  const [fileApplications, setFileApplications] = useState<ApplicationFileItem[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
   const [loadedAccessKey, setLoadedAccessKey] = useState('');
   const [referenceSectors, setReferenceSectors] = useState<string[]>([]);
@@ -61,12 +66,14 @@ export default function AdminApplicationsPage() {
   const [status, setStatus] = useState<'' | ApplicationStatus>(() => (initialQueryParam('status') as ApplicationStatus) || '');
   const [listError, setListError] = useState<string | null>(null);
   const [selected, setSelected] = useState<ApplicationSummary | null>(null);
+  const [openingFile, setOpeningFile] = useState<string | null>(null);
+  const fileSequence = useRef(0);
   const [workflow, setWorkflow] = useState('');
   const [checked, setChecked] = useState<string[]>([]);
   const [actionMessage, setActionMessage] = useState('');
   const [processing, setProcessing] = useState(false);
   const loadSequence = useRef(0);
-  const invalidateReads = useCallback(() => { loadSequence.current++; }, []);
+  const invalidateReads = useCallback(() => { loadSequence.current++; fileSequence.current++; }, []);
   const [activeSection, setActiveSection] = useState<WorkspaceSection>(() => {
     const requested = initialQueryParam('view');
     return WORKSPACE_SECTIONS.some(({ key }) => key === requested) ? requested as WorkspaceSection : initialQueryParam('status') ? 'files' : 'review';
@@ -89,10 +96,10 @@ export default function AdminApplicationsPage() {
 
   const load = useCallback(async () => {
     const sequence = ++loadSequence.current;
-    setListError(null); setFilesLoading(true); setLoadedAccessKey(''); setSelected(null); setChecked([]);
+    setListError(null); setFilesLoading(true); setLoadedAccessKey(''); setSelected(null); setChecked([]); fileSequence.current++; setOpeningFile(null);
     try {
-      // Existing authorized GET only: read complete pages once, then filter before pagination.
-      const [result, reference] = await Promise.all([loadFileApplications(page => apiFetch<Paginated<ApplicationSummary>>(`/association-applications?page=${page}&pageSize=100&includeCounts=false`)), getReferenceData()]);
+      // Complete metadata only; full dossiers are fetched individually when opened.
+      const [result, reference] = await Promise.all([readApplicationIndex(() => apiFetch<ApplicationIndex<ApplicationFileItem>>('/association-applications/index?kind=files')), getReferenceData()]);
       if (sequence === loadSequence.current) { setFileApplications(result); setReferenceSectors(reference.associationSectors); setLoadedAccessKey(accessKey); }
       return sequence === loadSequence.current;
     } catch (err) {
@@ -110,13 +117,25 @@ export default function AdminApplicationsPage() {
 
   useEffect(() => { setFileApplications([]); setLoadedAccessKey(''); setSelected(null); setChecked([]); setRegion(''); setCity(''); setSector(''); setPage(1); }, [accessKey]);
 
-  useEffect(() => { setChecked([]); setSelected(null); }, [page, search, status, workflow, region, city, sector, currentSection]);
+  useEffect(() => { fileSequence.current++; setOpeningFile(null); setChecked([]); setSelected(null); }, [page, search, status, workflow, region, city, sector, currentSection]);
+
+  const openFile = useCallback(async (row: ApplicationFileItem) => {
+    const sequence = ++fileSequence.current;
+    setOpeningFile(row.id); setSelected(null); setListError(null);
+    try {
+      const full = await resolveCurrentRead(apiFetch<ApplicationSummary>(`/association-applications/${row.id}`), () => sequence === fileSequence.current);
+      if (!full) return;
+      if (full.id !== row.id) throw new Error('تعذّر مطابقة ملف الجمعية؛ حدّث القائمة.');
+      setSelected(full);
+    } catch (reason) { if (sequence === fileSequence.current) setListError(reason instanceof Error ? reason.message : 'تعذّر تحميل ملف الجمعية.'); }
+    finally { if (sequence === fileSequence.current) setOpeningFile(null); }
+  }, []);
 
   useEffect(() => {
     if (!initialQueryParam('search') || !data?.items.length) return;
     const match = data.items.find((item) => item.publicCode === search);
-    if (match) setSelected(match);
-  }, [data, search]);
+    if (match) void openFile(match);
+  }, [data, search, openFile]);
 
   async function startCheckedProcessing() {
     if (processing || !checked.length || checked.length > 250) return;
@@ -154,7 +173,7 @@ export default function AdminApplicationsPage() {
       {currentSection === 'settings' && <section aria-label="موعد التقديم"><SelectionBoard user={user} mode="settings" /></section>}
       {currentSection === 'files' && <section aria-label="ملفات الطلبات">
       <h2>تفاصيل الطلبات والبحث</h2>
-      <div className="button-row" style={{ marginBottom: 16 }}>{[['','الكل'],['new','جديدة'],['processing','قيد المعالجة'],['missing','بانتظار الاستكمال']].map(([key,label]) => <button key={key} type="button" style={workflow === key ? primaryButtonStyle : secondaryButtonStyle} onClick={() => { setWorkflow(key); setPage(1); }}>{label}{data && 'counts' in data ? ` (${(data as Paginated<ApplicationSummary> & { counts?: Record<string, number> }).counts?.[key || 'all'] ?? 0})` : ''}</button>)}</div>
+      <div className="button-row" style={{ marginBottom: 16 }}>{[['','الكل'],['new','جديدة'],['processing','قيد المعالجة'],['missing','بانتظار الاستكمال']].map(([key,label]) => <button key={key} type="button" style={workflow === key ? primaryButtonStyle : secondaryButtonStyle} onClick={() => { setWorkflow(key); setPage(1); }}>{label}{data && 'counts' in data ? ` (${(data as Paginated<ApplicationFileItem> & { counts?: Record<string, number> }).counts?.[key || 'all'] ?? 0})` : ''}</button>)}</div>
       {actionMessage && <p role="status" style={actionMessage.startsWith('تم') ? { color: 'var(--success)' } : errorStyle}>{actionMessage}</p>}
 
       <form
@@ -196,7 +215,7 @@ export default function AdminApplicationsPage() {
         <button type="button" style={secondaryButtonStyle} onClick={() => { setSearchInput(''); setSearch(''); setStatus(''); setWorkflow(''); setRegion(''); setCity(''); setSector(''); setPage(1); }}>مسح الفلاتر</button>
         <button type="button" style={secondaryButtonStyle} disabled={filesLoading || processing} onClick={() => void load()}>تحديث القائمة</button>
       </form>
-      {filesLoading && <p role="status">جارٍ تحميل جميع الطلبات قبل الفرز…</p>}
+      {filesLoading && <p role="status">جارٍ تحميل فهرس الطلبات المختصر قبل الفرز…</p>}
 
       {listError && (
         <p role="alert" style={errorStyle}>
@@ -228,7 +247,7 @@ export default function AdminApplicationsPage() {
               </tr>
             )}
             {data?.items.map((row) => (
-              <tr key={row.id} onClick={() => setSelected(row)} style={{ cursor: 'pointer' }}>
+              <tr key={row.id} onClick={() => void openFile(row)} style={{ cursor: 'pointer' }}>
                 <td style={tdStyle}>{canAdmin(user, 'applications.review') && row.status === 'UNDER_REVIEW' && row.eligibilityStatus === 'PENDING' && !row.processingStartedAt && <input type="checkbox" aria-label={`تحديد ${row.name}`} disabled={processing} checked={checked.includes(row.id)} onClick={(event) => event.stopPropagation()} onChange={(event) => setChecked((old) => event.target.checked ? [...new Set([...old, row.id])] : old.filter((id) => id !== row.id))} />} {row.name}</td>
                 <td style={{ ...tdStyle, ...ltrStyle }}>{row.publicCode}</td>
                 <td style={tdStyle}>
@@ -242,7 +261,7 @@ export default function AdminApplicationsPage() {
                 <td style={{ ...tdStyle, ...ltrStyle }}>{row.scoreLabel}</td>
                 <td style={tdStyle}>{new Date(row.submittedAt).toLocaleDateString('ar-SA')}</td>
                 <td style={tdStyle}>
-                  <button type="button" style={secondaryButtonStyle} onClick={() => setSelected(row)}>
+                  <button type="button" style={secondaryButtonStyle} disabled={openingFile === row.id} onClick={(event) => { event.stopPropagation(); void openFile(row); }}>
                     عرض
                   </button>
                 </td>
@@ -272,6 +291,7 @@ export default function AdminApplicationsPage() {
         </div>
       )}
 
+      {openingFile && <div role="dialog" aria-modal="true" aria-label="تحميل ملف الجمعية" style={modalOverlayStyle}><section style={modalStyle}><p role="status">جارٍ تحميل الملف الكامل؛ لا تُعرض بيانات ناقصة.</p><button type="button" style={secondaryButtonStyle} onClick={() => { fileSequence.current++; setOpeningFile(null); }}>إلغاء</button></section></div>}
       {selected && (
         <ApplicationDetail
           user={user}

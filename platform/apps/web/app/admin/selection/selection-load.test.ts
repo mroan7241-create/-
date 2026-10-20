@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 // Node 24's type-stripping runner needs the explicit TypeScript extension.
 // @ts-ignore -- standalone node --test import
-import { fetchPagedItems, fetchAffectedItems, resolveCurrentRead } from './selection-load.ts';
+import { readApplicationIndex, fetchPagedItems, fetchAffectedItems, resolveCurrentRead } from './selection-load.ts';
 // @ts-ignore -- standalone node --test import
 import { regionApplications, filterApplications, applicationCityKey, groupApplications, selectionGroup } from './selection-groups.ts';
 import { readFileSync } from 'node:fs';
@@ -11,9 +11,9 @@ import type { ApplicationSummary, GeographicUnit } from '../../lib/api';
 test('list loading requests a typed lightweight projection and hydrates every editable dialog', () => {
   const board = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8');
   assert.match(board, /useState<ApplicationListItem\[\]>/);
-  assert.equal((board.match(/includeCounts=false&view=list/g) ?? []).length, 2);
+  assert.equal((board.match(/index\?kind=selection/g) ?? []).length, 2);
   assert.match(board, /async function openApplication\(/);
-  assert.match(board, /apiFetch<ApplicationSummary>\(`\/association-applications\/\$\{application.id\}`\)/);
+  assert.ok(board.includes("${application.id}${withEvidence ? '?view=review' : ''}"));
   for (const kind of ['eligibility', 'evaluation', 'information', 'detail']) {
     assert.match(board, new RegExp(`openApplication\\('${kind}', application\\)`));
   }
@@ -21,9 +21,22 @@ test('list loading requests a typed lightweight projection and hydrates every ed
   assert.match(board, /full.id !== application.id/);
   assert.match(board, /detailSequence.current\+\+/);
   assert.match(board, /onOpenFile=\{\(\) => setDetailTarget\(evaluationTarget\)\}/);
-  assert.match(board, /resolveCurrentRead\(Promise.all\(/);
-  assert.match(board, /kind === 'eligibility' \? getApplicationEligibilityEvidence\(application.id\)/);
+  assert.match(board, /resolveCurrentRead\(apiFetch/);
+  assert.match(board, /const evidence = full.currentEligibilityEvidence \?\? null/);
+  assert.match(board, /if \(withEvidence && !evidence\) throw/);
+  assert.doesNotMatch(board, /getApplicationEligibilityEvidence/);
+  assert.ok(board.includes('${id}?view=list'));
   assert.match(board, /<EligibilityDialog application=\{eligibilityTarget\} evidence=\{eligibilityEvidence\}/);
+});
+
+test('one complete index validates all 319 identities without a paged request waterfall', async () => {
+  let calls = 0;
+  const items = Array.from({length:319}, (_, i) => ({id:String(i)}));
+  assert.deepEqual(await readApplicationIndex(async () => { calls++; return {items,total:319}; }), items);
+  assert.equal(calls, 1);
+  for (const snapshot of [{items,total:320}, {items:[{id:'a'},{id:'a'}],total:2}, {items:[],total:5001}]) {
+    await assert.rejects(readApplicationIndex(async () => snapshot), /لم يكتمل/);
+  }
 });
 
 test('a cancelled or obsolete detail read cannot open its record after another read', async () => {

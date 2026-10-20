@@ -180,10 +180,12 @@ export class ApplicationAccessService {
     for (const application of applications) if (application.selectionList && application.selectionList !== 'MAIN') result.set(application.id, { status: 'NOT_REQUESTED' });
     if (!relevant.length) return result;
     const ids = relevant.map(application => application.id);
-    const records = await tx.auditLog.findMany({ where: { action: 'APPLICATION_ACCESS_EMAIL_QUEUED', OR: ids.map(id => ({ metadata: { path: ['applicationId'], equals: id } })) }, select: { metadata: true, createdAt: true } });
+    const [records, origins] = await Promise.all([
+      tx.auditLog.findMany({ where: { action: 'APPLICATION_ACCESS_EMAIL_QUEUED', OR: ids.map(id => ({ metadata: { path: ['applicationId'], equals: id } })) }, select: { metadata: true, createdAt: true } }),
+      tx.auditLog.findMany({ where: { action: 'APPLICATION_SELECTION_DECIDED', entityId: { in: ids }, metadata: { path: ['workflowVersion'], equals: 2 } }, select: { entityId: true, metadata: true } }),
+    ]);
     const eventIds = records.flatMap(record => typeof (record.metadata as { eventId?: unknown })?.eventId === 'string' ? [(record.metadata as { eventId: string }).eventId] : []);
-    const events = await tx.outboxEvent.findMany({ where: { id: { in: eventIds } } });
-    const origins = await tx.auditLog.findMany({ where: { action: 'APPLICATION_SELECTION_DECIDED', entityId: { in: ids }, metadata: { path: ['workflowVersion'], equals: 2 } }, select: { entityId: true, metadata: true } });
+    const events = eventIds.length ? await tx.outboxEvent.findMany({ where: { id: { in: eventIds } } }) : [];
     for (const application of applications) {
       if (application.selectionList && application.selectionList !== 'MAIN') { result.set(application.id, { status: 'NOT_REQUESTED' }); continue; }
       let matched = false, failed = false;

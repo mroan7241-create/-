@@ -2,8 +2,9 @@ import type { ApplicationSummary } from '../../lib/api';
 // @ts-ignore -- Node's standalone type-stripping test runner needs the extension.
 import { fetchPagedItems } from '../selection/selection-load.ts';
 
-export function fileCityKey(app: ApplicationSummary) { return `${app.regionOfficialCode ?? app.region}:${app.centerOfficialCode ?? app.governorateOfficialCode ?? ''}:${app.city}`; }
-export function fileRegionKey(app: ApplicationSummary) { return app.regionOfficialCode || app.region || ''; }
+type FileApplication = Pick<ApplicationSummary, 'id' | 'name' | 'publicCode' | 'sector' | 'region' | 'city' | 'email' | 'contactName' | 'licenseNumber' | 'regionOfficialCode' | 'governorateOfficialCode' | 'centerOfficialCode' | 'status' | 'eligibilityStatus' | 'processingStartedAt'> & { v2Payload?: ApplicationSummary['v2Payload']; sectorValues?: string[] };
+export function fileCityKey(app: Pick<FileApplication, 'regionOfficialCode' | 'region' | 'centerOfficialCode' | 'governorateOfficialCode' | 'city'>) { return `${app.regionOfficialCode ?? app.region}:${app.centerOfficialCode ?? app.governorateOfficialCode ?? ''}:${app.city}`; }
+export function fileRegionKey(app: Pick<FileApplication, 'regionOfficialCode' | 'region'>) { return app.regionOfficialCode || app.region || ''; }
 export async function loadFileApplications(fetchPage: (page: number) => Promise<{ items: ApplicationSummary[]; total: number; totalPages: number }>) {
   let expected: number | null = null;
   const items = await fetchPagedItems(async page => {
@@ -17,17 +18,18 @@ export async function loadFileApplications(fetchPage: (page: number) => Promise<
 }
 
 export interface FileFilters { search: string; status: string; workflow: string; city: string; sector: string; region?: string }
-export function applicationSectors(application: ApplicationSummary): string[] {
+export function applicationSectors(application: Pick<FileApplication, 'sector' | 'sectorValues' | 'v2Payload'>): string[] {
+  if (Array.isArray(application.sectorValues)) return application.sectorValues;
   const organization = application.v2Payload?.organization as Record<string, unknown> | undefined;
   const values = Array.isArray(organization?.sectors) ? organization.sectors : (application.sector ?? '').split(/[,،;؛]/);
   return [...new Set([...values, organization?.sectorOther].filter((value): value is string => typeof value === 'string' && !!value.trim()).map(value => value.trim()))];
 }
-export function selectableSectors(application: ApplicationSummary, allowed?: readonly string[]) {
+export function selectableSectors(application: Pick<FileApplication, 'sector' | 'sectorValues' | 'v2Payload'>, allowed?: readonly string[]) {
   const values = applicationSectors(application);
   if (!allowed) return values;
   return [...new Set(values.map(value => allowed.includes(value) && value !== 'أخرى' ? value : 'أخرى'))];
 }
-export function fileFilterOptions(applications: readonly ApplicationSummary[], region = '', allowed?: readonly string[]) {
+export function fileFilterOptions(applications: readonly FileApplication[], region = '', allowed?: readonly string[]) {
   const cities = new Map<string, string>();
   const regions = new Map<string, string>();
   for (const app of applications) {
@@ -40,7 +42,7 @@ export function fileFilterOptions(applications: readonly ApplicationSummary[], r
     sectors: [...new Set(applications.flatMap(app => selectableSectors(app, allowed)))].sort((a,b) => a === b ? 0 : a === 'أخرى' ? 1 : b === 'أخرى' ? -1 : a.localeCompare(b, 'ar')),
   };
 }
-export function filterFileApplications(applications: readonly ApplicationSummary[], filters: FileFilters, allowed?: readonly string[]): ApplicationSummary[] {
+export function filterFileApplications<T extends FileApplication>(applications: readonly T[], filters: FileFilters, allowed?: readonly string[]): T[] {
   const q = filters.search.trim().toLocaleLowerCase('ar');
   return applications.filter(app => (!filters.status || app.status === filters.status)
     && (!filters.region || fileRegionKey(app) === filters.region)

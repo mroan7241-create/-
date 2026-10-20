@@ -210,6 +210,15 @@ export type ApplicationListItem = Pick<ApplicationSummary,
   'schemaVersion' | 'financialPriority' | 'selectionDelivery' | 'selectionEditable' | 'ownerCanCorrect'
 > & { latestInformationRequest: Pick<ApplicationInformationRequest, 'status'> | null };
 
+/** Metadata only; never pass this to an editable form or a dossier viewer. */
+export type ApplicationFileItem = Pick<ApplicationSummary,
+  'id' | 'publicCode' | 'name' | 'sector' | 'region' | 'city' | 'email' | 'contactName' | 'licenseNumber' |
+  'regionOfficialCode' | 'governorateOfficialCode' | 'centerOfficialCode' | 'status' | 'eligibilityStatus' |
+  'selectionList' | 'processingStartedAt' | 'resultingAssociationId' | 'submittedAt' | 'scoreLabel'
+> & { sectorValues: string[] };
+
+export type ApplicationIndex<T> = { items: T[]; total: number; readAt: string };
+
 export interface GeographicUnit {
   officialCode: string;
   nameAr: string;

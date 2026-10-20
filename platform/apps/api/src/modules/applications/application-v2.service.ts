@@ -392,8 +392,7 @@ export class ApplicationV2Service {
     const application = await prisma.associationApplication.findUnique({ where: { id: applicationId }, include: { attachments: true, informationRequests: true } });
     if (!application) throw new ApiError('APPLICATION_NOT_FOUND', 'طلب المشاركة غير موجود', 404);
     if (ctx) assertAdminApplicationScope(ctx, application.regionOfficialCode);
-    if (application.schemaVersion === 1) return { schemaVersion: 1, checks: [], summary: 'يتطلب طلب V1 مراجعة بشرية وفق بياناته التاريخية' };
-    return buildEligibilityEvidence(asMap(application.v2Payload), new Set(application.attachments.map((item) => item.fieldKey)), application.informationRequests.length);
+    return currentEligibilityEvidence(application);
   }
 
   async evaluate(ctx: AuthContext, applicationId: string, dto: EvaluationV2Dto) {
@@ -699,6 +698,11 @@ async function validateV2Payload(payload: JsonMap, attachments: Set<string>, cha
   const serviceScope = check('location.serviceScope', () => requiredPathText(payload, 'location.serviceScope', 'نطاق خدمة الجمعية', 1000));
   if (changed) return;
   return { name: name!, licenseNumber: licenseNumber!, licenseExpiryDate: licenseExpiryDate!, category: category!, sector: sector!, officialEmail: officialEmail!, officialPhone: officialPhone!, coordinatorName: coordinatorName!, coordinatorTitle: coordinatorTitle!, coordinatorPhone: coordinatorPhone!, coordinatorEmail: coordinatorEmail!, registeredFamilies: registeredFamilies!, beneficiaryDatabaseUpdatedAt: beneficiaryDatabaseUpdatedAt!, revenue: revenue!, expenses: expenses!, currentAssets: currentAssets!, currentLiabilities: currentLiabilities!, regionCode: regionCode!, governorateCode: governorateCode!, centerCode, regionName: region!.nameAr.replace(/^منطقة\s+/, ''), governorateName: governorate!.nameAr.replace(/^(مدينة|محافظة)\s+/, ''), locationOtherText: locationOtherText!, locationNeedsVerification, serviceScope: serviceScope!, notes: readOptionalString(pathValue(payload, 'organization.notes')) || null };
+}
+
+export function currentEligibilityEvidence(application: { schemaVersion: number; v2Payload: Prisma.JsonValue | null; attachments: { fieldKey: string }[]; informationRequests: unknown[] }) {
+  if (application.schemaVersion === 1) return { schemaVersion: 1, checks: [], summary: 'يتطلب طلب V1 مراجعة بشرية وفق بياناته التاريخية' };
+  return buildEligibilityEvidence(asMap(application.v2Payload), new Set(application.attachments.map(item => item.fieldKey)), application.informationRequests.length);
 }
 
 function buildEligibilityEvidence(payload: JsonMap, attachments: Set<string>, needsInfoRounds: number) {

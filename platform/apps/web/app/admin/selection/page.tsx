@@ -5,10 +5,10 @@ import { AppShell } from '../../components/AppShell';
 import { PageHeader } from '../../components/PageHeader';
 import { useRoleGuard } from '../../lib/use-role-guard';
 import { canAdmin, isAdminOwner } from '../../lib/admin-access';
-import type { CurrentUser, ApplicationListItem } from '../../lib/api';
-import { apiFetch, decideApplicationEligibility, decideApplicationSelection, evaluateApplication, getApplicationEligibilityEvidence, getApplicationIntake, requestApplicationInformation, resendApplicationInformation, resendApplicationRejection, resendApplicationSelection, commitApplicationSelection, getApplicationGeography, saveSystemSetting, startApplicationProcessing, type ApplicationSummary, type GeographicUnit, type InternalSelectionDecision, type Paginated } from '../../lib/api';
+import type { CurrentUser, ApplicationIndex, ApplicationListItem } from '../../lib/api';
+import { apiFetch, decideApplicationEligibility, decideApplicationSelection, evaluateApplication, getApplicationIntake, requestApplicationInformation, resendApplicationInformation, resendApplicationRejection, resendApplicationSelection, commitApplicationSelection, getApplicationGeography, saveSystemSetting, startApplicationProcessing, type ApplicationSummary, type GeographicUnit, type InternalSelectionDecision } from '../../lib/api';
 import { filterApplications, applicationCityKey, groupApplications, PROJECT_GROUP_LABELS, selectionGroup, SELECTION_GROUPS, type SelectionGroup } from './selection-groups';
-import { fetchPagedItems, fetchAffectedItems, resolveCurrentRead } from './selection-load';
+import { readApplicationIndex, fetchAffectedItems, resolveCurrentRead } from './selection-load';
 import { ApplicationDetail } from '../applications/application-detail';
 import { SavedReviewDialog } from '../applications/saved-review';
 import { evaluationFacts, type EvaluationAxis } from './evaluation-evidence';
@@ -65,7 +65,7 @@ export function SelectionBoard({ user, showHeader = false, mode = 'all' }: { use
     const sequence = ++loadSequence.current;
     setListLoading(true);
     try {
-      const all = await fetchPagedItems((page) => apiFetch<Paginated<ApplicationListItem>>(`/association-applications?page=${page}&pageSize=100&includeCounts=false&view=list`));
+      const all = await readApplicationIndex(() => apiFetch<ApplicationIndex<ApplicationListItem>>('/association-applications/index?kind=selection'));
       if (sequence === loadSequence.current) setApps(all);
     } catch (reason) {
       if (sequence === loadSequence.current) setMessage(readError(reason));
@@ -85,12 +85,11 @@ export function SelectionBoard({ user, showHeader = false, mode = 'all' }: { use
     const sequence = ++detailSequence.current;
     detailBusyRef.current = true; setOpeningTarget(application);
     try {
-      const result = await resolveCurrentRead(Promise.all([
-        apiFetch<ApplicationSummary>(`/association-applications/${application.id}`),
-        kind === 'eligibility-view' ? getApplicationEligibilityEvidence(application.id).catch(() => ({ summary: 'تعذّر تحميل المؤشرات الحالية؛ القرار والملاحظات المحفوظة معروضة دون تغيير.' })) : kind === 'eligibility' ? getApplicationEligibilityEvidence(application.id) : Promise.resolve(null),
-      ]), () => sequence === detailSequence.current);
-      if (!result) return;
-      const [full, evidence] = result;
+      const withEvidence = kind === 'eligibility' || kind === 'eligibility-view';
+      const full = await resolveCurrentRead(apiFetch<ApplicationSummary & { currentEligibilityEvidence?: Record<string, unknown> }>(`/association-applications/${application.id}${withEvidence ? '?view=review' : ''}`), () => sequence === detailSequence.current);
+      if (!full) return;
+      const evidence = full.currentEligibilityEvidence ?? null;
+      if (withEvidence && !evidence) throw new Error('تعذّر تحميل مؤشرات الأهلية الحالية؛ لا يمكن فتح القرار ببيانات ناقصة.');
       if (full.id !== application.id) throw new Error('تعذّر مطابقة ملف الجمعية؛ أعد تحميل القائمة.');
       if (kind === 'eligibility-view' || kind === 'evaluation-view') { setEligibilityEvidence(evidence); setSavedReview({ application: full, kind: kind === 'eligibility-view' ? 'eligibility' : 'evaluation' }); }
       else if (kind === 'eligibility') { setEligibilityEvidence(evidence); setEligibilityTarget(full); }
@@ -109,7 +108,7 @@ export function SelectionBoard({ user, showHeader = false, mode = 'all' }: { use
     if (!ids.length) return;
     const sequence = ++loadSequence.current;
     try {
-      const changed = await fetchAffectedItems<ApplicationListItem>(ids, (id) => apiFetch<ApplicationSummary>(`/association-applications/${id}`), () => fetchPagedItems((page) => apiFetch<Paginated<ApplicationListItem>>(`/association-applications?page=${page}&pageSize=100&includeCounts=false&view=list`)));
+      const changed = await fetchAffectedItems<ApplicationListItem>(ids, (id) => apiFetch<ApplicationListItem>(`/association-applications/${id}?view=list`), () => readApplicationIndex(() => apiFetch<ApplicationIndex<ApplicationListItem>>('/association-applications/index?kind=selection')));
       if (sequence === loadSequence.current) setApps((current) => current.map((application) => changed.find((item) => item.id === application.id) ?? application));
     } catch (reason) {
       if (sequence === loadSequence.current) setMessage(`${success} لكن تعذّر تحديث العرض؛ لا تُعد تنفيذ الإجراء. استخدم تحديث القائمة. ${readError(reason)}`);

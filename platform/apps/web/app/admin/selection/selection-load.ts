@@ -4,6 +4,16 @@ export async function resolveCurrentRead<T>(read: Promise<T>, isCurrent: () => b
   return isCurrent() ? result : null;
 }
 
+/** A complete bounded metadata index keeps global filters/ranks honest in one request. */
+export async function readApplicationIndex<T extends { id: string }>(read: () => Promise<{ items: T[]; total: number }>): Promise<T[]> {
+  const result = await read();
+  if (!Array.isArray(result.items) || !Number.isSafeInteger(result.total) || result.total < 0 || result.total > 5000 ||
+    result.items.length !== result.total || new Set(result.items.map(row => row.id)).size !== result.total) {
+    throw new Error('لم يكتمل فهرس الطلبات؛ حدّث القائمة قبل الفرز أو الاختيار.');
+  }
+  return result.items;
+}
+
 export async function fetchPagedItems<T>(
   fetchPage: (page: number) => Promise<{ items: T[]; totalPages: number }>,
   concurrency = 4,

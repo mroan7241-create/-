@@ -19,7 +19,7 @@ describe('application list projection compatibility', () => {
     answers: [], attachments: [{ fieldKey: 'strategicPlan' }], licenseFile: { id: 'license' },
     informationRequests: [{ id: 'info', status: 'SUBMITTED', note: 'ملاحظة', deadline: null, requestedAt: date, submittedAt: date, items: [] }],
   };
-  const access = { selectionDeliveries: jest.fn(async () => new Map()) };
+  const access = { selectionDeliveries: jest.fn(async () => new Map()), selectionDelivery: jest.fn(async () => ({ status: 'NOT_REQUESTED' })) };
   const service = () => new ApplicationsService({} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never, access as never);
 
   beforeEach(() => {
@@ -43,6 +43,36 @@ describe('application list projection compatibility', () => {
     }
     expect(result.items[0]).toMatchObject({ id: row.id, evaluationScore: 90, financialPriority: 'HIGHER_CAPACITY_LOWER_AID_PRIORITY', latestInformationRequest: { status: 'SUBMITTED' }, selectionEditable: true });
     expect(result.counts).toEqual({});
+  });
+
+  it('loads the complete selection index in one scoped query without per-page counts', async () => {
+    const ctx = { role: AccountRole.ADMIN, adminFullAccess: false, adminApplicationScope: { regionCodes: ['0001'] } } as AuthContext;
+    const result = await service().applicationIndex(ctx, 'selection');
+    expect(result.total).toBe(1);
+    expect(result.items[0]).toMatchObject({ id: row.id, evaluationScore: 90 });
+    expect(prisma.associationApplication.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.associationApplication.count).not.toHaveBeenCalled();
+    expect(prisma.associationApplication.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { regionOfficialCode: { in: ['0001'] } }, take: 5001 }));
+    await expect(service().applicationIndex({ role: AccountRole.ABANMI } as AuthContext, 'selection')).rejects.toMatchObject({ code: 'AUTH_FORBIDDEN' });
+    expect(prisma.associationApplication.findMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses the authorized full read for current eligibility evidence, never a second application query', async () => {
+    jest.spyOn(prisma.associationApplication, 'findUnique').mockResolvedValue({ ...row, schemaVersion: 1 } as never);
+    jest.spyOn(prisma.projectParticipation, 'findUnique').mockResolvedValue(null);
+    const result = await service().getApplicationDetail(row.id, undefined, 'review');
+    expect(result).toMatchObject({ id: row.id, currentEligibilityEvidence: { schemaVersion: 1, checks: [] } });
+    expect(prisma.associationApplication.findUnique).toHaveBeenCalledTimes(1);
+    await expect(service().getApplicationDetail(row.id, { role: AccountRole.ADMIN, adminFullAccess: false, adminApplicationScope: { regionCodes: ['0013'] } } as AuthContext, 'review')).rejects.toMatchObject({ code: 'ADMIN_APPLICATION_SCOPE_FORBIDDEN' });
+  });
+
+  it('refreshes a changed list row without answers, JSON payloads or attachments', async () => {
+    jest.spyOn(prisma.associationApplication, 'findUnique').mockImplementation((async (args: { select: Record<string, unknown> }) =>
+      Object.fromEntries(Object.keys(args.select).map(key => [key, key === 'informationRequests' ? [{ status: 'SUBMITTED' }] : row[key as keyof typeof row]]))) as never);
+    const result = await service().getApplicationDetail(row.id, undefined, 'list');
+    expect(result).not.toHaveProperty('v2Payload');
+    expect(result).not.toHaveProperty('answers');
+    expect(prisma.associationApplication.findUnique).toHaveBeenCalledWith(expect.objectContaining({ select: expect.any(Object) }));
   });
 
   it('preserves each list field against the existing full response without changing its default contract', async () => {

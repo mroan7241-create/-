@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 // @ts-ignore -- standalone Node type-stripping runner.
 import { applicationSectors, fileCityKey, fileRegionKey, fileFilterOptions, filterFileApplications, loadFileApplications, savedEvaluationRows } from './file-filters.ts';
 import type { ApplicationSummary } from '../../lib/api';
+import { readFileSync } from 'node:fs';
 
 const app = (patch: Partial<ApplicationSummary> = {}) => ({ id: 'a', publicCode: 'APP-000001', name: 'جمعية', sector: null, city: 'المركز', region: 'الرياض', regionOfficialCode: '01', governorateOfficialCode: '011', status: 'ACCEPTED', eligibilityStatus: 'PASSED', selectionList: 'RESERVE', processingStartedAt: '2026-10-10', ...patch } as ApplicationSummary);
 const empty = { search: '', status: '', workflow: '', city: '', sector: '' };
@@ -58,4 +59,24 @@ test('saved scores never default to 1 and missing contributions remain missing',
   assert.equal(savedEvaluationRows(saved,criteria)[0].score,3);
   assert.equal(savedEvaluationRows(saved,criteria)[0].points,18);
   assert.equal(savedEvaluationRows(app({evaluationBreakdown:{raw:{operationalReadiness:0}}}),criteria)[0].score,null);
+});
+
+test('metadata sector projection preserves filters without the full v2 dossier', () => {
+  const full = app({ v2Payload: { organization: { sectors: ['التعليم', 'أخرى'], sectorOther: 'علمية' } } });
+  const metadata = { ...app(), sectorValues: ['التعليم', 'أخرى', 'علمية'] };
+  assert.deepEqual(applicationSectors(metadata), applicationSectors(full));
+  assert.deepEqual(fileFilterOptions([metadata], '', ['التعليم', 'أخرى']), fileFilterOptions([full], '', ['التعليم', 'أخرى']));
+  assert.equal(filterFileApplications([metadata], { ...empty, sector: 'أخرى' }, ['التعليم', 'أخرى']).length, 1);
+});
+
+test('file list reads a complete metadata index but hydrates a fresh matching dossier before display', () => {
+  const source = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8');
+  assert.match(source, /useState<ApplicationFileItem\[\]>/);
+  assert.match(source, /index\?kind=files/);
+  assert.doesNotMatch(source, /loadFileApplications\(/);
+  assert.match(source, /resolveCurrentRead\(apiFetch<ApplicationSummary>/);
+  assert.match(source, /sequence === fileSequence.current/);
+  assert.match(source, /full.id !== row.id/);
+  assert.match(source, /event.stopPropagation\(\); void openFile\(row\)/);
+  assert.doesNotMatch(source, /setSelected\(row\)|setSelected\(match\)/);
 });
