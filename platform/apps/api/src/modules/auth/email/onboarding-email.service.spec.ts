@@ -37,6 +37,21 @@ describe('Onboarding atomic email queue', () => {
     expect(tx.systemSetting.create).toHaveBeenCalledWith({ data: { key: 'COVENANT_COMPLETION_EMAIL:test-covenant', value: { status: 'QUEUED', eventId: result.eventId } } });
     expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.participationAgreement.findUniqueOrThrow.mock.invocationCallOrder[0]);
     expect(enqueueEmail.mock.invocationCallOrder[0]).toBeLessThan(tx.systemSetting.create.mock.invocationCallOrder[0]);
+    const deliveries = enqueueEmail.mock.calls.map(([input]) => decryptEmailDelivery(input.data.id, input.data.payload as EmailDeliveryPayload));
+    expect(deliveries.map(item => item.params.to)).toEqual(['test@example.org', 'malyahya@alzaad.org.sa', 'marwanalsawi@alzaad.org.sa']);
+    expect(deliveries[1].context).toMatchObject({ recipientRole: 'mousa', markerKey: 'COVENANT_COMPLETION_EMAIL:test-covenant:mousa' });
+    expect(deliveries[2].context).toMatchObject({ recipientRole: 'marwan', markerKey: 'COVENANT_COMPLETION_EMAIL:test-covenant:marwan' });
+    expect(deliveries.every(item => item.context.type === 'covenant' && item.context.fileId === 'final-file')).toBe(true);
+  });
+  it('encrypts the 48-hour signing link addressed only to Mousa, not plaintext stored rows', async () => {
+    const { service, tx, queued, enqueueEmail, sendSecurityAlert } = fixture();
+    const token = 'SyntheticTokenThatMustNotAppearInStoredRows';
+    await service.sendCovenantSigningRequest({ agreementId: 'test-covenant', token, expiresAt: new Date(Date.now() + 48 * 3600_000), associationName: 'جمعية اختبار', reference: 'COV-TEST' }, tx as never);
+    expect(queued()).toMatchObject({ kind: 'NOTICE', params: { to: 'malyahya@alzaad.org.sa', body: expect.stringContaining('48 ساعة'), action: { url: expect.stringContaining(`/covenant/party-one/${token}`) } }, context: { type: 'covenant-signing', tokenHash: createHash('sha256').update(token).digest('hex') } });
+    expect(enqueueEmail).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(enqueueEmail.mock.calls)).not.toContain(token);
+    expect(JSON.stringify(enqueueEmail.mock.calls)).not.toContain('malyahya@alzaad.org.sa');
+    expect(sendSecurityAlert).not.toHaveBeenCalled();
   });
   it.each(['unsigned', 'hash'])('refuses %s covenant before enqueue/marker mutation', async invalid => {
     const { service, tx, enqueueEmail, agreement, pdf } = fixture();

@@ -9,7 +9,8 @@ export type EmailDeliveryContext =
   | { type: 'reset'; tokenId: string; accountId: string; credentialHash: string; predecessorIds: string[] }
   | { type: 'credentials'; accountId: string; credentialHash: string }
   | { type: 'rejection'; applicationId: string; expectedReason?: string }
-  | { type: 'covenant'; agreementId: string; fileId: string; sha256: string; markerKey: string; filename: string }
+  | { type: 'covenant'; agreementId: string; fileId: string; sha256: string; markerKey: string; filename: string; recipientRole?: 'mousa' | 'marwan' }
+  | { type: 'covenant-signing'; agreementId: string; tokenHash: string; markerKey: string }
   | { type: 'notice'; accountId: string };
 export type EmailDeliveryPhase = 'READY' | 'SMTP_STARTED' | 'SMTP_ACCEPTED';
 export interface EmailDeliveryPayload {
@@ -44,7 +45,7 @@ export function decryptEmailDelivery(id: string, payload: EmailDeliveryPayload):
     const decipher = createDecipheriv('aes-256-gcm', emailDeliveryEncryptionKey(), iv);
     decipher.setAAD(Buffer.from(`email-delivery:${id}:1:${payload.kind}`)); decipher.setAuthTag(tag);
     const value = JSON.parse(Buffer.concat([decipher.update(Buffer.from(payload.ciphertext, 'base64')), decipher.final()]).toString('utf8')) as DecryptedEmailDelivery;
-    if (value.kind !== payload.kind || !value.params || typeof value.params.to !== 'string' || !isEmail(value.params.to) || !value.context || !['access', 'reset', 'credentials', 'rejection', 'covenant', 'notice'].includes(value.context.type)) throw new Error();
+    if (value.kind !== payload.kind || !value.params || typeof value.params.to !== 'string' || !isEmail(value.params.to) || !value.context || !['access', 'reset', 'credentials', 'rejection', 'covenant', 'covenant-signing', 'notice'].includes(value.context.type)) throw new Error();
     if ((value.context.type === 'access') !== (value.kind === 'APPLICATION_ACCESS') || (value.context.type === 'reset') !== (value.kind === 'PASSWORD_RESET')) throw new Error();
     return value;
   } catch { throw new Error('MAIL_PAYLOAD_INVALID'); }

@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { EmailService, classifyEmailFailure, decryptEmailDelivery, type DecryptedEmailDelivery, type EmailDeliveryPayload, type ApplicationAccessEmailParams, type PasswordResetEmailParams, type SecurityAlertEmailParams } from '../auth/email/email.service';
 import { StorageService } from '../files/storage.service';
 import { storageConfig } from '../../config/storage.config';
+import { COVENANT_STAFF_RECIPIENTS } from '../auth/email/onboarding-email.service';
 import { adminApplicationRegionCodes, adminApplicationScopeWhere } from '../auth/admin-route-permissions';
 
 const OUTBOX_BATCH_SIZE = 100;
@@ -194,11 +195,11 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
           where: { id: { in: context.predecessorIds.filter(id => id !== context.tokenId) }, accountId: context.accountId, consumedAt: null }, data: { consumedAt: now },
         });
         if (!current) await this.suppressEmailCandidate(tx, context);
-        if (context.type === 'covenant') {
+        if (context.type === 'covenant' || context.type === 'covenant-signing') {
           const marker = await tx.systemSetting.updateMany({ where: { key: context.markerKey, value: { path: ['eventId'], equals: event.id } }, data: { value: { status: 'SENT', eventId: event.id, sentAt: now.toISOString() } } });
           if (marker.count !== 1) throw new Error('MAIL_STATE_INVALID');
         }
-        await tx.auditLog.create({ data: { action: mailAuditAction(context.type), entityType: context.type === 'access' ? 'association_application_drafts' : context.type === 'rejection' ? 'association_applications' : context.type === 'covenant' ? 'participation_agreements' : 'accounts', entityId: context.type === 'access' ? context.draftTokens[0]!.draftId : context.type === 'rejection' ? context.applicationId : context.type === 'covenant' ? context.agreementId : context.accountId, metadata: { eventId: event.id, accepted: true, stale: !current } } });
+        await tx.auditLog.create({ data: { action: mailAuditAction(context.type), entityType: context.type === 'access' ? 'association_application_drafts' : context.type === 'rejection' ? 'association_applications' : (context.type === 'covenant' || context.type === 'covenant-signing') ? 'participation_agreements' : 'accounts', entityId: context.type === 'access' ? context.draftTokens[0]!.draftId : context.type === 'rejection' ? context.applicationId : (context.type === 'covenant' || context.type === 'covenant-signing') ? context.agreementId : context.accountId, metadata: { eventId: event.id, accepted: true, stale: !current } } });
         const completed = await tx.outboxEvent.updateMany({ where: { id: event.id, status: OutboxEventStatus.PROCESSING, lockedAt: event.lockedAt, payload: { path: ['phase'], equals: 'SMTP_ACCEPTED' } }, data: { status: OutboxEventStatus.PROCESSED, payload: payload as unknown as Prisma.InputJsonValue, processedAt: now, failedAt: null, lockedAt: null, lastError: null, attempts: { increment: 1 } } });
         if (completed.count !== 1) throw new Error('MAIL_STATE_UNAVAILABLE');
         return true;
@@ -241,8 +242,9 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
     } else if (context.type === 'reset' || context.type === 'credentials' || context.type === 'notice') {
       if (!context.accountId) throw new Error('MAIL_PAYLOAD_INVALID');
       await tx.$queryRaw`SELECT id FROM accounts WHERE id=${context.accountId}::uuid FOR UPDATE`;
-    } else if (context.type === 'covenant') {
-      if (!context.agreementId || context.markerKey !== `COVENANT_COMPLETION_EMAIL:${context.agreementId}`) throw new Error('MAIL_PAYLOAD_INVALID');
+    } else if (context.type === 'covenant' || context.type === 'covenant-signing') {
+      const expected = context.type === 'covenant-signing' ? `COVENANT_PARTY_ONE_EMAIL:${context.agreementId}:${context.tokenHash}` : `COVENANT_COMPLETION_EMAIL:${context.agreementId}${context.recipientRole ? `:${context.recipientRole}` : ''}`;
+      if (!context.agreementId || context.markerKey !== expected || (context.type === 'covenant' && context.recipientRole && !Object.hasOwn(COVENANT_STAFF_RECIPIENTS, context.recipientRole))) throw new Error('MAIL_PAYLOAD_INVALID');
       await tx.$queryRaw`SELECT id FROM participation_agreements WHERE id=${context.agreementId}::uuid FOR UPDATE`;
     } else if (context.type === 'rejection') {
       if (!context.applicationId) throw new Error('MAIL_PAYLOAD_INVALID');
@@ -286,9 +288,17 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
     } else if (context.type === 'rejection') {
       const application = await tx.associationApplication.findUnique({ where: { id: context.applicationId } });
       if (!application || (application.status !== 'REJECTED' && application.eligibilityStatus !== 'FAILED') || application.email?.trim().toLowerCase() !== to || (context.expectedReason !== undefined && (application.rejectReason ?? application.eligibilityNotes ?? 'عدم استيفاء متطلبات المشاركة') !== context.expectedReason)) throw new Error('MAIL_STATE_INVALID');
+    } else if (context.type === 'covenant-signing') {
+      const agreement = await tx.participationAgreement.findUnique({ where: { id: context.agreementId } });
+      if (!agreement || agreement.status !== 'SIGNED_BY_ORG' || !agreement.orgSignatureFileId || agreement.partyOneSigningTokenHash !== context.tokenHash || agreement.partyOneSigningConsumedAt || to !== COVENANT_STAFF_RECIPIENTS.mousa.email) throw new Error('MAIL_STATE_INVALID');
+      if (!agreement.partyOneSigningExpiresAt || agreement.partyOneSigningExpiresAt <= now) throw new Error('MAIL_EXPIRED');
+      const marker = await tx.systemSetting.findUnique({ where: { key: context.markerKey } });
+      const value = marker?.value as { status?: string; eventId?: string } | undefined;
+      if (!value || value.eventId !== eventId || !['QUEUED', 'SENT'].includes(value.status ?? '')) throw new Error('MAIL_STATE_INVALID');
     } else {
       const agreement = await tx.participationAgreement.findUnique({ where: { id: context.agreementId }, include: { associationAccount: true } });
-      if (!agreement || agreement.status !== 'SIGNED' || !agreement.fullyExecutedAt || agreement.finalFileId !== context.fileId || agreement.finalSha256 !== context.sha256 || agreement.associationAccount?.email?.trim().toLowerCase() !== to) throw new Error('MAIL_STATE_INVALID');
+      const recipient = context.recipientRole ? COVENANT_STAFF_RECIPIENTS[context.recipientRole]?.email : agreement?.associationAccount?.email?.trim().toLowerCase();
+      if (!agreement || agreement.status !== 'SIGNED' || !agreement.fullyExecutedAt || agreement.finalFileId !== context.fileId || agreement.finalSha256 !== context.sha256 || recipient !== to) throw new Error('MAIL_STATE_INVALID');
       const marker = await tx.systemSetting.findUnique({ where: { key: context.markerKey } });
       const value = marker?.value as { status?: string; eventId?: string } | undefined;
       if (!value || value.eventId !== eventId || !['QUEUED', 'SENT'].includes(value.status ?? '')) throw new Error('MAIL_STATE_INVALID');
@@ -366,7 +376,7 @@ function retryDelayMs(attempt: number) { return Math.min(60 * 60 * 1000, 30_000 
 function safeError(error: unknown) { return error instanceof Error ? error.message : String(error); }
 function isMailStateError(error: unknown) { return error instanceof Error && ['MAIL_STATE_INVALID', 'MAIL_EXPIRED'].includes(error.message); }
 function mailAuditAction(type: DecryptedEmailDelivery['context']['type']) {
-  return { access: 'APPLICATION_ACCESS_EMAIL_SENT', reset: 'PASSWORD_RESET_EMAIL_SENT', credentials: 'ONBOARDING_CREDENTIALS_EMAIL_SENT', rejection: 'APPLICATION_REJECTION_EMAIL_SENT', covenant: 'COVENANT_COMPLETION_EMAIL_SENT', notice: 'SECURITY_ALERT_EMAIL_SENT' }[type];
+  return { access: 'APPLICATION_ACCESS_EMAIL_SENT', reset: 'PASSWORD_RESET_EMAIL_SENT', credentials: 'ONBOARDING_CREDENTIALS_EMAIL_SENT', rejection: 'APPLICATION_REJECTION_EMAIL_SENT', covenant: 'COVENANT_COMPLETION_EMAIL_SENT', 'covenant-signing': 'COVENANT_PARTY_ONE_EMAIL_SENT', notice: 'SECURITY_ALERT_EMAIL_SENT' }[type];
 }
 function describe(type: OutboxEventType) {
   if (type === OutboxEventType.DELIVERY_SUBMITTED) return { role: AccountRole.ASSOCIATION, title: 'تسليم بانتظار اعتماد الجمعية', body: 'أرسل المندوب إثبات التسليم وتوقيع المستفيد.', severity: NotificationSeverity.INFO };

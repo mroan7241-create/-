@@ -5,10 +5,29 @@ import { ApiError } from '../../../common/api-error';
 import { EmailService, enqueueEmail } from './email.service';
 import { EXECUTION_GUIDE_URL } from './email-layout';
 
+export const COVENANT_STAFF_RECIPIENTS = {
+  mousa: { email: 'malyahya@alzaad.org.sa', name: 'أ. موسى اليحيى' },
+  marwan: { email: 'marwanalsawi@alzaad.org.sa', name: 'أ. مروان الصاوي' },
+} as const;
+
 /** Queue notifications in the business transaction; encrypted outbox owns retries. */
 @Injectable()
 export class OnboardingEmailService {
   constructor(@Inject(EmailService) email: EmailService) { void email; }
+
+  async sendCovenantSigningRequest(input: { agreementId: string; token: string; expiresAt: Date; associationName: string; reference: string }, tx: Prisma.TransactionClient) {
+    const tokenHash = createHash('sha256').update(input.token).digest('hex');
+    const markerKey = `COVENANT_PARTY_ONE_EMAIL:${input.agreementId}:${tokenHash}`;
+    const url = `${publicWebUrl()}/covenant/party-one/${encodeURIComponent(input.token)}`;
+    const queued = await enqueueEmail(tx, 'NOTICE', {
+      to: COVENANT_STAFF_RECIPIENTS.mousa.email, name: COVENANT_STAFF_RECIPIENTS.mousa.name,
+      subject: `بانتظار توقيع الطرف الأول — ${input.associationName}`,
+      body: `وقّعت الجمعية ميثاق المشاركة، وهو بانتظار اعتمادكم بصفتكم ممثل الطرف الأول.\nالجمعية: ${input.associationName}\nرقم الميثاق: ${input.reference}\nالرابط خاص بكم وصالح لمدة 48 ساعة؛ يمكن فتحه والخروج والعودة قبل اعتماد التوقيع. يُغلق التوقيع بعد الاعتماد لحماية النسخة النهائية. لا تشاركوا الرابط مع الآخرين.\nبعد اكتمال التوقيع ستصل النسخة النهائية الموقعة إلى الجمعية وإليكم وإلى أ. مروان.`,
+      action: { label: 'مراجعة الميثاق وتوقيعه', url },
+    }, { type: 'covenant-signing', agreementId: input.agreementId, tokenHash, markerKey });
+    await tx.systemSetting.create({ data: { key: markerKey, value: { status: 'QUEUED', eventId: queued.eventId } } });
+    return queued;
+  }
 
   async sendCovenantCompletion(agreementId: string, finalPdf: Buffer, tx?: Prisma.TransactionClient): Promise<{ ok: boolean; alreadySent?: boolean; alreadyQueued?: boolean; emailQueued?: boolean; eventId?: string }> {
     if (!tx) return prisma.$transaction(client => this.sendCovenantCompletion(agreementId, finalPdf, client));
@@ -35,6 +54,19 @@ export class OnboardingEmailService {
       action: { label: 'الدخول إلى بوابة الجمعية', url: `${publicWebUrl()}/association` },
     }, { type: 'covenant', agreementId: agreement.id, fileId: agreement.finalFile.id, sha256: agreement.finalSha256!, markerKey: key, filename: `covenant-${agreement.reference ?? agreement.id}.pdf` });
     await tx.systemSetting.create({ data: { key, value: { status: 'QUEUED', eventId: queued.eventId } } });
+    // Separate events/markers isolate delivery failures and do not disclose the
+    // other recipients. Legacy owned messages above are never resent/backfilled.
+    for (const recipientRole of ['mousa', 'marwan'] as const) {
+      const recipient = COVENANT_STAFF_RECIPIENTS[recipientRole];
+      if (recipient.email === account.email.trim().toLowerCase()) continue;
+      const markerKey = `${key}:${recipientRole}`;
+      const copy = await enqueueEmail(tx, 'NOTICE', {
+        to: recipient.email, name: recipient.name,
+        subject: `نسخة الميثاق الموقّع — ${account.name}`,
+        body: `اكتمل توقيع ميثاق المشاركة من الطرفين.\nالجمعية: ${account.name}\nرقم الميثاق: ${agreement.reference ?? agreement.id}\nتجدون النسخة النهائية المعتمدة مرفقة بهذه الرسالة.\nجمعية الزاد`,
+      }, { type: 'covenant', agreementId: agreement.id, fileId: agreement.finalFile.id, sha256: agreement.finalSha256!, markerKey, recipientRole, filename: `covenant-${agreement.reference ?? agreement.id}.pdf` });
+      await tx.systemSetting.create({ data: { key: markerKey, value: { status: 'QUEUED', eventId: copy.eventId } } });
+    }
     return { ok: true, alreadySent: false, ...queued };
   }
 

@@ -64,7 +64,7 @@ describe('NotificationsService email delivery phases', () => {
     expect(consume).not.toHaveBeenCalled();
   });
 
-  function harness(context: EmailDeliveryContext = { type: 'reset', tokenId: 'candidate', accountId: 'account', credentialHash: 'hash', predecessorIds: ['old', 'candidate'] }, phase: EmailDeliveryPayload['phase'] = 'READY') {
+  function harness(context: EmailDeliveryContext = { type: 'reset', tokenId: 'candidate', accountId: 'account', credentialHash: 'hash', predecessorIds: ['old', 'candidate'] }, phase: EmailDeliveryPayload['phase'] = 'READY', recipient = 'recipient@example.org') {
     const mutate = () => jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ count: 1 });
     const send = jest.fn<(...args: unknown[]) => Promise<void>>().mockResolvedValue(undefined);
     const mail = { sendPasswordResetCode: send, sendApplicationAccess: send, sendSecurityAlert: send } as unknown as EmailService;
@@ -73,6 +73,7 @@ describe('NotificationsService email delivery phases', () => {
     const service = new NotificationsService({} as SettingsService, {} as AllocationTriggerPort, mail, storage as unknown as StorageService);
     const params = context.type === 'access' ? { to: 'recipient@example.org', name: 'n', subject: 's', intro: 'b', items: [{ label: 'l', code: 'c', url: 'https://web.invalid/apply/access?token=private' }] } : context.type === 'reset' ? { to: 'recipient@example.org', name: 'n', code: 'secret' } : { to: 'recipient@example.org', name: 'n', subject: 's', body: 'secret-body' };
     const kind = context.type === 'access' ? 'APPLICATION_ACCESS' : context.type === 'reset' ? 'PASSWORD_RESET' : 'NOTICE';
+    params.to = recipient;
     const event = { id: '00000000-0000-4000-8000-000000000001', type: 'EMAIL_DELIVERY', attempts: 0, nextAttemptAt: new Date(), lockedAt: new Date(), status: 'PROCESSING', payload: { ...encryptEmailDelivery('00000000-0000-4000-8000-000000000001', kind, params as never, context), phase } };
     const stored = { ...event, lastError: null as string | null };
     const update = jest.spyOn(prisma.outboxEvent, 'update').mockImplementation((async ({ data }: { data: Record<string, unknown> }) => { Object.assign(stored, data); return stored; }) as never);
@@ -261,6 +262,27 @@ describe('NotificationsService email delivery phases', () => {
     h.storage.getPrivateObject.mockResolvedValue(Buffer.from('tampered'));
     expect(await h.run()).toBe('failed'); expect(h.send).not.toHaveBeenCalled(); expect(h.tx.systemSetting.updateMany).not.toHaveBeenCalled();
     expect(h.stored.lastError).toBe('MAIL_ATTACHMENT_INVALID');
+  });
+
+  it.each([['mousa', 'malyahya@alzaad.org.sa'], ['marwan', 'marwanalsawi@alzaad.org.sa']] as const)('delivers the verified final PDF to the fixed %s recipient', async (recipientRole, email) => {
+    const sha256 = createHash('sha256').update(Buffer.from('%PDF-test-private')).digest('hex');
+    const h = harness({ type: 'covenant', agreementId: 'agreement', fileId: 'file', sha256, recipientRole, markerKey: `COVENANT_COMPLETION_EMAIL:agreement:${recipientRole}`, filename: 'covenant.pdf' }, 'READY', email);
+    expect(await h.run()).toBe('processed');
+    expect(h.send).toHaveBeenCalledWith(expect.objectContaining({ to: email, pdfAttachment: expect.any(Object) }), expect.any(Object));
+  });
+
+  it('refuses a staff PDF copy addressed to anyone else', async () => {
+    const sha256 = createHash('sha256').update(Buffer.from('%PDF-test-private')).digest('hex');
+    const h = harness({ type: 'covenant', agreementId: 'agreement', fileId: 'file', sha256, recipientRole: 'mousa', markerKey: 'COVENANT_COMPLETION_EMAIL:agreement:mousa', filename: 'covenant.pdf' });
+    expect(await h.run()).toBe('failed'); expect(h.send).not.toHaveBeenCalled();
+  });
+
+  it.each(['valid', 'expired', 'consumed', 'replaced', 'wrong-recipient'] as const)('validates the pending first-party signing mail: %s', async state => {
+    const h = harness({ type: 'covenant-signing', agreementId: 'agreement', tokenHash: 'expected-hash', markerKey: 'COVENANT_PARTY_ONE_EMAIL:agreement:expected-hash' }, 'READY', state === 'wrong-recipient' ? 'other@example.org' : 'malyahya@alzaad.org.sa');
+    h.tx.participationAgreement.findUnique.mockResolvedValue({ id: 'agreement', status: 'SIGNED_BY_ORG', orgSignatureFileId: 'signature', partyOneSigningTokenHash: state === 'replaced' ? 'new-hash' : 'expected-hash', partyOneSigningConsumedAt: state === 'consumed' ? new Date() : null, partyOneSigningExpiresAt: new Date(Date.now() + (state === 'expired' ? -1000 : 48 * 3600_000)) });
+    expect(await h.run()).toBe(state === 'valid' ? 'processed' : 'failed');
+    expect(h.send).toHaveBeenCalledTimes(state === 'valid' ? 1 : 0);
+    expect(h.storage.getPrivateObject).not.toHaveBeenCalled();
   });
 
   it('requeues stale READY/ACCEPTED only and quarantines all remaining stale mail phases', async () => {

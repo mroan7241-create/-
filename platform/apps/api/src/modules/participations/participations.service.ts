@@ -168,12 +168,15 @@ export class ParticipationsService {
         await this.storage.uploadPrivateObject(objectKey, signature.buffer, validated.mime); uploaded = true;
         const file = await tx.fileObject.create({ data: { storageProvider: 's3', bucket: storageConfig.bucket, objectKey, originalName: 'association-covenant-signature', mimeType: validated.mime, sizeBytes: BigInt(signature.buffer.length), sha256: bufferSha256(signature.buffer), category: FileCategory.PARTICIPATION_AGREEMENT, uploadedById: ctx.accountId } });
         const now = new Date();
-        await tx.participationAgreement.update({ where: { id: agreement.id }, data: { status: AgreementStatus.SIGNED_BY_ORG, orgSignerName: requiredText(dto.representativeName, 'اسم الممثل المخول', 200), orgSignerTitle: requiredText(dto.representativeTitle, 'صفة الممثل', 120), orgSignatureFileId: file.id, associationAccountId: ctx.accountId, signedByOrgAt: now } });
+        const partyOneToken = randomBytes(32).toString('base64url');
+        const partyOneExpiresAt = new Date(now.getTime() + 48 * 60 * 60_000);
+        await tx.participationAgreement.update({ where: { id: agreement.id }, data: { status: AgreementStatus.SIGNED_BY_ORG, orgSignerName: requiredText(dto.representativeName, 'اسم الممثل المخول', 200), orgSignerTitle: requiredText(dto.representativeTitle, 'صفة الممثل', 120), orgSignatureFileId: file.id, associationAccountId: ctx.accountId, signedByOrgAt: now, partyOneSigningTokenHash: sha256Hex(partyOneToken), partyOneSigningExpiresAt: partyOneExpiresAt, partyOneSigningConsumedAt: null, partyOneSigningIssuedById: null } });
+        await this.onboardingEmail.sendCovenantSigningRequest({ agreementId: agreement.id, token: partyOneToken, expiresAt: partyOneExpiresAt, associationName: participation!.application!.name, reference: agreement.reference ?? agreement.id }, tx);
         await audit(tx, ctx, 'COVENANT_ASSOCIATION_SIGNED', 'participation_agreements', agreement.id, { version: COVENANT_VERSION, templateSha256: COVENANT_SOURCE_SHA256, completionAcknowledgement: true, completionCommitment: 'أتعهد بإنجاز المهام وتسليم الأجهزة خلال شهرين من تاريخ توقيع هذا الميثاق.' });
         const response = { ok: true as const, status: AgreementStatus.SIGNED_BY_ORG };
         await this.idempotency.complete(tx, ctx.accountId, 'covenant-association-sign', dto.opId, response);
         return response;
-      });
+      }, { maxWait: 5_000, timeout: 20_000 });
       return result;
     } catch (error) {
       if (uploaded) await this.storage.deleteObjectBestEffort(objectKey);
@@ -183,7 +186,7 @@ export class ParticipationsService {
 
   async issuePartyOneSigningSession(ctx: AuthContext, agreementId: string) {
     const token = randomBytes(32).toString('base64url');
-    const expiresAt = new Date(Date.now() + 30 * 60_000);
+    const expiresAt = new Date(Date.now() + 48 * 60 * 60_000);
     await prisma.$transaction(async (tx) => {
       const link = await tx.participationAgreement.findUnique({ where: { id: agreementId }, select: { participationId: true } });
       if (!link) throw new ApiError('AGREEMENT_NOT_FOUND', 'الاتفاقية غير موجودة', 404);
@@ -267,7 +270,7 @@ export class ParticipationsService {
         const response = { ok: true as const, status: AgreementStatus.SIGNED, finalSha256 };
         await this.idempotency.complete(tx, agreement.createdById, 'covenant-party-one-sign', opId, response);
         return { replayed: false as const, response };
-      });
+      }, { maxWait: 5_000, timeout: 20_000 });
       if (outcome.replayed) {
         for (const key of uploaded) await this.storage.deleteObjectBestEffort(key);
       }
@@ -419,7 +422,7 @@ function validateCovenantSignature(signature: { buffer: Buffer; declaredMimeType
   if (!validated.valid || !validated.detectedMimeType || validated.detectedMimeType === 'image/webp') throw new ApiError('COVENANT_SIGNATURE_INVALID', 'صورة التوقيع غير صالحة؛ استخدم PNG أو JPEG', 400);
   if (signature.buffer.length < 700) throw new ApiError('COVENANT_SIGNATURE_TOO_SIMPLE', 'التوقيع فارغ أو قصير جدًا؛ يرجى إعادة التوقيع', 400);
   const dimensions = signatureImageDimensions(signature.buffer, validated.detectedMimeType);
-  if (!dimensions || dimensions.width < 200 || dimensions.height < 80) throw new ApiError('COVENANT_SIGNATURE_DIMENSIONS_INVALID', 'مساحة التوقيع غير كافية', 400);
+  if (!dimensions || dimensions.width < 200 || dimensions.height < 80 || dimensions.width > 4096 || dimensions.height > 4096) throw new ApiError('COVENANT_SIGNATURE_DIMENSIONS_INVALID', 'أبعاد التوقيع يجب أن تكون بين 200 × 80 و4096 × 4096', 400);
   return { mime: validated.detectedMimeType };
 }
 

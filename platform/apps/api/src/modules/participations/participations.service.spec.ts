@@ -8,7 +8,7 @@ import type { OnboardingEmailService } from '../auth/email/onboarding-email.serv
 import type { StorageService } from '../files/storage.service';
 import { COVENANT_SOURCE_SHA256, COVENANT_VERSION, CovenantDocumentService } from './covenant-document.service';
 import { ParticipationsService } from './participations.service';
-import { verifySecret } from '../../common/password.util';
+import { hashSecret, verifySecret } from '../../common/password.util';
 
 const admin: AuthContext = { accountId: 'admin-id', associationId: null, role: AccountRole.ADMIN, sessionId: 'session', mustChangePassword: false };
 
@@ -226,6 +226,12 @@ describe('final covenant queue and uploaded-file compensation', () => {
     expect(sendCovenantCompletion.mock.invocationCallOrder[0]).toBeLessThan(idem.complete.mock.invocationCallOrder[0]);
     expect(storage.deleteObjectBestEffort).not.toHaveBeenCalled();
   });
+  it('allows repeated read-only opening before the signing expiry without consuming the token', async () => {
+    const { service, tx, token } = signingFixture();
+    await service.getPartyOneSigningView(token);
+    await service.getPartyOneSigningView(token);
+    expect(tx.participationAgreement.update).not.toHaveBeenCalled();
+  });
   it('queue failure propagates through existing catch and removes exactly its two uploaded objects', async () => {
     const { service, storage, idem, sendCovenantCompletion, token, signature } = signingFixture();
     sendCovenantCompletion.mockRejectedValue(new Error('synthetic queue failure'));
@@ -246,5 +252,55 @@ describe('final covenant queue and uploaded-file compensation', () => {
     expect(await service.signPartyOne(token, 'op', signature)).toMatchObject({ emailQueued: false, emailSent: null });
     expect(sendCovenantCompletion).not.toHaveBeenCalled(); expect(tx.participationAgreement.update).not.toHaveBeenCalled();
     expect(storage.deleteObjectBestEffort.mock.calls.map(([key]) => key)).toEqual(storage.uploadPrivateObject.mock.calls.map(([key]) => key));
+  });
+});
+
+describe('association signature automatically queues the first-party invitation', () => {
+  afterEach(() => jest.restoreAllMocks());
+  async function setup() {
+    const secretHash = await hashSecret('SyntheticPassword!2026');
+    const credential = { secretHash };
+    jest.spyOn(prisma.authCredential, 'findFirst').mockResolvedValue(credential as never);
+    const participation = { id: 'participation', application: { selectionList: 'MAIN', name: 'جمعية اختبار' }, agreements: [{ id: 'agreement', reference: 'COV-TEST', associationAccountId: 'association-account', status: 'SENT' }] };
+    const tx = {
+      $queryRaw: jest.fn(async () => []),
+      projectParticipation: { findUnique: jest.fn(async () => participation) },
+      account: { findUnique: jest.fn(async () => ({ status: 'ACTIVE', archivedAt: null })) },
+      authCredential: { findFirst: jest.fn(async () => credential) },
+      fileObject: { create: jest.fn(async () => ({ id: 'signature-file' })) },
+      participationAgreement: { update: jest.fn(async (arg: unknown) => { void arg; return {}; }) },
+      auditLog: { create: jest.fn(async () => ({})) },
+    };
+    jest.spyOn(prisma, '$transaction').mockImplementation(async callback => {
+      if (typeof callback !== 'function') throw new Error('Expected transaction');
+      return callback(tx as never);
+    });
+    const idem = { claim: jest.fn(async (): Promise<unknown> => ({ claimed: true })), complete: jest.fn(async () => undefined) };
+    const sendCovenantSigningRequest = jest.fn(async (input: { token: string; expiresAt: Date }, tx: unknown) => { void input; void tx; return { emailQueued: true }; });
+    const storage = { uploadPrivateObject: jest.fn(async () => undefined), deleteObjectBestEffort: jest.fn(async () => undefined) };
+    const service = new ParticipationsService({} as PublicCodeService, idem as unknown as IdempotencyService, storage as unknown as StorageService, {} as CovenantDocumentService, { sendCovenantSigningRequest } as unknown as OnboardingEmailService);
+    const buffer = Buffer.alloc(800); Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(buffer); buffer.writeUInt32BE(400, 16); buffer.writeUInt32BE(160, 20);
+    const ctx = { ...admin, accountId: 'association-account', associationId: 'association', role: AccountRole.ASSOCIATION };
+    const dto = { opId: 'op', representativeName: 'ممثل', representativeTitle: 'مدير', authorizedAcknowledgement: 'true', acceptanceAcknowledgement: 'true', completionAcknowledgement: 'true', currentPassword: 'SyntheticPassword!2026' };
+    return { service, tx, idem, sendCovenantSigningRequest, storage, run: () => service.signAssociation(ctx, dto, { buffer, declaredMimeType: 'image/png' }) };
+  }
+  it('atomically saves the signature and token hash, then queues the 48-hour invitation', async () => {
+    const h = await setup(); const before = Date.now();
+    expect(await h.run()).toMatchObject({ ok: true, status: 'SIGNED_BY_ORG' });
+    const [input, tx] = h.sendCovenantSigningRequest.mock.calls[0];
+    expect(tx).toBe(h.tx);
+    expect(input.expiresAt.getTime() - before).toBeGreaterThanOrEqual(48 * 3600_000);
+    expect(input.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(48 * 3600_000);
+    expect(h.tx.participationAgreement.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ partyOneSigningTokenHash: createHash('sha256').update(input.token).digest('hex'), partyOneSigningConsumedAt: null }) }));
+    expect(h.sendCovenantSigningRequest.mock.invocationCallOrder[0]).toBeLessThan(h.idem.complete.mock.invocationCallOrder[0]);
+  });
+  it('does not finish the signing operation when queuing fails and cleans its uploaded signature', async () => {
+    const h = await setup(); h.sendCovenantSigningRequest.mockRejectedValue(new Error('queue unavailable'));
+    await expect(h.run()).rejects.toThrow('queue unavailable');
+    expect(h.idem.complete).not.toHaveBeenCalled(); expect(h.storage.deleteObjectBestEffort).toHaveBeenCalledTimes(1);
+  });
+  it('does not queue another invitation on idempotent replay', async () => {
+    const h = await setup(); h.idem.claim.mockResolvedValue({ claimed: false, existingResponse: { ok: true, status: 'SIGNED_BY_ORG' } });
+    await h.run(); expect(h.sendCovenantSigningRequest).not.toHaveBeenCalled(); expect(h.storage.uploadPrivateObject).not.toHaveBeenCalled();
   });
 });
