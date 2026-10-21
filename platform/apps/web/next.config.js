@@ -27,6 +27,9 @@ const securityHeaders = [
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Managed hosts can expose the host's CPU count rather than this app's quota.
+  // Bound prerender workers: 56 concurrent workers aborted the hosted build.
+  experimental: { cpus: 2 },
   // Keep the managed-hosting runtime outside a hidden `.next` tree so the
   // build-to-runtime handoff does not depend on preserving hidden artifacts.
   distDir: 'next-build',
