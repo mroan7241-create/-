@@ -8,6 +8,7 @@ import type { OnboardingEmailService } from '../auth/email/onboarding-email.serv
 import type { StorageService } from '../files/storage.service';
 import { COVENANT_SOURCE_SHA256, COVENANT_VERSION, CovenantDocumentService } from './covenant-document.service';
 import { ParticipationsService } from './participations.service';
+import { verifySecret } from '../../common/password.util';
 
 const admin: AuthContext = { accountId: 'admin-id', associationId: null, role: AccountRole.ADMIN, sessionId: 'session', mustChangePassword: false };
 
@@ -165,6 +166,10 @@ describe('participation account producers queue atomically', () => {
     const { service, tx, idem, sendCredentials } = accountFixture(method === 'activate');
     const result = await service[method](admin, 'participation', 'op');
     expect(result).toMatchObject({ emailQueued: true, emailSent: null, temporaryPasswordPreviouslyIssued: false });
+    expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), { maxWait: 5_000, timeout: 20_000 });
+    const savedHash = (tx.authCredential.create.mock.calls[0] as unknown as [{ data: { secretHash: string } }])[0].data.secretHash;
+    expect(savedHash).not.toBe(result.temporaryPassword);
+    expect(await verifySecret(savedHash, result.temporaryPassword!)).toBe(true);
     expect(sendCredentials).toHaveBeenCalledWith('account', result.temporaryPassword, tx);
     expect(tx.authCredential.create.mock.invocationCallOrder[0]).toBeLessThan(sendCredentials.mock.invocationCallOrder[0]);
     expect(tx.projectParticipation.update.mock.invocationCallOrder[0]).toBeLessThan(sendCredentials.mock.invocationCallOrder[0]);

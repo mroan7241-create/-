@@ -83,6 +83,10 @@ export class ParticipationsService {
 
   async prepareSigningAccount(ctx: AuthContext, participationId: string, opId: string) {
     const scope = 'covenant-signing-account';
+    // Argon2 is CPU-bound: finish it before holding database locks or starting
+    // Prisma's interactive-transaction clock. No credential is written here.
+    const temporaryPassword = generateStrongTempPassword();
+    const secretHash = await hashSecret(temporaryPassword);
     const outcome = await prisma.$transaction(async (tx) => {
       const participation = await this.lockAdministrativeParticipation(tx, ctx, participationId);
       const claim = await this.idempotency.claim<{ associationId: string; accountId: string }>(tx, ctx.accountId, scope, opId, { participationId });
@@ -100,8 +104,7 @@ export class ParticipationsService {
         const corrected = await tx.auditLog.findFirst({ where: { action: 'COVENANT_RESTRICTED_ACCOUNT_SUSPENDED_BY_SELECTION', entityId: agreement.associationAccountId, metadata: { path: ['applicationId'], equals: participation.application.id } }, orderBy: { createdAt: 'desc' }, select: { metadata: true } });
         const correctionStamp = (corrected?.metadata as { accountUpdatedAt?: string } | undefined)?.accountUpdatedAt;
         if (!existing || existing.archivedAt || existing.role !== AccountRole.ASSOCIATION || existing.associationId !== participation.associationId || existing.status !== AccountStatus.SUSPENDED || correctionStamp !== existing.updatedAt.toISOString()) throw new ApiError('COVENANT_SIGNING_ACCOUNT_EXISTS', 'سبق إنشاء حساب التوقيع أو تغيّر إيقافه؛ يلزم مراجعة الإدارة', 409);
-        const temporaryPassword = generateStrongTempPassword();
-        const rotated = await tx.authCredential.updateMany({ where: { accountId: existing.id, type: AuthCredentialType.EMAIL_PASSWORD }, data: { secretHash: await hashSecret(temporaryPassword) } });
+        const rotated = await tx.authCredential.updateMany({ where: { accountId: existing.id, type: AuthCredentialType.EMAIL_PASSWORD }, data: { secretHash } });
         if (rotated.count !== 1) throw new ApiError('COVENANT_SIGNING_ACCOUNT_INVALID', 'بيانات حساب التوقيع غير مكتملة؛ لم يتم تفعيل الحساب', 409);
         await tx.account.update({ where: { id: existing.id }, data: { status: AccountStatus.ACTIVE, mustChangePassword: true } });
         await this.onboardingEmail.sendCredentials(existing.id, temporaryPassword, tx);
@@ -114,8 +117,7 @@ export class ParticipationsService {
       if (await tx.authCredential.findUnique({ where: { type_identifier: { type: AuthCredentialType.EMAIL_PASSWORD, identifier: email } } })) throw new ApiError('ASSOCIATION_EMAIL_IN_USE', 'البريد الإلكتروني مستخدم في حساب آخر الآن', 409);
       const association = await tx.association.create({ data: { publicCode: await this.codes.nextPublicCode(tx, 'ASC'), name: participation.application.name, category: participation.application.category ?? '', region: participation.application.region, city: participation.application.city, phones: [participation.application.phone], email, status: AssociationStatus.ACTIVE } });
       const account = await tx.account.create({ data: { publicCode: await this.codes.nextPublicCode(tx, 'USR'), name: participation.application.name, email, role: AccountRole.ASSOCIATION, associationId: association.id, status: AccountStatus.ACTIVE, mustChangePassword: true } });
-      const temporaryPassword = generateStrongTempPassword();
-      await tx.authCredential.create({ data: { accountId: account.id, type: AuthCredentialType.EMAIL_PASSWORD, identifier: email, secretHash: await hashSecret(temporaryPassword) } });
+      await tx.authCredential.create({ data: { accountId: account.id, type: AuthCredentialType.EMAIL_PASSWORD, identifier: email, secretHash } });
       await tx.projectParticipation.update({ where: { id: participationId }, data: { associationId: association.id } });
       await tx.associationApplication.update({ where: { id: participation.application.id }, data: { resultingAssociationId: association.id, reviewedAt: new Date(), reviewedById: ctx.accountId } });
       await tx.participationAgreement.update({ where: { id: agreement.id }, data: { associationAccountId: account.id } });
@@ -124,7 +126,7 @@ export class ParticipationsService {
       const response = { associationId: association.id, accountId: account.id };
       await this.idempotency.complete(tx, ctx.accountId, scope, opId, response);
       return { replayed: false as const, response, temporaryPassword };
-    });
+    }, { maxWait: 5_000, timeout: 20_000 });
     return { ok: true as const, ...outcome.response, temporaryPassword: outcome.replayed ? null : outcome.temporaryPassword, temporaryPasswordPreviouslyIssued: outcome.replayed, emailQueued: !outcome.replayed, emailSent: null };
   }
 
@@ -325,6 +327,8 @@ export class ParticipationsService {
 
   async activate(ctx: AuthContext, id: string, opId: string) {
     const scope = 'participation-activate';
+    const temporaryPassword = generateStrongTempPassword();
+    const secretHash = await hashSecret(temporaryPassword);
     const outcome = await prisma.$transaction(async (tx) => {
       const participation = await this.lockAdministrativeParticipation(tx, ctx, id);
       const claim = await this.idempotency.claim<{ associationId: string; accountId: string }>(tx, ctx.accountId, scope, opId, { id });
@@ -337,14 +341,13 @@ export class ParticipationsService {
       if (await tx.authCredential.findUnique({ where: { type_identifier: { type: AuthCredentialType.EMAIL_PASSWORD, identifier: email } } })) throw new ApiError('ASSOCIATION_EMAIL_IN_USE', 'البريد الإلكتروني مستخدم في حساب آخر الآن', 409);
       const association = await tx.association.create({ data: { publicCode: await this.codes.nextPublicCode(tx, 'ASC'), name: participation.application.name, category: participation.application.category ?? '', region: participation.application.region, city: participation.application.city, phones: [participation.application.phone], email, status: AssociationStatus.ACTIVE } });
       const account = await tx.account.create({ data: { publicCode: await this.codes.nextPublicCode(tx, 'USR'), name: participation.application.name, email, role: AccountRole.ASSOCIATION, associationId: association.id, status: AccountStatus.ACTIVE, mustChangePassword: true } });
-      const temporaryPassword = generateStrongTempPassword();
-      await tx.authCredential.create({ data: { accountId: account.id, type: AuthCredentialType.EMAIL_PASSWORD, identifier: email, secretHash: await hashSecret(temporaryPassword) } });
+      await tx.authCredential.create({ data: { accountId: account.id, type: AuthCredentialType.EMAIL_PASSWORD, identifier: email, secretHash } });
       await tx.associationApplication.update({ where: { id: participation.application.id }, data: { resultingAssociationId: association.id, reviewedAt: new Date(), reviewedById: ctx.accountId } });
       await tx.projectParticipation.update({ where: { id }, data: { associationId: association.id, status: ParticipationStatus.ACTIVE, activatedAt: new Date() } });
       await audit(tx, ctx, 'ASSOCIATION_ACTIVATED', 'project_participations', id, { associationId: association.id, accountId: account.id });
       await this.onboardingEmail.sendCredentials(account.id, temporaryPassword, tx);
       const response = { associationId: association.id, accountId: account.id }; await this.idempotency.complete(tx, ctx.accountId, scope, opId, response); return { replayed: false as const, response, temporaryPassword };
-    });
+    }, { maxWait: 5_000, timeout: 20_000 });
     return { ok: true as const, ...outcome.response, temporaryPassword: outcome.replayed ? null : outcome.temporaryPassword, temporaryPasswordPreviouslyIssued: outcome.replayed, emailQueued: !outcome.replayed, emailSent: null };
   }
 
