@@ -78,6 +78,7 @@ export interface SecurityAlertEmailParams {
   subject: string;
   body: string;
   action?: { label: string; url: string };
+  covenantSigning?: { temporaryPassword: string };
   pdfAttachment?: { filename: string; content: Buffer };
 }
 

@@ -58,6 +58,30 @@ describe('SMTP Arabic layout and completed Covenant attachment', () => {
     expect(JSON.stringify(jest.mocked(Logger.prototype.log).mock.calls)).not.toContain(code);
   });
 
+  it('makes covenant signing primary and the guide an outlined secondary button without leaking credentials into links or logs', async () => {
+    const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ accepted: ['test@example.org'] });
+    jest.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail } as never);
+    const password = 'Synthetic<&"2026';
+    await new SmtpEmailService().sendSecurityAlert({ to: 'test@example.org', name: '<جمعية تجريبية>', subject: 'بيانات دخول الجمعية — مشروع الأجهزة الكهربائية', body: 'نص بديل مع رابط https://web.example.org/login والدليل https://claude.ai/artifact/3koctF6Z7tKRPbFvZ92c6e', action: { label: 'الدخول لتوقيع الميثاق', url: 'https://web.example.org/login' }, covenantSigning: { temporaryPassword: password } });
+    const sent = sendMail.mock.calls[0][0] as { html: string; text: string; attachments: unknown[] };
+    expect(sent.html).toContain('&lt;جمعية تجريبية&gt;'); expect(sent.html).toContain('Synthetic&lt;&amp;&quot;2026');
+    expect(sent.html).toContain('cid:alzad-approved-logo'); expect(sent.attachments).toHaveLength(1);
+    const links = [...sent.html.matchAll(/<a href="([^"]+)" style="([^"]+)">([^<]+)<\/a>/g)];
+    expect(links).toHaveLength(2);
+    expect(links[0][1]).toBe('https://web.example.org/login'); expect(links[0][2]).toContain('background:#65102f'); expect(links[0][3]).toBe('الدخول لتوقيع الميثاق');
+    expect(links[1][1]).toBe('https://claude.ai/artifact/3koctF6Z7tKRPbFvZ92c6e'); expect(links[1][2]).toContain('background:#fff'); expect(links[1][2]).toContain('border:1px solid #65102f'); expect(links[1][3]).toBe('عرض الدليل التنفيذي');
+    expect(links.every(link => !link[1].includes('Synthetic') && !link[1].includes('test@example.org'))).toBe(true);
+    expect(sent.text).toContain('https://web.example.org/login'); expect(sent.text).toContain('https://claude.ai/artifact/');
+    expect(JSON.stringify(jest.mocked(Logger.prototype.log).mock.calls)).not.toContain('Synthetic');
+  });
+
+  it('rejects an incomplete signing notification before any SMTP attempt', async () => {
+    const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>();
+    jest.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail } as never);
+    await expect(new SmtpEmailService().sendSecurityAlert({ to: 'test@example.org', name: 'test', subject: 'test', body: 'test', covenantSigning: { temporaryPassword: 'Synthetic' } })).rejects.toThrow('COVENANT_SIGNING_LINK_REQUIRED');
+    expect(sendMail).not.toHaveBeenCalled();
+  });
+
   it.each([{ accepted: [] }, { accepted: ['other@example.org'] }, { accepted: ['test@example.org.attacker.invalid'] }])('rejects SMTP acceptance that excludes the exact requested recipient', async ({ accepted }) => {
     const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ accepted });
     jest.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail } as never);

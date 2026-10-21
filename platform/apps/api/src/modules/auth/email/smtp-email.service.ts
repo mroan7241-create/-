@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import nodemailer, { type Transporter } from 'nodemailer';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { EMAIL_LOGO_CID, emailLayout } from './email-layout';
+import { EMAIL_LOGO_CID, emailLayout, covenantSigningLayout } from './email-layout';
 import {
   ApplicationAccessEmailParams,
   EmailService,
@@ -70,9 +70,10 @@ export class SmtpEmailService implements EmailService {
   }
 
   async sendSecurityAlert(params: SecurityAlertEmailParams, options?: EmailSendOptions): Promise<void> {
+    if (params.covenantSigning && !params.action?.url) throw new Error('COVENANT_SIGNING_LINK_REQUIRED');
     const action = params.action ? `<p><a href="${escapeAttribute(params.action.url)}" style="display:inline-block;background:#65102f;color:#fff;padding:12px 20px;text-decoration:none;border-radius:8px">${escapeHtml(params.action.label)}</a></p>` : '';
     await this.send('NOTICE', params.to, params.subject, `${params.name}\n\n${params.body}`,
-      layout(`السادة/ ${escapeHtml(params.name)} المحترمون`, `<p style="line-height:1.9;direction:rtl;text-align:right">${escapeHtml(params.body).replace(/\n/g, '<br>')}</p>${action}`),
+      params.covenantSigning ? covenantSigningLayout({ name: params.name, email: params.to, temporaryPassword: params.covenantSigning.temporaryPassword, loginUrl: params.action!.url }) : layout(`السادة/ ${escapeHtml(params.name)} المحترمون`, `<p style="line-height:1.9;direction:rtl;text-align:right">${escapeHtml(params.body).replace(/\n/g, '<br>')}</p>${action}`),
       params.pdfAttachment ? [{ filename: params.pdfAttachment.filename, content: params.pdfAttachment.content, contentType: 'application/pdf' }] : undefined, options);
   }
 

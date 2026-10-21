@@ -78,6 +78,8 @@ describe('Onboarding atomic email queue', () => {
     const { service, tx, enqueueEmail, queued, sendSecurityAlert } = fixture();
     await expect(service.sendCredentials('test-account', 'Synthetic!Temp2026', tx as never)).resolves.toBe(true);
     expect(queued()).toMatchObject({ kind: 'NOTICE', params: { body: expect.stringContaining('Synthetic!Temp2026') }, context: { type: 'credentials', accountId: 'test-account', credentialHash: 'stored-secret-hash' } });
+    expect(queued()).toMatchObject({ params: { action: { label: 'الدخول لتوقيع الميثاق', url: expect.stringMatching(/\/login$/) }, covenantSigning: { temporaryPassword: 'Synthetic!Temp2026' } } });
+    expect(queued()).toMatchObject({ params: { body: expect.stringContaining('https://claude.ai/artifact/3koctF6Z7tKRPbFvZ92c6e') } });
     expect(JSON.stringify(enqueueEmail.mock.calls)).not.toContain('Synthetic!Temp2026');
     expect(JSON.stringify(enqueueEmail.mock.calls)).not.toContain('test@example.org');
     expect(sendSecurityAlert).not.toHaveBeenCalled();

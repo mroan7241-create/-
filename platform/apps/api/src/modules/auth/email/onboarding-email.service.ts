@@ -3,6 +3,7 @@ import { prisma, Prisma, AuthCredentialType } from '@alzad/db';
 import { createHash } from 'node:crypto';
 import { ApiError } from '../../../common/api-error';
 import { EmailService, enqueueEmail } from './email.service';
+import { EXECUTION_GUIDE_URL } from './email-layout';
 
 /** Queue notifications in the business transaction; encrypted outbox owns retries. */
 @Injectable()
@@ -45,7 +46,9 @@ export class OnboardingEmailService {
     await enqueueEmail(tx, 'NOTICE', {
       to: account.email, name: account.name,
       subject: 'بيانات دخول الجمعية — مشروع الأجهزة الكهربائية',
-      body: `تم تجهيز حساب جمعيتكم.\nالبريد الإلكتروني: ${account.email}\nكلمة المرور المؤقتة: ${temporaryPassword}\nتسجيل الدخول: ${publicWebUrl()}/login\nيجب تغيير كلمة المرور عند أول دخول، ثم مراجعة الميثاق وتوقيعه. تبقى الخدمات التشغيلية مقيدة حتى اكتمال متطلبات التفعيل.\nيرجى الحفاظ على سرية بيانات الدخول.`,
+      body: `تم تجهيز حساب جمعيتكم للدخول إلى المنصة ومراجعة ميثاق المشاركة وتوقيعه.\nالبريد الإلكتروني: ${account.email}\nكلمة المرور المؤقتة: ${temporaryPassword}\nيجب تغيير كلمة المرور عند أول دخول، ثم مراجعة الميثاق وتوقيعه. تبقى الخدمات التشغيلية مقيدة حتى اكتمال متطلبات التفعيل.\nالدخول لتوقيع الميثاق: ${publicWebUrl()}/login\nللاطلاع على خطوات العمل ومتطلبات التنفيذ:\nعرض الدليل التنفيذي: ${EXECUTION_GUIDE_URL}\nيرجى الحفاظ على سرية بيانات الدخول.`,
+      action: { label: 'الدخول لتوقيع الميثاق', url: `${publicWebUrl()}/login` },
+      covenantSigning: { temporaryPassword },
     }, { type: 'credentials', accountId, credentialHash: credential.secretHash });
     return true;
   }
