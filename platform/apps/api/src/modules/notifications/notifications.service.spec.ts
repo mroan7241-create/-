@@ -8,6 +8,7 @@ import { Logger } from '@nestjs/common';
 import type { StorageService } from '../files/storage.service';
 import { createHash } from 'node:crypto';
 import { storageConfig } from '../../config/storage.config';
+import { NONSELECTION_BODY, NONSELECTION_SUBJECT, nonselectionMarker } from '../applications/nonselection-notice.policy';
 
 describe('NotificationsService SLA', () => {
   afterEach(() => {
@@ -74,6 +75,7 @@ describe('NotificationsService email delivery phases', () => {
     const params = context.type === 'access' ? { to: 'recipient@example.org', name: 'n', subject: 's', intro: 'b', items: [{ label: 'l', code: 'c', url: 'https://web.invalid/apply/access?token=private' }] } : context.type === 'reset' ? { to: 'recipient@example.org', name: 'n', code: 'secret' } : { to: 'recipient@example.org', name: 'n', subject: 's', body: 'secret-body' };
     const kind = context.type === 'access' ? 'APPLICATION_ACCESS' : context.type === 'reset' ? 'PASSWORD_RESET' : 'NOTICE';
     params.to = recipient;
+    if (context.type === 'nonselection') Object.assign(params, { name: 'جمعية نموذجية', subject: NONSELECTION_SUBJECT, body: NONSELECTION_BODY });
     const event = { id: '00000000-0000-4000-8000-000000000001', type: 'EMAIL_DELIVERY', attempts: 0, nextAttemptAt: new Date(), lockedAt: new Date(), status: 'PROCESSING', payload: { ...encryptEmailDelivery('00000000-0000-4000-8000-000000000001', kind, params as never, context), phase } };
     const stored = { ...event, lastError: null as string | null };
     const update = jest.spyOn(prisma.outboxEvent, 'update').mockImplementation((async ({ data }: { data: Record<string, unknown> }) => { Object.assign(stored, data); return stored; }) as never);
@@ -89,11 +91,12 @@ describe('NotificationsService email delivery phases', () => {
       authCredential: { findFirst: jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ secretHash: 'hash' }) },
       passwordResetToken: { findUnique: jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ id: 'candidate', accountId: 'account', emailNormalized: params.to, expiresAt: new Date(Date.now() + 60_000), consumedAt: null }), updateMany: mutate() },
       applicationAccessToken: { findUnique: jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ id: 'candidate', draftId: 'draft', expiresAt: new Date(Date.now() + 60_000), consumedAt: null, draft: { contactEmail: params.to, status: 'ACTIVE', expiresAt: new Date(Date.now() + 60_000), submittedApplicationId: 'application' } }), updateMany: mutate() },
-      associationApplication: { findUnique: jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ id: 'application', email: params.to, status: 'REJECTED', eligibilityStatus: 'FAILED', rejectReason: 'reason', selectionList: 'MAIN' }) },
+      associationApplication: { findUnique: jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ id: 'application', email: params.to, status: 'REJECTED', eligibilityStatus: 'FAILED', rejectReason: 'reason', selectionList: 'MAIN' }), count: jest.fn(async () => 0) },
+      projectParticipation: { count: jest.fn(async () => 0) },
       applicationInformationRequest: { findUnique: jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ id: 'request', applicationId: 'application', status: 'OPEN' }) },
       participationAgreement: { findUnique: jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ id: 'agreement', status: 'SIGNED', fullyExecutedAt: new Date(), finalFileId: 'file', finalSha256: sha256, associationAccount: { email: params.to } }) },
       systemSetting: { findUnique: jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ value: { status: 'QUEUED', eventId: event.id } }), updateMany: mutate() },
-      auditLog: { create: mutate() },
+      auditLog: { create: mutate(), findFirst: jest.fn(async (): Promise<unknown> => null) },
     };
     jest.spyOn(prisma, '$transaction').mockImplementation((async (callback: (client: unknown) => Promise<unknown>) => callback(tx)) as never);
     jest.spyOn(prisma.fileObject, 'findUnique').mockResolvedValue({ bucket: storageConfig.bucket, objectKey: 'private-key', sha256, mimeType: 'application/pdf', sizeBytes: BigInt(pdf.length) } as never);
@@ -262,6 +265,16 @@ describe('NotificationsService email delivery phases', () => {
     h.storage.getPrivateObject.mockResolvedValue(Buffer.from('tampered'));
     expect(await h.run()).toBe('failed'); expect(h.send).not.toHaveBeenCalled(); expect(h.tx.systemSetting.updateMany).not.toHaveBeenCalled();
     expect(h.stored.lastError).toBe('MAIL_ATTACHMENT_INVALID');
+  });
+
+  it.each(['valid', 'approved', 'new-covenant', 'email-changed', 'previous-rejection', 'wrong-campaign'] as const)('checks nonselection exclusions again before SMTP: %s', async state => {
+    const h = harness({ type: 'nonselection', applicationId: 'application', campaign: state === 'wrong-campaign' ? 'wrong' : '20261022', markerKey: nonselectionMarker('application') });
+    h.tx.associationApplication.findUnique.mockResolvedValue({ id: 'application', publicCode: state === 'approved' ? 'APP-000272' : 'APP-000001', name: 'جمعية نموذجية', email: state === 'email-changed' ? 'changed@example.org' : 'recipient@example.org', resultingAssociationId: null });
+    if (state === 'new-covenant') h.tx.projectParticipation.count.mockResolvedValue(1);
+    if (state === 'previous-rejection') h.tx.auditLog.findFirst.mockResolvedValue({ id: 'prior' });
+    expect(await h.run()).toBe(state === 'valid' ? 'processed' : 'failed');
+    expect(h.send).toHaveBeenCalledTimes(state === 'valid' ? 1 : 0);
+    if (state === 'valid') expect(h.tx.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: 'NONSELECTION_NOTICE_EMAIL_SENT' }) }));
   });
 
   it.each([['mousa', 'malyahya@alzaad.org.sa'], ['marwan', 'marwanalsawi@alzaad.org.sa']] as const)('delivers the verified final PDF to the fixed %s recipient', async (recipientRole, email) => {

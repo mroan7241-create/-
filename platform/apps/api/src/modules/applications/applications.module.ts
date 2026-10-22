@@ -7,11 +7,12 @@ import { SettingsModule } from '../settings/settings.module';
 import { ApplicationV2Service } from './application-v2.service';
 import { ApplicationAccessService } from './application-access.service';
 import { EmailModule } from '../auth/email/email.module';
+import { NonselectionNoticeController, NonselectionNoticeService } from './nonselection-notice.controller';
 
 @Module({
   imports: [FilesModule, SettingsModule, EmailModule],
-  controllers: [ApplicationsController],
+  controllers: [ApplicationsController, NonselectionNoticeController],
   // PublicCodeService/IdempotencyService يأتيان من CommonModule العالمي (نسخة واحدة مشتركة).
-  providers: [ApplicationsService, ApplicationV2Service, ApplicationAccessService, RateLimitService],
+  providers: [ApplicationsService, ApplicationV2Service, ApplicationAccessService, RateLimitService, NonselectionNoticeService],
 })
 export class ApplicationsModule {}

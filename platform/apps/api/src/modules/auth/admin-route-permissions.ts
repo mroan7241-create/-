@@ -72,6 +72,7 @@ export const ADMIN_ROUTE_POLICIES: Readonly<Record<string, AdminPermission | 'se
   'POST /association-applications/processing/start': 'applications.review',
   'POST /association-applications/:id/eligibility': 'applications.review',
   'POST /association-applications/:id/eligibility/resend-rejection': 'applications.review',
+  'POST /association-applications/nonselection-notices': 'applications.select',
   'POST /association-applications/:id/information-request': 'applications.review',
   'POST /association-applications/:id/information-request/resend': 'applications.review',
   'POST /association-applications/:id/evaluation': 'applications.evaluate',
