@@ -290,9 +290,10 @@ export default function AssociationBeneficiariesPage() {
           initial={editing}
           reference={reference}
           socialStatuses={socialStatuses}
+          defaultRegion={user.associationRegion ?? ''}
           onClose={() => setEditing(null)}
-          onSaved={async (message) => {
-            setEditing(null);
+          onSaved={async (message, addNext) => {
+            if (!addNext) setEditing(null);
             setNotice(message);
             await load();
           }}
@@ -306,14 +307,16 @@ function BeneficiaryForm({
   initial,
   reference,
   socialStatuses,
+  defaultRegion,
   onClose,
   onSaved,
 }: {
   initial: BeneficiaryDetail | 'new';
   reference: ReferenceData | null;
   socialStatuses: string[];
+  defaultRegion: string;
   onClose: () => void;
-  onSaved: (message: string) => Promise<void>;
+  onSaved: (message: string, addNext?: boolean) => Promise<void>;
 }) {
   const isNew = initial === 'new';
   const existing = isNew ? null : initial;
@@ -338,18 +341,22 @@ function BeneficiaryForm({
           locationSource: existing.locationSource ?? '',
           deviceTypes: existing.needs.map((n) => n.deviceType),
         }
-      : EMPTY_FORM,
+      : { ...EMPTY_FORM, region: defaultRegion },
   );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [opId, setOpId] = useState(newOpId);
+  const [lastSaved, setLastSaved] = useState('');
 
   const cities = reference && form.region ? (reference.citiesByRegion[form.region] ?? []) : [];
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
+    setOpId(newOpId());
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
   function toggleDevice(type: DeviceType) {
+    setOpId(newOpId());
     setForm((prev) => ({
       ...prev,
       deviceTypes: prev.deviceTypes.includes(type)
@@ -358,8 +365,12 @@ function BeneficiaryForm({
     }));
   }
 
-  async function submit() {
+  async function submit(addNext = false) {
     setError(null);
+    if (!form.name.trim() || !form.region || !form.city || !form.district.trim() || !form.phone.trim() || !form.socialStatus) {
+      setError('أكمل الاسم والمنطقة والمدينة والحي والجوال والحالة الاجتماعية.');
+      return;
+    }
     if (form.deviceTypes.length === 0) {
       setError('اختر احتياجًا واحدًا على الأقل.');
       return;
@@ -384,7 +395,7 @@ function BeneficiaryForm({
         socialSecurity: form.socialSecurity,
         socialStatus: form.socialStatus,
         income: Number(form.income || 0),
-        opId: newOpId(),
+        opId,
       };
       if (form.phone2.trim()) body.phone2 = form.phone2.trim();
       if (form.notes.trim()) body.notes = form.notes.trim();
@@ -413,7 +424,12 @@ function BeneficiaryForm({
       // تنبيه "مطابق محتمل" غير حاجب: الحفظ **نجح** فعلًا، فيُعرض كتنبيه
       // مُلحَق بالرسالة لا كنافذة مانعة (نفس سلوك toast التحذيري القديم).
       const base = existing ? 'تم حفظ تعديلات المستفيد.' : 'تمت إضافة المستفيد واحتياجاته.';
-      await onSaved(result?.possibleDuplicate ? `${base} ⚠ ${result.possibleDuplicate.message}` : base);
+      await onSaved(result?.possibleDuplicate ? `${base} ⚠ ${result.possibleDuplicate.message}` : base, addNext);
+      if (addNext) {
+        setLastSaved(`تمت إضافة ${form.name}. يمكنك إدخال المستفيد التالي.`);
+        setForm({ ...EMPTY_FORM, region: form.region, city: form.city, district: form.district });
+        setOpId(newOpId());
+      }
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : 'تعذّر حفظ بيانات المستفيد.');
     } finally {
@@ -433,6 +449,7 @@ function BeneficiaryForm({
     }
     navigator.geolocation.getCurrentPosition(
       (position) => {
+        setOpId(newOpId());
         setForm((prev) => ({
           ...prev,
           lat: position.coords.latitude.toFixed(6),
@@ -447,6 +464,7 @@ function BeneficiaryForm({
   }
 
   function clearLocation() {
+    setOpId(newOpId());
     setForm((prev) => ({ ...prev, lat: '', lng: '', locationSource: '' }));
   }
 
@@ -454,6 +472,8 @@ function BeneficiaryForm({
     <div style={modalOverlayStyle} role="dialog" aria-modal="true">
       <div style={modalStyle}>
         <h2 style={{ marginTop: 0, color: 'var(--zad-800)' }}>{isNew ? 'إضافة مستفيد' : `تعديل: ${existing?.name}`}</h2>
+        <p style={mutedStyle}>المدينة والحي مطلوبان. موقع منزل المستفيد الدقيق اختياري ويمكن إضافته لاحقًا.</p>
+        {lastSaved && <p role="status" style={successStyle}>{lastSaved}</p>}
 
         {locked && (
           <p style={{ ...mutedStyle, marginTop: 0 }}>
@@ -472,6 +492,7 @@ function BeneficiaryForm({
             <select
               style={inputStyle}
               value={form.region}
+              disabled={isNew && !!defaultRegion && !!reference?.regions.includes(defaultRegion)}
               onChange={(e) => {
                 set('region', e.target.value);
                 set('city', '');
@@ -502,14 +523,14 @@ function BeneficiaryForm({
           </label>
           <label style={labelStyle}>
             رقم الجوال
-            <input style={inputStyle} value={form.phone} onChange={(e) => set('phone', e.target.value)} />
+            <input style={inputStyle} inputMode="tel" autoComplete="tel" dir="ltr" placeholder="05XXXXXXXX" value={form.phone} onChange={(e) => set('phone', e.target.value)} />
           </label>
           <label style={labelStyle}>
             رقم جوال إضافي (اختياري)
             <input style={inputStyle} value={form.phone2} onChange={(e) => set('phone2', e.target.value)} />
           </label>
           <label style={labelStyle}>
-            عدد الأفراد
+            عدد أفراد الأسرة شامل المستفيد
             <input
               style={inputStyle}
               type="number"
@@ -535,7 +556,7 @@ function BeneficiaryForm({
             )}
           </label>
           <label style={labelStyle}>
-            مبلغ الدخل
+            مبلغ الدخل (اختياري)
             <input
               style={inputStyle}
               type="number"
@@ -569,7 +590,7 @@ function BeneficiaryForm({
           المدمج + إدخال يدوي للإحداثيات. (اختيار الموقع بصريًا على خريطة
           مؤجَّل لقرار مزوّد الخرائط — راجع docs/BENEFICIARIES.md.)
         */}
-        <h3 style={{ marginBottom: 6 }}>موقع المستفيد (اختياري)</h3>
+        <details style={{ marginTop: 14, marginBottom: 14 }}><summary style={{ cursor: 'pointer', fontWeight: 700 }}>موقع منزل المستفيد الدقيق (اختياري)</summary>
         <p style={{ ...mutedStyle, marginTop: 0 }}>
           {form.lat && form.lng
             ? `الموقع المحدَّد حاليًا: ${form.lat}، ${form.lng}`
@@ -577,7 +598,7 @@ function BeneficiaryForm({
         </p>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
           <button type="button" style={secondaryButtonStyle} onClick={useMyLocation}>
-            📍 استخدم موقعي الحالي
+            📍 أنا الآن عند منزل المستفيد — استخدم موقعي
           </button>
           <button type="button" style={secondaryButtonStyle} onClick={clearLocation}>
             ✕ مسح الموقع
@@ -627,7 +648,7 @@ function BeneficiaryForm({
             />
           </label>
         </div>
-
+        <p style={mutedStyle}>لا تستخدم موقعك الحالي وأنت في مكتب الجمعية؛ المطلوب موقع منزل المستفيد.</p></details>
         {/* حقول تاريخية للقراءة فقط — تظهر إن حملها السجل، ولا تُرسَل أبدًا. */}
         {existing && (existing.address || existing.landmark) && (
           <div style={{ marginTop: 12 }}>
@@ -671,12 +692,13 @@ function BeneficiaryForm({
           </div>
         )}
 
-        {error && <p style={{ ...errorStyle, marginTop: 12 }}>{error}</p>}
+        {error && <p role="alert" style={{ ...errorStyle, marginTop: 12 }}>{error}</p>}
 
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button type="button" style={primaryButtonStyle} disabled={busy} onClick={() => void submit()}>
             {isNew ? 'إضافة' : 'حفظ'}
           </button>
+          {isNew && <button type="button" style={secondaryButtonStyle} disabled={busy} onClick={() => void submit(true)}>حفظ وإضافة التالي</button>}
           <button type="button" style={secondaryButtonStyle} onClick={onClose}>
             إلغاء
           </button>

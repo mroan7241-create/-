@@ -60,12 +60,15 @@ export default function AssociationInventoryPage() {
     setLoading(true);
     setError('');
     try {
-      setData(await listDeviceUnits({
+      const result = await listDeviceUnits({
         page,
         pageSize: PAGE_SIZE,
         deviceType: deviceType || undefined,
         status: status || undefined,
-      }));
+        includeCounts: true,
+      });
+      setData(result);
+      setCounts(result.counts ?? {});
     } catch (err) {
       setData(null);
       setError(err instanceof ApiClientError ? err.message : 'تعذّر تحميل مخزون الجمعية.');
@@ -78,12 +81,6 @@ export default function AssociationInventoryPage() {
     if (user) void load();
   }, [user, load]);
 
-  useEffect(() => {
-    if (!user) return;
-    Promise.all(STATUSES.map(async (item) => [item, (await listDeviceUnits({ pageSize: 1, status: item })).total] as const))
-      .then((rows) => setCounts(Object.fromEntries(rows)))
-      .catch(() => setCounts({}));
-  }, [user]);
 
   async function openDetail(id: string) {
     setDetailLoading(true);

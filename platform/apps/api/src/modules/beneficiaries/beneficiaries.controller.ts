@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query, StreamableFile, UploadedFiles, UseInterceptors } from '@nestjs/common';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { AccountRole } from '@alzad/db';
+import { AccountRole, prisma } from '@alzad/db';
 import { ApiError } from '../../common/api-error';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -64,9 +64,12 @@ export class BeneficiariesController {
 
   @Get('import/template.xlsx')
   @Roles(AccountRole.ADMIN, AccountRole.ASSOCIATION)
-  @ApiOperation({ summary: 'BEN-014 — قالب Excel لاستيراد المستفيدين (رأس الأعمدة + صف مثال)' })
-  async downloadXlsxTemplate(): Promise<StreamableFile> {
-    const buffer = await generateXlsxTemplate();
+  @ApiOperation({ summary: 'BEN-014 — قالب Excel عربي فارغ بقوائم اختيار وتعليمات منفصلة' })
+  async downloadXlsxTemplate(@CurrentUser() ctx: AuthContext): Promise<StreamableFile> {
+    const rows = await prisma.referenceValue.findMany({ where: { active: true, type: { in: ['REGION', 'CITY', 'SOCIAL_STATUS'] } }, select: { id: true, type: true, value: true, parentId: true }, orderBy: { sortOrder: 'asc' } });
+    const region = ctx.meSnapshot?.associationRegion;
+    const regionId = rows.find(row => row.type === 'REGION' && row.value === region)?.id;
+    const buffer = await generateXlsxTemplate({ region: regionId ? region : undefined, regions: rows.filter(row => row.type === 'REGION').map(row => row.value), cities: rows.filter(row => row.type === 'CITY' && (!regionId || row.parentId === regionId)).map(row => row.value), socialStatuses: rows.filter(row => row.type === 'SOCIAL_STATUS').map(row => row.value) });
     return new StreamableFile(buffer, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       disposition: 'attachment; filename="beneficiary-import-template.xlsx"',

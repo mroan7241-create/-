@@ -2,6 +2,7 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { AccountRole, prisma } from '@alzad/db';
 import { ApiError, authForbidden } from '../../common/api-error';
 import type { AuthContext } from '../auth/auth.types';
+import { boundedReads } from '../../common/bounded-reads';
 import type { AssociationReportQueryDto } from './dto/association-report-query.dto';
 import type { AbanmiReportQueryDto } from './dto/abanmi-report-query.dto';
 import { adminApplicationRegionCodes, adminApplicationScopeWhere, adminAssociationScopeWhere, assertAdminAssociationScope } from '../auth/admin-route-permissions';
@@ -114,8 +115,8 @@ export class ReportsService {
   async associationReport(ctx: AuthContext, query: AssociationReportQueryDto) {
     if (ctx.role !== AccountRole.ASSOCIATION || !ctx.associationId) throw authForbidden();
 
-    const from = new Date(`${query.from}T00:00:00.000Z`);
-    const to = new Date(`${query.to}T00:00:00.000Z`);
+    const from = new Date(`${query.from}T00:00:00.000+03:00`);
+    const to = new Date(`${query.to}T00:00:00.000+03:00`);
     if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) || from > to) {
       throw new ApiError('REPORT_PERIOD_INVALID', 'الفترة الزمنية غير صحيحة', HttpStatus.BAD_REQUEST);
     }
@@ -144,27 +145,27 @@ export class ReportsService {
       attemptsByStatus,
       movementsInPeriod,
       recentOperations,
-    ] = await reportQuery('DATA', prisma.$transaction([
-      prisma.association.findUniqueOrThrow({
+    ] = await reportQuery('DATA', boundedReads([
+      () => prisma.association.findUniqueOrThrow({
         where: { id: associationId },
         select: { id: true, publicCode: true, name: true, region: true, city: true },
       }),
-      prisma.beneficiary.count({ where: { associationId, archivedAt: null } }),
-      prisma.beneficiary.groupBy({ by: ['reviewStatus'], where: { associationId, archivedAt: null }, _count: { _all: true } }),
-      prisma.beneficiaryNeed.count({ where: { associationId } }),
-      prisma.beneficiaryNeed.groupBy({ by: ['decisionStatus'], where: { associationId }, _count: { _all: true } }),
-      prisma.beneficiaryNeed.groupBy({ by: ['fulfillmentStatus'], where: { associationId }, _count: { _all: true } }),
-      prisma.deviceUnit.count({ where: { associationId } }),
-      prisma.deviceUnit.groupBy({ by: ['status'], where: { associationId }, _count: { _all: true } }),
-      prisma.deviceUnit.groupBy({ by: ['deviceType'], where: { associationId }, _count: { _all: true } }),
-      prisma.receiptBatch.count({ where: { associationId, createdAt: inPeriod } }),
-      prisma.receiptBatch.groupBy({ by: ['status'], where: { associationId, createdAt: inPeriod }, _count: { _all: true } }),
-      prisma.deliveryMission.count({ where: { associationId } }),
-      prisma.deliveryMission.groupBy({ by: ['status'], where: { associationId }, _count: { _all: true } }),
-      prisma.deliveryAttempt.count({ where: { mission: { associationId }, attemptedAt: inPeriod } }),
-      prisma.deliveryAttempt.groupBy({ by: ['status'], where: { mission: { associationId }, attemptedAt: inPeriod }, _count: { _all: true } }),
-      prisma.deviceMovement.count({ where: { associationId, createdAt: inPeriod } }),
-      prisma.auditLog.findMany({
+      () => prisma.beneficiary.count({ where: { associationId, archivedAt: null } }),
+      () => prisma.beneficiary.groupBy({ by: ['reviewStatus'], where: { associationId, archivedAt: null }, _count: { _all: true } }),
+      () => prisma.beneficiaryNeed.count({ where: { associationId } }),
+      () => prisma.beneficiaryNeed.groupBy({ by: ['decisionStatus'], where: { associationId }, _count: { _all: true } }),
+      () => prisma.beneficiaryNeed.groupBy({ by: ['fulfillmentStatus'], where: { associationId }, _count: { _all: true } }),
+      () => prisma.deviceUnit.count({ where: { associationId } }),
+      () => prisma.deviceUnit.groupBy({ by: ['status'], where: { associationId }, _count: { _all: true } }),
+      () => prisma.deviceUnit.groupBy({ by: ['deviceType'], where: { associationId }, _count: { _all: true } }),
+      () => prisma.receiptBatch.count({ where: { associationId, createdAt: inPeriod } }),
+      () => prisma.receiptBatch.groupBy({ by: ['status'], where: { associationId, createdAt: inPeriod }, _count: { _all: true } }),
+      () => prisma.deliveryMission.count({ where: { associationId } }),
+      () => prisma.deliveryMission.groupBy({ by: ['status'], where: { associationId }, _count: { _all: true } }),
+      () => prisma.deliveryAttempt.count({ where: { mission: { associationId }, attemptedAt: inPeriod } }),
+      () => prisma.deliveryAttempt.groupBy({ by: ['status'], where: { mission: { associationId }, attemptedAt: inPeriod }, _count: { _all: true } }),
+      () => prisma.deviceMovement.count({ where: { associationId, createdAt: inPeriod } }),
+      () => prisma.auditLog.findMany({
         where: { associationId, createdAt: inPeriod },
         orderBy: { createdAt: 'desc' },
         take: 20,

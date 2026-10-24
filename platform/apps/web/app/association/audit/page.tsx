@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ApiClientError, listAuditLog, type AuditLogEntry, type Paginated } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
 import { AppShell } from '../../components/AppShell';
+import { actionLabel, entityLabel } from '../../lib/action-labels';
 import { cardStyle, errorStyle, ltrStyle, mutedStyle, secondaryButtonStyle, tableStyle, tdStyle, thStyle } from '../../lib/ui';
 
 const PAGE_SIZE = 50;
@@ -52,8 +53,8 @@ export default function AssociationAuditPage() {
               <tr key={row.id}>
                 <td style={{ ...tdStyle, ...ltrStyle }}>{new Date(row.createdAt).toLocaleString('ar-SA')}</td>
                 <td style={tdStyle}>{row.actorAccount ? `${row.actorAccount.name} (${row.actorAccount.publicCode})` : 'النظام'}</td>
-                <td style={{ ...tdStyle, ...ltrStyle }}>{row.action}</td>
-                <td style={{ ...tdStyle, ...ltrStyle }}>{row.entityType}</td>
+                <td style={tdStyle}>{actionLabel(row.action)}</td>
+                <td style={tdStyle}>{entityLabel(row.entityType)}</td>
               </tr>
             ))}
           </tbody>

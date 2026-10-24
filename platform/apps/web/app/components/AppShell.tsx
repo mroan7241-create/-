@@ -8,7 +8,7 @@ import { Menu, X } from 'lucide-react';
 import type { CurrentUser } from '../lib/api';
 import { logout } from '../lib/api';
 import { finishLogout } from '../lib/logout-flow';
-import { homeForUser, navGroupsForRole, ROLE_LABELS } from './nav-config';
+import { homeForUser, navGroupsForRole, ROLE_LABELS, associationTabs } from './nav-config';
 import { mobileMenuButtonStyle, mobileOverlayStyle } from './shell-styles';
 
 /**
@@ -26,6 +26,7 @@ export function AppShell({ user, children, restricted = false }: { user: Current
   const pathname = usePathname();
   const router = useRouter();
   const groups = restricted ? [] : navGroupsForRole(user.role, user);
+  const tabs = user.role === 'ASSOCIATION' && !restricted ? associationTabs(pathname) : [];
   const homeHref = user.role === 'ADMIN' ? homeForUser(user) : user.role === 'ASSOCIATION' ? '/association' : '/abanmi';
 
   useEffect(() => {
@@ -70,7 +71,7 @@ export function AppShell({ user, children, restricted = false }: { user: Current
               <div className="zad-nav-group-label2">{group}</div>
               <ul className="zad-nav-list2">
                 {items.map((item) => {
-                  const active = pathname === item.href || (item.href !== homeHref && pathname.startsWith(item.href));
+                  const active = pathname === item.href || (item.href !== homeHref && pathname.startsWith(item.href)) || tabs[0]?.href === item.href;
                   const Icon = item.icon;
                   return (
                     <li key={item.href}>
@@ -124,7 +125,9 @@ export function AppShell({ user, children, restricted = false }: { user: Current
             </button>
           </div>
         </div>
-        <main className="zad-content2">{logoutError && <p role="alert" style={{ color: '#a60020', marginBlock: '0 12px' }}>{logoutError}</p>}{children}</main>
+        <main className="zad-content2">{logoutError && <p role="alert" style={{ color: '#a60020', marginBlock: '0 12px' }}>{logoutError}</p>}
+          {tabs.length > 0 && <nav aria-label="أقسام الصفحة" className="button-row" style={{ marginBottom: 18 }}>{tabs.map(item => <Link key={item.href} href={item.href} aria-current={pathname === item.href ? 'page' : undefined} style={{ padding: '9px 14px', borderRadius: 10, textDecoration: 'none', background: pathname === item.href ? 'var(--zad-800)' : 'white', color: pathname === item.href ? 'white' : 'var(--zad-800)', border: '1px solid var(--zad-200, #eadde1)' }}>{item.label}</Link>)}</nav>}
+          {children}</main>
       </div>
 
       <style>{`

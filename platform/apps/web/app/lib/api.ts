@@ -329,6 +329,8 @@ export interface CurrentUser {
   role: 'ADMIN' | 'ASSOCIATION' | 'DELEGATE' | 'ABANMI';
   associationId: string | null;
   mustChangePassword: boolean;
+  associationRegion?: string;
+  associationCity?: string;
   adminFullAccess?: boolean;
   adminPermissions?: AdminPermission[];
   adminApplicationScope?: AdminApplicationScope | null;
@@ -472,8 +474,8 @@ export type BeneficiaryImportResult =
   | { ok: true; createdCount: number; beneficiaryIds: string[]; replayed: boolean }
   | { ok: false; errors: { row: number; message: string }[] };
 
-export function importBeneficiaries(input: { associationId?: string; acceptedPledge: boolean; rows: BeneficiaryImportRow[] }): Promise<BeneficiaryImportResult> {
-  return apiFetch(`/beneficiaries/import`, { method: 'POST', body: JSON.stringify({ ...input, opId: newOpId() }) });
+export function importBeneficiaries(input: { associationId?: string; acceptedPledge: boolean; rows: BeneficiaryImportRow[]; opId?: string }): Promise<BeneficiaryImportResult> {
+  return apiFetch(`/beneficiaries/import`, { method: 'POST', body: JSON.stringify({ ...input, opId: input.opId ?? newOpId() }) });
 }
 
 /** BEN-014 — معاينة ملف Excel فقط، بلا أي كتابة (يوازي inspectBeneficiaryExcel). */
@@ -751,13 +753,14 @@ export interface DeviceUnitSummary {
   deliveredAt: string | null;
 }
 
-export function listDeviceUnits(params: { page?: number; pageSize?: number; associationId?: string; deviceType?: DeviceType; status?: DeviceStatus } = {}): Promise<Paginated<DeviceUnitSummary>> {
+export function listDeviceUnits(params: { page?: number; pageSize?: number; associationId?: string; deviceType?: DeviceType; status?: DeviceStatus; includeCounts?: boolean } = {}): Promise<Paginated<DeviceUnitSummary> & { counts?: Partial<Record<DeviceStatus, number>> }> {
   const q = new URLSearchParams();
   if (params.page) q.set('page', String(params.page));
   if (params.pageSize) q.set('pageSize', String(params.pageSize));
   if (params.associationId) q.set('associationId', params.associationId);
   if (params.deviceType) q.set('deviceType', params.deviceType);
   if (params.status) q.set('status', params.status);
+  if (params.includeCounts) q.set('includeCounts', 'true');
   return apiFetch(`/inventory/devices?${q.toString()}`);
 }
 

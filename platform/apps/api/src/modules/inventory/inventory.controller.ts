@@ -22,6 +22,7 @@ export class InventoryController {
       associationId: query.associationId,
       deviceType: query.deviceType,
       status: query.status,
+      includeCounts: query.includeCounts,
     });
   }
 

@@ -58,21 +58,28 @@ export class DashboardService {
   async association(ctx: AuthContext) {
     if (ctx.role !== AccountRole.ASSOCIATION || !ctx.associationId) throw authForbidden();
     const associationId = ctx.associationId;
-    const [beneficiariesTotal, beneficiariesPendingReview, receiptsAwaitingConfirmation, devicesAllocated, delegates, devicesWithDelegate, devicesDelivered, deliveriesPendingApproval, deliveriesPendingReturnApproval, deliveriesDeferred, recentOperations] = await prisma.$transaction([
-      prisma.beneficiary.count({ where: { associationId, archivedAt: null } }),
-      prisma.beneficiary.count({ where: { associationId, archivedAt: null, reviewStatus: 'UNDER_REVIEW' } }),
-      prisma.receiptBatch.count({ where: { associationId, status: 'AWAITING_ASSOCIATION_CONFIRMATION' } }),
-      prisma.deviceUnit.count({ where: { associationId, status: 'ALLOCATED' } }),
-      prisma.account.count({ where: { associationId, role: 'DELEGATE', archivedAt: null } }),
-      prisma.deviceUnit.count({ where: { associationId, status: 'WITH_DELEGATE' } }),
-      prisma.deviceUnit.count({ where: { associationId, status: 'DELIVERED' } }),
-      prisma.deliveryMission.count({ where: { associationId, status: 'PENDING_DELIVERY_APPROVAL' } }),
-      prisma.deliveryMission.count({ where: { associationId, status: 'PENDING_RETURN_APPROVAL' } }),
-      prisma.deliveryMission.count({ where: { associationId, status: 'DEFERRED' } }),
-      prisma.auditLog.findMany({ where: { associationId }, orderBy: { createdAt: 'desc' }, take: 6, include: { actorAccount: { select: { name: true, role: true, publicCode: true } } } }),
+    const [beneficiaries, devices, deliveries, receiptsAwaitingConfirmation, delegates, recentOperations, participation] = await boundedReads([
+      () => prisma.beneficiary.groupBy({ by: ['reviewStatus'], where: { associationId, archivedAt: null }, _count: { _all: true as const } }),
+      () => prisma.deviceUnit.groupBy({ by: ['status'], where: { associationId }, _count: { _all: true as const } }),
+      () => prisma.deliveryMission.groupBy({ by: ['status'], where: { associationId }, _count: { _all: true as const } }),
+      () => prisma.receiptBatch.count({ where: { associationId, status: 'AWAITING_ASSOCIATION_CONFIRMATION' } }),
+      () => prisma.account.count({ where: { associationId, role: 'DELEGATE', archivedAt: null } }),
+      () => prisma.auditLog.findMany({ where: { associationId }, orderBy: { createdAt: 'desc' }, take: 6, include: { actorAccount: { select: { name: true, role: true, publicCode: true } } } }),
+      () => prisma.projectParticipation.findUnique({ where: { associationId }, select: { status: true } }),
     ]);
+    const beneficiariesTotal = beneficiaries.reduce((sum, row) => sum + groupedCount(row), 0);
+    const beneficiariesPendingReview = groupedCount(beneficiaries.find(row => row.reviewStatus === 'UNDER_REVIEW'));
+    const beneficiariesApproved = groupedCount(beneficiaries.find(row => row.reviewStatus === 'APPROVED'));
+    const beneficiariesRejected = groupedCount(beneficiaries.find(row => row.reviewStatus === 'REJECTED'));
+    const devicesAllocated = groupedCount(devices.find(row => row.status === 'ALLOCATED'));
+    const devicesWithDelegate = groupedCount(devices.find(row => row.status === 'WITH_DELEGATE'));
+    const devicesDelivered = groupedCount(devices.find(row => row.status === 'DELIVERED'));
+    const deliveriesPendingApproval = groupedCount(deliveries.find(row => row.status === 'PENDING_DELIVERY_APPROVAL'));
+    const deliveriesPendingReturnApproval = groupedCount(deliveries.find(row => row.status === 'PENDING_RETURN_APPROVAL'));
+    const deliveriesDeferred = groupedCount(deliveries.find(row => row.status === 'DEFERRED'));
     return {
-      counts: { beneficiariesTotal, beneficiariesPendingReview, receiptsAwaitingConfirmation, devicesAllocated, delegates, devicesWithDelegate, devicesDelivered, deliveriesPendingApproval, deliveriesPendingReturnApproval, deliveriesDeferred },
+      counts: { beneficiariesTotal, beneficiariesPendingReview, beneficiariesApproved, beneficiariesRejected, receiptsAwaitingConfirmation, devicesAllocated, delegates, devicesWithDelegate, devicesDelivered, deliveriesPendingApproval, deliveriesPendingReturnApproval, deliveriesDeferred },
+      participationStatus: participation?.status ?? null,
       recentOperations,
     };
   }

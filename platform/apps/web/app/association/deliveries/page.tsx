@@ -13,10 +13,11 @@ import {
   type Paginated,
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
+import { initialQueryParam } from '../../lib/query';
 import { AppShell } from '../../components/AppShell';
 import { BeneficiarySelect } from '../../lib/beneficiary-select';
 import { DelegateSelect } from '../../lib/delegate-select';
-import { cardStyle, errorStyle, labelStyle, mutedStyle, primaryButtonStyle, secondaryButtonStyle, statusBadgeStyle, successStyle } from '../../lib/ui';
+import { cardStyle, errorStyle, inputStyle, labelStyle, mutedStyle, primaryButtonStyle, secondaryButtonStyle, statusBadgeStyle, successStyle } from '../../lib/ui';
 
 const PAGE_SIZE = 25;
 const STATUS_TONE: Record<DeliveryStatus, 'neutral' | 'good' | 'bad'> = {
@@ -29,6 +30,10 @@ export default function AssociationDeliveriesPage() {
 
   const [data, setData] = useState<Paginated<DeliveryMissionSummary> | null>(null);
   const [page, setPage] = useState(1);
+  const [status, setStatus] = useState<DeliveryStatus | ''>(() => {
+    const value = initialQueryParam('status');
+    return value && Object.hasOwn(DELIVERY_STATUS_LABELS, value) ? value as DeliveryStatus : '';
+  });
   const [listError, setListError] = useState('');
   const [notice, setNotice] = useState('');
   const [showAssign, setShowAssign] = useState(false);
@@ -36,11 +41,11 @@ export default function AssociationDeliveriesPage() {
   const load = useCallback(async () => {
     setListError('');
     try {
-      setData(await listDeliveries({ page, pageSize: PAGE_SIZE }));
+      setData(await listDeliveries({ page, pageSize: PAGE_SIZE, status: status || undefined }));
     } catch (err) {
       setListError(err instanceof ApiClientError ? err.message : 'تعذّر تحميل مهام التسليم.');
     }
-  }, [page]);
+  }, [page, status]);
 
   useEffect(() => {
     if (user) void load();
@@ -66,6 +71,7 @@ export default function AssociationDeliveriesPage() {
       </div>
 
       {listError && <p role="alert" style={errorStyle}>{listError}</p>}
+      <label style={{ ...labelStyle, maxWidth: 320, marginBottom: 16 }}>حالة التسليم<select style={inputStyle} value={status} onChange={e => { setStatus(e.target.value as DeliveryStatus | ''); setPage(1); }}><option value="">كل الحالات</option>{Object.entries(DELIVERY_STATUS_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
       {notice && <p style={successStyle}>{notice}</p>}
       {data?.items.length === 0 && <p style={mutedStyle}>لا توجد مهام تسليم بعد.</p>}
 

@@ -1,9 +1,25 @@
 import { jest } from '@jest/globals';
-import { prisma } from '@alzad/db';
+import { prisma, AccountRole } from '@alzad/db';
 import { DashboardService } from './dashboard.service';
 
 describe('Admin dashboard count aggregation', () => {
   afterEach(() => jest.restoreAllMocks());
+
+  it('aggregates association counts with tenant isolation and no sequential transaction', async () => {
+    const transaction = jest.spyOn(prisma, '$transaction');
+    const beneficiaries = jest.spyOn(prisma.beneficiary, 'groupBy').mockResolvedValue([{ reviewStatus: 'APPROVED', _count: { _all: 3 } }, { reviewStatus: 'UNDER_REVIEW', _count: { _all: 2 } }] as never);
+    const devices = jest.spyOn(prisma.deviceUnit, 'groupBy').mockResolvedValue([{ status: 'ALLOCATED', _count: { _all: 4 } }] as never);
+    jest.spyOn(prisma.deliveryMission, 'groupBy').mockResolvedValue([]);
+    jest.spyOn(prisma.receiptBatch, 'count').mockResolvedValue(0);
+    jest.spyOn(prisma.account, 'count').mockResolvedValue(1);
+    jest.spyOn(prisma.auditLog, 'findMany').mockResolvedValue([]);
+    jest.spyOn(prisma.projectParticipation, 'findUnique').mockResolvedValue({ status: 'EXECUTING' } as never);
+    const result = await new DashboardService().association({ role: AccountRole.ASSOCIATION, associationId: 'tenant-a', accountId: 'actor', sessionId: 's', mustChangePassword: false });
+    expect(result.counts).toMatchObject({ beneficiariesTotal: 5, beneficiariesApproved: 3, beneficiariesPendingReview: 2, devicesAllocated: 4 });
+    expect(beneficiaries).toHaveBeenCalledWith(expect.objectContaining({ where: { associationId: 'tenant-a', archivedAt: null } }));
+    expect(devices).toHaveBeenCalledWith(expect.objectContaining({ where: { associationId: 'tenant-a' } }));
+    expect(transaction).not.toHaveBeenCalled();
+  });
 
   it('preserves exact totals and status counts using grouped database reads', async () => {
     const transaction = jest.spyOn(prisma, '$transaction');

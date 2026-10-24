@@ -200,6 +200,8 @@ export class AuthService {
       ...this.adminState({ role: ctx.role, adminFullAccess: ctx.adminFullAccess, adminPermissions: ctx.adminPermissions, adminApplicationScope: ctx.adminApplicationScope }),
       covenantRequired: ctx.meSnapshot.covenantRequired,
       covenantStatus: ctx.meSnapshot.covenantStatus,
+      associationRegion: ctx.meSnapshot.associationRegion,
+      associationCity: ctx.meSnapshot.associationCity,
     };
     const account = await prisma.account.findUniqueOrThrow({ where: { id: ctx.accountId } });
     const covenant = await this.covenantState(account.role, account.associationId);

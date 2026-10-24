@@ -7,6 +7,7 @@ import {
   downloadXlsxTemplate,
   importBeneficiaries,
   previewXlsxImport,
+  newOpId,
   type BeneficiaryImportRow,
   type DeviceType,
 } from './api';
@@ -14,7 +15,7 @@ import { AssociationSelect } from './association-select';
 import {
   ALL_BENEFICIARY_IMPORT_FIELDS,
   BENEFICIARY_IMPORT_HEADER_LABELS,
-  REQUIRED_BENEFICIARY_IMPORT_FIELDS,
+  missingBeneficiaryImportFields, normalizeBeneficiaryImportRaw,
   beneficiaryImportFieldForHeader,
 } from '@alzad/shared';
 import { cardStyle, errorStyle, inputStyle, modalOverlayStyle, modalStyle, mutedStyle, primaryButtonStyle, secondaryButtonStyle, successStyle, tableStyle, tdStyle, thStyle } from './ui';
@@ -78,6 +79,7 @@ function parseCsv(text: string): string[][] {
 }
 
 interface PreviewRow {
+  fileRow?: number;
   raw: Record<string, string>;
   row?: BeneficiaryImportRow;
   error?: string;
@@ -86,17 +88,18 @@ interface PreviewRow {
 function buildPreviewRows(csvRows: string[][]): { headers: string[]; preview: PreviewRow[]; headerError?: string } {
   if (csvRows.length === 0) return { headers: [], preview: [], headerError: 'الملف فارغ.' };
   const headers = csvRows[0].map((header) => beneficiaryImportFieldForHeader(header) ?? header.trim());
-  const missing = REQUIRED_BENEFICIARY_IMPORT_FIELDS.filter((h) => !headers.includes(h));
+  const missing = missingBeneficiaryImportFields(headers);
   if (missing.length > 0) {
     return { headers, preview: [], headerError: `أعمدة إلزامية ناقصة: ${missing.map((field) => BENEFICIARY_IMPORT_HEADER_LABELS[field]).join('، ')}` };
   }
 
   const preview: PreviewRow[] = [];
   for (const dataRow of csvRows.slice(1)) {
-    const raw: Record<string, string> = {};
+    let raw: Record<string, string> = {};
     headers.forEach((h, i) => { raw[h] = (dataRow[i] ?? '').trim(); });
 
     try {
+      raw = normalizeBeneficiaryImportRaw(raw);
       const deviceTypes = raw.deviceTypes
         .split(/[،,]/)
         .map((s) => s.trim())
@@ -159,8 +162,10 @@ function BulkImportModal({ isAdmin, onClose, onImported }: { isAdmin: boolean; o
   const [submitErrors, setSubmitErrors] = useState<{ row: number; message: string }[]>([]);
   const [busy, setBusy] = useState(false);
   const [parsing, setParsing] = useState(false);
+  const [opId, setOpId] = useState(newOpId);
 
   function resetPreview() {
+    setOpId(newOpId());
     setSubmitError('');
     setSubmitErrors([]);
     setHeaders([]);
@@ -190,7 +195,7 @@ function BulkImportModal({ isAdmin, onClose, onImported }: { isAdmin: boolean; o
     try {
       const res = await previewXlsxImport(file);
       setHeaders(res.headers);
-      setPreview(res.rows.map((r) => ({ raw: r.raw, row: r.parsed, error: r.error })));
+      setPreview(res.rows.map((r) => ({ fileRow: r.row, raw: { ...r.raw, deviceTypes: r.parsed?.deviceTypes.map(type => DEVICE_TYPE_LABELS[type]).join('،') ?? r.raw.deviceTypes ?? '' }, row: r.parsed, error: r.error })));
     } catch (err) {
       setHeaderError(err instanceof ApiClientError ? err.message : 'تعذّرت قراءة الملف — تأكد أنه ملف Excel (.xlsx) صالح.');
     } finally {
@@ -212,7 +217,7 @@ function BulkImportModal({ isAdmin, onClose, onImported }: { isAdmin: boolean; o
     setSubmitError('');
     setSubmitErrors([]);
     try {
-      const res = await importBeneficiaries({ associationId: isAdmin ? associationId : undefined, acceptedPledge: pledge, rows: validRows });
+      const res = await importBeneficiaries({ associationId: isAdmin ? associationId : undefined, acceptedPledge: pledge, rows: validRows, opId });
       if (res.ok) {
         onImported();
       } else {
@@ -234,17 +239,17 @@ function BulkImportModal({ isAdmin, onClose, onImported }: { isAdmin: boolean; o
         </div>
 
         <p style={mutedStyle}>
-          ارفع ملف CSV أو Excel (.xlsx) بحسب القالب العربي. عمود «الأجهزة المطلوبة» يقبل أكثر من نوع مفصولًا بفاصلة عربية «،» (مثال: ثلاجة،فرن). ما زالت القوالب الإنجليزية القديمة مدعومة.
+          ١. نزّل قالب Excel. ٢. عبّئ صفًا لكل مستفيد واختر نعم/لا للأجهزة. ٣. ارفع الملف وراجع المعاينة ثم أكد الاستيراد. القوالب القديمة وCSV ما زالت مدعومة.
         </p>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button type="button" style={secondaryButtonStyle} onClick={downloadCsvTemplate}>⬇ تنزيل قالب CSV</button>
           <button type="button" style={secondaryButtonStyle} onClick={() => void downloadXlsxTemplate().catch(() => setHeaderError('تعذّر تنزيل قالب Excel.'))}>⬇ تنزيل قالب Excel</button>
+          <details><summary>خيار متقدم: CSV</summary><button type="button" style={secondaryButtonStyle} onClick={downloadCsvTemplate}>تنزيل قالب CSV القديم</button></details>
         </div>
 
         {isAdmin && (
           <div style={{ marginTop: 14, maxWidth: 320 }}>
             <label style={{ display: 'block', fontSize: 14, marginBottom: 6 }}>الجمعية</label>
-            <AssociationSelect value={associationId} onChange={setAssociationId} placeholder="ابحث واختر الجمعية..." />
+            <AssociationSelect value={associationId} onChange={value => { setAssociationId(value); setOpId(newOpId()); }} placeholder="ابحث واختر الجمعية..." />
           </div>
         )}
 
@@ -259,6 +264,7 @@ function BulkImportModal({ isAdmin, onClose, onImported }: { isAdmin: boolean; o
         {preview.length > 0 && !headerError && (
           <>
             <h3 style={{ fontSize: 15, marginTop: 16 }}>معاينة ({preview.length} صف، {errorRows.length} به خطأ)</h3>
+            <p style={mutedStyle}>{Object.entries(DEVICE_TYPE_LABELS).map(([type, label]) => `${label}: ${validRows.filter(row => row.deviceTypes.includes(type as DeviceType)).length}`).join(' · ')}</p>
             <div style={{ ...cardStyle, padding: 0, overflowX: 'auto', maxHeight: 260 }}>
               <table style={tableStyle}>
                 <thead>
@@ -267,16 +273,18 @@ function BulkImportModal({ isAdmin, onClose, onImported }: { isAdmin: boolean; o
                     <th style={thStyle}>الاسم</th>
                     <th style={thStyle}>الجوال</th>
                     <th style={thStyle}>الأجهزة</th>
+                    <th style={thStyle}>المدينة والحي</th><th style={thStyle}>الأسرة والحالة</th>
                     <th style={thStyle}>الحالة</th>
                   </tr>
                 </thead>
                 <tbody>
                   {preview.map((p, i) => (
                     <tr key={i} style={p.error ? { background: 'var(--gold-100)' } : undefined}>
-                      <td style={tdStyle}>{i + 2}</td>
+                      <td style={tdStyle}>{p.fileRow ?? i + 2}</td>
                       <td style={tdStyle}>{p.raw.name}</td>
                       <td style={tdStyle}>{p.raw.phone}</td>
                       <td style={tdStyle}>{p.raw.deviceTypes}</td>
+                      <td style={tdStyle}>{p.raw.region} / {p.raw.city} / {p.raw.district}</td><td style={tdStyle}>{p.raw.familyCount} / {p.raw.socialStatus}</td>
                       <td style={tdStyle}>{p.error ? <span style={errorStyle}>{p.error}</span> : '✓ صالح'}</td>
                     </tr>
                   ))}

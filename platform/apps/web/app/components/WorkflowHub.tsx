@@ -112,6 +112,7 @@ function BusinessCalendarSettings({ busy, act }: { busy: boolean; act: (action: 
 }
 
 function OperationalRow({ user, section, row, busy, setForm, act }: { user: CurrentUser; section: string; row: WorkflowRecord; busy: boolean; setForm: (form: OpenForm) => void; act: (action: () => Promise<unknown>, success?: string, credentialEmail?: string) => Promise<void> }) {
+  const [closureReady, setClosureReady] = useState<boolean | null>(null);
   const publicLabel = workflowLabel(row, section);
   const status = String(row.status ?? row.listType ?? '');
   const currentAgreement = (row.agreements as WorkflowRecord[] | undefined)?.[0];
@@ -147,8 +148,8 @@ function OperationalRow({ user, section, row, busy, setForm, act }: { user: Curr
     } else {
       if (agreement?.status === 'SIGNED') button('تنزيل الميثاق المعتمد', () => getFinalCovenantUrl().then(({ url }) => { window.open(url, '_blank', 'noopener,noreferrer'); }));
       formButton('طلب تغيير المنسق', 'coordinator');
-      button('فحص جاهزية الإغلاق', () => apiFetch(`/reports/closure/readiness/${row.id}`));
-      if (!closure) button('إنشاء تقرير الإغلاق', () => generateOrganizationClosure(row.id));
+      button('فحص متطلبات الإغلاق', async () => { const result = await apiFetch<{ ready: boolean }>(`/reports/closure/readiness/${row.id}`); setClosureReady(result.ready); }, 'تم فحص متطلبات الإغلاق.');
+      if (!closure && closureReady === true) button('إنشاء تقرير الإغلاق', () => generateOrganizationClosure(row.id));
       if (closure && ['GENERATED', 'REOPENED'].includes(String(closure.status))) { formButton('تحرير التقرير النوعي', 'closure'); button('إرسال التقرير', () => transitionOrganizationClosure(closure.id, 'SUBMITTED')); }
     }
   }
@@ -178,7 +179,7 @@ function OperationalRow({ user, section, row, busy, setForm, act }: { user: Curr
     if (status === 'DONOR_FEEDBACK') button('إعادة الإرسال', () => transitionProjectClosure('RESUBMITTED'));
     if (status === 'DONOR_APPROVED') button('إغلاق المشروع', () => transitionProjectClosure('PROJECT_CLOSED'));
   }
-  return <article className="workflow-row"><div><strong>{publicLabel}</strong><p>{humanStatus(status)}</p>{section === 'participations' && user.role === 'ADMIN' && <p>الخطوة الحالية: {participationStageLabel(participationStage)}</p>}{section === 'procurement' && <ProcurementSummary row={row} />}</div><div className="button-row">{buttons}</div></article>;
+  return <article className="workflow-row"><div><strong>{publicLabel}</strong><p>{humanStatus(status)}</p>{section === 'participations' && user.role === 'ADMIN' && <p>الخطوة الحالية: {participationStageLabel(participationStage)}</p>}{section === 'participations' && user.role === 'ASSOCIATION' && closureReady !== null && <p role="status">{closureReady ? 'اجتاز الفحص الحالي؛ يُعاد التحقق عند إنشاء التقرير.' : 'توجد متطلبات غير مكتملة. راجع المستفيدين والأجهزة والتسليمات قبل الإغلاق.'}</p>}{section === 'procurement' && <ProcurementSummary row={row} />}</div><div className="button-row">{buttons}</div></article>;
 }
 
 function ProcurementSummary({ row }: { row: WorkflowRecord }) {

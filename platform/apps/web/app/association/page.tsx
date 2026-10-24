@@ -7,6 +7,7 @@ import { useRoleGuard } from '../lib/use-role-guard';
 import { AppShell } from '../components/AppShell';
 import { LoadingState, ErrorState } from '../components/States';
 import { actionLabel } from '../lib/action-labels';
+import { associationNextAction, type AssociationCounts } from './next-action';
 
 /**
  * لوحة تحكم ASSOCIATION — منقولة حرفيًا (البنية/التسلسل البصري) من
@@ -20,18 +21,8 @@ import { actionLabel } from '../lib/action-labels';
 export default function AssociationDashboardPage() {
   const { user, loading: guardLoading } = useRoleGuard(['ASSOCIATION']);
   const todayLabel = new Date().toLocaleDateString('ar-SA-u-ca-gregory', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-  const [counts, setCounts] = useState<{
-    beneficiariesTotal: number;
-    beneficiariesPendingReview: number;
-    receiptsAwaitingConfirmation: number;
-    devicesAllocated: number;
-    delegates: number;
-    devicesWithDelegate: number;
-    devicesDelivered: number;
-    deliveriesPendingApproval: number;
-    deliveriesPendingReturnApproval: number;
-    deliveriesDeferred: number;
-  } | null>(null);
+  const [counts, setCounts] = useState<AssociationCounts | null>(null);
+  const [stage, setStage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [latestOps, setLatestOps] = useState<AuditLogEntry[] | null>(null);
 
@@ -39,23 +30,25 @@ export default function AssociationDashboardPage() {
     if (!user) return;
     (async () => {
       try {
-        const result = await apiFetch<{ counts: NonNullable<typeof counts>; recentOperations: AuditLogEntry[] }>('/dashboard/association');
+        const result = await apiFetch<{ counts: AssociationCounts; recentOperations: AuditLogEntry[]; participationStatus: string | null }>('/dashboard/association');
         setCounts(result.counts);
         setLatestOps(result.recentOperations);
+        setStage(result.participationStatus);
       } catch {
         setError('تعذّر تحميل بيانات لوحة التحكم.');
       }
     })();
   }, [user]);
 
-  if (guardLoading || !user) return null;
+  if (guardLoading || !user) return <LoadingState label="جارٍ فتح بوابة الجمعية…" />;
+  const nextAction = counts ? associationNextAction(counts, stage) : null;
 
   const queues = counts
     ? [
         { key: 'approval', n: counts.deliveriesPendingApproval, severity: 'حرج', t: 'تسليمات بانتظار الاعتماد', d: 'إثبات وصل، بانتظار مراجعتكم', href: '/association/deliveries?status=PENDING_DELIVERY_APPROVAL' },
         { key: 'return', n: counts.deliveriesPendingReturnApproval, severity: 'حرج', t: 'إعادة بانتظار الاستلام الفعلي', d: 'جهاز عائد من مندوب', href: '/association/deliveries?status=PENDING_RETURN_APPROVAL' },
         { key: 'receipt', n: counts.receiptsAwaitingConfirmation, severity: 'متوسط', t: 'محضر استلام يحتاج تأكيدكم', d: 'وصل من إدارة الزاد', href: '/association/receipts?status=AWAITING_ASSOCIATION_CONFIRMATION' },
-        { key: 'ben', n: counts.beneficiariesPendingReview, severity: 'متوسط', t: 'مستفيدون يحتاجون إجراء', d: 'بانتظار مراجعة إدارة الزاد', href: '/association/beneficiaries?reviewStatus=UNDER_REVIEW' },
+        { key: 'ben', n: counts.beneficiariesPendingReview, severity: 'للمتابعة', t: 'مستفيدون بانتظار إدارة الزاد', d: 'لا يلزم إعادة رفعهم', href: '/association/beneficiaries?reviewStatus=UNDER_REVIEW' },
         { key: 'deferred', n: counts.deliveriesDeferred, severity: 'منخفض', t: 'تسليمات مؤجَّلة', d: 'بانتظار إعادة الجدولة', href: '/association/deliveries?status=DEFERRED' },
       ].filter((queue) => queue.n > 0)
     : [];
@@ -78,19 +71,24 @@ export default function AssociationDashboardPage() {
       {!counts && !error && <LoadingState />}
       {counts && (
         <>
+          {nextAction && <section className="zad-action-hero2" aria-labelledby="association-next-action" style={{ marginTop: 18 }}>
+            <span className="zad-section-meta2">المطلوب الآن · الإجراء على {nextAction.owner}</span>
+            <h2 id="association-next-action">{nextAction.title}</h2><p>{nextAction.detail}</p>
+            <Link href={nextAction.href} className="association-primary-action">{nextAction.label}</Link>
+          </section>}
           <div className="zad-section-head2">
             <div className="zad-framed-title2"><div className="zad-rule2" /><h2>المؤشرات الرئيسية</h2></div>
           </div>
           <div className="zad-summary-strip2">
             <Link className="zad-sum-card2" href="/association/beneficiaries"><div className="zad-sv2b">{counts.beneficiariesTotal}</div><div className="zad-sl2b">إجمالي المستفيدين</div></Link>
-            <span className="zad-sum-card2"><div className="zad-sv2b">{counts.devicesAllocated}</div><div className="zad-sl2b">أجهزة مخصَّصة</div></span>
+            <Link className="zad-sum-card2" href="/association/inventory?status=ALLOCATED"><div className="zad-sv2b">{counts.devicesAllocated}</div><div className="zad-sl2b">أجهزة مخصَّصة حاليًا</div></Link>
             <Link className="zad-sum-card2" href="/association/delegates"><div className="zad-sv2b">{counts.delegates}</div><div className="zad-sl2b">مناديبنا</div></Link>
             <Link className="zad-sum-card2" href="/association/deliveries"><div className="zad-sv2b">{counts.devicesWithDelegate}</div><div className="zad-sl2b">أجهزة مع مناديب</div></Link>
-            <span className="zad-sum-card2"><div className="zad-sv2b">{counts.devicesDelivered}</div><div className="zad-sl2b">أجهزة مُسلَّمة</div></span>
+            <Link className="zad-sum-card2" href="/association/inventory?status=DELIVERED"><div className="zad-sv2b">{counts.devicesDelivered}</div><div className="zad-sl2b">أجهزة مُسلَّمة</div></Link>
           </div>
 
           <div className="zad-action-hero2">
-            <h2>تنبيهات الانتباه</h2>
+            <h2>حالات المتابعة</h2>
             <div className="zad-ah-sub2">تظهر هنا الحالات الفعلية التي تحتاج متابعة، مرتبة بحسب مستوى الخطورة.</div>
             <div className="zad-queue-grid2">
               {queues.map((q) => (
@@ -103,7 +101,7 @@ export default function AssociationDashboardPage() {
                   </span>
                 </a>
               ))}
-              {queues.length === 0 && <p>لا توجد تنبيهات تشغيلية تحتاج إجراءً الآن.</p>}
+              {queues.length === 0 && <p>لا توجد حالات تشغيلية إضافية؛ راجعوا الخطوة المطلوبة أعلاه.</p>}
             </div>
           </div>
 

@@ -72,7 +72,9 @@ export async function seedReferenceData(prisma: PrismaClient): Promise<{ inserte
   await insertBatch('DEVICE_SPEC' as ReferenceValueType, specItems);
 
   // 5) بقية الأنواع المسطَّحة (لا parent لأي منها).
-  await insertBatch('SOCIAL_STATUS' as ReferenceValueType, LEGACY_SOCIAL_STATUSES.map((v) => ({ value: v, parentId: null })));
+  // Association entry adds the missing unmarried/widower choices without renaming
+  // historical values or reactivating an administrator-disabled entry.
+  await insertBatch('SOCIAL_STATUS' as ReferenceValueType, [...LEGACY_SOCIAL_STATUSES, 'أعزب/عزباء', 'أرمل'].map((v) => ({ value: v, parentId: null })));
   await insertBatch('ASSOCIATION_CATEGORY' as ReferenceValueType, LEGACY_ASSOCIATION_CATEGORIES.map((v) => ({ value: v, parentId: null })));
   await insertBatch('ASSOCIATION_SECTOR' as ReferenceValueType, LEGACY_ASSOCIATION_SECTORS.map((v) => ({ value: v, parentId: null })));
   await insertBatch('DIFFERENCE_REASON' as ReferenceValueType, LEGACY_DIFFERENCE_REASONS.map((v) => ({ value: v, parentId: null })));

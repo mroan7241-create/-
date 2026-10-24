@@ -777,3 +777,6 @@ a.zad-seg-col2:hover .zad-sv2 { text-decoration: underline; text-underline-offse
   .zad-primary-figure2 .zad-fig2 { font-size: 40px; }
   .zad-primary-figure2 .zad-fig2.zad-fig-compact2 { font-size: 34px; }
 }
+/* Association: one clear next action, with the established Alzad palette. */
+.association-primary-action { display:inline-flex; align-items:center; justify-content:center; min-height:44px; padding:10px 22px; border-radius:12px; background:var(--zad-800, #70142d); color:white; font-weight:700; text-decoration:none; }
+.association-primary-action:focus-visible { outline:3px solid #bd8b20; outline-offset:3px; }

@@ -73,7 +73,19 @@ export const NAV_ITEMS: NavItem[] = [
 ];
 
 export function navForRole(role: CurrentUser['role'], user?: CurrentUser): NavItem[] {
-  return NAV_ITEMS.filter((item) => item.roles.includes(role) && (item.available || (item.href === '/admin/participation' && user?.role === 'ADMIN' && !isAdminOwner(user) && canAdmin(user, 'notifications.manage'))) && (role !== 'ADMIN' || (!!user && canAccessAdminPath(user, item.href))));
+  const secondaryAssociationPages = ['/association/receipts', '/association/delegates', '/association/covenant', '/association/audit', '/association/settings'];
+  return NAV_ITEMS.filter((item) => item.roles.includes(role) && !(role === 'ASSOCIATION' && secondaryAssociationPages.includes(item.href)) && (item.available || (item.href === '/admin/participation' && user?.role === 'ADMIN' && !isAdminOwner(user) && canAdmin(user, 'notifications.manage'))) && (role !== 'ADMIN' || (!!user && canAccessAdminPath(user, item.href)))).map(item => role === 'ASSOCIATION' ? { ...item, label: ({ '/association/inventory': 'الأجهزة والاستلام', '/association/deliveries': 'التسليم والمناديب', '/association/participation': 'ملف الجمعية', '/association/escalations': 'المساعدة والمتابعة' } as Record<string, string>)[item.href] ?? item.label } : item);
+}
+
+/** Consolidation changes navigation only, never route access or permissions. */
+export function associationTabs(pathname: string): NavItem[] {
+  const groups = [
+    ['/association/inventory', '/association/receipts'],
+    ['/association/deliveries', '/association/delegates'],
+    ['/association/participation', '/association/covenant', '/association/settings', '/association/audit'],
+  ];
+  const paths = groups.find(group => group.some(path => pathname === path || pathname.startsWith(path + '/')));
+  return paths ? paths.flatMap(path => NAV_ITEMS.filter(item => item.href === path)) : [];
 }
 
 export function navGroupsForRole(role: CurrentUser['role'], user?: CurrentUser): { group: string; items: NavItem[] }[] {

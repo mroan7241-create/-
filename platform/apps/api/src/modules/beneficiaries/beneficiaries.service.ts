@@ -36,6 +36,8 @@ import { parseXlsxBeneficiaryRows, parseXlsxRowToImportRow } from './xlsx-import
 import { ALLOCATION_TRIGGER_PORT, type AllocationTriggerPort } from '../allocation/allocation-trigger.port';
 import type { AuthContext } from '../auth/auth.types';
 
+type ImportReference = { id: string; type: string; value: string; parentId: string | null };
+
 /**
  * حدود النصوص — مأخوذة حرفيًا من `Beneficiaries.gs::buildBeneficiaryFieldValues_`
  * و`BeneficiaryNeeds.gs::requiredIfRejected_` على الـbaseline القديم.
@@ -363,9 +365,9 @@ export class BeneficiariesService {
         // إعادة فحص التكرار مقابل القاعدة **بعد** اكتساب الأقفال — يغلق
         // نافذة TOCTOU لسباق كتابة متزامنة بنفس الرقم أثناء الانتظار،
         // تمامًا كإعادة الفحص بعد القفل في createBeneficiary.
-        for (const r of ok) {
-          await this.assertNoConfirmedDuplicate(tx, associationId, r.fields.phone, r.fields.secondaryPhone, null);
-        }
+        const phones = [...new Set(allPhones.filter((phone): phone is string => !!phone))];
+        const duplicate = await tx.beneficiary.findFirst({ where: { associationId, archivedAt: null, OR: [{ phone: { in: phones } }, { secondaryPhone: { in: phones } }] }, select: { id: true } });
+        if (duplicate) throw new ApiError('BENEFICIARY_DUPLICATE_PHONE', 'يوجد مستفيد بنفس رقم الجوال لدى الجمعية؛ راجع التكرار قبل إعادة الاستيراد', 409);
 
         const beneficiaryCodes = await this.publicCode.nextPublicCodes(tx, 'BEN', ok.length);
         const idRows = await tx.$queryRaw<{ id: string }[]>`SELECT uuidv7()::text AS id FROM generate_series(1, ${ok.length})`;
@@ -430,12 +432,13 @@ export class BeneficiariesService {
     const now = new Date();
     const ok: { index: number; fields: Awaited<ReturnType<BeneficiariesService['buildFieldValues']>>; location: ReturnType<typeof buildLocationWrite>; deviceTypes: DeviceType[] }[] = [];
     const errors: { row: number; message: string }[] = [];
+    const references = await prisma.referenceValue.findMany({ where: { active: true, type: { in: ['REGION', 'CITY', 'SOCIAL_STATUS'] } }, select: { id: true, type: true, value: true, parentId: true } });
 
     for (let i = 0; i < rows.length; i++) {
       if (errors.length >= 50) break;
       try {
         const deviceTypes = validateNewNeedDeviceTypes(rows[i].deviceTypes);
-        const fields = await this.buildFieldValues(rows[i] as BeneficiaryWriteInput, null);
+        const fields = await this.buildFieldValues(rows[i] as BeneficiaryWriteInput, null, references);
         const location = buildLocationWrite(rows[i], null, now);
         ok.push({ index: i, fields, location, deviceTypes });
       } catch (err) {
@@ -472,22 +475,26 @@ export class BeneficiariesService {
   }> {
     const { headers, rows: rawRows } = await parseXlsxBeneficiaryRows(buffer);
 
-    const parsedRows: Omit<BeneficiaryWriteInput, 'opId'>[] = rawRows.map((r) => parseXlsxRowToImportRow(r.raw));
-    const { errors } = await this.validateImportRows(parsedRows);
-    const errorByRow = new Map(errors.map((e) => [e.row, e.message]));
+    const conversionErrors = new Map<number, string>();
+    const parsedRows = rawRows.map((r, i) => {
+      try { return parseXlsxRowToImportRow(r.raw); }
+      catch (error) { conversionErrors.set(i, error instanceof Error ? error.message : 'تعذر قراءة الصف'); return null; }
+    });
+    const validIndexes = parsedRows.flatMap((row, i) => row ? [i] : []);
+    const { errors } = await this.validateImportRows(validIndexes.map(i => parsedRows[i]!));
+    const errorByRow = new Map(errors.map((e) => [validIndexes[e.row - 1], e.message]));
 
     return {
       ok: true as const,
       headers,
       rows: rawRows.map((r, i) => {
-        const rowNumber = i + 1;
-        const error = errorByRow.get(rowNumber);
+        const error = conversionErrors.get(i) ?? errorByRow.get(i);
         return {
           row: r.index,
           raw: r.raw,
           valid: !error,
           error,
-          parsed: error ? undefined : parsedRows[i],
+          parsed: error ? undefined : parsedRows[i]!,
         };
       }),
     };
@@ -1280,12 +1287,16 @@ export class BeneficiariesService {
   }
 
   /** يطابق `buildBeneficiaryFieldValues_` — تحقق صيغة بحت، بلا أي قراءة/كتابة قرار. */
-  private async buildFieldValues(input: BeneficiaryWriteInput, existing: { region: string; city: string; maritalStatus: string } | null) {
+  private async buildFieldValues(input: BeneficiaryWriteInput, existing: { region: string; city: string; maritalStatus: string } | null, references?: ImportReference[]) {
     const phone = normalizeSaudiPhone(input.phone);
     const secondaryPhone = input.phone2 ? normalizeSaudiPhone(input.phone2) : null;
 
-    const place = await validateRegionCity(input.region, input.city);
-    const maritalStatus = await validateSocialStatus(input.socialStatus, existing?.maritalStatus);
+    const region = String(input.region ?? '').trim(), city = String(input.city ?? '').trim();
+    const regionRow = references?.find(row => row.type === 'REGION' && row.value === region && row.parentId === null);
+    if (references && (!regionRow || !references.some(row => row.type === 'CITY' && row.value === city && row.parentId === regionRow.id))) throw new ApiError('APPLICATION_INVALID_REFERENCE', 'اختر منطقة ومدينة تابعتين لبعضهما من القوائم المعتمدة', 400);
+    const place = references ? { region, city } : await validateRegionCity(input.region, input.city);
+    const maritalStatus = references ? requiredText(input.socialStatus, 'الحالة الاجتماعية', 80) : await validateSocialStatus(input.socialStatus, existing?.maritalStatus);
+    if (references && !references.some(row => row.type === 'SOCIAL_STATUS' && row.value === maritalStatus)) throw new ApiError('BENEFICIARY_INVALID_REFERENCE', `الحالة الاجتماعية «${maritalStatus}» غير معروفة؛ اختر من القائمة`, 400);
 
     return {
       name: requiredText(input.name, 'اسم المستفيد', BENEFICIARY_LIMITS.name),

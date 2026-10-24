@@ -5,6 +5,9 @@ import { PaginationQueryDto } from '../../../common/validation/pagination-query.
 /** `GET /inventory/devices` — نطاق ADMIN مقابل ASSOCIATION يُحسم من AuthContext حصرًا داخل الخدمة، لا من associationId المُرسَل. */
 export class ListDeviceUnitsQueryDto extends PaginationQueryDto {
   @IsOptional()
+  @IsIn(['true', 'false'])
+  includeCounts?: 'true' | 'false';
+  @IsOptional()
   @IsUUID()
   associationId?: string;
 

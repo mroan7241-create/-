@@ -26,8 +26,8 @@ export class InventoryService {
   ) {}
   async listDeviceUnits(
     ctx: AuthContext,
-    params: PaginationParams & { associationId?: string; deviceType?: DeviceType; status?: DeviceStatus },
-  ): Promise<PaginatedResult<unknown>> {
+    params: PaginationParams & { associationId?: string; deviceType?: DeviceType; status?: DeviceStatus; includeCounts?: 'true' | 'false' },
+  ): Promise<PaginatedResult<unknown> & { counts?: Partial<Record<DeviceStatus, number>> }> {
     const { page, pageSize, skip, take } = normalizePagination(params);
     const where: Prisma.DeviceUnitWhereInput = {};
     if (ctx.role === AccountRole.ASSOCIATION) {
@@ -36,15 +36,17 @@ export class InventoryService {
     } else if (params.associationId) {
       where.associationId = params.associationId;
     }
+    const countScope = { ...where };
     if (params.deviceType) where.deviceType = params.deviceType;
     if (params.status) where.status = params.status;
 
-    const [rows, total] = await Promise.all([
+    const [rows, total, grouped] = await Promise.all([
       prisma.deviceUnit.findMany({ where, orderBy: { createdAt: 'desc' }, skip, take }),
       prisma.deviceUnit.count({ where }),
+      params.includeCounts === 'true' ? prisma.deviceUnit.groupBy({ by: ['status'], where: countScope, _count: { _all: true } }) : Promise.resolve(null),
     ]);
 
-    return toPaginatedResult(rows.map(mapDeviceUnit), total, page, pageSize);
+    return { ...toPaginatedResult(rows.map(mapDeviceUnit), total, page, pageSize), ...(grouped ? { counts: Object.fromEntries(Object.values(DeviceStatus).map(status => [status, grouped.find(row => row.status === status)?._count._all ?? 0])) } : {}) };
   }
 
   async getDeviceUnitDetail(ctx: AuthContext, id: string) {

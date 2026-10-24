@@ -3,10 +3,10 @@ import { DeviceType } from '@alzad/db';
 import { ApiError } from '../../common/api-error';
 import type { BeneficiaryWriteInput } from './beneficiaries.service';
 import {
-  ALL_BENEFICIARY_IMPORT_FIELDS,
   BENEFICIARY_IMPORT_HEADER_LABELS,
   REQUIRED_BENEFICIARY_IMPORT_FIELDS,
   beneficiaryImportFieldForHeader,
+  SIMPLE_BENEFICIARY_IMPORT_FIELDS, missingBeneficiaryImportFields, normalizeBeneficiaryImportRaw,
 } from '@alzad/shared';
 // ملاحظة: استيراد نوع فقط (import type) — يُحذَف بالكامل عند الترجمة، لا دورة استيراد فعلية زمن التشغيل رغم أن beneficiaries.service.ts يستورد من هذا الملف أيضًا.
 
@@ -63,7 +63,7 @@ export async function parseXlsxBeneficiaryRows(buffer: Buffer): Promise<{ header
 
   const headers = originalHeaders.map((header) => beneficiaryImportFieldForHeader(header) ?? header);
 
-  const missing = REQUIRED_XLSX_HEADERS.filter((h) => !headers.includes(h));
+  const missing = missingBeneficiaryImportFields(headers);
   if (missing.length > 0) {
     throw new ApiError('BENEFICIARY_IMPORT_XLSX_MISSING_HEADERS', `أعمدة إلزامية ناقصة: ${missing.map((field) => BENEFICIARY_IMPORT_HEADER_LABELS[field]).join('، ')}`, 400);
   }
@@ -84,7 +84,7 @@ export async function parseXlsxBeneficiaryRows(buffer: Buffer): Promise<{ header
       const cell = row.getCell(i + 1);
       const value = cellToString(cell.value);
       raw[header] = value;
-      if (value.trim() !== '') hasContent = true;
+      if (header !== 'region' && value.trim() !== '') hasContent = true;
     });
     if (!hasContent) continue; // صف فارغ تمامًا — يُتجاهَل بصمت (نفس سلوك القديم).
     rows.push({ index: rowNumber, raw });
@@ -93,23 +93,42 @@ export async function parseXlsxBeneficiaryRows(buffer: Buffer): Promise<{ header
   return { headers, rows };
 }
 
-/** يوازي `downloadImportTemplateXlsx` القديمة — رأس أعمدة + صف مثال واحد. */
-export async function generateXlsxTemplate(): Promise<Buffer> {
+/** Blank entry sheet; examples are instructions only and cannot be imported accidentally. */
+export async function generateXlsxTemplate(options: { region?: string; regions?: string[]; cities?: string[]; socialStatuses?: string[] } = {}): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet('مستفيدون');
-  sheet.views = [{ rightToLeft: true }];
-  sheet.addRow(ALL_BENEFICIARY_IMPORT_FIELDS.map((field) => BENEFICIARY_IMPORT_HEADER_LABELS[field]));
-  sheet.addRow(['اسم تجريبي', 'الرياض', 'الرياض', 'حي النرجس', '0500000001', 5, 'أرملة', 'ثلاجة،فرن', '', 'نعم', 2000, 'صف مثال — احذفه قبل الاستيراد', '', '']);
+  sheet.views = [{ rightToLeft: true, state: 'frozen', ySplit: 1 }];
+  sheet.addRow(SIMPLE_BENEFICIARY_IMPORT_FIELDS.map(field => BENEFICIARY_IMPORT_HEADER_LABELS[field]));
   sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
   sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF70142D' } };
-  sheet.autoFilter = { from: 'A1', to: 'N1' };
+  sheet.autoFilter = { from: 'A1', to: 'P1' };
   sheet.columns.forEach((col) => { col.width = 18; });
+  sheet.getColumn(1).width = 30;
+  for (const n of [5, 11]) sheet.getColumn(n).numFmt = '@';
+  const lists = workbook.addWorksheet('قوائم');
+  lists.state = 'veryHidden';
+  const validationLists = [options.regions ?? [], options.cities ?? [], options.socialStatuses ?? []];
+  validationLists.forEach((values, column) => values.forEach((value, row) => { lists.getCell(row + 1, column + 1).value = value; }));
+  const listNames = ['ImportRegions', 'ImportCities', 'ImportSocialStatuses'];
+  validationLists.forEach((values, index) => {
+    if (values.length) workbook.definedNames.add(`'قوائم'!$${String.fromCharCode(65 + index)}$1:$${String.fromCharCode(65 + index)}$${values.length}`, listNames[index]);
+  });
+  for (let row = 2; row <= 501; row++) {
+    if (options.region) sheet.getCell(row, 2).value = options.region;
+    for (const [col, listIndex] of [[2, 0], [3, 1], [7, 2]]) if (validationLists[listIndex].length) sheet.getCell(row, col).dataValidation = { type: 'list', allowBlank: true, formulae: [listNames[listIndex]], showErrorMessage: true, errorTitle: 'قيمة غير معتمدة', error: 'اختر من القائمة.' };
+    for (const col of [8, 9, 10, 12]) sheet.getCell(row, col).dataValidation = { type: 'list', allowBlank: true, formulae: ['"نعم,لا"'], showErrorMessage: true, error: 'اختر نعم أو لا.' };
+    sheet.getCell(row, 6).dataValidation = { type: 'whole', operator: 'between', allowBlank: true, formulae: [1, 99], showErrorMessage: true, error: 'عدد أفراد الأسرة من 1 إلى 99.' };
+  }
+  for (let col = 11; col <= 16; col++) { sheet.getColumn(col).outlineLevel = 1; }
+  sheet.properties.outlineProperties = { summaryRight: false, summaryBelow: true };
   const instructions = workbook.addWorksheet('تعليمات');
   instructions.views = [{ rightToLeft: true }];
   instructions.addRow(['طريقة الاستخدام']);
   instructions.addRow(['١. لا تعدّل أسماء الأعمدة في الصف الأول.']);
-  instructions.addRow(['٢. احذف صف المثال قبل رفع بياناتك.']);
-  instructions.addRow(['٣. أسماء الأجهزة المقبولة: ثلاجة، فرن، غسالة. افصل بين أكثر من جهاز بفاصلة عربية «،».']);
+  instructions.addRow(['٢. صف واحد لكل مستفيد. أكمل البيانات من الاسم إلى الحالة الاجتماعية. للأجهزة اختر نعم للمطلوب، ولا أو فارغ لغير المطلوب؛ يجب اختيار نعم لجهاز واحد على الأقل.']);
+  instructions.addRow(['٣. المنطقة معبأة من حساب الجمعية؛ اختر المدينة التابعة لها ثم اكتب الحي. الموقع الدقيق اختياري.']);
+  instructions.addRow(['٤. الأعمدة بعد غسالة؟ اختيارية. اكتب الجوال كنص، مثل 0500000001. عدد الأسرة شامل المستفيد.']);
+  instructions.addRow(['مثال للتوضيح فقط — لا تنقله إلى ورقة مستفيدون: اسم مستفيد، الرياض، الرياض، حي النرجس، 0500000001، 5، متزوج/متزوجة، نعم، لا، نعم.']);
   instructions.getColumn(1).width = 90;
   instructions.getColumn(1).alignment = { horizontal: 'right', wrapText: true };
   const buffer = await workbook.xlsx.writeBuffer();
@@ -134,6 +153,7 @@ function cellToString(value: ExcelJS.CellValue): string {
  * عادي فيلتقطها `validateImportRows` كخطأ صف عادي — لا معاملة خاصة.
  */
 export function parseXlsxRowToImportRow(raw: Record<string, string>): Omit<BeneficiaryWriteInput, 'opId'> {
+  raw = normalizeBeneficiaryImportRaw(raw);
   const deviceTypes = (raw.deviceTypes ?? '')
     .split(/[،,]/)
     .map((s) => s.trim())

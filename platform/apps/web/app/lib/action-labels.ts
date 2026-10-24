@@ -4,6 +4,9 @@
  * dashboards + تقرير المشروع الشامل) بدل تكرار الخريطة في كل مكان.
  */
 export const ACTION_LABELS: Record<string, string> = {
+  COVENANT_FULLY_EXECUTED: 'اكتمال اعتماد الميثاق',
+  COVENANT_ASSOCIATION_SIGNED: 'توقيع الجمعية على الميثاق',
+  COVENANT_PARTY_ONE_SIGNED: 'توقيع الزاد على الميثاق',
   BENEFICIARY_CREATED: 'تسجيل مستفيد جديد',
   BENEFICIARY_REVIEWED: 'مراجعة/اعتماد مستفيد',
   BENEFICIARY_BULK_REVIEWED: 'اعتماد مستفيدين بالجملة',
@@ -67,5 +70,9 @@ export const ACTION_LABELS: Record<string, string> = {
 
 export function actionLabel(action: string): string {
   return ACTION_LABELS[action] ?? action.replaceAll('_', ' ').toLowerCase();
+}
+
+export function entityLabel(entity: string): string {
+  return ({ accounts: 'الحسابات', auth_sessions: 'الدخول والخروج', participation_agreements: 'الميثاق', project_participations: 'المشاركة', beneficiaries: 'المستفيدون', beneficiary_needs: 'الاحتياجات', delivery_missions: 'التسليمات', receipt_batches: 'محاضر الاستلام', device_units: 'الأجهزة' } as Record<string, string>)[entity] ?? 'عمليات المشروع';
 }
 

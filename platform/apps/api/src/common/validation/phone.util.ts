@@ -6,7 +6,7 @@ import { BadRequestException } from '@nestjs/common';
  * بصيغة 05XXXXXXXX (10 خانات).
  */
 export function normalizeSaudiPhone(value: string): string {
-  const phone = String(value ?? '').replace(/[^\d+]/g, '');
+  const phone = String(value ?? '').replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 0x660)).replace(/[۰-۹]/g, d => String(d.charCodeAt(0) - 0x6f0)).replace(/[^\d+]/g, '');
   if (!/^(?:\+?966|0)?5\d{8}$/.test(phone)) {
     throw new BadRequestException('رقم الجوال غير صحيح');
   }

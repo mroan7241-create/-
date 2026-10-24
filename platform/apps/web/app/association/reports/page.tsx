@@ -5,14 +5,12 @@ import { AppShell } from '../../components/AppShell';
 import { ErrorState, LoadingState } from '../../components/States';
 import { OfficialReportHeader } from '../../components/OfficialReportHeader';
 import { ApiClientError, getAssociationReport, type AssociationReport } from '../../lib/api';
-import { actionLabel } from '../../lib/action-labels';
+import { actionLabel, entityLabel } from '../../lib/action-labels';
+import { riyadhDate } from '../../lib/business-date';
 import { reportValueLabel } from '../../lib/report-labels';
 import { useRoleGuard } from '../../lib/use-role-guard';
 import { cardStyle, inputStyle, mutedStyle, primaryButtonStyle, tableStyle, tdStyle, thStyle } from '../../lib/ui';
 
-function isoDate(date: Date) {
-  return date.toISOString().slice(0, 10);
-}
 
 function CounterTable({ title, values }: { title: string; values: Record<string, number> }) {
   const rows = Object.entries(values);
@@ -32,8 +30,8 @@ function CounterTable({ title, values }: { title: string; values: Record<string,
 export default function AssociationReportsPage() {
   const { user, loading: guardLoading } = useRoleGuard(['ASSOCIATION']);
   const today = new Date();
-  const [from, setFrom] = useState(() => isoDate(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1))));
-  const [to, setTo] = useState(() => isoDate(today));
+  const [from, setFrom] = useState(() => `${riyadhDate(today).slice(0, 7)}-01`);
+  const [to, setTo] = useState(() => riyadhDate(today));
   const [report, setReport] = useState<AssociationReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -104,7 +102,7 @@ export default function AssociationReportsPage() {
             {report.recentOperations.length === 0 ? <p style={{ ...mutedStyle, padding: '0 16px 16px' }}>لا توجد عمليات مسجلة خلال الفترة.</p> : (
               <table style={tableStyle}>
                 <thead><tr><th style={thStyle}>العملية</th><th style={thStyle}>الكيان</th><th style={thStyle}>الوقت</th></tr></thead>
-                <tbody>{report.recentOperations.map((row, index) => <tr key={`${row.createdAt}-${index}`}><td style={tdStyle}>{actionLabel(row.action)}</td><td style={tdStyle}>{row.entityType}</td><td style={tdStyle}>{new Date(row.createdAt).toLocaleString('ar-SA')}</td></tr>)}</tbody>
+                <tbody>{report.recentOperations.map((row, index) => <tr key={`${row.createdAt}-${index}`}><td style={tdStyle}>{actionLabel(row.action)}</td><td style={tdStyle}>{entityLabel(row.entityType)}</td><td style={tdStyle}>{new Date(row.createdAt).toLocaleString('ar-SA', { timeZone: 'Asia/Riyadh' })}</td></tr>)}</tbody>
               </table>
             )}
           </section>
