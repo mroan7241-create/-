@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 // @ts-ignore Node test runner requires the explicit source extension.
 import { associationNextAction, type AssociationCounts } from './next-action.ts';
+
+test('CSV fallback template cannot accidentally create an example beneficiary', () => {
+  const source = readFileSync(new URL('../lib/beneficiary-import.tsx', import.meta.url), 'utf8');
+  assert.ok(source.includes('const csv = `${headerRow}\\n`;'));
+  assert.ok(!source.includes('const exampleRow'));
+});
 const empty: AssociationCounts = { beneficiariesTotal: 0, beneficiariesPendingReview: 0, beneficiariesApproved: 0, beneficiariesRejected: 0, receiptsAwaitingConfirmation: 0, devicesAllocated: 0, delegates: 0, devicesWithDelegate: 0, devicesDelivered: 0, deliveriesPendingApproval: 0, deliveriesPendingReturnApproval: 0, deliveriesDeferred: 0 };
 test('zero beneficiaries requires entry, not a misleading all-clear', () => {
   assert.equal(associationNextAction(empty).href, '/association/beneficiaries');

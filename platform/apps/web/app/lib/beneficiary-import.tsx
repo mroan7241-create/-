@@ -39,8 +39,7 @@ const DEVICE_LABEL_TO_TYPE: Record<string, DeviceType> = Object.fromEntries(
 
 function downloadCsvTemplate() {
   const headerRow = ALL_BENEFICIARY_IMPORT_FIELDS.map((field) => BENEFICIARY_IMPORT_HEADER_LABELS[field]).join(',');
-  const exampleRow = ['اسم تجريبي', 'الرياض', 'الرياض', 'حي النرجس', '0500000001', '5', 'أرملة', 'ثلاجة،فرن', '', 'نعم', '2000', 'صف مثال — احذفه قبل الاستيراد', '', ''].join(',');
-  const csv = `${headerRow}\n${exampleRow}\n`;
+  const csv = `${headerRow}\n`;
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
