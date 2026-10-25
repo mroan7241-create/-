@@ -69,7 +69,7 @@ export default function SignerPage() {
   const pending = rows?.filter(row => row.status === 'SIGNED_BY_ORG') ?? [];
   const completed = rows?.filter(row => row.status === 'SIGNED') ?? [];
   return <AppShell user={user}>
-    <header><h1>المواثيق</h1><p>مرحبًا، {user.name} — مراجعة واعتماد المواثيق المسندة إليكم.</p></header>
+    <header><h1>المواثيق</h1><p>مرحبًا، {user.name} — مراجعة واعتماد المواثيق.</p></header>
     {error && <p role="alert" style={errorStyle}>{error}</p>}
     {notice && <p role="status" style={successStyle}>{notice}</p>}
     {!selected ? <>
