@@ -47,7 +47,9 @@ export default function LoginPage() {
         method: 'POST',
         body: JSON.stringify(body),
       });
-      router.push(res.user.mustChangePassword ? '/change-password' : res.user.role === 'ASSOCIATION' && res.user.covenantRequired ? '/association/covenant' : homeForUser(res.user));
+      const next = new URLSearchParams(window.location.search).get('next');
+      const signerNext = res.user.role === 'COVENANT_SIGNER' && next && /^\/signer(?:\?agreement=[0-9a-f-]{36})?$/i.test(next) ? next : null;
+      router.push(res.user.mustChangePassword ? '/change-password' : res.user.role === 'ASSOCIATION' && res.user.covenantRequired ? '/association/covenant' : signerNext ?? homeForUser(res.user));
     } catch (err) {
       if (err instanceof ApiClientError) {
         setError(ERROR_MESSAGES[err.code] ?? err.message);

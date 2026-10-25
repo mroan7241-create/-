@@ -7,6 +7,12 @@ import { SessionAuthGuard } from './session-auth.guard';
 
 describe('session guard request-local account snapshot', () => {
   afterEach(() => jest.restoreAllMocks());
+  it.each(['/api/v1/beneficiaries', '/api/v1/association-applications', '/api/v1/accounts/admins', '/api/v1/files', '/api/v1/reports/abanmi'])('denies signer access to %s even without controller role metadata', async path => {
+    jest.spyOn(prisma.authSession, 'findUnique').mockResolvedValue({ id: 'session', revokedAt: null, expiresAt: new Date(Date.now() + 60_000), absoluteExpiresAt: new Date(Date.now() + 60_000), lastSeenAt: new Date(), account: { id: 'signer', role: AccountRole.COVENANT_SIGNER, status: 'ACTIVE', archivedAt: null, mustChangePassword: false, associationId: null } } as never);
+    const request = { cookies: { [authConfig.sessionCookieName]: 'synthetic' }, method: 'GET', originalUrl: path };
+    const ctx = { getHandler: () => undefined, getClass: () => undefined, switchToHttp: () => ({ getRequest: () => request }) } as unknown as ExecutionContext;
+    await expect(new SessionAuthGuard({ getAllAndOverride: () => undefined } as unknown as Reflector).canActivate(ctx)).rejects.toMatchObject({ code: 'AUTH_FORBIDDEN' });
+  });
 
   it('reuses the already checked association and covenant state for /auth/me', async () => {
     const request: Record<string, unknown> = {

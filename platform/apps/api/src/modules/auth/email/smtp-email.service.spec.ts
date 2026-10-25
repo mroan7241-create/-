@@ -11,6 +11,17 @@ describe('SMTP Arabic layout and completed Covenant attachment', () => {
     Object.assign(process.env, { NODE_ENV: 'test', SMTP_HOST: 'smtp.test.invalid', SMTP_PORT: '587', SMTP_SECURE: 'false', SMTP_USER: 'synthetic', SMTP_PASSWORD: 'synthetic-only', SMTP_FROM_EMAIL: 'sender@example.org', SMTP_FROM_NAME: 'جمعية الزاد', PUBLIC_WEB_URL: 'https://web.example.org' });
   });
   afterEach(() => { process.env = { ...previous }; jest.restoreAllMocks(); });
+  it('sends signer setup without an administration role claim, password or secret query string', async () => {
+    const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ accepted: ['malyahya@alzaad.org.sa'] });
+    jest.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail } as never);
+    const code = `RST-${'A'.repeat(32)}`;
+    await new SmtpEmailService().sendPasswordResetCode({ to: 'malyahya@alzaad.org.sa', name: 'أ. موسى', code, signerInvitation: true });
+    const sent = sendMail.mock.calls[0][0] as { text: string; subject: string; html: string };
+    expect(sent.subject).toContain('توقيع المواثيق'); expect(sent.html).not.toContain('تفعيل حساب الإدارة');
+    const url = new URL(sent.text.split('\n').find(line => line.startsWith('https://'))!);
+    expect(url.search).toBe(''); expect(new URLSearchParams(url.hash.slice(1)).get('invitation')).toBe('signer');
+    expect(JSON.stringify(jest.mocked(Logger.prototype.log).mock.calls)).not.toContain(code);
+  });
 
   it('sends an Abanmi activation button with secrets in the fragment, not URL query or logs', async () => {
     const sendMail = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({ accepted: ['test@example.org'] });

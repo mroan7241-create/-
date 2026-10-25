@@ -43,15 +43,21 @@ describe('Onboarding atomic email queue', () => {
     expect(deliveries[2].context).toMatchObject({ recipientRole: 'marwan', markerKey: 'COVENANT_COMPLETION_EMAIL:test-covenant:marwan' });
     expect(deliveries.every(item => item.context.type === 'covenant' && item.context.fileId === 'final-file')).toBe(true);
   });
-  it('encrypts the 48-hour signing link addressed only to Mousa, not plaintext stored rows', async () => {
+  it('encrypts the seven-day signing link addressed only to Mousa, not plaintext stored rows', async () => {
     const { service, tx, queued, enqueueEmail, sendSecurityAlert } = fixture();
     const token = 'SyntheticTokenThatMustNotAppearInStoredRows';
-    await service.sendCovenantSigningRequest({ agreementId: 'test-covenant', token, expiresAt: new Date(Date.now() + 48 * 3600_000), associationName: 'جمعية اختبار', reference: 'COV-TEST' }, tx as never);
-    expect(queued()).toMatchObject({ kind: 'NOTICE', params: { to: 'malyahya@alzaad.org.sa', body: expect.stringContaining('48 ساعة'), action: { url: expect.stringContaining(`/covenant/party-one/${token}`) } }, context: { type: 'covenant-signing', tokenHash: createHash('sha256').update(token).digest('hex') } });
+    await service.sendCovenantSigningRequest({ agreementId: 'test-covenant', token, expiresAt: new Date(Date.now() + 7 * 24 * 3600_000), associationName: 'جمعية اختبار', reference: 'COV-TEST' }, tx as never);
+    expect(queued()).toMatchObject({ kind: 'NOTICE', params: { to: 'malyahya@alzaad.org.sa', body: expect.stringContaining('7 أيام'), action: { url: expect.stringContaining(`/covenant/party-one/${token}`) } }, context: { type: 'covenant-signing', tokenHash: createHash('sha256').update(token).digest('hex') } });
     expect(enqueueEmail).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(enqueueEmail.mock.calls)).not.toContain(token);
     expect(JSON.stringify(enqueueEmail.mock.calls)).not.toContain('malyahya@alzaad.org.sa');
     expect(sendSecurityAlert).not.toHaveBeenCalled();
+  });
+  it('new assigned invitations link to the authenticated portal, never turn a single token into list access', async () => {
+    const { service, tx, queued } = fixture();
+    await service.sendCovenantSigningRequest({ agreementId: 'agreement', token: 'secret-token', expiresAt: new Date(), associationName: 'جمعية', reference: 'COV-1', signerAccountId: 'signer-id' }, tx as never);
+    expect(queued()).toMatchObject({ params: { to: 'malyahya@alzaad.org.sa', action: { url: expect.stringMatching(/\/signer\?agreement=agreement$/) } } });
+    expect(JSON.stringify(queued())).not.toContain('/party-one/secret-token');
   });
   it.each(['unsigned', 'hash'])('refuses %s covenant before enqueue/marker mutation', async invalid => {
     const { service, tx, enqueueEmail, agreement, pdf } = fixture();

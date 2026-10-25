@@ -15,16 +15,16 @@ export const COVENANT_STAFF_RECIPIENTS = {
 export class OnboardingEmailService {
   constructor(@Inject(EmailService) email: EmailService) { void email; }
 
-  async sendCovenantSigningRequest(input: { agreementId: string; token: string; expiresAt: Date; associationName: string; reference: string }, tx: Prisma.TransactionClient) {
+  async sendCovenantSigningRequest(input: { agreementId: string; token: string; expiresAt: Date; associationName: string; reference: string; signerAccountId?: string }, tx: Prisma.TransactionClient) {
     const tokenHash = createHash('sha256').update(input.token).digest('hex');
     const markerKey = `COVENANT_PARTY_ONE_EMAIL:${input.agreementId}:${tokenHash}`;
-    const url = `${publicWebUrl()}/covenant/party-one/${encodeURIComponent(input.token)}`;
+    const url = input.signerAccountId ? `${publicWebUrl()}/signer?agreement=${encodeURIComponent(input.agreementId)}` : `${publicWebUrl()}/covenant/party-one/${encodeURIComponent(input.token)}`;
     const queued = await enqueueEmail(tx, 'NOTICE', {
       to: COVENANT_STAFF_RECIPIENTS.mousa.email, name: COVENANT_STAFF_RECIPIENTS.mousa.name,
       subject: `بانتظار توقيع الطرف الأول — ${input.associationName}`,
-      body: `وقّعت الجمعية ميثاق المشاركة، وهو بانتظار اعتمادكم بصفتكم ممثل الطرف الأول.\nالجمعية: ${input.associationName}\nرقم الميثاق: ${input.reference}\nالرابط خاص بكم وصالح لمدة 48 ساعة؛ يمكن فتحه والخروج والعودة قبل اعتماد التوقيع. يُغلق التوقيع بعد الاعتماد لحماية النسخة النهائية. لا تشاركوا الرابط مع الآخرين.\nبعد اكتمال التوقيع ستصل النسخة النهائية الموقعة إلى الجمعية وإليكم وإلى أ. مروان.`,
+      body: `وقّعت الجمعية ميثاق المشاركة، وهو بانتظار اعتمادكم بصفتكم ممثل الطرف الأول.\nالجمعية: ${input.associationName}\nرقم الميثاق: ${input.reference}\n${input.signerAccountId ? 'ادخلوا بحسابكم إلى صفحة المواثيق لمراجعة هذا الميثاق وبقية المواثيق المسندة إليكم. الدخول بالبريد وكلمة المرور الحالية.' : 'الرابط خاص بكم وصالح لمدة 7 أيام؛ يمكن فتحه والخروج والعودة قبل اعتماد التوقيع. لا تشاركوا الرابط مع الآخرين.'}\nيُغلق التوقيع بعد الاعتماد لحماية النسخة النهائية.\nبعد اكتمال التوقيع ستصل النسخة النهائية الموقعة إلى الجمعية وإليكم وإلى أ. مروان.`,
       action: { label: 'مراجعة الميثاق وتوقيعه', url },
-    }, { type: 'covenant-signing', agreementId: input.agreementId, tokenHash, markerKey });
+    }, { type: 'covenant-signing', agreementId: input.agreementId, tokenHash, markerKey, ...(input.signerAccountId ? { signerAccountId: input.signerAccountId } : {}) });
     await tx.systemSetting.create({ data: { key: markerKey, value: { status: 'QUEUED', eventId: queued.eventId } } });
     return queued;
   }

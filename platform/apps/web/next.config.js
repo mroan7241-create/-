@@ -10,7 +10,7 @@ const securityHeaders = [
     `img-src 'self' data: blob: https:${isProduction ? '' : ' http://localhost:* http://127.0.0.1:*'}`,
     "font-src 'self' data:",
     `connect-src 'self' https:${isProduction ? '' : ' http://localhost:* http://127.0.0.1:* ws:'}`,
-    "frame-src 'self' https:",
+    "frame-src 'self' blob: https:",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",

@@ -10,6 +10,13 @@ import { AgreementTransitionDto, AssociationCovenantSignDto, CoordinatorChangeDt
 @Controller('participations')
 export class ParticipationsController {
   constructor(private readonly service: ParticipationsService) {}
+  @Get('signer/agreements') @Roles(AccountRole.COVENANT_SIGNER) signerList(@CurrentUser() ctx: AuthContext) { return this.service.listSignerAgreements(ctx); }
+  @Get('signer/agreements/:id') @Roles(AccountRole.COVENANT_SIGNER) signerView(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string) { return this.service.signerView(ctx, id); }
+  @Get('signer/agreements/:id/template') @Roles(AccountRole.COVENANT_SIGNER) async signerTemplate(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Res({ passthrough: true }) res: Response) { await this.service.signerView(ctx, id); prepareCovenantPdfResponse(res); return new StreamableFile(await this.service.covenantTemplate()); }
+  @Get('signer/agreements/:id/association-signature') @Roles(AccountRole.COVENANT_SIGNER) signerSignature(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string) { return this.service.signerFile(ctx, id, 'association-signature'); }
+  @Get('signer/agreements/:id/final') @Roles(AccountRole.COVENANT_SIGNER) signerFinal(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string) { return this.service.signerFile(ctx, id, 'final'); }
+  @Post('signer/agreements/:id/sign') @Roles(AccountRole.COVENANT_SIGNER) @UseInterceptors(FileInterceptor('signature', { limits: { fileSize: RECEIPT_EVIDENCE_MAX_BYTES + 1024 } }))
+  signerSign(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: PartyOneCovenantSignDto, @UploadedFile() signature?: Express.Multer.File) { return this.service.signAssignedAgreement(ctx, id, dto.opId, { buffer: signature?.buffer ?? Buffer.alloc(0), declaredMimeType: signature?.mimetype }); }
   @Get() @Roles(AccountRole.ADMIN, AccountRole.ASSOCIATION) list(@CurrentUser() ctx: AuthContext) { return this.service.list(ctx); }
   @Post(':id/agreements') @Roles(AccountRole.ADMIN) createAgreement(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: CreateAgreementDto) { return this.service.createAgreement(ctx, id, dto); }
   @Post('agreements/:id/transition') @Roles(AccountRole.ADMIN) transition(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: AgreementTransitionDto) { return this.service.transitionAgreement(ctx, id, dto.status, dto.signerName, dto.opId); }

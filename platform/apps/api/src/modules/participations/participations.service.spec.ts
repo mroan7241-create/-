@@ -193,9 +193,9 @@ describe('final covenant queue and uploaded-file compensation', () => {
   afterEach(() => jest.restoreAllMocks());
   function signingFixture() {
     const token = 'synthetic-signing-token-long-enough-for-validation';
-    const current = { id: 'agreement', createdById: 'admin', status: AgreementStatus.SIGNED_BY_ORG,
-      partyOneSigningTokenHash: createHash('sha256').update(token).digest('hex'), partyOneSigningExpiresAt: new Date(Date.now() + 60_000), partyOneSigningConsumedAt: null,
-      participationId: 'participation', participation: { associationId: 'association', association: { name: 'جمعية' } },
+    const current = { id: 'agreement', createdById: 'admin', status: AgreementStatus.SIGNED_BY_ORG, templateVersion: COVENANT_VERSION, templateSha256: COVENANT_SOURCE_SHA256,
+      assignedSignerId: null as string | null, partyOneSigningTokenHash: createHash('sha256').update(token).digest('hex'), partyOneSigningExpiresAt: new Date(Date.now() + 60_000), partyOneSigningConsumedAt: null,
+      participationId: 'participation', participation: { status: ParticipationStatus.APPROVED_AWAITING_SETUP as ParticipationStatus, associationId: 'association', association: { name: 'جمعية' } },
       orgSignatureFile: { objectKey: 'org-signature', mimeType: 'image/png' }, signedByOrgAt: new Date(), orgSignerName: 'ممثل', orgSignerTitle: 'مدير', reference: 'COV-TEST' };
     const tx = {
       $queryRaw: jest.fn(async () => []), participationAgreement: { findUnique: jest.fn(async () => current), update: jest.fn(async () => ({})) },
@@ -215,8 +215,33 @@ describe('final covenant queue and uploaded-file compensation', () => {
       storage as unknown as StorageService, { generateFinal: async () => finalPdf } as unknown as CovenantDocumentService,
       { sendCovenantCompletion } as unknown as OnboardingEmailService);
     const buffer = Buffer.alloc(800); Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(buffer); buffer.writeUInt32BE(200, 16); buffer.writeUInt32BE(80, 20);
-    return { service, tx, storage, idem, sendCovenantCompletion, finalPdf, token, signature: { buffer, declaredMimeType: 'image/png' } };
+    return { service, tx, storage, idem, sendCovenantCompletion, finalPdf, token, current, signature: { buffer, declaredMimeType: 'image/png' } };
   }
+  it('scopes every signer read to the assigned account and rejects non-signers', async () => {
+    const h = signingFixture();
+    const read = jest.spyOn(prisma.participationAgreement, 'findFirst').mockResolvedValue(null);
+    const ctx = { ...admin, role: AccountRole.COVENANT_SIGNER, accountId: 'signer' };
+    await expect(h.service.signerView(ctx, 'other-agreement')).rejects.toMatchObject({ code: 'COVENANT_NOT_FOUND' });
+    expect(read).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: 'other-agreement', assignedSignerId: 'signer' }) }));
+    await expect(h.service.listSignerAgreements(admin)).rejects.toMatchObject({ code: 'AUTH_FORBIDDEN' });
+  });
+  it('authenticated assigned signing is independent of legacy-link expiry and records the actual actor', async () => {
+    const h = signingFixture(); h.current.partyOneSigningExpiresAt = new Date(0); h.current.assignedSignerId = 'signer';
+    jest.spyOn(prisma.participationAgreement, 'findFirst').mockResolvedValue(h.current as never);
+    const actor = { id: 'signer', role: AccountRole.COVENANT_SIGNER, status: 'ACTIVE', archivedAt: null, mustChangePassword: false };
+    const tx = Object.assign(h.tx, { account: { findUnique: jest.fn(async () => actor) }, authSession: { findUnique: jest.fn(async () => ({ accountId: 'signer', revokedAt: null, expiresAt: new Date(Date.now() + 60_000), absoluteExpiresAt: new Date(Date.now() + 60_000) })) } });
+    expect(await h.service.signAssignedAgreement({ ...admin, role: AccountRole.COVENANT_SIGNER, accountId: 'signer' }, 'agreement', 'op', h.signature)).toMatchObject({ status: 'SIGNED' });
+    expect(tx.auditLog.createMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.arrayContaining([expect.objectContaining({ actorAccountId: 'signer', actorRole: AccountRole.COVENANT_SIGNER, action: 'COVENANT_PARTY_ONE_SIGNED' })]) }));
+    expect(h.sendCovenantCompletion).toHaveBeenCalledTimes(1);
+  });
+  it('rechecks assignment under the lock and compensates only its own uploads if revoked', async () => {
+    const h = signingFixture();
+    jest.spyOn(prisma.participationAgreement, 'findFirst').mockResolvedValue({ ...h.current, assignedSignerId: 'signer' } as never);
+    h.current.assignedSignerId = 'another-signer';
+    Object.assign(h.tx, { account: { findUnique: jest.fn(async () => ({ id: 'signer', role: AccountRole.COVENANT_SIGNER, status: 'ACTIVE' })) }, authSession: { findUnique: jest.fn(async () => ({ accountId: 'signer', revokedAt: null, expiresAt: new Date(Date.now() + 60_000), absoluteExpiresAt: new Date(Date.now() + 60_000) })) } });
+    await expect(h.service.signAssignedAgreement({ ...admin, role: AccountRole.COVENANT_SIGNER, accountId: 'signer' }, 'agreement', 'op', h.signature)).rejects.toMatchObject({ code: 'COVENANT_PARTY_ONE_TOKEN_INVALID' });
+    expect(h.sendCovenantCompletion).not.toHaveBeenCalled(); expect(h.storage.deleteObjectBestEffort).toHaveBeenCalledTimes(2);
+  });
   it('queues after SIGNED/ACTIVE writes in the signing transaction, before completing idempotency', async () => {
     const { service, tx, storage, idem, sendCovenantCompletion, finalPdf, token, signature } = signingFixture();
     expect(await service.signPartyOne(token, 'op', signature)).toMatchObject({ status: AgreementStatus.SIGNED, emailQueued: true, emailSent: null });
@@ -231,6 +256,17 @@ describe('final covenant queue and uploaded-file compensation', () => {
     await service.getPartyOneSigningView(token);
     await service.getPartyOneSigningView(token);
     expect(tx.participationAgreement.update).not.toHaveBeenCalled();
+  });
+  it('never reactivates a withdrawn participation through an old valid signing link', async () => {
+    const h = signingFixture(); h.current.participation.status = ParticipationStatus.WITHDRAWN;
+    await expect(h.service.signPartyOne(h.token, 'op', h.signature)).rejects.toMatchObject({ code: 'COVENANT_PARTY_ONE_TOKEN_INVALID' });
+    expect(h.sendCovenantCompletion).not.toHaveBeenCalled(); expect(h.tx.projectParticipation.update).not.toHaveBeenCalled();
+  });
+  it('disabling the assigned signer also blocks its old standalone signing link', async () => {
+    const h = signingFixture();
+    jest.spyOn(prisma.participationAgreement, 'findUnique').mockResolvedValue({ ...h.current, assignedSignerId: 'signer', assignedSigner: { role: AccountRole.COVENANT_SIGNER, status: 'SUSPENDED', archivedAt: null } } as never);
+    await expect(h.service.getPartyOneSigningView(h.token)).rejects.toMatchObject({ code: 'COVENANT_PARTY_ONE_TOKEN_INVALID' });
+    expect(h.storage.uploadPrivateObject).not.toHaveBeenCalled();
   });
   it('queue failure propagates through existing catch and removes exactly its two uploaded objects', async () => {
     const { service, storage, idem, sendCovenantCompletion, token, signature } = signingFixture();
@@ -265,7 +301,7 @@ describe('association signature automatically queues the first-party invitation'
     const tx = {
       $queryRaw: jest.fn(async () => []),
       projectParticipation: { findUnique: jest.fn(async () => participation) },
-      account: { findUnique: jest.fn(async () => ({ status: 'ACTIVE', archivedAt: null })) },
+      account: { findUnique: jest.fn(async () => ({ status: 'ACTIVE', archivedAt: null })), findFirst: jest.fn(async () => null) },
       authCredential: { findFirst: jest.fn(async () => credential) },
       fileObject: { create: jest.fn(async () => ({ id: 'signature-file' })) },
       participationAgreement: { update: jest.fn(async (arg: unknown) => { void arg; return {}; }) },
@@ -284,13 +320,13 @@ describe('association signature automatically queues the first-party invitation'
     const dto = { opId: 'op', representativeName: 'ممثل', representativeTitle: 'مدير', authorizedAcknowledgement: 'true', acceptanceAcknowledgement: 'true', completionAcknowledgement: 'true', currentPassword: 'SyntheticPassword!2026' };
     return { service, tx, idem, sendCovenantSigningRequest, storage, run: () => service.signAssociation(ctx, dto, { buffer, declaredMimeType: 'image/png' }) };
   }
-  it('atomically saves the signature and token hash, then queues the 48-hour invitation', async () => {
+  it('atomically saves the signature and token hash, then queues the seven-day invitation', async () => {
     const h = await setup(); const before = Date.now();
     expect(await h.run()).toMatchObject({ ok: true, status: 'SIGNED_BY_ORG' });
     const [input, tx] = h.sendCovenantSigningRequest.mock.calls[0];
     expect(tx).toBe(h.tx);
-    expect(input.expiresAt.getTime() - before).toBeGreaterThanOrEqual(48 * 3600_000);
-    expect(input.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(48 * 3600_000);
+    expect(input.expiresAt.getTime() - before).toBeGreaterThanOrEqual(7 * 24 * 3600_000);
+    expect(input.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(7 * 24 * 3600_000);
     expect(h.tx.participationAgreement.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ partyOneSigningTokenHash: createHash('sha256').update(input.token).digest('hex'), partyOneSigningConsumedAt: null }) }));
     expect(h.sendCovenantSigningRequest.mock.invocationCallOrder[0]).toBeLessThan(h.idem.complete.mock.invocationCallOrder[0]);
   });

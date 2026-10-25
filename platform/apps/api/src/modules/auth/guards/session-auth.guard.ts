@@ -11,6 +11,7 @@ import { IS_PUBLIC_KEY } from '../../../common/decorators/public.decorator';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 import { ALLOW_MUST_CHANGE_PASSWORD_KEY } from '../decorators/allow-must-change-password.decorator';
 import type { AuthContext } from '../auth.types';
+import { signerRouteAllowed } from '../signer-route-policy';
 
 interface RequestWithAuth extends Request {
   authContext?: AuthContext;
@@ -84,6 +85,11 @@ export class SessionAuthGuard implements CanActivate {
       if (!approvedRead && !approvedSessionWrite) throw authForbidden();
     }
 
+    // Signers are deny-by-default, including controllers without a role decorator.
+    if (account.role === AccountRole.COVENANT_SIGNER) {
+      if (!signerRouteAllowed(request.method, request.originalUrl)) throw authForbidden();
+    }
+
     // Sliding expiry مع خفض تضخيم الكتابة: نلمس الصف مرة واحدة كل خمس دقائق
     // فقط، مع بقاء انتهاء الخمول والسقف المطلق قابلين للتحقق في كل طلب.
     const touchIntervalMs = 5 * 60 * 1000;
@@ -101,7 +107,7 @@ export class SessionAuthGuard implements CanActivate {
       context.getClass(),
     ]);
     // الحسابات المنشأة بكلمة مرور مؤقتة لا تدخل أي بوابة أعمال قبل تغييرها.
-    if (account.mustChangePassword && (account.role === 'ASSOCIATION' || account.role === 'ABANMI' || account.role === 'ADMIN') && !allowMustChangePassword) {
+    if (account.mustChangePassword && (account.role === 'ASSOCIATION' || account.role === 'ABANMI' || account.role === 'ADMIN' || account.role === AccountRole.COVENANT_SIGNER) && !allowMustChangePassword) {
       throw authPasswordChangeRequired();
     }
 

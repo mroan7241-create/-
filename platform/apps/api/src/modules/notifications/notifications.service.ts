@@ -300,7 +300,10 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
     } else if (context.type === 'covenant-signing') {
       const agreement = await tx.participationAgreement.findUnique({ where: { id: context.agreementId } });
       if (!agreement || agreement.status !== 'SIGNED_BY_ORG' || !agreement.orgSignatureFileId || agreement.partyOneSigningTokenHash !== context.tokenHash || agreement.partyOneSigningConsumedAt || to !== COVENANT_STAFF_RECIPIENTS.mousa.email) throw new Error('MAIL_STATE_INVALID');
-      if (!agreement.partyOneSigningExpiresAt || agreement.partyOneSigningExpiresAt <= now) throw new Error('MAIL_EXPIRED');
+      if (context.signerAccountId) {
+        const signer = await tx.account.findUnique({ where: { id: context.signerAccountId } });
+        if (agreement.assignedSignerId !== context.signerAccountId || !signer || signer.role !== 'COVENANT_SIGNER' || signer.status !== 'ACTIVE' || signer.archivedAt || signer.email?.trim().toLowerCase() !== to) throw new Error('MAIL_STATE_INVALID');
+      } else if (!agreement.partyOneSigningExpiresAt || agreement.partyOneSigningExpiresAt <= now) throw new Error('MAIL_EXPIRED');
       const marker = await tx.systemSetting.findUnique({ where: { key: context.markerKey } });
       const value = marker?.value as { status?: string; eventId?: string } | undefined;
       if (!value || value.eventId !== eventId || !['QUEUED', 'SENT'].includes(value.status ?? '')) throw new Error('MAIL_STATE_INVALID');

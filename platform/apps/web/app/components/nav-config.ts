@@ -30,6 +30,7 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: NavItem[] = [
+  { href: '/signer', label: 'المواثيق', icon: ScrollText, roles: ['COVENANT_SIGNER'], available: true, group: 'التوقيع' },
   { href: '/admin', label: 'لوحة التحكم', icon: LayoutDashboard, roles: ['ADMIN'], available: true, group: 'نظرة عامة' },
   { href: '/admin/selection', label: 'التقييم والاختيار', icon: Target, roles: ['ADMIN'], available: false, group: 'نظرة عامة' },
   { href: '/admin/applications', label: 'طلبات الانضمام', icon: Inbox, roles: ['ADMIN'], available: true, group: 'إدارة البرنامج' },
@@ -107,9 +108,11 @@ export const ROLE_LABELS: Record<CurrentUser['role'], string> = {
   ASSOCIATION: 'جمعية',
   DELEGATE: 'مندوب',
   ABANMI: 'أبانمي',
+  COVENANT_SIGNER: 'موقّع مواثيق الزاد',
 };
 
 export function homeForRole(role: CurrentUser['role']): string {
+  if (role === 'COVENANT_SIGNER') return '/signer';
   if (role === 'ADMIN') return '/admin';
   if (role === 'ASSOCIATION') return '/association';
   if (role === 'DELEGATE') return '/delegate';

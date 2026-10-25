@@ -6,7 +6,7 @@ import { AppShell } from '../../components/AppShell';
 import { ConfirmDialog, type ConfirmDialogProps } from '../../components/ConfirmDialog';
 import { PROJECT_GROUP_LABELS } from '../selection/selection-groups';
 import { useRoleGuard } from '../../lib/use-role-guard';
-import { ACCOUNT_STATUS_LABELS, ApiClientError, createAdminAccount, getApplicationGeography, listAdminAccounts, resetAdminAccountPassword, sendAdminAccountInvitation, setAdminAccountStatus, updateAdminAccount, type AdminAccountSummary } from '../../lib/api';
+import { ACCOUNT_STATUS_LABELS, ApiClientError, apiFetch, createAdminAccount, getApplicationGeography, listAdminAccounts, resetAdminAccountPassword, sendAdminAccountInvitation, setAdminAccountStatus, updateAdminAccount, type AdminAccountSummary } from '../../lib/api';
 import { cardStyle, errorStyle, inputStyle, labelStyle, ltrStyle, modalOverlayStyle, modalStyle, mutedStyle, primaryButtonStyle, secondaryButtonStyle, statusBadgeStyle, successStyle, tableStyle, tdStyle, thStyle } from '../../lib/ui';
 
 export default function AdminAccountsPage() {
@@ -44,10 +44,20 @@ export default function AdminAccountsPage() {
     } });
   }
 
+  function prepareSigner() {
+    setConfirmation({ title: 'تجهيز حساب توقيع المواثيق', message: 'تجهيز حساب أ. موسى اليحيى على malyahya@alzaad.org.sa بصلاحية توقيع المواثيق فقط، وإسناد المواثيق المنتظرة غير المسندة إليه. عند الإنشاء لأول مرة تُرسل دعوة واحدة ليختار كلمة مروره؛ لا يتغير حساب موجود ولا يعاد إرسال الدعوة.', confirmLabel: 'تجهيز حساب موسى', onConfirm: async () => {
+      try {
+        const result = await apiFetch<{ emailQueued: boolean; assignedCount: number }>('/accounts/covenant-signer', { method: 'POST', body: '{}' });
+        setConfirmation(null); setMessage(`تم تجهيز حساب الموقّع وإسناد ${result.assignedCount} ميثاق. ${result.emailQueued ? 'سُجلت دعوة إعداد كلمة المرور للإرسال.' : 'الحساب موجود؛ لم تتغير كلمة مروره ولم تُرسل دعوة جديدة.'}`);
+      } catch (reason) { setMessage(readError(reason)); }
+    } });
+  }
+
   if (loading || !user) return null;
   return <AppShell user={user}>
     <div className="workflow-row"><h1>حسابات الإدارة</h1><button type="button" style={primaryButtonStyle} onClick={() => setEditing('new')}>إضافة موظف إدارة</button></div>
     <p style={mutedStyle}>كل موظف يستخدم حسابه باسمه وصلاحياته المحددة. إدارة هذه الحسابات متاحة لمدير المنصة فقط.</p>
+    <section style={{ ...cardStyle, marginBottom: 18 }}><h2>حساب توقيع المواثيق</h2><p>أ. موسى اليحيى — حساب مستقل ومحدود بالتوقيع، وليس حساب إدارة.</p><button type="button" style={secondaryButtonStyle} onClick={prepareSigner}>تجهيز حساب موسى ودعوته</button></section>
     {message && <p role={message.startsWith('تم') ? 'status' : 'alert'} style={message.startsWith('تم') ? successStyle : errorStyle}>{message}</p>}
     <section style={{ ...cardStyle, padding: 0, overflowX: 'auto' }}><table style={tableStyle}><thead><tr><th style={thStyle}>الاسم</th><th style={thStyle}>الرمز</th><th style={thStyle}>البريد</th><th style={thStyle}>الحالة</th><th style={thStyle}>الصلاحيات</th><th style={thStyle}>آخر دخول</th><th style={thStyle}>الإجراءات</th></tr></thead><tbody>
       {accounts.map((account) => <tr key={account.id}><td style={tdStyle}>{account.name}</td><td style={{ ...tdStyle, ...ltrStyle }}>{account.publicCode}</td><td style={{ ...tdStyle, ...ltrStyle }}>{account.email}</td><td style={tdStyle}><span style={statusBadgeStyle(account.status === 'ACTIVE' ? 'good' : 'bad')}>{ACCOUNT_STATUS_LABELS[account.status]}</span></td><td style={tdStyle}>{account.adminFullAccess ? 'مدير المنصة — جميع الصلاحيات' : `${account.adminPermissions.length} صلاحية`}</td><td style={tdStyle}>{account.lastLoginAt ? new Date(account.lastLoginAt).toLocaleString('ar-SA') : 'لم يسجّل دخولًا'}</td><td style={tdStyle}>{account.adminFullAccess || account.publicCode === 'ADM-000001' ? <span style={mutedStyle}>حساب المدير محمي</span> : <div className="button-row"><button type="button" style={secondaryButtonStyle} onClick={() => setEditing(account)}>تعديل الصلاحيات</button><button type="button" style={secondaryButtonStyle} onClick={() => toggleStatus(account)}>{account.status === 'ACTIVE' ? 'تعطيل' : 'تفعيل'}</button>{account.status === 'ACTIVE' && account.mustChangePassword && !account.lastLoginAt && <button type="button" style={secondaryButtonStyle} onClick={() => sendInvitation(account)}>إرسال / إعادة إرسال دعوة الدخول</button>}<button type="button" style={secondaryButtonStyle} onClick={() => resetPassword(account)}>إعادة تعيين كلمة المرور</button></div>}</td></tr>)}

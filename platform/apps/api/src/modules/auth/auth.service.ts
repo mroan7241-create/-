@@ -66,7 +66,7 @@ export class AuthService {
     const roleOk = account && (
       account.role === AccountRole.ADMIN ||
       account.role === AccountRole.ASSOCIATION ||
-      account.role === AccountRole.ABANMI
+      account.role === AccountRole.ABANMI || account.role === AccountRole.COVENANT_SIGNER
     );
     const passwordOk = credential && (await verifySecret(credential.secretHash, password));
 
@@ -278,7 +278,7 @@ export class AuthService {
     let eligible =
       !!account &&
       account.status === AccountStatus.ACTIVE &&
-      (account.role === AccountRole.ADMIN || account.role === AccountRole.ASSOCIATION || account.role === AccountRole.ABANMI);
+      (account.role === AccountRole.ADMIN || account.role === AccountRole.ASSOCIATION || account.role === AccountRole.ABANMI || account.role === AccountRole.COVENANT_SIGNER);
     if (eligible && account!.role === AccountRole.ASSOCIATION) {
       eligible = !!account!.association && account!.association.status === AssociationStatus.ACTIVE;
     }
@@ -295,7 +295,7 @@ export class AuthService {
         await tx.$queryRaw`SELECT id FROM accounts WHERE id=${account.id}::uuid FOR UPDATE`;
         const currentCredential = await tx.authCredential.findUnique({ where: { id: credential!.id }, include: { account: { include: { association: true } } } });
         const current = currentCredential?.account;
-        if (!currentCredential || !current || currentCredential.type !== AuthCredentialType.EMAIL_PASSWORD || currentCredential.identifier !== email || current.status !== AccountStatus.ACTIVE || ![AccountRole.ADMIN, AccountRole.ASSOCIATION, AccountRole.ABANMI].includes(current.role as 'ADMIN' | 'ASSOCIATION' | 'ABANMI') || (current.role === AccountRole.ASSOCIATION && current.association?.status !== AssociationStatus.ACTIVE)) return;
+        if (!currentCredential || !current || current.archivedAt || currentCredential.type !== AuthCredentialType.EMAIL_PASSWORD || currentCredential.identifier !== email || current.status !== AccountStatus.ACTIVE || !([AccountRole.ADMIN, AccountRole.ASSOCIATION, AccountRole.ABANMI, AccountRole.COVENANT_SIGNER] as AccountRole[]).includes(current.role) || (current.role === AccountRole.ASSOCIATION && current.association?.status !== AssociationStatus.ACTIVE)) return;
         if (invitation && (current.role !== AccountRole.ABANMI || !current.mustChangePassword || current.name !== email || current.archivedAt)) return;
         const predecessors = await tx.passwordResetToken.findMany({ where: { accountId: account.id, consumedAt: null, expiresAt: { gt: new Date() } }, select: { id: true } });
         // Persist the candidate and the encrypted delivery atomically. The worker

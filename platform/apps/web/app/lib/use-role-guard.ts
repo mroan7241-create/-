@@ -42,7 +42,7 @@ export function useRoleGuard(allowed: CurrentUser['role'][]): { user: CurrentUse
         setUser(me);
       })
       .catch(() => {
-        if (!cancelled) router.replace('/login');
+        if (!cancelled) router.replace(pathname === '/signer' ? `/login?next=${encodeURIComponent('/signer' + window.location.search)}` : '/login');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

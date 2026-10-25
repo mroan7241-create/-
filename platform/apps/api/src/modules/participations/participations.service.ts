@@ -13,7 +13,7 @@ import { validateReceiptEvidenceFile } from '../files/file-validation.util';
 import type { AuthContext } from '../auth/auth.types';
 import type { AssociationCovenantSignDto, CreateAgreementDto, CoordinatorChangeDto } from './dto/participation.dto';
 import { COVENANT_SOURCE_SHA256, COVENANT_VERSION, CovenantDocumentService, PARTY_ONE_NAME, PARTY_ONE_TITLE } from './covenant-document.service';
-import { OnboardingEmailService } from '../auth/email/onboarding-email.service';
+import { COVENANT_STAFF_RECIPIENTS, OnboardingEmailService } from '../auth/email/onboarding-email.service';
 import { hasCovenantSignature } from '@alzad/shared';
 import { adminApplicationRegionCodes, adminApplicationScopeWhere, assertAdminApplicationScope, lockAdminApplicationScope } from '../auth/admin-route-permissions';
 
@@ -169,9 +169,11 @@ export class ParticipationsService {
         const file = await tx.fileObject.create({ data: { storageProvider: 's3', bucket: storageConfig.bucket, objectKey, originalName: 'association-covenant-signature', mimeType: validated.mime, sizeBytes: BigInt(signature.buffer.length), sha256: bufferSha256(signature.buffer), category: FileCategory.PARTICIPATION_AGREEMENT, uploadedById: ctx.accountId } });
         const now = new Date();
         const partyOneToken = randomBytes(32).toString('base64url');
-        const partyOneExpiresAt = new Date(now.getTime() + 48 * 60 * 60_000);
+        const partyOneExpiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60_000);
+        const signer = await tx.account.findFirst({ where: { role: AccountRole.COVENANT_SIGNER, email: COVENANT_STAFF_RECIPIENTS.mousa.email, status: AccountStatus.ACTIVE, archivedAt: null }, select: { id: true } });
+        await tx.participationAgreement.update({ where: { id: agreement.id }, data: { assignedSignerId: signer?.id ?? null } });
         await tx.participationAgreement.update({ where: { id: agreement.id }, data: { status: AgreementStatus.SIGNED_BY_ORG, orgSignerName: requiredText(dto.representativeName, 'اسم الممثل المخول', 200), orgSignerTitle: requiredText(dto.representativeTitle, 'صفة الممثل', 120), orgSignatureFileId: file.id, associationAccountId: ctx.accountId, signedByOrgAt: now, partyOneSigningTokenHash: sha256Hex(partyOneToken), partyOneSigningExpiresAt: partyOneExpiresAt, partyOneSigningConsumedAt: null, partyOneSigningIssuedById: null } });
-        await this.onboardingEmail.sendCovenantSigningRequest({ agreementId: agreement.id, token: partyOneToken, expiresAt: partyOneExpiresAt, associationName: participation!.application!.name, reference: agreement.reference ?? agreement.id }, tx);
+        await this.onboardingEmail.sendCovenantSigningRequest({ agreementId: agreement.id, token: partyOneToken, expiresAt: partyOneExpiresAt, associationName: participation!.application!.name, reference: agreement.reference ?? agreement.id, ...(signer ? { signerAccountId: signer.id } : {}) }, tx);
         await audit(tx, ctx, 'COVENANT_ASSOCIATION_SIGNED', 'participation_agreements', agreement.id, { version: COVENANT_VERSION, templateSha256: COVENANT_SOURCE_SHA256, completionAcknowledgement: true, completionCommitment: 'أتعهد بإنجاز المهام وتسليم الأجهزة خلال شهرين من تاريخ توقيع هذا الميثاق.' });
         const response = { ok: true as const, status: AgreementStatus.SIGNED_BY_ORG };
         await this.idempotency.complete(tx, ctx.accountId, 'covenant-association-sign', dto.opId, response);
@@ -186,7 +188,7 @@ export class ParticipationsService {
 
   async issuePartyOneSigningSession(ctx: AuthContext, agreementId: string) {
     const token = randomBytes(32).toString('base64url');
-    const expiresAt = new Date(Date.now() + 48 * 60 * 60_000);
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60_000);
     await prisma.$transaction(async (tx) => {
       const link = await tx.participationAgreement.findUnique({ where: { id: agreementId }, select: { participationId: true } });
       if (!link) throw new ApiError('AGREEMENT_NOT_FOUND', 'الاتفاقية غير موجودة', 404);
@@ -221,9 +223,45 @@ export class ParticipationsService {
     return { url: await this.storage.getSignedGetUrl(agreement.orgSignatureFile.objectKey, storageConfig.licenseSignedUrlSeconds) };
   }
 
-  async signPartyOne(token: string, opId: string, signature: { buffer: Buffer; declaredMimeType?: string }) {
+  async listSignerAgreements(ctx: AuthContext) {
+    if (ctx.role !== AccountRole.COVENANT_SIGNER) throw new ApiError('AUTH_FORBIDDEN', 'غير مسموح', 403);
+    const rows = await prisma.participationAgreement.findMany({
+      where: { assignedSignerId: ctx.accountId, status: { in: [AgreementStatus.SIGNED_BY_ORG, AgreementStatus.SIGNED] } },
+      select: { id: true, reference: true, status: true, signedByOrgAt: true, signedByZaadAt: true, participation: { select: { association: { select: { name: true } }, application: { select: { name: true } } } } },
+      orderBy: [{ signedByOrgAt: 'asc' }, { id: 'asc' }],
+    });
+    return rows.map(({ participation, ...row }) => ({ ...row, associationName: participation.association?.name ?? participation.application?.name ?? 'جمعية' }));
+  }
+
+  private async assignedSignerAgreement(ctx: AuthContext, id: string) {
+    if (ctx.role !== AccountRole.COVENANT_SIGNER) throw new ApiError('AUTH_FORBIDDEN', 'غير مسموح', 403);
+    const agreement = await prisma.participationAgreement.findFirst({ where: { id, assignedSignerId: ctx.accountId, templateVersion: COVENANT_VERSION, templateSha256: COVENANT_SOURCE_SHA256, status: { in: [AgreementStatus.SIGNED_BY_ORG, AgreementStatus.SIGNED] } }, include: { orgSignatureFile: true, finalFile: true, participation: { include: { association: true, application: true } } } });
+    if (!agreement) throw new ApiError('COVENANT_NOT_FOUND', 'الميثاق غير متاح', 404);
+    return agreement;
+  }
+
+  async signerView(ctx: AuthContext, id: string) {
+    const agreement = await this.assignedSignerAgreement(ctx, id);
+    return { reference: agreement.reference, version: agreement.templateVersion, status: agreement.status,
+      associationName: agreement.participation.association?.name ?? agreement.participation.application?.name,
+      associationRepresentative: agreement.orgSignerName, associationRepresentativeTitle: agreement.orgSignerTitle,
+      associationSignedAt: agreement.signedByOrgAt, partyOneRepresentative: PARTY_ONE_NAME, partyOneTitle: PARTY_ONE_TITLE };
+  }
+
+  async signerFile(ctx: AuthContext, id: string, kind: 'association-signature' | 'final') {
+    const agreement = await this.assignedSignerAgreement(ctx, id);
+    const file = kind === 'final' && agreement.status === AgreementStatus.SIGNED ? agreement.finalFile : kind === 'association-signature' ? agreement.orgSignatureFile : null;
+    if (!file) throw new ApiError('COVENANT_FILE_NOT_FOUND', 'الملف غير متاح', 404);
+    return { url: await this.storage.getSignedGetUrl(file.objectKey, storageConfig.licenseSignedUrlSeconds) };
+  }
+
+  async signAssignedAgreement(ctx: AuthContext, id: string, opId: string, signature: { buffer: Buffer; declaredMimeType?: string }) {
+    return this.signPartyOne('', opId, signature, { ctx, id });
+  }
+
+  async signPartyOne(token: string, opId: string, signature: { buffer: Buffer; declaredMimeType?: string }, signer?: { ctx: AuthContext; id: string }) {
     const validated = validateCovenantSignature(signature);
-    const agreement = await this.validPartyOneAgreement(token);
+    const agreement = signer ? await this.assignedSignerAgreement(signer.ctx, signer.id) : await this.validPartyOneAgreement(token);
     if (!agreement.orgSignatureFile || !agreement.signedByOrgAt || !agreement.orgSignerName || !agreement.orgSignerTitle) throw new ApiError('COVENANT_ASSOCIATION_SIGNATURE_INCOMPLETE', 'توقيع الجمعية غير مكتمل', 409);
     const associationName = agreement.participation.association?.name ?? agreement.participation.application?.name;
     if (!associationName) throw new ApiError('COVENANT_ASSOCIATION_MISSING', 'بيانات الجمعية غير مكتملة', 409);
@@ -251,24 +289,36 @@ export class ParticipationsService {
       await this.storage.uploadPrivateObject(finalKey, finalBytes, 'application/pdf'); uploaded.push(finalKey);
       const outcome = await prisma.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT id FROM project_participations WHERE id=${agreement.participationId}::uuid FOR UPDATE`;
-        const claim = await this.idempotency.claim<{ ok: true; status: AgreementStatus; finalSha256: string }>(tx, agreement.createdById, 'covenant-party-one-sign', opId, { agreementId: agreement.id });
+        if (signer) {
+          await tx.$queryRaw`SELECT id FROM accounts WHERE id=${signer.ctx.accountId}::uuid FOR UPDATE`;
+          const actor = await tx.account.findUnique({ where: { id: signer.ctx.accountId } });
+          const session = await tx.authSession.findUnique({ where: { id: signer.ctx.sessionId } });
+          if (!actor || actor.role !== AccountRole.COVENANT_SIGNER || actor.status !== AccountStatus.ACTIVE || actor.archivedAt || actor.mustChangePassword || !session || session.accountId !== actor.id || session.revokedAt || session.expiresAt <= new Date() || session.absoluteExpiresAt <= new Date()) throw new ApiError('AUTH_FORBIDDEN', 'جلسة التوقيع غير متاحة', 403);
+        }
+        const claim = await this.idempotency.claim<{ ok: true; status: AgreementStatus; finalSha256: string }>(tx, signer?.ctx.accountId ?? agreement.createdById, 'covenant-party-one-sign', opId, { agreementId: agreement.id });
         if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse! };
         await tx.$queryRaw`SELECT id FROM participation_agreements WHERE id=${agreement.id}::uuid FOR UPDATE`;
         const current = await tx.participationAgreement.findUnique({ where: { id: agreement.id }, include: { participation: true } });
-        if (!current || current.status !== AgreementStatus.SIGNED_BY_ORG || current.partyOneSigningTokenHash !== sha256Hex(token) || current.partyOneSigningConsumedAt || !current.partyOneSigningExpiresAt || current.partyOneSigningExpiresAt <= new Date()) throw new ApiError('COVENANT_PARTY_ONE_TOKEN_INVALID', 'رابط التوقيع غير صالح أو استُخدم أو انتهت صلاحيته', 403);
+        const permitted = signer ? current?.assignedSignerId === signer.ctx.accountId : current?.partyOneSigningTokenHash === sha256Hex(token) && !current.partyOneSigningConsumedAt && current.partyOneSigningExpiresAt && current.partyOneSigningExpiresAt > new Date();
+        if (!current || current.status !== AgreementStatus.SIGNED_BY_ORG || !permitted || current.templateVersion !== COVENANT_VERSION || current.templateSha256 !== COVENANT_SOURCE_SHA256 || current.participation.status !== ParticipationStatus.APPROVED_AWAITING_SETUP) throw new ApiError('COVENANT_PARTY_ONE_TOKEN_INVALID', 'الميثاق غير قابل للتوقيع أو تغيرت حالته', 403);
+        if (!signer && current.assignedSignerId) {
+          await tx.$queryRaw`SELECT id FROM accounts WHERE id=${current.assignedSignerId}::uuid FOR UPDATE`;
+          const assigned = await tx.account.findUnique({ where: { id: current.assignedSignerId } });
+          if (!assigned || assigned.role !== AccountRole.COVENANT_SIGNER || assigned.status !== AccountStatus.ACTIVE || assigned.archivedAt) throw new ApiError('COVENANT_PARTY_ONE_TOKEN_INVALID', 'حساب الموقّع غير متاح', 403);
+        }
         const partyFile = await tx.fileObject.create({ data: { storageProvider: 's3', bucket: storageConfig.bucket, objectKey: partyKey, originalName: 'party-one-covenant-signature', mimeType: validated.mime, sizeBytes: BigInt(signature.buffer.length), sha256: bufferSha256(signature.buffer), category: FileCategory.PARTICIPATION_AGREEMENT } });
         const finalSha256 = bufferSha256(finalBytes);
         const finalFile = await tx.fileObject.create({ data: { storageProvider: 's3', bucket: storageConfig.bucket, objectKey: finalKey, originalName: `covenant-${current.reference ?? current.id}.pdf`, mimeType: 'application/pdf', sizeBytes: BigInt(finalBytes.length), sha256: finalSha256, category: FileCategory.PARTICIPATION_AGREEMENT } });
         await tx.participationAgreement.update({ where: { id: current.id }, data: { status: AgreementStatus.SIGNED, zaadSignerName: PARTY_ONE_NAME, partyOneSignatureFileId: partyFile.id, signedByZaadAt: now, fullyExecutedAt: now, partyOneSigningConsumedAt: now, finalFileId: finalFile.id, finalSha256 } });
         await tx.projectParticipation.update({ where: { id: current.participationId }, data: { status: ParticipationStatus.ACTIVE, activatedAt: now } });
         await tx.auditLog.createMany({ data: [
-          { actorAccountId: null, actorRole: null, associationId: current.participation.associationId, action: 'COVENANT_PARTY_ONE_SIGNED', entityType: 'participation_agreements', entityId: current.id, metadata: { representative: PARTY_ONE_NAME, signingSessionIssuedById: current.partyOneSigningIssuedById } },
+          { actorAccountId: signer?.ctx.accountId ?? null, actorRole: signer?.ctx.role ?? null, associationId: current.participation.associationId, action: 'COVENANT_PARTY_ONE_SIGNED', entityType: 'participation_agreements', entityId: current.id, metadata: { representative: PARTY_ONE_NAME, signingSessionIssuedById: current.partyOneSigningIssuedById, authenticatedSigner: Boolean(signer) } },
           { actorAccountId: null, actorRole: null, associationId: current.participation.associationId, action: 'COVENANT_FULLY_EXECUTED', entityType: 'participation_agreements', entityId: current.id, metadata: { version: COVENANT_VERSION, finalSha256, signingSessionIssuedById: current.partyOneSigningIssuedById } },
         ] });
         const completionEmail = await this.onboardingEmail.sendCovenantCompletion(current.id, finalBytes, tx);
         if (!completionEmail.ok) throw new ApiError('COVENANT_EMAIL_DELIVERY_FAILED', 'تعذر تسجيل رسالة الميثاق للإرسال؛ راجع الإدارة.', 503);
         const response = { ok: true as const, status: AgreementStatus.SIGNED, finalSha256 };
-        await this.idempotency.complete(tx, agreement.createdById, 'covenant-party-one-sign', opId, response);
+        await this.idempotency.complete(tx, signer?.ctx.accountId ?? agreement.createdById, 'covenant-party-one-sign', opId, response);
         return { replayed: false as const, response };
       }, { maxWait: 5_000, timeout: 20_000 });
       if (outcome.replayed) {
@@ -303,8 +353,9 @@ export class ParticipationsService {
 
   private async validPartyOneAgreement(token: string) {
     if (!token || token.length < 40) throw new ApiError('COVENANT_PARTY_ONE_TOKEN_INVALID', 'رابط التوقيع غير صالح أو منتهي الصلاحية', 403);
-    const agreement = await prisma.participationAgreement.findUnique({ where: { partyOneSigningTokenHash: sha256Hex(token) }, include: { orgSignatureFile: true, participation: { include: { association: true, application: true } } } });
+    const agreement = await prisma.participationAgreement.findUnique({ where: { partyOneSigningTokenHash: sha256Hex(token) }, include: { orgSignatureFile: true, assignedSigner: { select: { role: true, status: true, archivedAt: true } }, participation: { include: { association: true, application: true } } } });
     if (!agreement || agreement.status !== AgreementStatus.SIGNED_BY_ORG || agreement.partyOneSigningConsumedAt || !agreement.partyOneSigningExpiresAt || agreement.partyOneSigningExpiresAt <= new Date()) throw new ApiError('COVENANT_PARTY_ONE_TOKEN_INVALID', 'رابط التوقيع غير صالح أو منتهي الصلاحية', 403);
+    if (agreement.assignedSignerId && (!agreement.assignedSigner || agreement.assignedSigner.role !== AccountRole.COVENANT_SIGNER || agreement.assignedSigner.status !== AccountStatus.ACTIVE || agreement.assignedSigner.archivedAt)) throw new ApiError('COVENANT_PARTY_ONE_TOKEN_INVALID', 'حساب الموقّع غير متاح', 403);
     return agreement;
   }
 

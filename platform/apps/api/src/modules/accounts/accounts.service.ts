@@ -12,10 +12,40 @@ import { AuditService } from '../audit/audit.service';
 import type { AuthContext } from '../auth/auth.types';
 import type { CreateAbanmiAccountDto } from './dto/create-abanmi-account.dto';
 import type { CreateAdminAccountDto, UpdateAdminAccountDto } from './dto/admin-account.dto';
+import { COVENANT_STAFF_RECIPIENTS } from '../auth/email/onboarding-email.service';
+import { COVENANT_SOURCE_SHA256, COVENANT_VERSION } from '../participations/covenant-document.service';
 
 @Injectable()
 export class AccountsService {
   constructor(private readonly publicCode: PublicCodeService, private readonly audit: AuditService) {}
+
+  async provisionCovenantSigner(ctx: AuthContext) {
+    await this.assertOwner(ctx);
+    const { email, name } = COVENANT_STAFF_RECIPIENTS.mousa;
+    const secretHash = await hashSecret(generateStrongTempPassword());
+    return prisma.$transaction(async tx => {
+      await this.assertOwner(ctx, tx);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`covenant-signer:${email}`}, 0))`;
+      const existing = await tx.authCredential.findUnique({ where: { type_identifier: { type: AuthCredentialType.EMAIL_PASSWORD, identifier: email } }, include: { account: true } });
+      let account = existing?.account;
+      if (account && (account.role !== AccountRole.COVENANT_SIGNER || account.status !== AccountStatus.ACTIVE || account.archivedAt || account.associationId || account.adminFullAccess)) throw new ApiError('SIGNER_ACCOUNT_CONFLICT', 'البريد مستخدم بحساب آخر أو حساب غير متاح؛ لم يتغير أي حساب', 409);
+      if (!account && await tx.account.findFirst({ where: { email } })) throw new ApiError('SIGNER_ACCOUNT_CONFLICT', 'يوجد سجل آخر بهذا البريد؛ يلزم مراجعته', 409);
+      let emailQueued = false;
+      if (!account) {
+        account = await tx.account.create({ data: { publicCode: await this.publicCode.nextPublicCode(tx, 'USR'), name, email, role: AccountRole.COVENANT_SIGNER, status: AccountStatus.ACTIVE, mustChangePassword: true, adminFullAccess: false, adminPermissions: [] } });
+        await tx.authCredential.create({ data: { accountId: account.id, type: AuthCredentialType.EMAIL_PASSWORD, identifier: email, secretHash } });
+        const code = generateAccessCode('RST', 32);
+        const token = await tx.passwordResetToken.create({ data: { accountId: account.id, emailNormalized: email, tokenHash: resetTokenHash(code), expiresAt: new Date(Date.now() + authConfig.passwordResetTtlSeconds * 1000) } });
+        await enqueueEmail(tx, 'PASSWORD_RESET', { to: email, name, code, signerInvitation: true }, { type: 'reset', tokenId: token.id, accountId: account.id, credentialHash: secretHash, predecessorIds: [] });
+        await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'COVENANT_SIGNER_ACCOUNT_INVITED', entityType: 'accounts', entityId: account.id } });
+        emailQueued = true;
+      }
+      const pending = await tx.participationAgreement.findMany({ where: { status: 'SIGNED_BY_ORG', assignedSignerId: null, templateVersion: COVENANT_VERSION, templateSha256: COVENANT_SOURCE_SHA256, signedByOrgAt: { not: null }, orgSignatureFileId: { not: null } }, select: { id: true } });
+      const assigned = await tx.participationAgreement.updateMany({ where: { id: { in: pending.map(row => row.id) }, status: 'SIGNED_BY_ORG', assignedSignerId: null }, data: { assignedSignerId: account.id } });
+      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, action: 'COVENANTS_ASSIGNED_TO_SIGNER', entityType: 'accounts', entityId: account.id, metadata: { count: assigned.count, agreementIds: pending.map(row => row.id) } } });
+      return { ok: true, accountId: account.id, emailQueued, assignedCount: assigned.count };
+    }, { maxWait: 5_000, timeout: 20_000 });
+  }
 
   private async assertOwner(ctx: AuthContext, tx: Pick<Prisma.TransactionClient, 'account'> = prisma) {
     if (ctx.role !== AccountRole.ADMIN) throw authForbidden();

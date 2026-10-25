@@ -79,7 +79,7 @@ export class AuthController {
   }
 
   @Patch('password')
-  @Roles(AccountRole.ADMIN, AccountRole.ASSOCIATION, AccountRole.ABANMI)
+  @Roles(AccountRole.ADMIN, AccountRole.ASSOCIATION, AccountRole.ABANMI, AccountRole.COVENANT_SIGNER)
   @AllowMustChangePassword()
   @ApiOperation({ summary: 'تغيير كلمة المرور — يعمل حتى إذا mustChangePassword=true؛ يُبطل كل الجلسات بعد النجاح' })
   async changePassword(@CurrentUser() ctx: AuthContext, @Body() dto: ChangePasswordDto, @Res({ passthrough: true }) res: Response) {

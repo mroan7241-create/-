@@ -23,6 +23,8 @@ export default function AssociationDashboardPage() {
   const todayLabel = new Date().toLocaleDateString('ar-SA-u-ca-gregory', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const [counts, setCounts] = useState<AssociationCounts | null>(null);
   const [stage, setStage] = useState<string | null>(null);
+  const [associationName, setAssociationName] = useState<string | null>(null);
+  const [covenantCompleted, setCovenantCompleted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [latestOps, setLatestOps] = useState<AuditLogEntry[] | null>(null);
 
@@ -30,10 +32,12 @@ export default function AssociationDashboardPage() {
     if (!user) return;
     (async () => {
       try {
-        const result = await apiFetch<{ counts: AssociationCounts; recentOperations: AuditLogEntry[]; participationStatus: string | null }>('/dashboard/association');
+        const result = await apiFetch<{ counts: AssociationCounts; recentOperations: AuditLogEntry[]; participationStatus: string | null; associationName: string | null; covenantCompleted: boolean }>('/dashboard/association');
         setCounts(result.counts);
         setLatestOps(result.recentOperations);
         setStage(result.participationStatus);
+        setAssociationName(result.associationName);
+        setCovenantCompleted(result.covenantCompleted === true);
       } catch {
         setError('تعذّر تحميل بيانات لوحة التحكم.');
       }
@@ -41,7 +45,7 @@ export default function AssociationDashboardPage() {
   }, [user]);
 
   if (guardLoading || !user) return <LoadingState label="جارٍ فتح بوابة الجمعية…" />;
-  const nextAction = counts ? associationNextAction(counts, stage) : null;
+  const nextAction = counts ? associationNextAction(counts, stage, associationName, covenantCompleted) : null;
 
   const queues = counts
     ? [
@@ -72,8 +76,10 @@ export default function AssociationDashboardPage() {
       {counts && (
         <>
           {nextAction && <section className="zad-action-hero2" aria-labelledby="association-next-action" style={{ marginTop: 18 }}>
-            <span className="zad-section-meta2">المطلوب الآن · الإجراء على {nextAction.owner}</span>
-            <h2 id="association-next-action">{nextAction.title}</h2><p>{nextAction.detail}</p>
+            <p style={{ fontSize: 18, color: '#3b2530' }}><strong>الإجراء المكتمل:</strong> {nextAction.completed}</p>
+            <h2 id="association-next-action" style={{ fontSize: 'clamp(22px, 2.4vw, 28px)', lineHeight: 1.6 }}>الإجراء المطلوب: {nextAction.title}</h2>
+            <p style={{ fontSize: 19, color: '#3b2530' }}><strong>المسؤول عن التنفيذ:</strong> {nextAction.owner}</p>
+            <p style={{ fontSize: 17, lineHeight: 1.8 }}>{nextAction.detail}</p>
             <Link href={nextAction.href} className="association-primary-action">{nextAction.label}</Link>
           </section>}
           <div className="zad-section-head2">

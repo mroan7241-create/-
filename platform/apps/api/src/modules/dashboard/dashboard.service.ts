@@ -65,7 +65,7 @@ export class DashboardService {
       () => prisma.receiptBatch.count({ where: { associationId, status: 'AWAITING_ASSOCIATION_CONFIRMATION' } }),
       () => prisma.account.count({ where: { associationId, role: 'DELEGATE', archivedAt: null } }),
       () => prisma.auditLog.findMany({ where: { associationId }, orderBy: { createdAt: 'desc' }, take: 6, include: { actorAccount: { select: { name: true, role: true, publicCode: true } } } }),
-      () => prisma.projectParticipation.findUnique({ where: { associationId }, select: { status: true } }),
+      () => prisma.projectParticipation.findUnique({ where: { associationId }, select: { status: true, association: { select: { name: true } }, agreements: { orderBy: { version: 'desc' }, take: 1, select: { status: true, fullyExecutedAt: true } } } }),
     ]);
     const beneficiariesTotal = beneficiaries.reduce((sum, row) => sum + groupedCount(row), 0);
     const beneficiariesPendingReview = groupedCount(beneficiaries.find(row => row.reviewStatus === 'UNDER_REVIEW'));
@@ -80,6 +80,8 @@ export class DashboardService {
     return {
       counts: { beneficiariesTotal, beneficiariesPendingReview, beneficiariesApproved, beneficiariesRejected, receiptsAwaitingConfirmation, devicesAllocated, delegates, devicesWithDelegate, devicesDelivered, deliveriesPendingApproval, deliveriesPendingReturnApproval, deliveriesDeferred },
       participationStatus: participation?.status ?? null,
+      associationName: participation?.association?.name ?? null,
+      covenantCompleted: participation?.agreements?.[0]?.status === 'SIGNED' && Boolean(participation.agreements[0].fullyExecutedAt),
       recentOperations,
     };
   }

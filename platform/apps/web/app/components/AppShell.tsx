@@ -27,7 +27,7 @@ export function AppShell({ user, children, restricted = false }: { user: Current
   const router = useRouter();
   const groups = restricted ? [] : navGroupsForRole(user.role, user);
   const tabs = user.role === 'ASSOCIATION' && !restricted ? associationTabs(pathname) : [];
-  const homeHref = user.role === 'ADMIN' ? homeForUser(user) : user.role === 'ASSOCIATION' ? '/association' : '/abanmi';
+  const homeHref = homeForUser(user);
 
   useEffect(() => {
     if (!mobileOpen) return;

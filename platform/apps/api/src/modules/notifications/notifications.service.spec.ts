@@ -297,6 +297,13 @@ describe('NotificationsService email delivery phases', () => {
     expect(h.send).toHaveBeenCalledTimes(state === 'valid' ? 1 : 0);
     expect(h.storage.getPrivateObject).not.toHaveBeenCalled();
   });
+  it.each(['valid', 'assignment-revoked', 'account-disabled'] as const)('binds portal mail to its active assigned signer, independently of legacy-link expiry: %s', async state => {
+    const h = harness({ type: 'covenant-signing', agreementId: 'agreement', tokenHash: 'expected-hash', markerKey: 'COVENANT_PARTY_ONE_EMAIL:agreement:expected-hash', signerAccountId: 'signer' }, 'READY', 'malyahya@alzaad.org.sa');
+    h.tx.participationAgreement.findUnique.mockResolvedValue({ id: 'agreement', status: 'SIGNED_BY_ORG', orgSignatureFileId: 'signature', partyOneSigningTokenHash: 'expected-hash', partyOneSigningConsumedAt: null, partyOneSigningExpiresAt: new Date(0), assignedSignerId: state === 'assignment-revoked' ? 'someone-else' : 'signer' });
+    h.tx.account.findUnique.mockResolvedValue({ id: 'signer', email: 'malyahya@alzaad.org.sa', role: 'COVENANT_SIGNER', status: state === 'account-disabled' ? 'SUSPENDED' : 'ACTIVE', archivedAt: null });
+    expect(await h.run()).toBe(state === 'valid' ? 'processed' : 'failed');
+    expect(h.send).toHaveBeenCalledTimes(state === 'valid' ? 1 : 0);
+  });
 
   it('requeues stale READY/ACCEPTED only and quarantines all remaining stale mail phases', async () => {
     const h = harness(); const updateMany = jest.spyOn(prisma.outboxEvent, 'updateMany').mockResolvedValue({ count: 0 });

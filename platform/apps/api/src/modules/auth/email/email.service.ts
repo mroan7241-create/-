@@ -11,7 +11,7 @@ export type EmailDeliveryContext =
   | { type: 'rejection'; applicationId: string; expectedReason?: string }
   | { type: 'nonselection'; applicationId: string; campaign: string; markerKey: string }
   | { type: 'covenant'; agreementId: string; fileId: string; sha256: string; markerKey: string; filename: string; recipientRole?: 'mousa' | 'marwan' }
-  | { type: 'covenant-signing'; agreementId: string; tokenHash: string; markerKey: string }
+  | { type: 'covenant-signing'; agreementId: string; tokenHash: string; markerKey: string; signerAccountId?: string }
   | { type: 'notice'; accountId: string };
 export type EmailDeliveryPhase = 'READY' | 'SMTP_STARTED' | 'SMTP_ACCEPTED';
 export interface EmailDeliveryPayload {
@@ -72,6 +72,7 @@ export interface PasswordResetEmailParams {
   code: string;
   invitation?: boolean;
   adminInvitation?: boolean;
+  signerInvitation?: boolean;
 }
 
 export interface SecurityAlertEmailParams {

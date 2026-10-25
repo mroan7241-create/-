@@ -16,6 +16,8 @@ import { CreateAdminAccountDto, SetAdminAccountStatusDto, UpdateAdminAccountDto 
 @Controller('accounts')
 export class AccountsController {
   constructor(private readonly accounts: AccountsService) {}
+  @Post('covenant-signer') @Roles(AccountRole.ADMIN)
+  provisionSigner(@CurrentUser() ctx: AuthContext) { return this.accounts.provisionCovenantSigner(ctx); }
 
   @Get('admins')
   @Roles(AccountRole.ADMIN)

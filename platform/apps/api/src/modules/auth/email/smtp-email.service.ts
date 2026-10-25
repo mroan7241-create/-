@@ -47,6 +47,14 @@ export class SmtpEmailService implements EmailService {
   }
 
   async sendPasswordResetCode(params: PasswordResetEmailParams, options?: EmailSendOptions): Promise<void> {
+    if (params.signerInvitation) {
+      const webUrl = required('PUBLIC_WEB_URL').replace(/\/$/, '');
+      const url = `${webUrl}/forgot-password#${new URLSearchParams({ invitation: 'signer', email: params.to, code: params.code })}`;
+      await this.send('PASSWORD_RESET', params.to, 'تفعيل حساب توقيع المواثيق — جمعية الزاد',
+        `مرحبًا ${params.name}\nتم تجهيز حسابكم لمراجعة المواثيق المسندة إليكم وتوقيعها. اختروا كلمة مروركم من الرابط التالي:\n${url}\nيُستخدم رابط الإعداد مرة واحدة. بعد الإعداد تدخلون من صفحة دخول المنصة بالبريد وكلمة المرور دون رمز بريد متكرر. إذا انتهى رابط الإعداد، اطلبوا رمزًا جديدًا من صفحة استعادة الدخول.`,
+        layout('تفعيل حساب توقيع المواثيق', `<p>مرحبًا ${escapeHtml(params.name)}</p><p>حسابكم مخصص لمراجعة المواثيق المسندة إليكم وتوقيعها فقط. اختاروا كلمة مروركم بأنفسكم.</p><p><a href="${escapeAttribute(url)}" style="display:inline-block;background:#65102f;color:#fff;padding:12px 20px;text-decoration:none;border-radius:8px">إعداد كلمة المرور</a></p><p>يُستخدم رابط الإعداد مرة واحدة؛ الدخول لاحقًا بالبريد وكلمة المرور، دون رمز بريد متكرر.</p>`), undefined, options);
+      return;
+    }
     if (params.invitation || params.adminInvitation) {
       const webUrl = required('PUBLIC_WEB_URL').replace(/\/$/, '');
       const url = `${webUrl}/forgot-password#${new URLSearchParams({ invitation: params.adminInvitation ? 'admin' : '1', email: params.to, code: params.code })}`;

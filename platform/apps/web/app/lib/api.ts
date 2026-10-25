@@ -3,6 +3,12 @@ export type { AdminApplicationScope } from '@alzad/shared';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001/api/v1';
 
+export async function signerTemplateBlob(id: string): Promise<Blob> {
+  const response = await fetchWithNetworkFeedback(`${API_BASE}/participations/signer/agreements/${encodeURIComponent(id)}/template`, { credentials: 'include', cache: 'no-store' });
+  if (!response.ok || !response.headers.get('content-type')?.includes('application/pdf')) throw new ApiClientError('COVENANT_TEMPLATE_UNAVAILABLE', 'تعذّر تحميل نص الميثاق؛ أعد فتحه قبل التوقيع.');
+  return response.blob();
+}
+
 export interface ApiErrorBody {
   ok: false;
   error: { code: string; message: string; correlationId?: string };
@@ -326,7 +332,7 @@ export interface CurrentUser {
   id: string;
   publicCode: string;
   name: string;
-  role: 'ADMIN' | 'ASSOCIATION' | 'DELEGATE' | 'ABANMI';
+  role: 'ADMIN' | 'ASSOCIATION' | 'DELEGATE' | 'ABANMI' | 'COVENANT_SIGNER';
   associationId: string | null;
   mustChangePassword: boolean;
   associationRegion?: string;
