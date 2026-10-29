@@ -17,6 +17,13 @@ test('zero beneficiaries requires entry, not a misleading all-clear', () => {
 test('review belongs to Alzad and does not request another upload', () => {
   assert.equal(associationNextAction({ ...empty, beneficiariesTotal: 50, beneficiariesPendingReview: 50 }).owner, 'جمعية الزاد');
 });
+
+test('partial household entry keeps the action with the association until fifty entries', () => {
+  const action = associationNextAction({ ...empty, beneficiariesTotal: 1, beneficiariesPendingReview: 1 }, 'ACTIVE', 'جمعية تجربة', true);
+  assert.equal(action.owner, 'جمعية تجربة');
+  assert.match(action.detail, /1 من 50/);
+  assert.match(action.completed, /توقيع الميثاق/);
+});
 test('urgent physical return and receipts take precedence over entry', () => {
   assert.match(associationNextAction({ ...empty, deliveriesPendingReturnApproval: 1, receiptsAwaitingConfirmation: 1 }).href, /PENDING_RETURN_APPROVAL/);
 });

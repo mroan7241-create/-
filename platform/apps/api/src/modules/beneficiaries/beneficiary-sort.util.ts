@@ -17,7 +17,7 @@ import type { Prisma } from '@alzad/db';
  * أي قيمة خارجها يرفضها `@IsIn` بـ400 قبل أي استعلام — لا يُبنى مرجع
  * عمود من نص عميل خام إطلاقًا.
  */
-export const BENEFICIARY_SORT_FIELDS = ['name', 'city', 'createdAt'] as const;
+export const BENEFICIARY_SORT_FIELDS = ['name', 'city', 'createdAt', 'needPriority'] as const;
 
 export type BeneficiarySortField = (typeof BENEFICIARY_SORT_FIELDS)[number];
 
@@ -41,6 +41,7 @@ export function beneficiaryOrderBy(
   // الترتيب (نفس المدينة مثلًا) قد ترتّب عشوائيًا بين استعلامَي صفحتين
   // متتاليتين فيتكرّر/يختفي سجل عبر حدود الصفحات.
   if (!sortBy) return [{ createdAt: 'desc' }, { id: 'desc' }];
+  if (sortBy === 'needPriority') return [{ needPriority: { sort: direction, nulls: 'last' } }, { id: 'asc' }];
   if (sortBy === 'city') return [{ city: direction }, { id: 'asc' }];
   if (sortBy === 'createdAt') return [{ createdAt: direction }, { id: direction }];
   return [{ name: direction }, { id: 'asc' }];

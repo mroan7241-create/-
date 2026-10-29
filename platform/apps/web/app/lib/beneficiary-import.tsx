@@ -109,11 +109,16 @@ function buildPreviewRows(csvRows: string[][]): { headers: string[]; preview: Pr
           return type;
         });
       if (deviceTypes.length === 0) throw new Error('عمود «الأجهزة المطلوبة» فارغ — اكتب نوعًا واحدًا على الأقل (ثلاجة/فرن/غسالة)');
+      const needPriority = Number(raw.needPriority);
+      if (!Number.isInteger(needPriority) || needPriority < 1 || needPriority > 50) throw new Error('أدخل ترتيب الحاجة من 1 إلى 50؛ 1 للأشد حاجة');
+      if (new Set(deviceTypes).size === 3 && !/[\p{L}\p{N}]/u.test(raw.threeDeviceReason ?? '')) throw new Error('عند طلب ثلاثة أجهزة يجب كتابة مبرر يشرح حاجة الأسرة إليها');
 
       const familyCount = Number(raw.familyCount);
       if (!Number.isFinite(familyCount)) throw new Error('قيمة «عدد أفراد الأسرة» ليست رقمًا صالحًا');
 
       const row: BeneficiaryImportRow = {
+        needPriority,
+        threeDeviceReason: raw.threeDeviceReason?.trim() || undefined,
         name: raw.name,
         region: raw.region,
         city: raw.city,
@@ -140,17 +145,17 @@ function buildPreviewRows(csvRows: string[][]): { headers: string[]; preview: Pr
   return { headers, preview };
 }
 
-export function BulkImportButton({ isAdmin, onImported }: { isAdmin: boolean; onImported: () => void }) {
+export function BulkImportButton({ isAdmin, onImported }: { isAdmin: boolean; onImported: (beneficiaryIds: string[]) => void }) {
   const [open, setOpen] = useState(false);
   return (
     <>
       <button type="button" style={secondaryButtonStyle} onClick={() => setOpen(true)}>استيراد بالجملة</button>
-      {open && <BulkImportModal isAdmin={isAdmin} onClose={() => setOpen(false)} onImported={() => { setOpen(false); onImported(); }} />}
+      {open && <BulkImportModal isAdmin={isAdmin} onClose={() => setOpen(false)} onImported={(ids) => { setOpen(false); onImported(ids); }} />}
     </>
   );
 }
 
-function BulkImportModal({ isAdmin, onClose, onImported }: { isAdmin: boolean; onClose: () => void; onImported: () => void }) {
+function BulkImportModal({ isAdmin, onClose, onImported }: { isAdmin: boolean; onClose: () => void; onImported: (beneficiaryIds: string[]) => void }) {
   const [associationId, setAssociationId] = useState('');
   const [fileName, setFileName] = useState('');
   const [headers, setHeaders] = useState<string[]>([]);
@@ -218,7 +223,7 @@ function BulkImportModal({ isAdmin, onClose, onImported }: { isAdmin: boolean; o
     try {
       const res = await importBeneficiaries({ associationId: isAdmin ? associationId : undefined, acceptedPledge: pledge, rows: validRows, opId });
       if (res.ok) {
-        onImported();
+        onImported(res.beneficiaryIds);
       } else {
         setSubmitErrors(res.errors);
       }
@@ -238,7 +243,7 @@ function BulkImportModal({ isAdmin, onClose, onImported }: { isAdmin: boolean; o
         </div>
 
         <p style={mutedStyle}>
-          ١. نزّل قالب Excel. ٢. عبّئ صفًا لكل مستفيد واختر نعم/لا للأجهزة. ٣. ارفع الملف وراجع المعاينة ثم أكد الاستيراد. القوالب القديمة وCSV ما زالت مدعومة.
+          ١. نزّل قالب Excel. ٢. عبّئ 50 أسرة بترتيب الحاجة من 1 إلى 50 واختر نعم/لا للأجهزة؛ عند طلب ثلاثة أجهزة اكتب المبرر. ٣. ارفع الملف وراجع المعاينة ثم أكد الاستيراد. في القوالب القديمة أضف عمود «ترتيب الحاجة» وعمود «مبرر طلب ثلاثة أجهزة» عند الحاجة.
         </p>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button type="button" style={secondaryButtonStyle} onClick={() => void downloadXlsxTemplate().catch(() => setHeaderError('تعذّر تنزيل قالب Excel.'))}>⬇ تنزيل قالب Excel</button>

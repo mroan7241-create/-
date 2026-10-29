@@ -58,7 +58,7 @@ export default function AdminBeneficiariesPage() {
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [reviewStatus, setReviewStatus] = useState<'' | BeneficiaryReviewStatus>(() => (initialQueryParam('reviewStatus') as BeneficiaryReviewStatus) || '');
-  const [sortBy, setSortBy] = useState<'' | 'name' | 'city' | 'createdAt'>('');
+  const [sortBy, setSortBy] = useState<'' | 'name' | 'city' | 'createdAt' | 'needPriority'>('');
   const [loading, setLoading] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -221,11 +221,12 @@ export default function AdminBeneficiariesPage() {
             value={sortBy}
             onChange={(e) => {
               setPage(1);
-              setSortBy(e.target.value as '' | 'name' | 'city' | 'createdAt');
+              setSortBy(e.target.value as '' | 'name' | 'city' | 'createdAt' | 'needPriority');
             }}
           >
             <option value="">الأحدث أولًا</option>
             <option value="name">الاسم</option>
+            <option value="needPriority">ترتيب الحاجة</option>
             <option value="city">المدينة</option>
             <option value="createdAt">تاريخ الإضافة</option>
           </select>
@@ -314,7 +315,7 @@ export default function AdminBeneficiariesPage() {
                   />}
                 </th>
                 <th style={thStyle}>الرقم</th>
-                <th style={thStyle}>الاسم</th>
+                <th style={thStyle}>الاسم / ترتيب الحاجة</th>
                 <th style={thStyle}>المدينة</th>
                 <th style={thStyle}>الجوال</th>
                 <th style={thStyle}>الاحتياجات</th>
@@ -335,7 +336,7 @@ export default function AdminBeneficiariesPage() {
                     />}
                   </td>
                   <td style={tdStyle}>{row.publicCode}</td>
-                  <td style={tdStyle}>{row.name}</td>
+                  <td style={tdStyle}>{row.name}<div style={mutedStyle}>ترتيب الحاجة: {row.needPriority ?? 'لم يُحدد'}</div></td>
                   <td style={tdStyle}>{row.city}</td>
                   <td style={tdStyle}>{row.phone}</td>
                   <td style={tdStyle}>
@@ -464,6 +465,8 @@ function ReviewModal({
           <div>الحي: {detail.district ?? '—'}</div>
           <div>الجوال: {detail.phone}</div>
           <div>عدد الأفراد: {detail.familyCount}</div>
+          <div>ترتيب الحاجة: {detail.needPriority ?? 'لم يُحدد'}</div>
+          {detail.threeDeviceReason && <div style={{ gridColumn: '1 / -1' }}>مبرر طلب ثلاثة أجهزة: {detail.threeDeviceReason}</div>}
           <div>الحالة الاجتماعية: {detail.socialStatus}</div>
           <div>ضمان اجتماعي: {detail.socialSecurity ? 'نعم' : 'لا'}</div>
           <div style={{ gridColumn: '1 / -1' }}>العنوان: {detail.address}</div>

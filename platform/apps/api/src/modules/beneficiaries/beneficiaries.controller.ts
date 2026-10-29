@@ -11,6 +11,7 @@ import { XLSX_MAX_BYTES, generateXlsxTemplate } from './xlsx-import.util';
 import {
   BulkReviewDto,
   CreateBeneficiaryDto,
+  CleanupTestImportDto,
   ImportBeneficiariesDto,
   ListBeneficiariesQueryDto,
   RemoveNeedDto,
@@ -37,6 +38,12 @@ import { PromoteReserveDto, ReplaceBeneficiaryDto, SetBeneficiaryListDto } from 
 @Controller('beneficiaries')
 export class BeneficiariesController {
   constructor(private readonly beneficiaries: BeneficiariesService) {}
+
+  @Post('test-import/cleanup')
+  @Roles(AccountRole.ASSOCIATION)
+  cleanupTestImport(@CurrentUser() ctx: AuthContext, @Body() dto: CleanupTestImportDto) {
+    return this.beneficiaries.cleanupTestImport(ctx, dto.beneficiaryIds);
+  }
 
   // ترتيب المسارات: 'bulk-review'/'import'/'import/preview-xlsx' يجب أن تسبق ':id/...' حتى لا تُلتقَط كـid.
   @Post('import')

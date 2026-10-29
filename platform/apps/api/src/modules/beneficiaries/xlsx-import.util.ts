@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs';
 import { DeviceType } from '@alzad/db';
 import { ApiError } from '../../common/api-error';
 import type { BeneficiaryWriteInput } from './beneficiaries.service';
+import { validateNeedPriority, validateThreeDeviceReason } from './beneficiary-onboarding.util';
 import {
   BENEFICIARY_IMPORT_HEADER_LABELS,
   REQUIRED_BENEFICIARY_IMPORT_FIELDS,
@@ -62,6 +63,8 @@ export async function parseXlsxBeneficiaryRows(buffer: Buffer): Promise<{ header
   });
 
   const headers = originalHeaders.map((header) => beneficiaryImportFieldForHeader(header) ?? header);
+  const namedHeaders = headers.filter(Boolean);
+  if (new Set(namedHeaders).size !== namedHeaders.length) throw new ApiError('BENEFICIARY_IMPORT_DUPLICATE_HEADERS', 'توجد أسماء أعمدة مكررة؛ استخدم القالب دون تكرار الأعمدة', 400);
 
   const missing = missingBeneficiaryImportFields(headers);
   if (missing.length > 0) {
@@ -101,10 +104,15 @@ export async function generateXlsxTemplate(options: { region?: string; regions?:
   sheet.addRow(SIMPLE_BENEFICIARY_IMPORT_FIELDS.map(field => BENEFICIARY_IMPORT_HEADER_LABELS[field]));
   sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
   sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF70142D' } };
-  sheet.autoFilter = { from: 'A1', to: 'P1' };
+  const column = (field: typeof SIMPLE_BENEFICIARY_IMPORT_FIELDS[number]) => SIMPLE_BENEFICIARY_IMPORT_FIELDS.indexOf(field) + 1;
+  sheet.autoFilter = { from: 'A1', to: 'R1' };
   sheet.columns.forEach((col) => { col.width = 18; });
-  sheet.getColumn(1).width = 30;
-  for (const n of [5, 11]) sheet.getColumn(n).numFmt = '@';
+  sheet.getRow(1).height = 36;
+  sheet.getRow(1).alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+  sheet.getColumn(column('name')).width = 30;
+  sheet.getColumn(column('threeDeviceReason')).width = 48;
+  sheet.getColumn(column('needPriority')).width = 16;
+  for (const field of ['phone', 'phone2'] as const) sheet.getColumn(column(field)).numFmt = '@';
   const lists = workbook.addWorksheet('قوائم');
   lists.state = 'veryHidden';
   const validationLists = [options.regions ?? [], options.cities ?? [], options.socialStatuses ?? []];
@@ -113,24 +121,31 @@ export async function generateXlsxTemplate(options: { region?: string; regions?:
   validationLists.forEach((values, index) => {
     if (values.length) workbook.definedNames.add(`'قوائم'!$${String.fromCharCode(65 + index)}$1:$${String.fromCharCode(65 + index)}$${values.length}`, listNames[index]);
   });
-  for (let row = 2; row <= 501; row++) {
-    if (options.region) sheet.getCell(row, 2).value = options.region;
-    for (const [col, listIndex] of [[2, 0], [3, 1], [7, 2]]) if (validationLists[listIndex].length) sheet.getCell(row, col).dataValidation = { type: 'list', allowBlank: true, formulae: [listNames[listIndex]], showErrorMessage: true, errorTitle: 'قيمة غير معتمدة', error: 'اختر من القائمة.' };
-    for (const col of [8, 9, 10, 12]) sheet.getCell(row, col).dataValidation = { type: 'list', allowBlank: true, formulae: ['"نعم,لا"'], showErrorMessage: true, error: 'اختر نعم أو لا.' };
-    sheet.getCell(row, 6).dataValidation = { type: 'whole', operator: 'between', allowBlank: true, formulae: [1, 99], showErrorMessage: true, error: 'عدد أفراد الأسرة من 1 إلى 99.' };
+  for (let row = 2; row <= 51; row++) {
+    if (options.region) sheet.getCell(row, column('region')).value = options.region;
+    sheet.getCell(row, column('needPriority')).dataValidation = { type: 'whole', operator: 'between', allowBlank: true, formulae: [1, 50], showErrorMessage: true, error: 'ترتيب الحاجة من 1 إلى 50 دون تكرار؛ 1 للأشد حاجة.' };
+    for (const [field, listIndex] of [['region', 0], ['city', 1], ['socialStatus', 2]] as const) if (validationLists[listIndex].length) sheet.getCell(row, column(field)).dataValidation = { type: 'list', allowBlank: true, formulae: [listNames[listIndex]], showErrorMessage: true, errorTitle: 'قيمة غير معتمدة', error: 'اختر من القائمة.' };
+    for (const field of ['refrigerator', 'oven', 'washingMachine', 'socialSecurity'] as const) sheet.getCell(row, column(field)).dataValidation = { type: 'list', allowBlank: true, formulae: ['"نعم,لا"'], showErrorMessage: true, error: 'اختر نعم أو لا.' };
+    sheet.getCell(row, column('familyCount')).dataValidation = { type: 'whole', operator: 'between', allowBlank: true, formulae: [1, 99], showErrorMessage: true, error: 'عدد أفراد الأسرة من 1 إلى 99.' };
+    sheet.getCell(row, column('threeDeviceReason')).dataValidation = { type: 'custom', allowBlank: false, formulae: [`OR(COUNTIF(I${row}:K${row},"نعم")<3,LEN(TRIM(L${row}))>0)`], showErrorMessage: true, error: 'عند اختيار ثلاثة أجهزة اكتب مبرر الحاجة إليها.' };
   }
-  for (let col = 11; col <= 16; col++) { sheet.getColumn(col).outlineLevel = 1; }
+  for (let col = column('phone2'); col <= SIMPLE_BENEFICIARY_IMPORT_FIELDS.length; col++) { sheet.getColumn(col).outlineLevel = 1; }
+  sheet.addConditionalFormatting({ ref: 'L2:L51', rules: [{ type: 'expression', priority: 1, formulae: ['AND(COUNTIF(I2:K2,"نعم")=3,LEN(TRIM(L2))=0)'], style: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFBE5E5' } } } }] });
+  sheet.addConditionalFormatting({ ref: 'A2:A51', rules: [{ type: 'expression', priority: 2, formulae: ['AND(A2<>"",COUNTIF($A$2:$A$51,A2)>1)'], style: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFBE5E5' } } } }] });
   sheet.properties.outlineProperties = { summaryRight: false, summaryBelow: true };
   const instructions = workbook.addWorksheet('تعليمات');
   instructions.views = [{ rightToLeft: true }];
   instructions.addRow(['طريقة الاستخدام']);
   instructions.addRow(['١. لا تعدّل أسماء الأعمدة في الصف الأول.']);
-  instructions.addRow(['٢. صف واحد لكل مستفيد. أكمل البيانات من الاسم إلى الحالة الاجتماعية. للأجهزة اختر نعم للمطلوب، ولا أو فارغ لغير المطلوب؛ يجب اختيار نعم لجهاز واحد على الأقل.']);
-  instructions.addRow(['٣. المنطقة معبأة من حساب الجمعية؛ اختر المدينة التابعة لها ثم اكتب الحي. الموقع الدقيق اختياري.']);
-  instructions.addRow(['٤. الأعمدة بعد غسالة؟ اختيارية. اكتب الجوال كنص، مثل 0500000001. عدد الأسرة شامل المستفيد.']);
-  instructions.addRow(['مثال للتوضيح فقط — لا تنقله إلى ورقة مستفيدون: اسم مستفيد، الرياض، الرياض، حي النرجس، 0500000001، 5، متزوج/متزوجة، نعم، لا، نعم.']);
+  instructions.addRow(['٢. أدخل 50 أسرة بصف واحد لكل أسرة. ترتيب الحاجة من 1 إلى 50 دون تكرار: 1 للأشد حاجة ثم 2 وهكذا. للأجهزة اختر نعم للمطلوب، ولا أو فارغ لغير المطلوب؛ يجب اختيار جهاز واحد على الأقل.']);
+  instructions.addRow([options.region ? '٣. المنطقة معبأة من حساب الجمعية؛ اختر المدينة التابعة لها ثم اكتب الحي. الموقع الدقيق اختياري.' : '٣. اختر منطقة جمعيتكم والمدينة التابعة لها من القوائم، ثم اكتب الحي. الموقع الدقيق اختياري.']);
+  instructions.addRow(['٤. الأصل جهاز واحد حسب الاحتياج الفعلي. الأسرة التي تحتاج جهازين تكون أشد حاجة من الأسرة التي تحتاج جهازًا واحدًا. عند اختيار ثلاثة أجهزة يجب كتابة مبرر يشرح حاجة الأسرة إليها؛ يُرفض الصف دونه.']);
+  instructions.addRow(['٥. اكتب الجوال كنص مثل 0500000001. عدد الأسرة شامل المستفيد. الأعمدة من جوال إضافي وما بعدها اختيارية.']);
+  instructions.addRow(['٦. ارفع الملف، وراجع جميع الصفوف في المعاينة ثم أكد الاستيراد. عند وجود خطأ لا تُحفظ الدفعة حتى تصحيحه. الأسر والاحتياجات المرفوعة ستخضع للدراسة.']);
   instructions.getColumn(1).width = 90;
   instructions.getColumn(1).alignment = { horizontal: 'right', wrapText: true };
+  instructions.eachRow(row => { row.height = Math.max(34, Math.ceil(String(row.getCell(1).value ?? '').length / 85) * 22 + 12); row.font = { name: 'Arial', size: 12 }; row.alignment = { horizontal: 'right', vertical: 'middle', wrapText: true }; });
+  instructions.getRow(1).font = { name: 'Arial', size: 15, bold: true, color: { argb: 'FF70142D' } };
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);
 }
@@ -168,6 +183,8 @@ export function parseXlsxRowToImportRow(raw: Record<string, string>): Omit<Benef
   if (!Number.isFinite(familyCount)) throw new ApiError('BENEFICIARY_IMPORT_INVALID_FAMILY_COUNT', 'familyCount ليس رقمًا صالحًا', 400);
 
   return {
+    needPriority: validateNeedPriority(Number(raw.needPriority)),
+    threeDeviceReason: validateThreeDeviceReason(new Set(deviceTypes).size, raw.threeDeviceReason) ?? undefined,
     name: raw.name ?? '',
     region: raw.region ?? '',
     city: raw.city ?? '',

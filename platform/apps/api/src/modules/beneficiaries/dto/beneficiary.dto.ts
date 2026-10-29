@@ -3,6 +3,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   ArrayNotEmpty,
+  ArrayUnique,
   IsArray,
   IsBoolean,
   IsIn,
@@ -67,6 +68,15 @@ export class ListBeneficiariesQueryDto extends PaginationQueryDto {
 
 /** حقول المستفيد المشتركة بين الإنشاء والتعديل — مطابقة لِ`buildBeneficiaryFieldValues_`. */
 class BeneficiaryFieldsDto {
+  @IsOptional()
+  @IsInt()
+  needPriority?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  threeDeviceReason?: string;
+
   @IsString()
   @MaxLength(120)
   name!: string;
@@ -264,6 +274,15 @@ export class UpdateBeneficiaryLocationDto {
 
 /** صف استيراد واحد — نفس حقول BeneficiaryFieldsDto بلا opId (الـopId على مستوى الدفعة كاملة، لا الصف). راجع BEN-013. */
 export class BeneficiaryImportRowDto {
+  @IsOptional()
+  @IsInt()
+  needPriority?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  threeDeviceReason?: string;
+
   @IsString()
   @MaxLength(120)
   name!: string;
@@ -348,4 +367,14 @@ export class ImportBeneficiariesDto {
   @IsString()
   @MaxLength(120)
   opId!: string;
+}
+
+/** Disposable data in the named demo account only; normal associations cannot use this. */
+export class CleanupTestImportDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(50)
+  @ArrayUnique()
+  @IsUUID('all', { each: true })
+  beneficiaryIds!: string[];
 }

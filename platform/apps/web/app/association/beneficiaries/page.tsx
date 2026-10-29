@@ -50,6 +50,8 @@ function statusTone(status: BeneficiaryReviewStatus): 'neutral' | 'good' | 'bad'
  * لا يظهران كمُدخَلين ولا يُرسَلان في أي جسم طلب.
  */
 interface FormState {
+  needPriority: string;
+  threeDeviceReason: string;
   name: string;
   region: string;
   city: string;
@@ -69,6 +71,8 @@ interface FormState {
 }
 
 const EMPTY_FORM: FormState = {
+  needPriority: '',
+  threeDeviceReason: '',
   name: '',
   region: '',
   city: '',
@@ -109,11 +113,13 @@ export default function AssociationBeneficiariesPage() {
   const [listError, setListError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [editing, setEditing] = useState<BeneficiaryDetail | 'new' | null>(null);
+  const [testBatchIds, setTestBatchIds] = useState<string[]>([]);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     setListError(null);
-    const params = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE) });
+    const params = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE), sortBy: 'needPriority' });
     if (search) params.set('search', search);
     if (locationStatus) params.set('locationStatus', locationStatus);
     if (reviewStatus) params.set('reviewStatus', reviewStatus);
@@ -153,11 +159,11 @@ export default function AssociationBeneficiariesPage() {
         <div>
           <h1 style={{ color: 'var(--zad-800)', marginBottom: 4 }}>المستفيدون</h1>
           <p style={mutedStyle}>
-            كل مستفيد جديد يجب أن يحمل احتياجًا واحدًا على الأقل. الاحتياجات قابلة للتعديل ما دام المستفيد تحت المراجعة.
+            أضيفوا 50 أسرة بترتيب الحاجة؛ 1 للأشد حاجة. عند طلب ثلاثة أجهزة يلزم توضيح السبب. الأسر والاحتياجات المرفوعة ستخضع للدراسة.
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <BulkImportButton isAdmin={false} onImported={() => void load()} />
+          <BulkImportButton isAdmin={false} onImported={(ids) => { if (user.name === 'جمعية تجربة') setTestBatchIds(ids); void load(); }} />
           <button type="button" style={primaryButtonStyle} onClick={() => setEditing('new')}>
             ＋ إضافة مستفيد
           </button>
@@ -226,6 +232,17 @@ export default function AssociationBeneficiariesPage() {
 
       {listError && <p style={{ ...errorStyle, marginTop: 12 }}>{listError}</p>}
       {notice && <p style={{ ...successStyle, marginTop: 12 }}>{notice}</p>}
+      {user.name === 'جمعية تجربة' && (testBatchIds.length > 0 || (data?.total ?? 0) > 0) && <button type="button" style={secondaryButtonStyle} disabled={cleanupBusy} onClick={async () => {
+        if (!window.confirm('حذف بيانات دفعة الاختبار الوهمية فقط؟ لا يشمل ذلك الميثاق أو البيانات السابقة.')) return;
+        setCleanupBusy(true);
+        try {
+          const ids = testBatchIds.length ? testBatchIds : (await apiFetch<Paginated<BeneficiarySummary>>('/beneficiaries?pageSize=100')).items.filter(row => /^اختبار رفع الأسر — \d+$/.test(row.name) && /^ONBOARDING-TEST-20261029-[a-f0-9-]{36}$/.test(row.notes ?? '')).map(row => row.id);
+          if (!ids.length) throw new Error('لا توجد دفعة اختبار مطابقة للحذف.');
+          const result = await apiFetch<{ removedCount: number }>('/beneficiaries/test-import/cleanup', { method: 'POST', body: JSON.stringify({ beneficiaryIds: ids }) });
+          setTestBatchIds([]); setNotice(`حُذفت بيانات ${result.removedCount} أسرة تجريبية واحتياجاتها.`); await load();
+        } catch (error) { setListError(error instanceof Error ? error.message : 'تعذر تنظيف دفعة الاختبار.'); }
+        finally { setCleanupBusy(false); }
+      }}>حذف بيانات دفعة اختبار الرفع</button>}
 
       {loading && <p style={{ ...mutedStyle, marginTop: 16 }}>جارِ التحميل…</p>}
       {!loading && data && data.items.length === 0 && (
@@ -253,6 +270,7 @@ export default function AssociationBeneficiariesPage() {
             <p style={{ ...mutedStyle, margin: '6px 0' }}>
               {row.publicCode} — {row.city} — {row.phone}
             </p>
+            <p style={{ fontSize: 14, fontWeight: 700 }}>ترتيب الحاجة: {row.needPriority ?? 'لم يُحدد'}</p>
             <p style={{ fontSize: 13, margin: '6px 0' }}>
               الاحتياجات: {row.needsTotal} (معلَّق {row.needsPending} / معتمد {row.needsApproved} / مرفوض {row.needsRejected})
             </p>
@@ -326,6 +344,8 @@ function BeneficiaryForm({
     existing
       ? {
           name: existing.name,
+          needPriority: existing.needPriority == null ? '' : String(existing.needPriority),
+          threeDeviceReason: existing.threeDeviceReason ?? '',
           region: existing.region,
           city: existing.city,
           district: existing.district ?? '',
@@ -375,6 +395,15 @@ function BeneficiaryForm({
       setError('اختر احتياجًا واحدًا على الأقل.');
       return;
     }
+    const needPriority = Number(form.needPriority);
+    if ((isNew || form.needPriority !== '') && (!Number.isInteger(needPriority) || needPriority < 1 || needPriority > 50)) {
+      setError('أدخل ترتيب الحاجة من 1 إلى 50؛ الرقم 1 للأسرة الأشد حاجة.');
+      return;
+    }
+    if (!locked && form.deviceTypes.length === 3 && !/[\p{L}\p{N}]/u.test(form.threeDeviceReason)) {
+      setError('عند طلب ثلاثة أجهزة يجب كتابة مبرر يشرح حاجة الأسرة إليها.');
+      return;
+    }
     const latFilled = form.lat.trim() !== '';
     const lngFilled = form.lng.trim() !== '';
     if (latFilled !== lngFilled) {
@@ -386,6 +415,8 @@ function BeneficiaryForm({
       // `address`/`landmark` **لا يُرسَلان أبدًا** — ليسا حقلَي إدخال بعد
       // الآن، ويرفضهما الخادم صراحةً بـ400 لو أُرسلا (NODE-3.1 البند 1).
       const body: Record<string, unknown> = {
+        ...(form.needPriority !== '' ? { needPriority } : {}),
+        ...(!locked ? { threeDeviceReason: form.threeDeviceReason.trim() } : {}),
         name: form.name,
         region: form.region,
         city: form.city,
@@ -427,7 +458,7 @@ function BeneficiaryForm({
       await onSaved(result?.possibleDuplicate ? `${base} ⚠ ${result.possibleDuplicate.message}` : base, addNext);
       if (addNext) {
         setLastSaved(`تمت إضافة ${form.name}. يمكنك إدخال المستفيد التالي.`);
-        setForm({ ...EMPTY_FORM, region: form.region, city: form.city, district: form.district });
+        setForm({ ...EMPTY_FORM, region: form.region, city: form.city, district: form.district, needPriority: needPriority < 50 ? String(needPriority + 1) : '' });
         setOpId(newOpId());
       }
     } catch (err) {
@@ -486,6 +517,10 @@ function BeneficiaryForm({
           <label style={labelStyle}>
             اسم المستفيد
             <input style={inputStyle} value={form.name} maxLength={120} onChange={(e) => set('name', e.target.value)} />
+          </label>
+          <label style={labelStyle}>
+            ترتيب الحاجة (1 للأشد حاجة)
+            <input style={inputStyle} type="number" min={1} max={50} step={1} disabled={locked} value={form.needPriority} onChange={(e) => set('needPriority', e.target.value)} />
           </label>
           <label style={labelStyle}>
             المنطقة
@@ -662,6 +697,7 @@ function BeneficiaryForm({
         )}
 
         <h3 style={{ marginBottom: 6 }}>الاحتياجات المطلوبة</h3>
+        <p style={mutedStyle}>الأصل جهاز واحد حسب الاحتياج. الأسرة التي تحتاج جهازين تكون أشد حاجة من الأسرة التي تحتاج جهازًا واحدًا.</p>
         {locked ? (
           <ul style={{ margin: 0, paddingInlineStart: 20 }}>
             {existing!.needs.map((n) => (
@@ -692,6 +728,10 @@ function BeneficiaryForm({
           </div>
         )}
 
+        {(form.deviceTypes.length === 3 || form.threeDeviceReason) && <label style={{ ...labelStyle, marginTop: 12 }}>
+          مبرر طلب ثلاثة أجهزة {form.deviceTypes.length === 3 ? '(إلزامي)' : '(اختياري)'}
+          <textarea style={{ ...inputStyle, minHeight: 85 }} maxLength={1000} disabled={locked} value={form.threeDeviceReason} onChange={(e) => set('threeDeviceReason', e.target.value)} placeholder="وضّح حاجة الأسرة إلى الأجهزة الثلاثة." />
+        </label>}
         {error && <p role="alert" style={{ ...errorStyle, marginTop: 12 }}>{error}</p>}
 
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>

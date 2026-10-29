@@ -33,6 +33,7 @@ import {
 } from './beneficiary-location.util';
 import { acquirePhoneLocks } from './beneficiary-phone-lock.util';
 import { parseXlsxBeneficiaryRows, parseXlsxRowToImportRow } from './xlsx-import.util';
+import { validateNeedPriority, validateThreeDeviceReason } from './beneficiary-onboarding.util';
 import { ALLOCATION_TRIGGER_PORT, type AllocationTriggerPort } from '../allocation/allocation-trigger.port';
 import type { AuthContext } from '../auth/auth.types';
 
@@ -64,6 +65,8 @@ export const BENEFICIARY_LIMITS = {
 const NEW_NEED_DEVICE_TYPES: DeviceType[] = [DeviceType.REFRIGERATOR, DeviceType.OVEN, DeviceType.WASHING_MACHINE];
 
 export interface BeneficiaryWriteInput {
+  needPriority?: number;
+  threeDeviceReason?: string;
   associationId?: string;
   name: string;
   region: string;
@@ -127,6 +130,33 @@ export class BeneficiariesService {
     private readonly audit: AuditService,
     @Inject(ALLOCATION_TRIGGER_PORT) private readonly allocationTrigger: AllocationTriggerPort,
   ) {}
+
+  async cleanupTestImport(ctx: AuthContext, beneficiaryIds: string[]) {
+    const denied = () => new ApiError('TEST_IMPORT_SCOPE_INVALID', 'الحذف مخصص لدفعة الاختبار الموثقة في جمعية تجربة فقط', 403);
+    if (ctx.role !== AccountRole.ASSOCIATION || !ctx.associationId || !beneficiaryIds.length || beneficiaryIds.length > 50 || new Set(beneficiaryIds).size !== beneficiaryIds.length) throw denied();
+    return prisma.$transaction(async tx => {
+      const association = await tx.association.findUnique({ where: { id: ctx.associationId! }, include: { participation: { include: { application: true } } } });
+      if (association?.name !== 'جمعية تجربة' || association.participation?.application?.publicCode !== 'APP-000328') throw denied();
+      await lockParticipationForOperationalWrite(tx, ctx.associationId!);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`beneficiary-priority:${ctx.associationId}`}, 0))`;
+      const ids = [...beneficiaryIds].sort();
+      await tx.$queryRaw`SELECT id FROM beneficiaries WHERE id IN (${Prisma.join(ids.map(id => Prisma.sql`${id}::uuid`))}) ORDER BY id FOR UPDATE`;
+      const rows = await tx.beneficiary.findMany({ where: { id: { in: ids }, associationId: ctx.associationId!, archivedAt: null }, include: { needs: true } });
+      if (rows.length !== ids.length || rows.some(row => row.reviewStatus !== 'UNDER_REVIEW' || row.listType || !/^اختبار رفع الأسر — \d+$/.test(row.name) || !/^ONBOARDING-TEST-20261029-[a-f0-9-]{36}$/.test(row.notes ?? '') || row.needs.some(need => need.decisionStatus !== 'PENDING' || need.fulfillmentStatus))) throw denied();
+      if (new Set(rows.map(row => row.notes)).size !== 1) throw denied();
+      const batches = await tx.idempotencyKey.findMany({ where: { accountId: ctx.accountId, scope: 'beneficiary-import', status: 'COMPLETED', createdAt: { gte: new Date(Date.now() - 86400000) } }, select: { responseJson: true } });
+      const owned = batches.some(batch => {
+        const response = batch.responseJson as { beneficiaryIds?: string[] } | null;
+        return Array.isArray(response?.beneficiaryIds) && JSON.stringify([...response.beneficiaryIds].sort()) === JSON.stringify(ids);
+      });
+      if (!owned) throw denied();
+      // Foreign keys also fail closed if any operational record was attached.
+      await tx.beneficiaryNeed.deleteMany({ where: { beneficiaryId: { in: ids }, associationId: ctx.associationId! } });
+      const removed = await tx.beneficiary.deleteMany({ where: { id: { in: ids }, associationId: ctx.associationId! } });
+      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, associationId: ctx.associationId!, action: 'TEST_BENEFICIARY_IMPORT_REMOVED', entityType: 'beneficiaries', metadata: { count: removed.count, beneficiaryIds: ids } } });
+      return { ok: true as const, removedCount: removed.count };
+    });
+  }
 
   // ================================================================
   // listBeneficiaries — Beneficiaries.gs::listBeneficiaries_
@@ -222,6 +252,8 @@ export class BeneficiariesService {
     // «كل مستفيد جديد يجب أن يحمل احتياجًا واحدًا على الأقل»
     // (validateNewNeedDeviceTypes_ — Phase 2.2 المعتمدة).
     const deviceTypes = validateNewNeedDeviceTypes(input.deviceTypes);
+    validateNeedPriority(input.needPriority);
+    validateThreeDeviceReason(deviceTypes.length, input.threeDeviceReason);
 
     const associationId = this.resolveWriteAssociation(ctx, input.associationId);
     const fields = await this.buildFieldValues(input, null);
@@ -256,6 +288,8 @@ export class BeneficiariesService {
       const association = await tx.association.findUnique({ where: { id: associationId }, select: { id: true } });
       if (!association) throw new ApiError('BENEFICIARY_ASSOCIATION_NOT_FOUND', 'اختر جمعية صحيحة', 400);
       await lockParticipationForOperationalWrite(tx, associationId);
+
+      await this.assertAvailablePriorities(tx, associationId, [fields.needPriority]);
 
       // قفل استشاري لكل (جمعية، جوال) **قبل** فحص التكرار وقبل الكتابة —
       // يغلق سباق TOCTOU الذي كان يسمح لطلبين متزامنين بالمرور معًا.
@@ -359,6 +393,8 @@ export class BeneficiariesService {
         if (!association) throw new ApiError('BENEFICIARY_ASSOCIATION_NOT_FOUND', 'اختر جمعية صحيحة', 400);
         await lockParticipationForOperationalWrite(tx, associationId);
 
+        await this.assertAvailablePriorities(tx, associationId, ok.map(row => row.fields.needPriority));
+
         const allPhones = ok.flatMap((r) => [r.fields.phone, r.fields.secondaryPhone]);
         await acquirePhoneLocks(tx, associationId, allPhones);
 
@@ -438,11 +474,24 @@ export class BeneficiariesService {
       if (errors.length >= 50) break;
       try {
         const deviceTypes = validateNewNeedDeviceTypes(rows[i].deviceTypes);
+        validateNeedPriority(rows[i].needPriority);
+        validateThreeDeviceReason(deviceTypes.length, rows[i].threeDeviceReason);
         const fields = await this.buildFieldValues(rows[i] as BeneficiaryWriteInput, null, references);
         const location = buildLocationWrite(rows[i], null, now);
         ok.push({ index: i, fields, location, deviceTypes });
       } catch (err) {
         errors.push({ row: i + 1, message: err instanceof ApiError ? err.message : 'بيانات غير صالحة' });
+      }
+    }
+
+    if (errors.length < 50) {
+      const seenPriorities = new Map<number, number>();
+      for (const r of ok) {
+        const priority = r.fields.needPriority!;
+        const first = seenPriorities.get(priority);
+        if (first !== undefined) errors.push({ row: r.index + 1, message: `ترتيب الحاجة ${priority} مكرر داخل الملف (الصف ${first})` });
+        else seenPriorities.set(priority, r.index + 1);
+        if (errors.length >= 50) break;
       }
     }
 
@@ -549,6 +598,8 @@ export class BeneficiariesService {
       if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse ?? { ok: true as const } };
       await lockParticipationForOperationalWrite(tx, existing.associationId);
 
+      await this.assertAvailablePriorities(tx, existing.associationId, [fields.needPriority], id);
+
       // إعادة قراءة الحالة **داخل** المعاملة مع قفل الصف — القرار لا يُبنى
       // على قراءة سابقة تجاوزها الزمن (سباق: الإدارة تبتّ بينما التعديل
       // في الطريق). نفس مبدأ «كل قراءة يُبنى عليها قرار تحدث داخل القفل».
@@ -569,6 +620,13 @@ export class BeneficiariesService {
       // الراهنة لا على لقطة قديمة.
       const locked = await this.lockBeneficiary(tx, id);
       if (!locked) throw beneficiaryNotFound();
+      if (isFinalReviewStatus(locked.review_status as BeneficiaryReviewStatus) && ((input.needPriority !== undefined && input.needPriority !== locked.need_priority) || (input.threeDeviceReason !== undefined && (input.threeDeviceReason?.trim() ?? '') !== (locked.three_device_reason ?? '')))) {
+        throw new ApiError('BENEFICIARY_PRIORITY_LOCKED', 'لا يمكن تغيير ترتيب الحاجة أو مبرر الأجهزة بعد البت في المستفيد', 409);
+      }
+      if (input.needPriority === undefined) fields.needPriority = locked.need_priority;
+      if (input.threeDeviceReason === undefined) fields.threeDeviceReason = locked.three_device_reason;
+      const effectiveTypes = requestedTypes ?? (await tx.beneficiaryNeed.findMany({ where: { beneficiaryId: id }, select: { deviceType: true } })).map(n => n.deviceType);
+      if (!isFinalReviewStatus(locked.review_status as BeneficiaryReviewStatus)) validateThreeDeviceReason(effectiveTypes.length, fields.threeDeviceReason);
       if (touchesNeeds && isFinalReviewStatus(locked.review_status as BeneficiaryReviewStatus)) {
         throw needsLocked();
       }
@@ -1145,9 +1203,11 @@ export class BeneficiariesService {
         association_id: string;
         latitude: Prisma.Decimal | null;
         longitude: Prisma.Decimal | null;
+        need_priority: number | null;
+        three_device_reason: string | null;
       }[]
     >`
-      SELECT id, review_status, association_id, latitude, longitude
+      SELECT id, review_status, association_id, latitude, longitude, need_priority, three_device_reason
       FROM beneficiaries WHERE id = ${id}::uuid AND archived_at IS NULL FOR UPDATE
     `;
     return rows[0] ?? null;
@@ -1264,6 +1324,15 @@ export class BeneficiariesService {
   }
 
   /** جمعية الكتابة: من AuthContext لفاعل ASSOCIATION، ومن الطلب لِADMIN. */
+  private async assertAvailablePriorities(tx: Prisma.TransactionClient, associationId: string, priorities: (number | null)[], excludeId?: string) {
+    // One tenant-scoped lock, before phone/entity locks in every write path.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`beneficiary-priority:${associationId}`}, 0))`;
+    const values = priorities.filter((value): value is number => value !== null);
+    if (!values.length) return;
+    const conflict = await tx.beneficiary.findFirst({ where: { associationId, archivedAt: null, needPriority: { in: values }, ...(excludeId ? { id: { not: excludeId } } : {}) }, select: { needPriority: true } });
+    if (conflict) throw new ApiError('BENEFICIARY_PRIORITY_DUPLICATE', 'ترتيب الحاجة مستخدم لأسرة أخرى؛ اختر ترتيبًا غير مكرر من 1 إلى 50', 409);
+  }
+
   private resolveWriteAssociation(ctx: AuthContext, requested?: string): string {
     if (ctx.role === AccountRole.ASSOCIATION) {
       if (!ctx.associationId) throw authForbidden();
@@ -1287,7 +1356,7 @@ export class BeneficiariesService {
   }
 
   /** يطابق `buildBeneficiaryFieldValues_` — تحقق صيغة بحت، بلا أي قراءة/كتابة قرار. */
-  private async buildFieldValues(input: BeneficiaryWriteInput, existing: { region: string; city: string; maritalStatus: string } | null, references?: ImportReference[]) {
+  private async buildFieldValues(input: BeneficiaryWriteInput, existing: { region: string; city: string; maritalStatus: string; needPriority?: number | null; threeDeviceReason?: string | null } | null, references?: ImportReference[]) {
     const phone = normalizeSaudiPhone(input.phone);
     const secondaryPhone = input.phone2 ? normalizeSaudiPhone(input.phone2) : null;
 
@@ -1317,6 +1386,8 @@ export class BeneficiariesService {
         boundedInt(input.income ?? 0, BENEFICIARY_LIMITS.incomeMin, BENEFICIARY_LIMITS.incomeMax, 'مبلغ الدخل'),
       ),
       notes: cleanText(input.notes, BENEFICIARY_LIMITS.notes) || null,
+      needPriority: input.needPriority === undefined ? existing?.needPriority ?? null : validateNeedPriority(input.needPriority),
+      threeDeviceReason: input.threeDeviceReason === undefined ? existing?.threeDeviceReason ?? null : validateThreeDeviceReason(0, input.threeDeviceReason),
     };
   }
 }
@@ -1424,6 +1495,8 @@ function mapBeneficiary(row: {
   income: Prisma.Decimal | null;
   landmark: string | null;
   notes: string | null;
+  needPriority?: number | null;
+  threeDeviceReason?: string | null;
   latitude: Prisma.Decimal | null;
   longitude: Prisma.Decimal | null;
   locationSource: string | null;
@@ -1452,6 +1525,8 @@ function mapBeneficiary(row: {
     // شكل الرد كما هما (سجلات مهاجَرة قد تحملهما)، لكنهما ليسا حقلَي إدخال.
     landmark: row.landmark,
     notes: row.notes,
+    needPriority: row.needPriority ?? null,
+    threeDeviceReason: row.threeDeviceReason ?? null,
     lat: row.latitude === null ? null : Number(row.latitude),
     lng: row.longitude === null ? null : Number(row.longitude),
     locationSource: row.locationSource,

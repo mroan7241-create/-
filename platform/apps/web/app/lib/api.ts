@@ -460,6 +460,8 @@ export const DEVICE_TYPES: DeviceType[] = ['REFRIGERATOR', 'OVEN', 'WASHING_MACH
 
 /** BEN-013 — صف استيراد واحد، يطابق BeneficiaryImportRowDto (بلا opId — على مستوى الدفعة كاملة). */
 export interface BeneficiaryImportRow {
+  needPriority?: number;
+  threeDeviceReason?: string;
   name: string;
   region: string;
   city: string;
@@ -524,6 +526,8 @@ export interface BeneficiaryNeed {
 }
 
 export interface BeneficiarySummary {
+  needPriority?: number | null;
+  threeDeviceReason?: string | null;
   id: string;
   publicCode: string;
   associationId: string;

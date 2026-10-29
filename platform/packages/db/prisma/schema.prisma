@@ -890,6 +890,8 @@ model Beneficiary {
   /// Legacy (cleanText_ بلا requiredText_)، فيبقيان nullable هنا.
   landmark               String?
   notes                  String?
+  needPriority           Int?                    @map("need_priority")
+  threeDeviceReason      String?                 @map("three_device_reason")
   latitude               Decimal?                @db.Decimal(9, 6)
   longitude              Decimal?                @db.Decimal(9, 6)
   locationSource         LocationSource?         @map("location_source")
