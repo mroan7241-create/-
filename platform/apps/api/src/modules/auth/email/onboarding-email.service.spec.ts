@@ -38,9 +38,10 @@ describe('Onboarding atomic email queue', () => {
     expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.participationAgreement.findUniqueOrThrow.mock.invocationCallOrder[0]);
     expect(enqueueEmail.mock.invocationCallOrder[0]).toBeLessThan(tx.systemSetting.create.mock.invocationCallOrder[0]);
     const deliveries = enqueueEmail.mock.calls.map(([input]) => decryptEmailDelivery(input.data.id, input.data.payload as EmailDeliveryPayload));
-    expect(deliveries.map(item => item.params.to)).toEqual(['test@example.org', 'malyahya@alzaad.org.sa', 'marwanalsawi@alzaad.org.sa']);
+    expect(deliveries.map(item => item.params.to)).toEqual(['test@example.org', 'malyahya@alzaad.org.sa', 'marwanalsawi@alzaad.org.sa', 'salehalfawzan@alzaad.org.sa']);
     expect(deliveries[1].context).toMatchObject({ recipientRole: 'mousa', markerKey: 'COVENANT_COMPLETION_EMAIL:test-covenant:mousa' });
     expect(deliveries[2].context).toMatchObject({ recipientRole: 'marwan', markerKey: 'COVENANT_COMPLETION_EMAIL:test-covenant:marwan' });
+    expect(deliveries[3].context).toMatchObject({ recipientRole: 'saleh', markerKey: 'COVENANT_COMPLETION_EMAIL:test-covenant:saleh' });
     expect(deliveries.every(item => item.context.type === 'covenant' && item.context.fileId === 'final-file')).toBe(true);
   });
   it('encrypts the seven-day signing link addressed only to Mousa, not plaintext stored rows', async () => {
@@ -70,6 +71,24 @@ describe('Onboarding atomic email queue', () => {
     tx.systemSetting.findUnique.mockResolvedValue({ value: { status: 'SENT' } });
     expect(await service.sendCovenantCompletion('test-covenant', pdf, tx as never)).toEqual({ ok: true, alreadySent: true });
     expect(enqueueEmail).not.toHaveBeenCalled();
+  });
+  it('does not duplicate the Saleh copy when he is already the association recipient', async () => {
+    const { service, tx, enqueueEmail, agreement, pdf } = fixture();
+    agreement.associationAccount.email = 'salehalfawzan@alzaad.org.sa';
+    await service.sendCovenantCompletion('test-covenant', pdf, tx as never);
+    const deliveries = enqueueEmail.mock.calls.map(([input]) => decryptEmailDelivery(input.data.id, input.data.payload as EmailDeliveryPayload));
+    expect(deliveries.map(item => item.params.to)).toEqual(['salehalfawzan@alzaad.org.sa', 'malyahya@alzaad.org.sa', 'marwanalsawi@alzaad.org.sa']);
+    expect(deliveries.filter(item => item.context.type === 'covenant' && item.context.recipientRole === 'saleh')).toHaveLength(0);
+  });
+  it('propagates failure of the new Saleh copy so the enclosing transaction cannot partially commit', async () => {
+    const { service, tx, enqueueEmail, pdf } = fixture();
+    enqueueEmail.mockImplementation(async input => {
+      const delivery = decryptEmailDelivery(input.data.id, input.data.payload as EmailDeliveryPayload);
+      if (delivery.context.type === 'covenant' && delivery.context.recipientRole === 'saleh') throw new Error('synthetic Saleh queue failure');
+      return {};
+    });
+    await expect(service.sendCovenantCompletion('test-covenant', pdf, tx as never)).rejects.toThrow('synthetic Saleh queue failure');
+    expect(tx.systemSetting.create).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ key: 'COVENANT_COMPLETION_EMAIL:test-covenant:saleh' }) }));
   });
   it.each(['QUEUED', 'PROCESSING', 'FAILED', 'SMTP_UNCERTAIN'])('returns existing %s ownership without unsafe resend', async status => {
     const { service, tx, enqueueEmail, pdf } = fixture();

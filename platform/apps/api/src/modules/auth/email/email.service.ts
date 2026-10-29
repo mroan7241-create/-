@@ -10,7 +10,7 @@ export type EmailDeliveryContext =
   | { type: 'credentials'; accountId: string; credentialHash: string }
   | { type: 'rejection'; applicationId: string; expectedReason?: string }
   | { type: 'nonselection'; applicationId: string; campaign: string; markerKey: string }
-  | { type: 'covenant'; agreementId: string; fileId: string; sha256: string; markerKey: string; filename: string; recipientRole?: 'mousa' | 'marwan' }
+  | { type: 'covenant'; agreementId: string; fileId: string; sha256: string; markerKey: string; filename: string; recipientRole?: 'mousa' | 'marwan' | 'saleh' }
   | { type: 'covenant-signing'; agreementId: string; tokenHash: string; markerKey: string; signerAccountId?: string }
   | { type: 'notice'; accountId: string };
 export type EmailDeliveryPhase = 'READY' | 'SMTP_STARTED' | 'SMTP_ACCEPTED';

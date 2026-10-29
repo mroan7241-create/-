@@ -8,6 +8,7 @@ import { EXECUTION_GUIDE_URL } from './email-layout';
 export const COVENANT_STAFF_RECIPIENTS = {
   mousa: { email: 'malyahya@alzaad.org.sa', name: 'أ. موسى اليحيى' },
   marwan: { email: 'marwanalsawi@alzaad.org.sa', name: 'أ. مروان الصاوي' },
+  saleh: { email: 'salehalfawzan@alzaad.org.sa', name: 'أ. صالح الفوزان' },
 } as const;
 
 /** Queue notifications in the business transaction; encrypted outbox owns retries. */
@@ -22,7 +23,7 @@ export class OnboardingEmailService {
     const queued = await enqueueEmail(tx, 'NOTICE', {
       to: COVENANT_STAFF_RECIPIENTS.mousa.email, name: COVENANT_STAFF_RECIPIENTS.mousa.name,
       subject: `بانتظار توقيع الطرف الأول — ${input.associationName}`,
-      body: `وقّعت الجمعية ميثاق المشاركة، وهو بانتظار اعتمادكم بصفتكم ممثل الطرف الأول.\nالجمعية: ${input.associationName}\nرقم الميثاق: ${input.reference}\n${input.signerAccountId ? 'ادخلوا بحسابكم إلى صفحة المواثيق لمراجعة هذا الميثاق وبقية المواثيق المسندة إليكم. الدخول بالبريد وكلمة المرور الحالية.' : 'الرابط خاص بكم وصالح لمدة 7 أيام؛ يمكن فتحه والخروج والعودة قبل اعتماد التوقيع. لا تشاركوا الرابط مع الآخرين.'}\nيُغلق التوقيع بعد الاعتماد لحماية النسخة النهائية.\nبعد اكتمال التوقيع ستصل النسخة النهائية الموقعة إلى الجمعية وإليكم وإلى أ. مروان.`,
+      body: `وقّعت الجمعية ميثاق المشاركة، وهو بانتظار اعتمادكم بصفتكم ممثل الطرف الأول.\nالجمعية: ${input.associationName}\nرقم الميثاق: ${input.reference}\n${input.signerAccountId ? 'ادخلوا بحسابكم إلى صفحة المواثيق لمراجعة هذا الميثاق وبقية المواثيق المسندة إليكم. الدخول بالبريد وكلمة المرور الحالية.' : 'الرابط خاص بكم وصالح لمدة 7 أيام؛ يمكن فتحه والخروج والعودة قبل اعتماد التوقيع. لا تشاركوا الرابط مع الآخرين.'}\nيُغلق التوقيع بعد الاعتماد لحماية النسخة النهائية.\nبعد اكتمال التوقيع ستصل النسخة النهائية الموقعة إلى الجمعية وإليكم وإلى أ. مروان وأ. صالح الفوزان.`,
       action: { label: 'مراجعة الميثاق وتوقيعه', url },
     }, { type: 'covenant-signing', agreementId: input.agreementId, tokenHash, markerKey, ...(input.signerAccountId ? { signerAccountId: input.signerAccountId } : {}) });
     await tx.systemSetting.create({ data: { key: markerKey, value: { status: 'QUEUED', eventId: queued.eventId } } });
@@ -56,7 +57,7 @@ export class OnboardingEmailService {
     await tx.systemSetting.create({ data: { key, value: { status: 'QUEUED', eventId: queued.eventId } } });
     // Separate events/markers isolate delivery failures and do not disclose the
     // other recipients. Legacy owned messages above are never resent/backfilled.
-    for (const recipientRole of ['mousa', 'marwan'] as const) {
+    for (const recipientRole of ['mousa', 'marwan', 'saleh'] as const) {
       const recipient = COVENANT_STAFF_RECIPIENTS[recipientRole];
       if (recipient.email === account.email.trim().toLowerCase()) continue;
       const markerKey = `${key}:${recipientRole}`;

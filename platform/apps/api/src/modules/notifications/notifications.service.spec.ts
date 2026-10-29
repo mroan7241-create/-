@@ -277,16 +277,16 @@ describe('NotificationsService email delivery phases', () => {
     if (state === 'valid') expect(h.tx.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: 'NONSELECTION_NOTICE_EMAIL_SENT' }) }));
   });
 
-  it.each([['mousa', 'malyahya@alzaad.org.sa'], ['marwan', 'marwanalsawi@alzaad.org.sa']] as const)('delivers the verified final PDF to the fixed %s recipient', async (recipientRole, email) => {
+  it.each([['mousa', 'malyahya@alzaad.org.sa'], ['marwan', 'marwanalsawi@alzaad.org.sa'], ['saleh', 'salehalfawzan@alzaad.org.sa']] as const)('delivers the verified final PDF to the fixed %s recipient', async (recipientRole, email) => {
     const sha256 = createHash('sha256').update(Buffer.from('%PDF-test-private')).digest('hex');
     const h = harness({ type: 'covenant', agreementId: 'agreement', fileId: 'file', sha256, recipientRole, markerKey: `COVENANT_COMPLETION_EMAIL:agreement:${recipientRole}`, filename: 'covenant.pdf' }, 'READY', email);
     expect(await h.run()).toBe('processed');
     expect(h.send).toHaveBeenCalledWith(expect.objectContaining({ to: email, pdfAttachment: expect.any(Object) }), expect.any(Object));
   });
 
-  it('refuses a staff PDF copy addressed to anyone else', async () => {
+  it.each(['mousa', 'marwan', 'saleh'] as const)('refuses a %s PDF copy addressed to anyone else', async recipientRole => {
     const sha256 = createHash('sha256').update(Buffer.from('%PDF-test-private')).digest('hex');
-    const h = harness({ type: 'covenant', agreementId: 'agreement', fileId: 'file', sha256, recipientRole: 'mousa', markerKey: 'COVENANT_COMPLETION_EMAIL:agreement:mousa', filename: 'covenant.pdf' });
+    const h = harness({ type: 'covenant', agreementId: 'agreement', fileId: 'file', sha256, recipientRole, markerKey: `COVENANT_COMPLETION_EMAIL:agreement:${recipientRole}`, filename: 'covenant.pdf' });
     expect(await h.run()).toBe('failed'); expect(h.send).not.toHaveBeenCalled();
   });
 
