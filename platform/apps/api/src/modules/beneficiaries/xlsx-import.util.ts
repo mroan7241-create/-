@@ -97,7 +97,9 @@ export async function parseXlsxBeneficiaryRows(buffer: Buffer): Promise<{ header
 }
 
 /** Blank entry sheet; examples are instructions only and cannot be imported accidentally. */
-export async function generateXlsxTemplate(options: { region?: string; regions?: string[]; cities?: string[]; socialStatuses?: string[] } = {}): Promise<Buffer> {
+export async function generateXlsxTemplate(options: { limit?: number; region?: string; regions?: string[]; cities?: string[]; socialStatuses?: string[] } = {}): Promise<Buffer> {
+  const limit = options.limit ?? 50;
+  validateNeedPriority(limit);
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet('مستفيدون');
   sheet.views = [{ rightToLeft: true, state: 'frozen', ySplit: 1 }];
@@ -121,25 +123,25 @@ export async function generateXlsxTemplate(options: { region?: string; regions?:
   validationLists.forEach((values, index) => {
     if (values.length) workbook.definedNames.add(`'قوائم'!$${String.fromCharCode(65 + index)}$1:$${String.fromCharCode(65 + index)}$${values.length}`, listNames[index]);
   });
-  for (let row = 2; row <= 51; row++) {
+  for (let row = 2; row <= limit + 1; row++) {
     if (options.region) sheet.getCell(row, column('region')).value = options.region;
-    sheet.getCell(row, column('needPriority')).dataValidation = { type: 'whole', operator: 'between', allowBlank: true, formulae: [1, 50], showErrorMessage: true, error: 'ترتيب الحاجة من 1 إلى 50 دون تكرار؛ 1 للأشد حاجة.' };
+    sheet.getCell(row, column('needPriority')).dataValidation = { type: 'whole', operator: 'between', allowBlank: true, formulae: [1, limit], showErrorMessage: true, error: `ترتيب الحاجة من 1 إلى ${limit} دون تكرار؛ 1 للأشد حاجة.` };
     for (const [field, listIndex] of [['region', 0], ['city', 1], ['socialStatus', 2]] as const) if (validationLists[listIndex].length) sheet.getCell(row, column(field)).dataValidation = { type: 'list', allowBlank: true, formulae: [listNames[listIndex]], showErrorMessage: true, errorTitle: 'قيمة غير معتمدة', error: 'اختر من القائمة.' };
     for (const field of ['refrigerator', 'oven', 'washingMachine', 'socialSecurity'] as const) sheet.getCell(row, column(field)).dataValidation = { type: 'list', allowBlank: true, formulae: ['"نعم,لا"'], showErrorMessage: true, error: 'اختر نعم أو لا.' };
     sheet.getCell(row, column('familyCount')).dataValidation = { type: 'whole', operator: 'between', allowBlank: true, formulae: [1, 99], showErrorMessage: true, error: 'عدد أفراد الأسرة من 1 إلى 99.' };
     sheet.getCell(row, column('threeDeviceReason')).dataValidation = { type: 'custom', allowBlank: false, formulae: [`OR(COUNTIF(I${row}:K${row},"نعم")<3,LEN(TRIM(L${row}))>0)`], showErrorMessage: true, error: 'عند اختيار ثلاثة أجهزة اكتب مبرر الحاجة إليها.' };
   }
   for (let col = column('phone2'); col <= SIMPLE_BENEFICIARY_IMPORT_FIELDS.length; col++) { sheet.getColumn(col).outlineLevel = 1; }
-  sheet.addConditionalFormatting({ ref: 'L2:L51', rules: [{ type: 'expression', priority: 1, formulae: ['AND(COUNTIF(I2:K2,"نعم")=3,LEN(TRIM(L2))=0)'], style: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFBE5E5' } } } }] });
-  sheet.addConditionalFormatting({ ref: 'A2:A51', rules: [{ type: 'expression', priority: 2, formulae: ['AND(A2<>"",COUNTIF($A$2:$A$51,A2)>1)'], style: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFBE5E5' } } } }] });
+  sheet.addConditionalFormatting({ ref: `L2:L${limit + 1}`, rules: [{ type: 'expression', priority: 1, formulae: ['AND(COUNTIF(I2:K2,"نعم")=3,LEN(TRIM(L2))=0)'], style: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFBE5E5' } } } }] });
+  sheet.addConditionalFormatting({ ref: `A2:A${limit + 1}`, rules: [{ type: 'expression', priority: 2, formulae: [`AND(A2<>"",COUNTIF($A$2:$A$${limit + 1},A2)>1)`], style: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFBE5E5' } } } }] });
   sheet.properties.outlineProperties = { summaryRight: false, summaryBelow: true };
   const instructions = workbook.addWorksheet('تعليمات');
   instructions.views = [{ rightToLeft: true }];
   instructions.addRow(['طريقة الاستخدام']);
   instructions.addRow(['١. لا تعدّل أسماء الأعمدة في الصف الأول.']);
-  instructions.addRow(['٢. أدخل 50 أسرة بصف واحد لكل أسرة. ترتيب الحاجة من 1 إلى 50 دون تكرار: 1 للأشد حاجة ثم 2 وهكذا. للأجهزة اختر نعم للمطلوب، ولا أو فارغ لغير المطلوب؛ يجب اختيار جهاز واحد على الأقل.']);
+  instructions.addRow([`٢. الحد المسموح ${limit} أسرة بصف واحد لكل أسرة. ترتيب الحاجة من 1 إلى ${limit} دون تكرار: 1 للأشد حاجة ثم 2 وهكذا. للأجهزة اختر نعم للمطلوب، ولا أو فارغ لغير المطلوب؛ يجب اختيار جهاز واحد على الأقل.`]);
   instructions.addRow([options.region ? '٣. المنطقة معبأة من حساب الجمعية؛ اختر المدينة التابعة لها ثم اكتب الحي. الموقع الدقيق اختياري.' : '٣. اختر منطقة جمعيتكم والمدينة التابعة لها من القوائم، ثم اكتب الحي. الموقع الدقيق اختياري.']);
-  instructions.addRow(['٤. الأصل جهاز واحد حسب الاحتياج الفعلي. الأسرة التي تحتاج جهازين تكون أشد حاجة من الأسرة التي تحتاج جهازًا واحدًا. عند اختيار ثلاثة أجهزة يجب كتابة مبرر يشرح حاجة الأسرة إليها؛ يُرفض الصف دونه.']);
+  instructions.addRow(['٤. الأصل جهاز واحد لكل أسرة حسب الاحتياج الفعلي. الأسرة التي تحتاج جهازين تكون أشد حاجة من الأسرة التي تحتاج جهازًا واحدًا. عند اختيار ثلاثة أجهزة يجب كتابة مبرر يشرح حاجة الأسرة إليها؛ يُرفض الصف دونه.']);
   instructions.addRow(['٥. اكتب الجوال كنص مثل 0500000001. عدد الأسرة شامل المستفيد. الأعمدة من جوال إضافي وما بعدها اختيارية.']);
   instructions.addRow(['٦. ارفع الملف، وراجع جميع الصفوف في المعاينة ثم أكد الاستيراد. عند وجود خطأ لا تُحفظ الدفعة حتى تصحيحه. الأسر والاحتياجات المرفوعة ستخضع للدراسة.']);
   instructions.getColumn(1).width = 90;

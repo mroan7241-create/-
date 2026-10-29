@@ -5,12 +5,18 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthContext } from '../auth/auth.types';
 import { AssociationsService } from './associations.service';
-import { AssociationSelfSettingsDto, CreateAssociationDto, ListAssociationsQueryDto, UpdateAssociationDto } from './dto/association.dto';
+import { AssociationSelfSettingsDto, BeneficiaryLimitDto, CreateAssociationDto, ListAssociationsQueryDto, UpdateAssociationDto } from './dto/association.dto';
 
 @ApiTags('associations')
 @Controller('associations')
 export class AssociationsController {
   constructor(private readonly associations: AssociationsService) {}
+
+  @Patch(':id/beneficiary-limit')
+  @Roles(AccountRole.ADMIN)
+  updateBeneficiaryLimit(@CurrentUser() ctx: AuthContext, @Param('id', ParseUUIDPipe) id: string, @Body() dto: BeneficiaryLimitDto) {
+    return this.associations.updateBeneficiaryLimit(ctx, id, dto.limit, dto.opId);
+  }
 
   // ملاحظة ترتيب: 'me/settings' يجب أن يسبق ':id' حتى لا يُلتقَط كـid.
   @Get('me/settings')

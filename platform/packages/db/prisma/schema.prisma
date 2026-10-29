@@ -558,6 +558,7 @@ model Association {
   city         String
   phones       String[]
   email        String?
+  beneficiaryLimit Int           @default(50) @map("beneficiary_limit")
   status       AssociationStatus @default(ACTIVE)
   createdAt    DateTime          @default(now()) @map("created_at")
   updatedAt    DateTime          @updatedAt @map("updated_at")

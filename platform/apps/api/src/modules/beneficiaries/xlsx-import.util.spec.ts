@@ -4,6 +4,13 @@ import { DeviceType } from '@alzad/db';
 import { generateXlsxTemplate, parseXlsxBeneficiaryRows, parseXlsxRowToImportRow } from './xlsx-import.util';
 
 describe('قالب استيراد المستفيدين', () => {
+  it('uses the approved association quota in the template and priority validation', async () => {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await generateXlsxTemplate({ region: 'القصيم', limit: 60 }) as unknown as ExcelJS.Buffer);
+    expect(workbook.worksheets[0].getRow(61).getCell(3).value).toBe('القصيم');
+    expect(workbook.worksheets[0].getCell('A2').dataValidation.formulae).toEqual([1, 60]);
+    expect((await parseXlsxBeneficiaryRows(Buffer.from(await workbook.xlsx.writeBuffer()))).rows).toHaveLength(0);
+  });
   it('ينشئ قالبًا بلا مستفيدين تجريبيين ويتجاهل المنطقة المعبأة مسبقًا وحدها', async () => {
     const buffer = await generateXlsxTemplate({ region: 'مكة المكرمة', regions: ['مكة المكرمة'], cities: ['جدة'], socialStatuses: ['أرملة'] });
     const parsed = await parseXlsxBeneficiaryRows(buffer);

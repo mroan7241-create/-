@@ -78,7 +78,7 @@ export class DashboardService {
     const deliveriesPendingReturnApproval = groupedCount(deliveries.find(row => row.status === 'PENDING_RETURN_APPROVAL'));
     const deliveriesDeferred = groupedCount(deliveries.find(row => row.status === 'DEFERRED'));
     return {
-      counts: { beneficiariesTotal, beneficiariesPendingReview, beneficiariesApproved, beneficiariesRejected, receiptsAwaitingConfirmation, devicesAllocated, delegates, devicesWithDelegate, devicesDelivered, deliveriesPendingApproval, deliveriesPendingReturnApproval, deliveriesDeferred },
+      counts: { beneficiaryLimit: ctx.meSnapshot?.beneficiaryLimit ?? 50, beneficiariesTotal, beneficiariesPendingReview, beneficiariesApproved, beneficiariesRejected, receiptsAwaitingConfirmation, devicesAllocated, delegates, devicesWithDelegate, devicesDelivered, deliveriesPendingApproval, deliveriesPendingReturnApproval, deliveriesDeferred },
       participationStatus: participation?.status ?? null,
       associationName: participation?.association?.name ?? null,
       covenantCompleted: participation?.agreements?.[0]?.status === 'SIGNED' && Boolean(participation.agreements[0].fullyExecutedAt),

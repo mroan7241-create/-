@@ -24,6 +24,13 @@ test('partial household entry keeps the action with the association until fifty 
   assert.match(action.detail, /1 من 50/);
   assert.match(action.completed, /توقيع الميثاق/);
 });
+
+test('an owner-approved quota updates the required action without changing other associations', () => {
+  const expanded = associationNextAction({ ...empty, beneficiaryLimit: 60, beneficiariesTotal: 50, beneficiariesPendingReview: 50 }, 'ACTIVE', 'جمعية موسعة', true);
+  assert.equal(expanded.owner, 'جمعية موسعة');
+  assert.match(expanded.detail, /50 من 60/);
+  assert.equal(associationNextAction({ ...empty, beneficiariesTotal: 50, beneficiariesPendingReview: 50 }).owner, 'جمعية الزاد');
+});
 test('urgent physical return and receipts take precedence over entry', () => {
   assert.match(associationNextAction({ ...empty, deliveriesPendingReturnApproval: 1, receiptsAwaitingConfirmation: 1 }).href, /PENDING_RETURN_APPROVAL/);
 });

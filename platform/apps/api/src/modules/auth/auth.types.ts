@@ -23,6 +23,7 @@ export interface AuthContext {
     covenantRequired: boolean;
     covenantStatus: AgreementStatus | null;
     associationRegion?: string;
+    beneficiaryLimit?: number;
     associationCity?: string;
   };
 }

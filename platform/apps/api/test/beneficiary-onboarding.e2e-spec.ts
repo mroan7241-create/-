@@ -13,10 +13,12 @@ describe('50-family onboarding: Excel to association and admin', () => {
   let fakeEmail: Awaited<ReturnType<typeof createTestApp>>['fakeEmail'];
   let fx: Awaited<ReturnType<typeof seedNode3Fixtures>>;
   let associationCookie: string, adminCookie: string, otherCookie: string;
+  let adminAccountId: string;
   beforeAll(async () => {
     ({ app, fakeEmail } = await createTestApp());
     await seedReferenceData(prisma);
     const base = await seedTestFixtures();
+    adminAccountId = (await prisma.account.findFirstOrThrow({ where: { email: base.adminEmail }, select: { id: true } })).id;
     fx = await seedNode3Fixtures();
     await cleanNode3State();
     await cleanAuthState();
@@ -103,5 +105,45 @@ describe('50-family onboarding: Excel to association and admin', () => {
     expect(await prisma.beneficiary.count({ where: { associationId: fx.associationBId } })).toBe(0);
     expect(await prisma.beneficiaryNeed.count({ where: { associationId: fx.associationBId } })).toBe(0);
     expect(await prisma.auditLog.count({ where: { associationId: fx.associationBId, action: 'TEST_BENEFICIARY_IMPORT_REMOVED' } })).toBe(1);
+  });
+
+  it('counts legacy records, blocks concurrent/manual/bulk overflow, and allows only the owner to raise one association quota', async () => {
+    await prisma.beneficiary.create({ data: { publicCode: 'HISTORICAL-QUOTA-TEST', associationId: fx.associationAId, name: 'سجل قديم للاختبار', region: 'الرياض', city: 'الرياض', district: 'حي اختبار', phone: uniquePhone(), familyCount: 3, maritalStatus: 'أرملة' } });
+    const initial = await http().post('/api/v1/beneficiaries/import').set('Cookie', associationCookie).send({ rows: Array.from({ length: 48 }, (_, i) => row(i)), acceptedPledge: true, opId: newOpId('forty-eight') });
+    expect(initial.body).toMatchObject({ ok: true, createdCount: 48 });
+    const raced = await Promise.all([48, 49].map(i => http().post('/api/v1/beneficiaries').set('Cookie', associationCookie).send({ ...row(i), opId: newOpId('last-slot') })));
+    expect(raced.map(response => response.status).sort()).toEqual([201, 409]);
+    expect(await prisma.beneficiary.count({ where: { associationId: fx.associationAId } })).toBe(50);
+    const blocked = await http().post('/api/v1/beneficiaries/import').set('Cookie', associationCookie).send({ rows: [row(50), row(51)], acceptedPledge: true, opId: newOpId('overflow-batch') });
+    expect(blocked.status).toBe(409);
+    expect(await prisma.beneficiary.count({ where: { associationId: fx.associationAId } })).toBe(50);
+    const overflowWorkbook = new ExcelJS.Workbook();
+    const overflowSheet = overflowWorkbook.addWorksheet('مستفيدون');
+    overflowSheet.addRow(SIMPLE_BENEFICIARY_IMPORT_FIELDS);
+    const overflowValues: Record<string, unknown> = { ...row(50), socialSecurity: 'نعم', refrigerator: 'نعم', oven: 'لا', washingMachine: 'لا' };
+    overflowSheet.addRow(SIMPLE_BENEFICIARY_IMPORT_FIELDS.map(field => overflowValues[field] ?? '') as ExcelJS.CellValue[]);
+    const overflowPreview = await http().post('/api/v1/beneficiaries/import/preview-xlsx').set('Cookie', associationCookie).attach('file', Buffer.from(await overflowWorkbook.xlsx.writeBuffer()), 'overflow.xlsx');
+    expect(overflowPreview.body.rows[0].valid).toBe(false);
+    expect(overflowPreview.body.rows[0].error).toContain('المتاح');
+    expect((await http().patch(`/api/v1/associations/${fx.associationAId}/beneficiary-limit`).set('Cookie', associationCookie).send({ limit: 52, opId: newOpId('tenant-change') })).status).toBe(403);
+    expect((await http().patch(`/api/v1/associations/${fx.associationAId}/beneficiary-limit`).set('Cookie', adminCookie).send({ limit: 52, opId: newOpId('not-owner') })).status).toBe(403);
+    // The owner promotion is confined to this disposable test database.
+    await prisma.account.update({ where: { id: adminAccountId }, data: { publicCode: 'ADM-000001', adminFullAccess: true } });
+    const approved = await http().patch(`/api/v1/associations/${fx.associationAId}/beneficiary-limit`).set('Cookie', adminCookie).send({ limit: 52, opId: newOpId('owner-approval') });
+    expect(approved.status).toBe(200);
+    expect(approved.body).toMatchObject({ ok: true, limit: 52 });
+    const expandedTemplate = await http().get('/api/v1/beneficiaries/import/template.xlsx').set('Cookie', associationCookie).buffer(true).parse((res, callback) => { const chunks: Buffer[] = []; res.on('data', chunk => chunks.push(chunk)); res.on('end', () => callback(null, Buffer.concat(chunks))); });
+    const expandedWorkbook = new ExcelJS.Workbook();
+    await expandedWorkbook.xlsx.load(expandedTemplate.body);
+    expect(expandedWorkbook.worksheets[0].getCell('A2').dataValidation.formulae).toEqual([1, 52]);
+    expect((await prisma.association.findUniqueOrThrow({ where: { id: fx.associationBId } })).beneficiaryLimit).toBe(50);
+    const extra = await http().post('/api/v1/beneficiaries/import').set('Cookie', associationCookie).send({ rows: [row(50), row(51)], acceptedPledge: true, opId: newOpId('approved-extra') });
+    expect(extra.body).toMatchObject({ ok: true, createdCount: 2 });
+    expect((await http().get('/api/v1/beneficiaries/intake-status').set('Cookie', associationCookie)).body).toMatchObject({ limit: 52, count: 52, remaining: 0 });
+    expect((await http().get('/api/v1/dashboard/association').set('Cookie', associationCookie)).body.counts.beneficiaryLimit).toBe(52);
+    expect((await http().patch(`/api/v1/associations/${fx.associationAId}/beneficiary-limit`).set('Cookie', adminCookie).send({ limit: 51, opId: newOpId('unsafe-lowering') })).status).toBe(409);
+    const cannotSelfRaise = await http().post('/api/v1/beneficiaries').set('Cookie', associationCookie).send({ ...row(52), beneficiaryLimit: 1000, opId: newOpId('forged-limit') });
+    expect(cannotSelfRaise.status).toBe(400);
+    expect(await prisma.auditLog.count({ where: { action: 'ASSOCIATION_BENEFICIARY_LIMIT_UPDATED', associationId: fx.associationAId } })).toBe(1);
   });
 });

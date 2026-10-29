@@ -9,13 +9,14 @@ import {
   getReferenceData,
   getFinalCovenantUrl,
   issuePartyOneSigningSession,
+  newOpId,
   type AssociationSummary,
   type AbanmiReport,
   type Paginated,
   type ReferenceData,
 } from '../../lib/api';
 import { useRoleGuard } from '../../lib/use-role-guard';
-import { canAdmin } from '../../lib/admin-access';
+import { canAdmin, isAdminOwner } from '../../lib/admin-access';
 import { AppShell } from '../../components/AppShell';
 import { ConfirmDialog, type ConfirmDialogProps } from '../../components/ConfirmDialog';
 import { initialQueryParam } from '../../lib/query';
@@ -334,6 +335,8 @@ export default function AdminAssociationsPage() {
           </div>
           <p>حالة الحساب: {profile.association.account?.status === 'ACTIVE' ? 'نشط' : 'غير نشط'} · آخر دخول: {profile.association.account?.lastLoginAt ? new Date(profile.association.account.lastLoginAt).toLocaleString('ar-SA') : 'لم يسجّل دخولًا'}</p>
           <p>الميثاق: {profile.association.covenant ? covenantStatus(profile.association.covenant.status) : 'لا يوجد ميثاق'}</p>
+          <p>الحد المسموح للأسر: <strong>{profile.association.beneficiaryLimit ?? 50}</strong></p>
+          {isAdminOwner(user) && <BeneficiaryLimitControl key={profile.association.id} association={profile.association} onChanged={(limit) => { setProfile(current => current ? { ...current, association: { ...current.association, beneficiaryLimit: limit } } : current); void load(); }} />}
           {canAdmin(user, 'reports.read') && <Link href={`/admin/reports?associationId=${profile.association.id}`} style={{ ...primaryButtonStyle, textDecoration: 'none', display: 'inline-block' }}>عرض التقرير الكامل</Link>}
         </>}
       </section></div>}
@@ -347,6 +350,33 @@ function covenantStatus(status: string) {
   if (status === 'SIGNED') return 'مكتمل ومعتمد';
   if (status === 'DRAFT') return 'مسودة';
   return status === 'CANCELLED' ? 'ملغى' : 'غير نشط';
+}
+
+function BeneficiaryLimitControl({ association, onChanged }: { association: AssociationSummary; onChanged: (limit: number) => void }) {
+  const currentLimit = association.beneficiaryLimit ?? 50;
+  const [value, setValue] = useState(String(currentLimit));
+  const [opId, setOpId] = useState(newOpId);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => setValue(String(currentLimit)), [currentLimit]);
+  async function save() {
+    const limit = Number(value);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) { setError('أدخل عددًا صحيحًا من 1 إلى 1000.'); return; }
+    setBusy(true); setError('');
+    try {
+      await apiFetch(`/associations/${association.id}/beneficiary-limit`, { method: 'PATCH', body: JSON.stringify({ limit, opId }) });
+      onChanged(limit);
+    } catch (e) { setError(e instanceof ApiClientError ? e.message : 'تعذر تعديل حد الأسر.'); }
+    finally { setBusy(false); }
+  }
+  return <section style={{ ...cardStyle, marginBottom: 16 }} aria-label="إدارة الحد المسموح للأسر">
+    <label style={labelStyle}>تعديل حد الأسر لهذه الجمعية — للمالك فقط
+      <input style={inputStyle} type="number" min={1} max={1000} value={value} onChange={e => { setValue(e.target.value); setOpId(newOpId()); }} />
+    </label>
+    <p style={mutedStyle}>المسجل {association.beneficiariesCount} أسرة. يطبق التغيير على هذه الجمعية فقط ويُسجل في سجل العمليات.</p>
+    <button style={secondaryButtonStyle} type="button" disabled={busy || Number(value) === currentLimit} onClick={() => void save()}>حفظ حد الأسر</button>
+    {error && <p role="alert" style={errorStyle}>{error}</p>}
+  </section>;
 }
 
 function formatDate(value: string) { return new Intl.DateTimeFormat('ar-SA', { dateStyle: 'medium' }).format(new Date(value)); }

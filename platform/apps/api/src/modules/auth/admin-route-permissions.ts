@@ -81,6 +81,7 @@ export const ADMIN_ROUTE_POLICIES: Readonly<Record<string, AdminPermission | 'se
   'POST /association-applications/:id/selection-decision/resend': 'applications.select',
   'POST /association-applications/selection/commit': 'applications.select',
   'GET /associations': 'associations.read', 'GET /associations/:id': 'associations.read',
+  'PATCH /associations/:id/beneficiary-limit': 'owner',
   'POST /associations': 'associations.manage', 'PATCH /associations/:id': 'associations.manage',
   'GET /beneficiaries': 'beneficiaries.read', 'GET /beneficiaries/:id': 'beneficiaries.read',
   'GET /beneficiaries/import/template.xlsx': 'beneficiaries.read',

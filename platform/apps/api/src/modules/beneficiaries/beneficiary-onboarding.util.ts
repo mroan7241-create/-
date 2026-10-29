@@ -1,8 +1,8 @@
 import { ApiError } from '../../common/api-error';
 
-export function validateNeedPriority(value: number | undefined | null): number {
-  if (!Number.isInteger(value) || value! < 1 || value! > 50) {
-    throw new ApiError('BENEFICIARY_PRIORITY_REQUIRED', 'أدخل ترتيب الحاجة من 1 إلى 50؛ الرقم 1 للأسرة الأشد حاجة', 400);
+export function validateNeedPriority(value: number | undefined | null, maximum = 1000): number {
+  if (!Number.isInteger(value) || value! < 1 || value! > maximum) {
+    throw new ApiError('BENEFICIARY_PRIORITY_REQUIRED', `أدخل ترتيب الحاجة من 1 إلى ${maximum}؛ الرقم 1 للأسرة الأشد حاجة`, 400);
   }
   return value!;
 }

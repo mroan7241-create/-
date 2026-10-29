@@ -312,6 +312,7 @@ export interface ReviewResult {
 }
 
 export interface AssociationSummary {
+  beneficiaryLimit?: number;
   id: string;
   publicCode: string;
   name: string;

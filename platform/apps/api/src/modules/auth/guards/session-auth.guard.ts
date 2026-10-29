@@ -158,6 +158,7 @@ export class SessionAuthGuard implements CanActivate {
         covenantRequired,
         covenantStatus,
         associationRegion: account.association?.region,
+          beneficiaryLimit: account.association?.beneficiaryLimit,
         associationCity: account.association?.city,
       } } : {}),
     };

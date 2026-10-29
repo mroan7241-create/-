@@ -1,4 +1,4 @@
-import { IsIn, IsOptional, IsString } from 'class-validator';
+import { IsIn, IsOptional, IsString, IsInt, Min, Max } from 'class-validator';
 import { AssociationStatus } from '@alzad/db';
 import { PaginationQueryDto } from '../../../common/validation/pagination-query.dto';
 import { ASSOCIATION_SORT_FIELDS, type AssociationSortField } from '../association-sort.util';
@@ -30,6 +30,13 @@ export class CreateAssociationDto {
   @IsString()
   temporaryPassword!: string;
 
+  @IsString()
+  opId!: string;
+}
+
+export class BeneficiaryLimitDto {
+  @IsInt() @Min(1) @Max(1000)
+  limit!: number;
   @IsString()
   opId!: string;
 }

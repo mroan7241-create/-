@@ -115,6 +115,7 @@ export default function AssociationBeneficiariesPage() {
   const [editing, setEditing] = useState<BeneficiaryDetail | 'new' | null>(null);
   const [testBatchIds, setTestBatchIds] = useState<string[]>([]);
   const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [intake, setIntake] = useState<{ limit: number; count: number; remaining: number } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -124,7 +125,9 @@ export default function AssociationBeneficiariesPage() {
     if (locationStatus) params.set('locationStatus', locationStatus);
     if (reviewStatus) params.set('reviewStatus', reviewStatus);
     try {
-      setData(await apiFetch<Paginated<BeneficiarySummary>>(`/beneficiaries?${params.toString()}`));
+      const [list, status] = await Promise.all([apiFetch<Paginated<BeneficiarySummary>>(`/beneficiaries?${params.toString()}`), apiFetch<{ limit: number; count: number; remaining: number }>('/beneficiaries/intake-status')]);
+      setData(list); setIntake(status);
+      return status;
     } catch (err) {
       setListError(err instanceof ApiClientError ? err.message : 'تعذّر تحميل قائمة المستفيدين.');
     } finally {
@@ -159,12 +162,12 @@ export default function AssociationBeneficiariesPage() {
         <div>
           <h1 style={{ color: 'var(--zad-800)', marginBottom: 4 }}>المستفيدون</h1>
           <p style={mutedStyle}>
-            أضيفوا 50 أسرة بترتيب الحاجة؛ 1 للأشد حاجة. عند طلب ثلاثة أجهزة يلزم توضيح السبب. الأسر والاحتياجات المرفوعة ستخضع للدراسة.
+            أضيفوا {intake?.limit ?? 50} أسرة بترتيب الحاجة؛ 1 للأشد حاجة. عند طلب ثلاثة أجهزة يلزم توضيح السبب. الأسر والاحتياجات المرفوعة ستخضع للدراسة.
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <BulkImportButton isAdmin={false} onImported={(ids) => { if (user.name === 'جمعية تجربة') setTestBatchIds(ids); void load(); }} />
-          <button type="button" style={primaryButtonStyle} onClick={() => setEditing('new')}>
+          <BulkImportButton isAdmin={false} limit={intake?.limit ?? 50} disabled={!intake || intake.remaining === 0} onImported={(ids) => { if (user.name === 'جمعية تجربة') setTestBatchIds(ids); void load(); }} />
+          <button type="button" style={primaryButtonStyle} disabled={!intake || intake.remaining === 0} onClick={() => setEditing('new')}>
             ＋ إضافة مستفيد
           </button>
         </div>
@@ -231,6 +234,7 @@ export default function AssociationBeneficiariesPage() {
       </div>
 
       {listError && <p style={{ ...errorStyle, marginTop: 12 }}>{listError}</p>}
+      {intake && <p style={mutedStyle}>المسجل: {intake.count} من {intake.limit} أسرة · المتاح: {intake.remaining}{intake.remaining === 0 ? ' — اكتمل الحد المسموح؛ أي زيادة تحتاج إذن إدارة المشروع.' : ''}</p>}
       {notice && <p style={{ ...successStyle, marginTop: 12 }}>{notice}</p>}
       {user.name === 'جمعية تجربة' && (testBatchIds.length > 0 || (data?.total ?? 0) > 0) && <button type="button" style={secondaryButtonStyle} disabled={cleanupBusy} onClick={async () => {
         if (!window.confirm('حذف بيانات دفعة الاختبار الوهمية فقط؟ لا يشمل ذلك الميثاق أو البيانات السابقة.')) return;
@@ -309,11 +313,12 @@ export default function AssociationBeneficiariesPage() {
           reference={reference}
           socialStatuses={socialStatuses}
           defaultRegion={user.associationRegion ?? ''}
+          limit={intake?.limit ?? 50}
           onClose={() => setEditing(null)}
           onSaved={async (message, addNext) => {
-            if (!addNext) setEditing(null);
             setNotice(message);
-            await load();
+            const status = await load();
+            if (!addNext || status?.remaining === 0) setEditing(null);
           }}
         />
       )}
@@ -326,6 +331,7 @@ function BeneficiaryForm({
   reference,
   socialStatuses,
   defaultRegion,
+  limit,
   onClose,
   onSaved,
 }: {
@@ -333,6 +339,7 @@ function BeneficiaryForm({
   reference: ReferenceData | null;
   socialStatuses: string[];
   defaultRegion: string;
+  limit: number;
   onClose: () => void;
   onSaved: (message: string, addNext?: boolean) => Promise<void>;
 }) {
@@ -396,8 +403,8 @@ function BeneficiaryForm({
       return;
     }
     const needPriority = Number(form.needPriority);
-    if ((isNew || form.needPriority !== '') && (!Number.isInteger(needPriority) || needPriority < 1 || needPriority > 50)) {
-      setError('أدخل ترتيب الحاجة من 1 إلى 50؛ الرقم 1 للأسرة الأشد حاجة.');
+    if ((isNew || form.needPriority !== '') && (!Number.isInteger(needPriority) || needPriority < 1 || needPriority > limit)) {
+      setError(`أدخل ترتيب الحاجة من 1 إلى ${limit}؛ الرقم 1 للأسرة الأشد حاجة.`);
       return;
     }
     if (!locked && form.deviceTypes.length === 3 && !/[\p{L}\p{N}]/u.test(form.threeDeviceReason)) {
@@ -458,7 +465,7 @@ function BeneficiaryForm({
       await onSaved(result?.possibleDuplicate ? `${base} ⚠ ${result.possibleDuplicate.message}` : base, addNext);
       if (addNext) {
         setLastSaved(`تمت إضافة ${form.name}. يمكنك إدخال المستفيد التالي.`);
-        setForm({ ...EMPTY_FORM, region: form.region, city: form.city, district: form.district, needPriority: needPriority < 50 ? String(needPriority + 1) : '' });
+        setForm({ ...EMPTY_FORM, region: form.region, city: form.city, district: form.district, needPriority: needPriority < limit ? String(needPriority + 1) : '' });
         setOpId(newOpId());
       }
     } catch (err) {
@@ -520,7 +527,7 @@ function BeneficiaryForm({
           </label>
           <label style={labelStyle}>
             ترتيب الحاجة (1 للأشد حاجة)
-            <input style={inputStyle} type="number" min={1} max={50} step={1} disabled={locked} value={form.needPriority} onChange={(e) => set('needPriority', e.target.value)} />
+            <input style={inputStyle} type="number" min={1} max={limit} step={1} disabled={locked} value={form.needPriority} onChange={(e) => set('needPriority', e.target.value)} />
           </label>
           <label style={labelStyle}>
             المنطقة
@@ -697,7 +704,7 @@ function BeneficiaryForm({
         )}
 
         <h3 style={{ marginBottom: 6 }}>الاحتياجات المطلوبة</h3>
-        <p style={mutedStyle}>الأصل جهاز واحد حسب الاحتياج. الأسرة التي تحتاج جهازين تكون أشد حاجة من الأسرة التي تحتاج جهازًا واحدًا.</p>
+        <p style={mutedStyle}>الأصل جهاز واحد لكل أسرة حسب الاحتياج. الأسرة التي تحتاج جهازين تكون أشد حاجة من الأسرة التي تحتاج جهازًا واحدًا.</p>
         {locked ? (
           <ul style={{ margin: 0, paddingInlineStart: 20 }}>
             {existing!.needs.map((n) => (

@@ -289,7 +289,7 @@ export class BeneficiariesService {
       if (!association) throw new ApiError('BENEFICIARY_ASSOCIATION_NOT_FOUND', 'اختر جمعية صحيحة', 400);
       await lockParticipationForOperationalWrite(tx, associationId);
 
-      await this.assertAvailablePriorities(tx, associationId, [fields.needPriority]);
+      await this.assertAvailablePriorities(tx, associationId, [fields.needPriority], undefined, 1);
 
       // قفل استشاري لكل (جمعية، جوال) **قبل** فحص التكرار وقبل الكتابة —
       // يغلق سباق TOCTOU الذي كان يسمح لطلبين متزامنين بالمرور معًا.
@@ -393,7 +393,7 @@ export class BeneficiariesService {
         if (!association) throw new ApiError('BENEFICIARY_ASSOCIATION_NOT_FOUND', 'اختر جمعية صحيحة', 400);
         await lockParticipationForOperationalWrite(tx, associationId);
 
-        await this.assertAvailablePriorities(tx, associationId, ok.map(row => row.fields.needPriority));
+        await this.assertAvailablePriorities(tx, associationId, ok.map(row => row.fields.needPriority), undefined, ok.length);
 
         const allPhones = ok.flatMap((r) => [r.fields.phone, r.fields.secondaryPhone]);
         await acquirePhoneLocks(tx, associationId, allPhones);
@@ -532,12 +532,14 @@ export class BeneficiariesService {
     const validIndexes = parsedRows.flatMap((row, i) => row ? [i] : []);
     const { errors } = await this.validateImportRows(validIndexes.map(i => parsedRows[i]!));
     const errorByRow = new Map(errors.map((e) => [validIndexes[e.row - 1], e.message]));
+    const intake = ctx.role === AccountRole.ASSOCIATION ? await this.intakeStatus(ctx) : null;
+    const capacityError = intake && rawRows.length > intake.remaining ? `الملف يحتوي ${rawRows.length} أسرة، والمتاح للجمعية ${intake.remaining} من حدها المعتمد ${intake.limit}. لا يمكن استيراد الدفعة` : undefined;
 
     return {
       ok: true as const,
       headers,
       rows: rawRows.map((r, i) => {
-        const error = conversionErrors.get(i) ?? errorByRow.get(i);
+        const error = conversionErrors.get(i) ?? errorByRow.get(i) ?? capacityError ?? (intake && parsedRows[i]?.needPriority! > intake.limit ? `ترتيب الحاجة يتجاوز الحد المعتمد ${intake.limit}` : undefined);
         return {
           row: r.index,
           raw: r.raw,
@@ -1324,13 +1326,31 @@ export class BeneficiariesService {
   }
 
   /** جمعية الكتابة: من AuthContext لفاعل ASSOCIATION، ومن الطلب لِADMIN. */
-  private async assertAvailablePriorities(tx: Prisma.TransactionClient, associationId: string, priorities: (number | null)[], excludeId?: string) {
+  async intakeStatus(ctx: AuthContext) {
+    if (ctx.role !== AccountRole.ASSOCIATION || !ctx.associationId) throw authForbidden();
+    const [association, count] = await Promise.all([
+      prisma.association.findUnique({ where: { id: ctx.associationId }, select: { beneficiaryLimit: true } }),
+      prisma.beneficiary.count({ where: { associationId: ctx.associationId, archivedAt: null } }),
+    ]);
+    if (!association) throw beneficiaryNotFound();
+    return { limit: association.beneficiaryLimit, count, remaining: Math.max(0, association.beneficiaryLimit - count) };
+  }
+
+  private async assertAvailablePriorities(tx: Prisma.TransactionClient, associationId: string, priorities: (number | null)[], excludeId?: string, additional = 0) {
     // One tenant-scoped lock, before phone/entity locks in every write path.
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`beneficiary-priority:${associationId}`}, 0))`;
+    const associations = await tx.$queryRaw<{ beneficiary_limit: number }[]>`SELECT beneficiary_limit FROM associations WHERE id=${associationId}::uuid FOR UPDATE`;
+    if (!associations[0]) throw new ApiError('BENEFICIARY_ASSOCIATION_NOT_FOUND', 'الجمعية غير موجودة', 404);
+    const limit = associations[0].beneficiary_limit;
+    if (additional > 0) {
+      const count = await tx.beneficiary.count({ where: { associationId, archivedAt: null } });
+      if (count + additional > limit) throw new ApiError('BENEFICIARY_LIMIT_REACHED', `الحد المسموح لهذه الجمعية ${limit} أسرة؛ المسجل ${count} والمتاح ${Math.max(0, limit - count)}. يلزم إذن الإدارة لزيادة العدد`, 409);
+    }
     const values = priorities.filter((value): value is number => value !== null);
+    for (const value of values) validateNeedPriority(value, limit);
     if (!values.length) return;
     const conflict = await tx.beneficiary.findFirst({ where: { associationId, archivedAt: null, needPriority: { in: values }, ...(excludeId ? { id: { not: excludeId } } : {}) }, select: { needPriority: true } });
-    if (conflict) throw new ApiError('BENEFICIARY_PRIORITY_DUPLICATE', 'ترتيب الحاجة مستخدم لأسرة أخرى؛ اختر ترتيبًا غير مكرر من 1 إلى 50', 409);
+    if (conflict) throw new ApiError('BENEFICIARY_PRIORITY_DUPLICATE', `ترتيب الحاجة مستخدم لأسرة أخرى؛ اختر ترتيبًا غير مكرر من 1 إلى ${limit}`, 409);
   }
 
   private resolveWriteAssociation(ctx: AuthContext, requested?: string): string {

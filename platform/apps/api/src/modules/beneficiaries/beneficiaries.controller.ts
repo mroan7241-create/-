@@ -39,6 +39,10 @@ import { PromoteReserveDto, ReplaceBeneficiaryDto, SetBeneficiaryListDto } from 
 export class BeneficiariesController {
   constructor(private readonly beneficiaries: BeneficiariesService) {}
 
+  @Get('intake-status')
+  @Roles(AccountRole.ASSOCIATION)
+  intakeStatus(@CurrentUser() ctx: AuthContext) { return this.beneficiaries.intakeStatus(ctx); }
+
   @Post('test-import/cleanup')
   @Roles(AccountRole.ASSOCIATION)
   cleanupTestImport(@CurrentUser() ctx: AuthContext, @Body() dto: CleanupTestImportDto) {
@@ -76,7 +80,8 @@ export class BeneficiariesController {
     const rows = await prisma.referenceValue.findMany({ where: { active: true, type: { in: ['REGION', 'CITY', 'SOCIAL_STATUS'] } }, select: { id: true, type: true, value: true, parentId: true }, orderBy: { sortOrder: 'asc' } });
     const region = ctx.meSnapshot?.associationRegion;
     const regionId = rows.find(row => row.type === 'REGION' && row.value === region)?.id;
-    const buffer = await generateXlsxTemplate({ region: regionId ? region : undefined, regions: rows.filter(row => row.type === 'REGION').map(row => row.value), cities: rows.filter(row => row.type === 'CITY' && (!regionId || row.parentId === regionId)).map(row => row.value), socialStatuses: rows.filter(row => row.type === 'SOCIAL_STATUS').map(row => row.value) });
+    const intake = ctx.role === AccountRole.ASSOCIATION ? await this.beneficiaries.intakeStatus(ctx) : null;
+    const buffer = await generateXlsxTemplate({ limit: intake?.limit, region: regionId ? region : undefined, regions: rows.filter(row => row.type === 'REGION').map(row => row.value), cities: rows.filter(row => row.type === 'CITY' && (!regionId || row.parentId === regionId)).map(row => row.value), socialStatuses: rows.filter(row => row.type === 'SOCIAL_STATUS').map(row => row.value) });
     return new StreamableFile(buffer, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       disposition: 'attachment; filename="beneficiary-import-template.xlsx"',

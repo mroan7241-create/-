@@ -54,6 +54,29 @@ export class AssociationsService {
     private readonly audit: AuditService,
   ) {}
 
+  async updateBeneficiaryLimit(ctx: AuthContext, id: string, limit: number, opId: string) {
+    if (ctx.role !== AccountRole.ADMIN) throw authForbidden();
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000 || !opId?.trim()) throw new ApiError('BENEFICIARY_LIMIT_INVALID', 'حدد عددًا صحيحًا من 1 إلى 1000', 400);
+    return prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM accounts WHERE id=${ctx.accountId}::uuid FOR SHARE`;
+      const owner = await tx.account.findUnique({ where: { id: ctx.accountId }, select: { publicCode: true, role: true, status: true, archivedAt: true, adminFullAccess: true } });
+      if (!owner || owner.publicCode !== 'ADM-000001' || owner.role !== 'ADMIN' || owner.status !== 'ACTIVE' || owner.archivedAt || !owner.adminFullAccess) throw authForbidden();
+      const claim = await this.idempotency.claim<{ ok: true; limit: number }>(tx, ctx.accountId, 'association-beneficiary-limit', opId, { id, limit });
+      if (!claim.claimed) return claim.existingResponse!;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`beneficiary-priority:${id}`}, 0))`;
+      const locked = await tx.$queryRaw<{ beneficiary_limit: number }[]>`SELECT beneficiary_limit FROM associations WHERE id=${id}::uuid FOR UPDATE`;
+      if (!locked[0]) throw new ApiError('ASSOCIATION_NOT_FOUND', 'الجمعية غير موجودة', 404);
+      const count = await tx.beneficiary.count({ where: { associationId: id, archivedAt: null } });
+      const ranked = await tx.beneficiary.findFirst({ where: { associationId: id, archivedAt: null, needPriority: { gt: limit } }, select: { id: true } });
+      if (limit < count || ranked) throw new ApiError('BENEFICIARY_LIMIT_BELOW_EXISTING', 'لا يمكن خفض الحد دون عدد الأسر المسجلة أو ترتيبها الحالي', 409);
+      await tx.association.update({ where: { id }, data: { beneficiaryLimit: limit } });
+      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, associationId: id, action: 'ASSOCIATION_BENEFICIARY_LIMIT_UPDATED', entityType: 'associations', entityId: id, metadata: { before: locked[0].beneficiary_limit, after: limit, registeredCount: count } } });
+      const response = { ok: true as const, limit };
+      await this.idempotency.complete(tx, ctx.accountId, 'association-beneficiary-limit', opId, response);
+      return response;
+    });
+  }
+
   async listAssociations(
     params: PaginationParams & { search?: string; status?: AssociationStatus; sortBy?: AssociationSortField; sortDir?: 'asc' | 'desc' },
     ctx?: AuthContext,
@@ -402,6 +425,7 @@ async function resolveUpdatedPlace(
 }
 
 function mapAssociation(row: {
+  beneficiaryLimit?: number;
   id: string;
   publicCode: string;
   name: string;
@@ -414,6 +438,7 @@ function mapAssociation(row: {
   createdAt: Date;
 }) {
   return {
+    beneficiaryLimit: row.beneficiaryLimit ?? 50,
     id: row.id,
     publicCode: row.publicCode,
     name: row.name,
