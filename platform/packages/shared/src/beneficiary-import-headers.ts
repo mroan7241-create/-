@@ -1,23 +1,23 @@
 export const BENEFICIARY_IMPORT_HEADER_LABELS = {
-  needPriority: 'ترتيب الحاجة',
-  threeDeviceReason: 'مبرر طلب ثلاثة أجهزة',
-  name: 'الاسم',
-  region: 'المنطقة',
-  city: 'المدينة',
-  district: 'الحي',
-  phone: 'رقم الجوال',
-  familyCount: 'عدد أفراد الأسرة',
-  socialStatus: 'الحالة الاجتماعية',
+  needPriority: 'ترتيب الحاجة (1 = الأشد حاجة)',
+  threeDeviceReason: 'مبرر الحاجة إلى ثلاثة أجهزة (إلزامي عند طلبها)',
+  name: 'اسم المستفيد كاملًا',
+  region: 'منطقة المستفيد',
+  city: 'مدينة المستفيد',
+  district: 'حي المستفيد',
+  phone: 'رقم جوال المستفيد',
+  familyCount: 'عدد أفراد أسرة المستفيد (شامل المستفيد)',
+  socialStatus: 'الحالة الاجتماعية للمستفيد',
   deviceTypes: 'الأجهزة المطلوبة',
-  phone2: 'جوال إضافي',
-  socialSecurity: 'الضمان الاجتماعي',
-  income: 'الدخل',
-  notes: 'ملاحظات',
-  lat: 'خط العرض',
-  lng: 'خط الطول',
-  refrigerator: 'ثلاجة؟',
-  oven: 'فرن؟',
-  washingMachine: 'غسالة؟',
+  phone2: 'رقم جوال إضافي (اختياري)',
+  socialSecurity: 'هل يستفيد من الضمان الاجتماعي؟ (نعم/لا — اختياري)',
+  income: 'كم دخل المستفيد؟ (ريال — اختياري)',
+  notes: 'ملاحظات (اختياري)',
+  lat: 'موقع منزل المستفيد: خط العرض (اختياري)',
+  lng: 'موقع منزل المستفيد: خط الطول (اختياري)',
+  refrigerator: 'هل يحتاج إلى ثلاجة؟ (نعم/لا)',
+  oven: 'هل يحتاج إلى فرن؟ (نعم/لا)',
+  washingMachine: 'هل يحتاج إلى غسالة؟ (نعم/لا)',
 } as const;
 
 export type BeneficiaryImportField = keyof typeof BENEFICIARY_IMPORT_HEADER_LABELS;
@@ -36,6 +36,16 @@ const HEADER_TO_FIELD = new Map<string, BeneficiaryImportField>(
     [BENEFICIARY_IMPORT_HEADER_LABELS[field], field] as const,
   ]),
 );
+
+// Keep previously downloaded Arabic templates readable after clarifying the labels.
+const LEGACY_ARABIC_HEADERS: Partial<Record<BeneficiaryImportField, string>> = {
+  needPriority: 'ترتيب الحاجة', threeDeviceReason: 'مبرر طلب ثلاثة أجهزة',
+  name: 'الاسم', region: 'المنطقة', city: 'المدينة', district: 'الحي',
+  phone: 'رقم الجوال', familyCount: 'عدد أفراد الأسرة', socialStatus: 'الحالة الاجتماعية',
+  phone2: 'جوال إضافي', socialSecurity: 'الضمان الاجتماعي', income: 'الدخل', notes: 'ملاحظات',
+  lat: 'خط العرض', lng: 'خط الطول', refrigerator: 'ثلاجة؟', oven: 'فرن؟', washingMachine: 'غسالة؟',
+};
+for (const [field, label] of Object.entries(LEGACY_ARABIC_HEADERS)) HEADER_TO_FIELD.set(label, field as BeneficiaryImportField);
 
 export const DEVICE_IMPORT_FIELDS = ['refrigerator', 'oven', 'washingMachine'] as const;
 export const SIMPLE_BENEFICIARY_IMPORT_FIELDS: BeneficiaryImportField[] = [

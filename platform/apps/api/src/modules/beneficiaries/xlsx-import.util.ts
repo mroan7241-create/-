@@ -87,9 +87,9 @@ export async function parseXlsxBeneficiaryRows(buffer: Buffer): Promise<{ header
       const cell = row.getCell(i + 1);
       const value = cellToString(cell.value);
       raw[header] = value;
-      if (header !== 'region' && value.trim() !== '') hasContent = true;
+      if (header !== 'region' && header !== 'needPriority' && value.trim() !== '') hasContent = true;
     });
-    if (!hasContent) continue; // صف فارغ تمامًا — يُتجاهَل بصمت (نفس سلوك القديم).
+    if (!hasContent) continue; // Region and priority are prefilled guidance, not beneficiary records.
     rows.push({ index: rowNumber, raw });
   }
 
@@ -109,11 +109,17 @@ export async function generateXlsxTemplate(options: { limit?: number; region?: s
   const column = (field: typeof SIMPLE_BENEFICIARY_IMPORT_FIELDS[number]) => SIMPLE_BENEFICIARY_IMPORT_FIELDS.indexOf(field) + 1;
   sheet.autoFilter = { from: 'A1', to: 'R1' };
   sheet.columns.forEach((col) => { col.width = 18; });
-  sheet.getRow(1).height = 36;
+  sheet.getRow(1).height = 70;
   sheet.getRow(1).alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
   sheet.getColumn(column('name')).width = 30;
   sheet.getColumn(column('threeDeviceReason')).width = 48;
-  sheet.getColumn(column('needPriority')).width = 16;
+  sheet.getColumn(column('needPriority')).width = 26;
+  sheet.getColumn(column('familyCount')).width = 26;
+  sheet.getColumn(column('socialStatus')).width = 25;
+  for (const field of ['refrigerator', 'oven', 'washingMachine'] as const) sheet.getColumn(column(field)).width = 24;
+  for (const field of ['phone2', 'socialSecurity', 'income', 'lat', 'lng'] as const) sheet.getColumn(column(field)).width = 28;
+  sheet.getColumn(column('needPriority')).numFmt = '[=1]0" — الأشد حاجة";0';
+  for (const field of ['phone2', 'socialSecurity', 'income', 'notes', 'lat', 'lng'] as const) sheet.getCell(1, column(field)).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF6B6064' } };
   for (const field of ['phone', 'phone2'] as const) sheet.getColumn(column(field)).numFmt = '@';
   const lists = workbook.addWorksheet('قوائم');
   lists.state = 'veryHidden';
@@ -124,6 +130,10 @@ export async function generateXlsxTemplate(options: { limit?: number; region?: s
     if (values.length) workbook.definedNames.add(`'قوائم'!$${String.fromCharCode(65 + index)}$1:$${String.fromCharCode(65 + index)}$${values.length}`, listNames[index]);
   });
   for (let row = 2; row <= limit + 1; row++) {
+    sheet.getRow(row).height = 28;
+    sheet.getRow(row).alignment = { horizontal: 'right', vertical: 'middle' };
+    sheet.getCell(row, column('needPriority')).value = row - 1;
+    sheet.getCell(row, column('needPriority')).font = { color: { argb: 'FF70142D' }, bold: true };
     if (options.region) sheet.getCell(row, column('region')).value = options.region;
     sheet.getCell(row, column('needPriority')).dataValidation = { type: 'whole', operator: 'between', allowBlank: true, formulae: [1, limit], showErrorMessage: true, error: `ترتيب الحاجة من 1 إلى ${limit} دون تكرار؛ 1 للأشد حاجة.` };
     for (const [field, listIndex] of [['region', 0], ['city', 1], ['socialStatus', 2]] as const) if (validationLists[listIndex].length) sheet.getCell(row, column(field)).dataValidation = { type: 'list', allowBlank: true, formulae: [listNames[listIndex]], showErrorMessage: true, errorTitle: 'قيمة غير معتمدة', error: 'اختر من القائمة.' };
@@ -139,11 +149,14 @@ export async function generateXlsxTemplate(options: { limit?: number; region?: s
   instructions.views = [{ rightToLeft: true }];
   instructions.addRow(['طريقة الاستخدام']);
   instructions.addRow(['١. لا تعدّل أسماء الأعمدة في الصف الأول.']);
-  instructions.addRow([`٢. الحد المسموح ${limit} أسرة بصف واحد لكل أسرة. ترتيب الحاجة من 1 إلى ${limit} دون تكرار: 1 للأشد حاجة ثم 2 وهكذا. للأجهزة اختر نعم للمطلوب، ولا أو فارغ لغير المطلوب؛ يجب اختيار جهاز واحد على الأقل.`]);
+  instructions.addRow([`٢. الحد المسموح ${limit} أسرة بصف واحد لكل أسرة. ترتيب الحاجة معبأ من 1 إلى ${limit}: ضع الأسرة الأشد حاجة عند 1، والتي تليها عند 2 وهكذا. يمكن تعديل أرقام الترتيب دون تكرار. الصفوف التي فيها ترتيب ومنطقة فقط لا تُستورد.`]);
   instructions.addRow([options.region ? '٣. المنطقة معبأة من حساب الجمعية؛ اختر المدينة التابعة لها ثم اكتب الحي. الموقع الدقيق اختياري.' : '٣. اختر منطقة جمعيتكم والمدينة التابعة لها من القوائم، ثم اكتب الحي. الموقع الدقيق اختياري.']);
   instructions.addRow(['٤. الأصل جهاز واحد لكل أسرة حسب الاحتياج الفعلي. الأسرة التي تحتاج جهازين تكون أشد حاجة من الأسرة التي تحتاج جهازًا واحدًا. عند اختيار ثلاثة أجهزة يجب كتابة مبرر يشرح حاجة الأسرة إليها؛ يُرفض الصف دونه.']);
   instructions.addRow(['٥. اكتب الجوال كنص مثل 0500000001. عدد الأسرة شامل المستفيد. الأعمدة من جوال إضافي وما بعدها اختيارية.']);
   instructions.addRow(['٦. ارفع الملف، وراجع جميع الصفوف في المعاينة ثم أكد الاستيراد. عند وجود خطأ لا تُحفظ الدفعة حتى تصحيحه. الأسر والاحتياجات المرفوعة ستخضع للدراسة.']);
+  instructions.addRow(['٧. اسم المستفيد كاملًا هو اسم الشخص المسجل للأسرة، وليس اسم الجمعية. اكتب مدينة المستفيد وحيه ورقم جواله وعدد أفراد أسرته شاملًا المستفيد، واختر حالته الاجتماعية.']);
+  instructions.addRow(['٨. لاحتياجات الأجهزة اختر نعم للمطلوب، ولا أو فارغًا لغير المطلوب، مع اختيار جهاز واحد على الأقل. الضمان الاجتماعي: نعم للمستفيد من الضمان ولا لغير المستفيد. الدخل بالريال. الأعمدة المعلّمة «اختياري» يمكن تركها فارغة، وترك الضمان فارغًا لا يثبت عدم الاستفادة منه.']);
+  instructions.addRow(['٩. خط العرض وخط الطول هما إحداثيات موقع منزل المستفيد. إن توفرا فاكتب الإحداثيين معًا، وإلا فاتركهما فارغين. موقع المنزل الدقيق اختياري ولا يمنع رفع الأسرة.']);
   instructions.getColumn(1).width = 90;
   instructions.getColumn(1).alignment = { horizontal: 'right', wrapText: true };
   instructions.eachRow(row => { row.height = Math.max(34, Math.ceil(String(row.getCell(1).value ?? '').length / 85) * 22 + 12); row.font = { name: 'Arial', size: 12 }; row.alignment = { horizontal: 'right', vertical: 'middle', wrapText: true }; });
