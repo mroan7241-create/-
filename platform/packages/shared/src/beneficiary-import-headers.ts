@@ -10,8 +10,8 @@ export const BENEFICIARY_IMPORT_HEADER_LABELS = {
   socialStatus: 'الحالة الاجتماعية للمستفيد',
   deviceTypes: 'الأجهزة المطلوبة',
   phone2: 'رقم جوال إضافي (اختياري)',
-  socialSecurity: 'هل يستفيد من الضمان الاجتماعي؟ (نعم/لا — اختياري)',
-  income: 'كم دخل المستفيد؟ (ريال — اختياري)',
+  socialSecurity: 'هل يستفيد من الضمان الاجتماعي؟ (نعم/لا)',
+  income: 'كم دخل المستفيد؟ (ريال)',
   notes: 'ملاحظات (اختياري)',
   lat: 'موقع منزل المستفيد: خط العرض (اختياري)',
   lng: 'موقع منزل المستفيد: خط الطول (اختياري)',
@@ -23,11 +23,12 @@ export const BENEFICIARY_IMPORT_HEADER_LABELS = {
 export type BeneficiaryImportField = keyof typeof BENEFICIARY_IMPORT_HEADER_LABELS;
 
 export const REQUIRED_BENEFICIARY_IMPORT_FIELDS: BeneficiaryImportField[] = [
-  'name', 'region', 'city', 'district', 'phone', 'familyCount', 'socialStatus', 'deviceTypes',
+  'name', 'region', 'city', 'district', 'phone', 'familyCount', 'socialStatus', 'deviceTypes', 'socialSecurity', 'income',
 ];
 
 export const ALL_BENEFICIARY_IMPORT_FIELDS: BeneficiaryImportField[] = [
-  ...REQUIRED_BENEFICIARY_IMPORT_FIELDS, 'phone2', 'socialSecurity', 'income', 'notes', 'lat', 'lng', 'needPriority', 'threeDeviceReason',
+  'name', 'region', 'city', 'district', 'phone', 'familyCount', 'socialStatus', 'deviceTypes',
+  'phone2', 'socialSecurity', 'income', 'notes', 'lat', 'lng', 'needPriority', 'threeDeviceReason',
 ];
 
 const HEADER_TO_FIELD = new Map<string, BeneficiaryImportField>(
@@ -46,10 +47,12 @@ const LEGACY_ARABIC_HEADERS: Partial<Record<BeneficiaryImportField, string>> = {
   lat: 'خط العرض', lng: 'خط الطول', refrigerator: 'ثلاجة؟', oven: 'فرن؟', washingMachine: 'غسالة؟',
 };
 for (const [field, label] of Object.entries(LEGACY_ARABIC_HEADERS)) HEADER_TO_FIELD.set(label, field as BeneficiaryImportField);
+HEADER_TO_FIELD.set('هل يستفيد من الضمان الاجتماعي؟ (نعم/لا — اختياري)', 'socialSecurity');
+HEADER_TO_FIELD.set('كم دخل المستفيد؟ (ريال — اختياري)', 'income');
 
 export const DEVICE_IMPORT_FIELDS = ['refrigerator', 'oven', 'washingMachine'] as const;
 export const SIMPLE_BENEFICIARY_IMPORT_FIELDS: BeneficiaryImportField[] = [
-  'needPriority', ...REQUIRED_BENEFICIARY_IMPORT_FIELDS.filter(f => f !== 'deviceTypes'), ...DEVICE_IMPORT_FIELDS, 'threeDeviceReason',
+  'needPriority', 'name', 'region', 'city', 'district', 'phone', 'familyCount', 'socialStatus', ...DEVICE_IMPORT_FIELDS, 'threeDeviceReason',
   'phone2', 'socialSecurity', 'income', 'notes', 'lat', 'lng',
 ];
 export function missingBeneficiaryImportFields(headers: string[]): BeneficiaryImportField[] {
@@ -61,6 +64,8 @@ export function normalizeImportDigits(value: string): string {
 /** Old combined-device templates and new yes/no columns remain compatible. */
 export function normalizeBeneficiaryImportRaw(raw: Record<string, string>): Record<string, string> {
   const result = { ...raw };
+  if (!raw.socialSecurity?.trim()) throw new Error('أجب عن سؤال الاستفادة من الضمان الاجتماعي بنعم أو لا');
+  if (!raw.income?.trim()) throw new Error('أدخل دخل المستفيد بالريال، واكتب 0 إذا لم يكن له دخل');
   for (const field of ['phone', 'phone2', 'familyCount', 'income', 'lat', 'lng', 'needPriority']) if (result[field]) result[field] = normalizeImportDigits(result[field]);
   if (raw.socialSecurity?.trim()) {
     const value = normalizeImportDigits(raw.socialSecurity).trim().toLowerCase();

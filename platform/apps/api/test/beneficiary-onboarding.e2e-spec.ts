@@ -39,6 +39,31 @@ describe('50-family onboarding: Excel to association and admin', () => {
     expect(await prisma.beneficiary.count({ where: { associationId: fx.associationAId } })).toBe(0);
   });
 
+  it('requires explicit social-security and income answers for manual, JSON and Excel intake', async () => {
+    for (const missing of [{ socialSecurity: undefined }, { income: undefined }, { socialSecurity: null }, { income: null }]) {
+      const invalid = { ...row(1), ...missing };
+      const manual = await http().post('/api/v1/beneficiaries').set('Cookie', associationCookie).send({ ...invalid, opId: newOpId('required-finance') });
+      expect(manual.status).toBe(400);
+      const bulk = await http().post('/api/v1/beneficiaries/import').set('Cookie', associationCookie).send({ acceptedPledge: true, rows: [invalid], opId: newOpId('required-finance-bulk') });
+      expect(bulk.body).toMatchObject({ ok: false, errors: [expect.objectContaining({ row: 1 })] });
+    }
+    const { generateXlsxTemplate } = await import('../src/modules/beneficiaries/xlsx-import.util');
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await generateXlsxTemplate({ region: 'الرياض' }) as unknown as ExcelJS.Buffer);
+    const values = { ...row(1), income: 0, socialSecurity: 'لا', refrigerator: 'نعم', oven: 'لا', washingMachine: 'لا' } as Record<string, unknown>;
+    workbook.worksheets[0].getRow(2).values = SIMPLE_BENEFICIARY_IMPORT_FIELDS.map(field => values[field] ?? '') as ExcelJS.CellValue[];
+    for (const column of ['N2', 'O2']) {
+      const saved = workbook.worksheets[0].getCell(column).value;
+      workbook.worksheets[0].getCell(column).value = '';
+      const preview = await http().post('/api/v1/beneficiaries/import/preview-xlsx').set('Cookie', associationCookie).attach('file', Buffer.from(await workbook.xlsx.writeBuffer()), 'missing-finance.xlsx');
+      expect(preview.body.rows[0].valid).toBe(false);
+      workbook.worksheets[0].getCell(column).value = saved;
+    }
+    const valid = await http().post('/api/v1/beneficiaries/import/preview-xlsx').set('Cookie', associationCookie).attach('file', Buffer.from(await workbook.xlsx.writeBuffer()), 'explicit-zero.xlsx');
+    expect(valid.body.rows[0]).toMatchObject({ valid: true, parsed: { socialSecurity: false, income: 0 } });
+    expect(await prisma.beneficiary.count({ where: { associationId: fx.associationAId } })).toBe(0);
+  });
+
   it('imports all 50 real XLSX rows, preserves every field, isolates tenants and supports safe admin review', async () => {
     const template = await http().get('/api/v1/beneficiaries/import/template.xlsx').set('Cookie', associationCookie).buffer(true).parse((res, callback) => { const chunks: Buffer[] = []; res.on('data', chunk => chunks.push(chunk)); res.on('end', () => callback(null, Buffer.concat(chunks))); });
     expect(template.status).toBe(200);

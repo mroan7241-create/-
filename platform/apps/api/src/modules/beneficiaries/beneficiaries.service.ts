@@ -1376,9 +1376,15 @@ export class BeneficiariesService {
   }
 
   /** يطابق `buildBeneficiaryFieldValues_` — تحقق صيغة بحت، بلا أي قراءة/كتابة قرار. */
-  private async buildFieldValues(input: BeneficiaryWriteInput, existing: { region: string; city: string; maritalStatus: string; needPriority?: number | null; threeDeviceReason?: string | null } | null, references?: ImportReference[]) {
+  private async buildFieldValues(input: BeneficiaryWriteInput, existing: { region: string; city: string; maritalStatus: string; needPriority?: number | null; threeDeviceReason?: string | null; socialSecurity?: boolean; income?: Prisma.Decimal | null } | null, references?: ImportReference[]) {
     const phone = normalizeSaudiPhone(input.phone);
     const secondaryPhone = input.phone2 ? normalizeSaudiPhone(input.phone2) : null;
+    if ((!existing || input.socialSecurity !== undefined) && typeof input.socialSecurity !== 'boolean') {
+      throw new ApiError('BENEFICIARY_SOCIAL_SECURITY_REQUIRED', 'أجب عن سؤال الاستفادة من الضمان الاجتماعي بنعم أو لا', 400);
+    }
+    if ((!existing || input.income !== undefined) && (typeof input.income !== 'number' || !Number.isFinite(input.income))) {
+      throw new ApiError('BENEFICIARY_INCOME_REQUIRED', 'أدخل دخل المستفيد بالريال، واكتب 0 إذا لم يكن له دخل', 400);
+    }
 
     const region = String(input.region ?? '').trim(), city = String(input.city ?? '').trim();
     const regionRow = references?.find(row => row.type === 'REGION' && row.value === region && row.parentId === null);
@@ -1400,10 +1406,10 @@ export class BeneficiariesService {
       phone,
       secondaryPhone,
       familyCount: boundedInt(input.familyCount, BENEFICIARY_LIMITS.familyCountMin, BENEFICIARY_LIMITS.familyCountMax, 'عدد الأفراد'),
-      socialSecurity: input.socialSecurity === true,
+      socialSecurity: input.socialSecurity ?? existing?.socialSecurity ?? false,
       maritalStatus,
       income: new Prisma.Decimal(
-        boundedInt(input.income ?? 0, BENEFICIARY_LIMITS.incomeMin, BENEFICIARY_LIMITS.incomeMax, 'مبلغ الدخل'),
+        boundedInt(input.income ?? Number(existing?.income ?? 0), BENEFICIARY_LIMITS.incomeMin, BENEFICIARY_LIMITS.incomeMax, 'مبلغ الدخل'),
       ),
       notes: cleanText(input.notes, BENEFICIARY_LIMITS.notes) || null,
       needPriority: input.needPriority === undefined ? existing?.needPriority ?? null : validateNeedPriority(input.needPriority),

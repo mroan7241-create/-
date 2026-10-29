@@ -14,7 +14,7 @@ const references = [
 const rows: Omit<BeneficiaryWriteInput, 'opId'>[] = Array.from({ length: 50 }, (_, i) => ({
   name: `اختبار ${i}`, region: 'مكة المكرمة', city: 'جدة', district: 'اختبار', phone: `05000000${String(i).padStart(2, '0')}`,
   familyCount: 5, socialStatus: 'أرملة', deviceTypes: [DeviceType.REFRIGERATOR, DeviceType.WASHING_MACHINE],
-  needPriority: i + 1,
+  needPriority: i + 1, socialSecurity: false, income: 0,
 }));
 
 describe('beneficiary batch preparation and atomic import', () => {
@@ -73,9 +73,9 @@ describe('beneficiary batch preparation and atomic import', () => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('المستفيدون');
     sheet.addRow(SIMPLE_BENEFICIARY_IMPORT_FIELDS);
-    sheet.addRow([1, 'أول', 'مكة المكرمة', 'جدة', 'حي', '0500000001', 4, 'أرملة', 'ربما', 'لا', 'نعم']);
-    sheet.addRow([2, 'ثان', 'مكة المكرمة', 'جدة', 'حي', '0500000002', 4, 'أرملة', 'نعم', 'لا', 'نعم']);
-    sheet.addRow([3, 'ثالث', 'مكة المكرمة', 'مدينة خاطئة', 'حي', '0500000003', 4, 'أرملة', 'نعم', 'لا', 'نعم']);
+    sheet.addRow([1, 'أول', 'مكة المكرمة', 'جدة', 'حي', '0500000001', 4, 'أرملة', 'ربما', 'لا', 'نعم', '', '', 'لا', 0]);
+    sheet.addRow([2, 'ثان', 'مكة المكرمة', 'جدة', 'حي', '0500000002', 4, 'أرملة', 'نعم', 'لا', 'نعم', '', '', 'لا', 0]);
+    sheet.addRow([3, 'ثالث', 'مكة المكرمة', 'مدينة خاطئة', 'حي', '0500000003', 4, 'أرملة', 'نعم', 'لا', 'نعم', '', '', 'لا', 0]);
     const result = await new BeneficiariesService(null!, null!, null!, null!).previewXlsxImport(ctx, Buffer.from(await workbook.xlsx.writeBuffer()));
     expect(result.rows.map(row => [row.row, row.valid])).toEqual([[2, false], [3, true], [4, false]]);
     expect(result.rows[0].error).toContain('نعم أو لا');

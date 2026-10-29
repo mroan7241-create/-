@@ -119,7 +119,7 @@ export async function generateXlsxTemplate(options: { limit?: number; region?: s
   for (const field of ['refrigerator', 'oven', 'washingMachine'] as const) sheet.getColumn(column(field)).width = 24;
   for (const field of ['phone2', 'socialSecurity', 'income', 'lat', 'lng'] as const) sheet.getColumn(column(field)).width = 28;
   sheet.getColumn(column('needPriority')).numFmt = '[=1]0" — الأشد حاجة";0';
-  for (const field of ['phone2', 'socialSecurity', 'income', 'notes', 'lat', 'lng'] as const) sheet.getCell(1, column(field)).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF6B6064' } };
+  for (const field of ['phone2', 'notes', 'lat', 'lng'] as const) sheet.getCell(1, column(field)).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF6B6064' } };
   for (const field of ['phone', 'phone2'] as const) sheet.getColumn(column(field)).numFmt = '@';
   const lists = workbook.addWorksheet('قوائم');
   lists.state = 'veryHidden';
@@ -137,11 +137,12 @@ export async function generateXlsxTemplate(options: { limit?: number; region?: s
     if (options.region) sheet.getCell(row, column('region')).value = options.region;
     sheet.getCell(row, column('needPriority')).dataValidation = { type: 'whole', operator: 'between', allowBlank: true, formulae: [1, limit], showErrorMessage: true, error: `ترتيب الحاجة من 1 إلى ${limit} دون تكرار؛ 1 للأشد حاجة.` };
     for (const [field, listIndex] of [['region', 0], ['city', 1], ['socialStatus', 2]] as const) if (validationLists[listIndex].length) sheet.getCell(row, column(field)).dataValidation = { type: 'list', allowBlank: true, formulae: [listNames[listIndex]], showErrorMessage: true, errorTitle: 'قيمة غير معتمدة', error: 'اختر من القائمة.' };
-    for (const field of ['refrigerator', 'oven', 'washingMachine', 'socialSecurity'] as const) sheet.getCell(row, column(field)).dataValidation = { type: 'list', allowBlank: true, formulae: ['"نعم,لا"'], showErrorMessage: true, error: 'اختر نعم أو لا.' };
+    for (const field of ['refrigerator', 'oven', 'washingMachine', 'socialSecurity'] as const) sheet.getCell(row, column(field)).dataValidation = { type: 'list', allowBlank: field !== 'socialSecurity', formulae: ['"نعم,لا"'], showErrorMessage: true, error: 'اختر نعم أو لا.' };
+    sheet.getCell(row, column('income')).dataValidation = { type: 'whole', operator: 'between', allowBlank: false, formulae: [0, 1_000_000], showErrorMessage: true, error: 'أدخل الدخل بالريال، واكتب 0 إذا لم يكن للمستفيد دخل.' };
     sheet.getCell(row, column('familyCount')).dataValidation = { type: 'whole', operator: 'between', allowBlank: true, formulae: [1, 99], showErrorMessage: true, error: 'عدد أفراد الأسرة من 1 إلى 99.' };
     sheet.getCell(row, column('threeDeviceReason')).dataValidation = { type: 'custom', allowBlank: false, formulae: [`OR(COUNTIF(I${row}:K${row},"نعم")<3,LEN(TRIM(L${row}))>0)`], showErrorMessage: true, error: 'عند اختيار ثلاثة أجهزة اكتب مبرر الحاجة إليها.' };
   }
-  for (let col = column('phone2'); col <= SIMPLE_BENEFICIARY_IMPORT_FIELDS.length; col++) { sheet.getColumn(col).outlineLevel = 1; }
+  for (const field of ['phone2', 'notes', 'lat', 'lng'] as const) sheet.getColumn(column(field)).outlineLevel = 1;
   sheet.addConditionalFormatting({ ref: `L2:L${limit + 1}`, rules: [{ type: 'expression', priority: 1, formulae: ['AND(COUNTIF(I2:K2,"نعم")=3,LEN(TRIM(L2))=0)'], style: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFBE5E5' } } } }] });
   sheet.addConditionalFormatting({ ref: `A2:A${limit + 1}`, rules: [{ type: 'expression', priority: 2, formulae: [`AND(A2<>"",COUNTIF($A$2:$A$${limit + 1},A2)>1)`], style: { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFBE5E5' } } } }] });
   sheet.properties.outlineProperties = { summaryRight: false, summaryBelow: true };
@@ -152,10 +153,10 @@ export async function generateXlsxTemplate(options: { limit?: number; region?: s
   instructions.addRow([`٢. الحد المسموح ${limit} أسرة بصف واحد لكل أسرة. ترتيب الحاجة معبأ من 1 إلى ${limit}: ضع الأسرة الأشد حاجة عند 1، والتي تليها عند 2 وهكذا. يمكن تعديل أرقام الترتيب دون تكرار. الصفوف التي فيها ترتيب ومنطقة فقط لا تُستورد.`]);
   instructions.addRow([options.region ? '٣. المنطقة معبأة من حساب الجمعية؛ اختر المدينة التابعة لها ثم اكتب الحي. الموقع الدقيق اختياري.' : '٣. اختر منطقة جمعيتكم والمدينة التابعة لها من القوائم، ثم اكتب الحي. الموقع الدقيق اختياري.']);
   instructions.addRow(['٤. الأصل جهاز واحد لكل أسرة حسب الاحتياج الفعلي. الأسرة التي تحتاج جهازين تكون أشد حاجة من الأسرة التي تحتاج جهازًا واحدًا. عند اختيار ثلاثة أجهزة يجب كتابة مبرر يشرح حاجة الأسرة إليها؛ يُرفض الصف دونه.']);
-  instructions.addRow(['٥. اكتب الجوال كنص مثل 0500000001. عدد الأسرة شامل المستفيد. الأعمدة من جوال إضافي وما بعدها اختيارية.']);
+  instructions.addRow(['٥. اكتب الجوال كنص مثل 0500000001. عدد الأسرة شامل المستفيد. أجب عن سؤال الضمان بنعم أو لا، واكتب دخل المستفيد بالريال؛ إن لم يكن له دخل فاكتب 0.']);
   instructions.addRow(['٦. ارفع الملف، وراجع جميع الصفوف في المعاينة ثم أكد الاستيراد. عند وجود خطأ لا تُحفظ الدفعة حتى تصحيحه. الأسر والاحتياجات المرفوعة ستخضع للدراسة.']);
   instructions.addRow(['٧. اسم المستفيد كاملًا هو اسم الشخص المسجل للأسرة، وليس اسم الجمعية. اكتب مدينة المستفيد وحيه ورقم جواله وعدد أفراد أسرته شاملًا المستفيد، واختر حالته الاجتماعية.']);
-  instructions.addRow(['٨. لاحتياجات الأجهزة اختر نعم للمطلوب، ولا أو فارغًا لغير المطلوب، مع اختيار جهاز واحد على الأقل. الضمان الاجتماعي: نعم للمستفيد من الضمان ولا لغير المستفيد. الدخل بالريال. الأعمدة المعلّمة «اختياري» يمكن تركها فارغة، وترك الضمان فارغًا لا يثبت عدم الاستفادة منه.']);
+  instructions.addRow(['٨. لاحتياجات الأجهزة اختر نعم للمطلوب، ولا أو فارغًا لغير المطلوب، مع اختيار جهاز واحد على الأقل. الضمان الاجتماعي: نعم للمستفيد من الضمان ولا لغير المستفيد. لا تترك سؤال الضمان أو الدخل فارغًا. الأعمدة المعلّمة «اختياري» يمكن تركها فارغة.']);
   instructions.addRow(['٩. خط العرض وخط الطول هما إحداثيات موقع منزل المستفيد. إن توفرا فاكتب الإحداثيين معًا، وإلا فاتركهما فارغين. موقع المنزل الدقيق اختياري ولا يمنع رفع الأسرة.']);
   instructions.getColumn(1).width = 90;
   instructions.getColumn(1).alignment = { horizontal: 'right', wrapText: true };

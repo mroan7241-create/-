@@ -59,7 +59,7 @@ interface FormState {
   phone: string;
   phone2: string;
   familyCount: string;
-  socialSecurity: boolean;
+  socialSecurity: '' | 'نعم' | 'لا';
   socialStatus: string;
   income: string;
   notes: string;
@@ -80,9 +80,9 @@ const EMPTY_FORM: FormState = {
   phone: '',
   phone2: '',
   familyCount: '1',
-  socialSecurity: false,
+  socialSecurity: '',
   socialStatus: '',
-  income: '0',
+  income: '',
   notes: '',
   lat: '',
   lng: '',
@@ -359,9 +359,9 @@ function BeneficiaryForm({
           phone: existing.phone,
           phone2: existing.phone2 ?? '',
           familyCount: String(existing.familyCount),
-          socialSecurity: existing.socialSecurity,
+          socialSecurity: existing.socialSecurity ? 'نعم' : 'لا',
           socialStatus: existing.socialStatus,
-          income: String(existing.income ?? 0),
+          income: existing.income == null ? '' : String(existing.income),
           notes: existing.notes ?? '',
           lat: existing.lat == null ? '' : String(existing.lat),
           lng: existing.lng == null ? '' : String(existing.lng),
@@ -402,6 +402,14 @@ function BeneficiaryForm({
       setError('اختر احتياجًا واحدًا على الأقل.');
       return;
     }
+    if (!form.socialSecurity) {
+      setError('أجب عن سؤال الاستفادة من الضمان الاجتماعي بنعم أو لا.');
+      return;
+    }
+    if (form.income.trim() === '' || !Number.isInteger(Number(form.income)) || Number(form.income) < 0 || Number(form.income) > 1_000_000) {
+      setError('أدخل دخل المستفيد بالريال من 0 إلى 1000000، واكتب 0 إذا لم يكن له دخل.');
+      return;
+    }
     const needPriority = Number(form.needPriority);
     if ((isNew || form.needPriority !== '') && (!Number.isInteger(needPriority) || needPriority < 1 || needPriority > limit)) {
       setError(`أدخل ترتيب الحاجة من 1 إلى ${limit}؛ الرقم 1 للأسرة الأشد حاجة.`);
@@ -430,9 +438,9 @@ function BeneficiaryForm({
         district: form.district,
         phone: form.phone,
         familyCount: Number(form.familyCount),
-        socialSecurity: form.socialSecurity,
+        socialSecurity: form.socialSecurity === 'نعم',
         socialStatus: form.socialStatus,
-        income: Number(form.income || 0),
+        income: Number(form.income),
         opId,
       };
       if (form.phone2.trim()) body.phone2 = form.phone2.trim();
@@ -598,22 +606,25 @@ function BeneficiaryForm({
             )}
           </label>
           <label style={labelStyle}>
-            مبلغ الدخل (اختياري)
+            كم دخل المستفيد؟ (ريال)
             <input
               style={inputStyle}
               type="number"
               min={0}
+              max={1_000_000}
+              step={1}
+              placeholder="اكتب 0 إذا لم يكن له دخل"
               value={form.income}
               onChange={(e) => set('income', e.target.value)}
             />
           </label>
-          <label style={{ ...labelStyle, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <input
-              type="checkbox"
-              checked={form.socialSecurity}
-              onChange={(e) => set('socialSecurity', e.target.checked)}
-            />
-            ضمان اجتماعي
+          <label style={labelStyle}>
+            هل يستفيد من الضمان الاجتماعي؟
+            <select style={inputStyle} value={form.socialSecurity} onChange={(e) => set('socialSecurity', e.target.value as FormState['socialSecurity'])}>
+              <option value="">اختر…</option>
+              <option value="نعم">نعم</option>
+              <option value="لا">لا</option>
+            </select>
           </label>
           <label style={{ ...labelStyle, gridColumn: '1 / -1' }}>
             ملاحظات (اختياري)

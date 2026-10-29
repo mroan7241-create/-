@@ -22,7 +22,13 @@ describe('قالب استيراد المستفيدين', () => {
     expect(sheet.getCell('B1').value).toBe('اسم المستفيد كاملًا');
     expect(sheet.getCell('I1').value).toBe('هل يحتاج إلى ثلاجة؟ (نعم/لا)');
     expect(sheet.getCell('L1').value).toContain('إلزامي عند طلبها');
-    for (const cell of ['M1', 'N1', 'O1', 'P1', 'Q1', 'R1']) expect(sheet.getCell(cell).value).toContain('اختياري');
+    for (const cell of ['M1', 'P1', 'Q1', 'R1']) expect(sheet.getCell(cell).value).toContain('اختياري');
+    expect(sheet.getCell('N1').value).toBe('هل يستفيد من الضمان الاجتماعي؟ (نعم/لا)');
+    expect(sheet.getCell('O1').value).toBe('كم دخل المستفيد؟ (ريال)');
+    expect(sheet.getCell('N2').dataValidation.allowBlank).toBeFalsy();
+    expect(sheet.getCell('O2').dataValidation).toMatchObject({ type: 'whole', formulae: [0, 1000000] });
+    expect(sheet.getColumn(14).outlineLevel).toBe(0);
+    expect(sheet.getColumn(15).outlineLevel).toBe(0);
     expect(sheet.getCell('Q1').value).toContain('موقع منزل المستفيد');
     expect(sheet.getCell('R1').value).toContain('موقع منزل المستفيد');
     expect(sheet.getCell('A2').numFmt).toContain('الأشد حاجة');
@@ -38,7 +44,7 @@ describe('قالب استيراد المستفيدين', () => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('قديم');
     sheet.addRow(['ترتيب الحاجة', 'الاسم', 'المنطقة', 'المدينة', 'الحي', 'رقم الجوال', 'عدد أفراد الأسرة', 'الحالة الاجتماعية', 'ثلاجة؟', 'فرن؟', 'غسالة؟', 'مبرر طلب ثلاثة أجهزة', 'جوال إضافي', 'الضمان الاجتماعي', 'الدخل', 'ملاحظات', 'خط العرض', 'خط الطول']);
-    sheet.addRow([1, 'اسم قديم', 'القصيم', 'بريدة', 'حي', '0500000001', 5, 'أرملة', 'نعم', 'لا', 'لا']);
+    sheet.addRow([1, 'اسم قديم', 'القصيم', 'بريدة', 'حي', '0500000001', 5, 'أرملة', 'نعم', 'لا', 'لا', '', '', 'لا', 0]);
     const parsed = await parseXlsxBeneficiaryRows(Buffer.from(await workbook.xlsx.writeBuffer()));
     expect(parsed.headers).toEqual(SIMPLE_BENEFICIARY_IMPORT_FIELDS);
     expect(parseXlsxRowToImportRow(parsed.rows[0].raw)).toMatchObject({ name: 'اسم قديم', needPriority: 1, deviceTypes: [DeviceType.REFRIGERATOR] });
@@ -60,7 +66,7 @@ describe('قالب استيراد المستفيدين', () => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(await generateXlsxTemplate({ region: 'مكة المكرمة' }) as unknown as ExcelJS.Buffer);
     const sheet = workbook.worksheets[0];
-    for (let i = 0; i < 50; i++) sheet.getRow(i + 2).values = [i + 1, `مستفيد ${i}`, 'مكة المكرمة', 'جدة', 'حي تجريبي', `05000000${String(i).padStart(2, '0')}`, '٥', 'أرملة', 'نعم', 'لا', 'نعم'];
+    for (let i = 0; i < 50; i++) sheet.getRow(i + 2).values = [i + 1, `مستفيد ${i}`, 'مكة المكرمة', 'جدة', 'حي تجريبي', `05000000${String(i).padStart(2, '0')}`, '٥', 'أرملة', 'نعم', 'لا', 'نعم', '', '', 'لا', 0];
     const parsed = await parseXlsxBeneficiaryRows(Buffer.from(await workbook.xlsx.writeBuffer()));
     expect(parsed.rows).toHaveLength(50);
     const rows = parsed.rows.map(row => parseXlsxRowToImportRow(row.raw));
@@ -71,24 +77,30 @@ describe('قالب استيراد المستفيدين', () => {
   });
 
   it('يرفض نعم/لا غير المعروفة والتعارض بين القالبين', () => {
-    expect(() => parseXlsxRowToImportRow({ refrigerator: 'ربما' })).toThrow('نعم أو لا');
-    expect(() => parseXlsxRowToImportRow({ refrigerator: 'نعم', oven: 'لا', washingMachine: 'لا', deviceTypes: 'فرن' })).toThrow('تعارض');
+    expect(() => parseXlsxRowToImportRow({ socialSecurity: 'لا', income: '0', refrigerator: 'ربما' })).toThrow('نعم أو لا');
+    expect(() => parseXlsxRowToImportRow({ socialSecurity: 'لا', income: '0', refrigerator: 'نعم', oven: 'لا', washingMachine: 'لا', deviceTypes: 'فرن' })).toThrow('تعارض');
   });
 
   it('يبقي رؤوس القالب الإنجليزي القديم متوافقة', async () => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('legacy');
     sheet.addRow(ALL_BENEFICIARY_IMPORT_FIELDS);
-    sheet.addRow(['مستفيد قديم', 'الرياض', 'الرياض', 'النرجس', '0500000001', 4, 'متزوج', 'غسالة', '', 'false', '', '', '', '', 1]);
+    sheet.addRow(['مستفيد قديم', 'الرياض', 'الرياض', 'النرجس', '0500000001', 4, 'متزوج', 'غسالة', '', 'false', 0, '', '', '', 1]);
     const parsed = await parseXlsxBeneficiaryRows(Buffer.from(await workbook.xlsx.writeBuffer()));
     expect(parsed.headers).toEqual(ALL_BENEFICIARY_IMPORT_FIELDS);
     expect(parseXlsxRowToImportRow(parsed.rows[0].raw)).toMatchObject({ name: 'مستفيد قديم', familyCount: 4, deviceTypes: [DeviceType.WASHING_MACHINE] });
   });
 
   it('requires a reason for three unique devices even when Excel validation was bypassed', () => {
-    const row = { needPriority: '١', familyCount: '4', name: 'اختبار', deviceTypes: 'ثلاجة،فرن،غسالة' };
+    const row = { needPriority: '١', familyCount: '4', name: 'اختبار', socialSecurity: 'لا', income: '0', deviceTypes: 'ثلاجة،فرن،غسالة' };
     expect(() => parseXlsxRowToImportRow(row)).toThrow('مبرر');
     expect(() => parseXlsxRowToImportRow({ ...row, threeDeviceReason: '   ...   ' })).toThrow('مبرر');
     expect(parseXlsxRowToImportRow({ ...row, threeDeviceReason: 'لا تتوفر للأسرة أجهزة صالحة للاستخدام' })).toMatchObject({ needPriority: 1, threeDeviceReason: 'لا تتوفر للأسرة أجهزة صالحة للاستخدام' });
+  });
+  it('rejects blank financial answers and accepts an explicit no with zero income', () => {
+    const row = { needPriority: '1', familyCount: '4', name: 'اختبار', socialSecurity: 'لا', income: '٠', deviceTypes: 'ثلاجة' };
+    expect(() => parseXlsxRowToImportRow({ ...row, socialSecurity: '' })).toThrow('الضمان');
+    expect(() => parseXlsxRowToImportRow({ ...row, income: ' ' })).toThrow('دخل');
+    expect(parseXlsxRowToImportRow(row)).toMatchObject({ socialSecurity: false, income: 0 });
   });
 });
