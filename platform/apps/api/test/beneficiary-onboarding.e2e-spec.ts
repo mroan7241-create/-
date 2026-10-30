@@ -119,7 +119,12 @@ describe('50-family onboarding: Excel to association and admin', () => {
     const application = await prisma.associationApplication.create({ data: { publicCode: 'APP-000328', name: 'جمعية تجربة', category: 'جمعية خيرية', region: 'الرياض', city: 'الرياض', phone: uniquePhone(), contactName: 'اختبار محلي' } });
     await prisma.association.update({ where: { id: fx.associationBId }, data: { name: 'جمعية تجربة' } });
     const actor = await prisma.account.findFirstOrThrow({ where: { email: fx.assocBEmail }, select: { id: true } });
-    await prisma.projectParticipation.create({ data: { associationId: fx.associationBId, applicationId: application.id, status: 'ACTIVE', activationBasis: 'AGREEMENT_COMPLETED', agreements: { create: { version: 1, templateVersion: 'TEST', status: 'SIGNED', fullyExecutedAt: new Date(), createdById: actor.id } } } });
+    const participation = await prisma.projectParticipation.create({ data: { associationId: fx.associationBId, applicationId: application.id, status: 'ACTIVE', activationBasis: 'AGREEMENT_COMPLETED', agreements: { create: { version: 1, templateVersion: 'TEST', status: 'SIGNED', fullyExecutedAt: new Date(), createdById: actor.id } } } });
+    const signedProfile = await http().get(`/api/v1/associations/${fx.associationBId}`).set('Cookie', adminCookie);
+    const signedList = await http().get('/api/v1/associations?search=جمعية%20تجربة').set('Cookie', adminCookie);
+    expect(signedProfile.status).toBe(200);
+    expect(signedProfile.body.covenant).toEqual(signedList.body.items.find((item: { id: string }) => item.id === fx.associationBId).covenant);
+    expect(signedProfile.body.covenant).toMatchObject({ status: 'SIGNED', templateVersion: 'TEST' });
     const rows = [row(0), row(1)].map(item => ({ ...item, notes: 'ONBOARDING-TEST-20261029-11111111-1111-4111-8111-111111111111' }));
     const imported = await http().post('/api/v1/beneficiaries/import').set('Cookie', otherCookie).send({ rows, acceptedPledge: true, opId: newOpId('disposable-demo') });
     expect(imported.body).toMatchObject({ ok: true, createdCount: 2 });
@@ -130,6 +135,11 @@ describe('50-family onboarding: Excel to association and admin', () => {
     expect(await prisma.beneficiary.count({ where: { associationId: fx.associationBId } })).toBe(0);
     expect(await prisma.beneficiaryNeed.count({ where: { associationId: fx.associationBId } })).toBe(0);
     expect(await prisma.auditLog.count({ where: { associationId: fx.associationBId, action: 'TEST_BENEFICIARY_IMPORT_REMOVED' } })).toBe(1);
+    await prisma.participationAgreement.create({ data: { participationId: participation.id, version: 2, templateVersion: 'NEXT', status: 'DRAFT', createdById: actor.id } });
+    const latestProfile = await http().get(`/api/v1/associations/${fx.associationBId}`).set('Cookie', adminCookie);
+    const latestList = await http().get('/api/v1/associations?search=جمعية%20تجربة').set('Cookie', adminCookie);
+    expect(latestProfile.body.covenant).toEqual(latestList.body.items.find((item: { id: string }) => item.id === fx.associationBId).covenant);
+    expect(latestProfile.body.covenant).toMatchObject({ status: 'DRAFT', templateVersion: 'NEXT', fullyExecutedAt: null });
   });
 
   it('counts legacy records, blocks concurrent/manual/bulk overflow, and allows only the owner to raise one association quota', async () => {

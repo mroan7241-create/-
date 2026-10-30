@@ -19,6 +19,12 @@ import { associationOrderBy, type AssociationSortField } from './association-sor
 import type { AuthContext } from '../auth/auth.types';
 import { adminApplicationRegionCodes, adminAssociationScopeWhere, assertAdminAssociationScope, lockAdminApplicationScope } from '../auth/admin-route-permissions';
 
+// The list and profile must describe the same latest agreement, including unsigned versions.
+const ASSOCIATION_COVENANT_SELECT = {
+  id: true, status: true, templateVersion: true, reference: true, orgSignerName: true,
+  signedByOrgAt: true, signedByZaadAt: true, fullyExecutedAt: true, finalFileId: true,
+} satisfies Prisma.ParticipationAgreementSelect;
+
 export interface CreateAssociationInput {
   name: string;
   category?: string;
@@ -117,7 +123,7 @@ export class AssociationsService {
     const ids = rows.map((r) => r.id);
     const [counts, covenantRows] = await Promise.all([
       this.countsByAssociation(ids),
-      prisma.projectParticipation.findMany({ where: { associationId: { in: ids } }, select: { associationId: true, agreements: { orderBy: { version: 'desc' }, take: 1, select: { id: true, status: true, templateVersion: true, reference: true, orgSignerName: true, signedByOrgAt: true, signedByZaadAt: true, fullyExecutedAt: true, finalFileId: true } } } }),
+      prisma.projectParticipation.findMany({ where: { associationId: { in: ids } }, select: { associationId: true, agreements: { orderBy: { version: 'desc' }, take: 1, select: ASSOCIATION_COVENANT_SELECT } } }),
     ]);
     const covenants = new Map(covenantRows.filter((row) => row.associationId).map((row) => [row.associationId!, row.agreements[0] ?? null]));
 
@@ -134,13 +140,16 @@ export class AssociationsService {
     const association = await prisma.association.findUnique({ where: { id } });
     if (!association) throw new ApiError('ASSOCIATION_NOT_FOUND', 'الجمعية غير موجودة', 404);
 
-    const account = await prisma.account.findFirst({
-      where: { associationId: id, role: AccountRole.ASSOCIATION, archivedAt: null },
-      select: { id: true, publicCode: true, email: true, status: true, mustChangePassword: true, lastLoginAt: true },
-    });
-    const counts = await this.countsByAssociation([id]);
+    const [account, counts, participation] = await Promise.all([
+      prisma.account.findFirst({
+        where: { associationId: id, role: AccountRole.ASSOCIATION, archivedAt: null },
+        select: { id: true, publicCode: true, email: true, status: true, mustChangePassword: true, lastLoginAt: true },
+      }),
+      this.countsByAssociation([id]),
+      prisma.projectParticipation.findUnique({ where: { associationId: id }, select: { agreements: { orderBy: { version: 'desc' }, take: 1, select: ASSOCIATION_COVENANT_SELECT } } }),
+    ]);
 
-    return { ...mapAssociation(association), ...counts[id], account: account ?? null };
+    return { ...mapAssociation(association), ...counts[id], account: account ?? null, covenant: participation?.agreements[0] ?? null };
   }
 
   // ================================================================
