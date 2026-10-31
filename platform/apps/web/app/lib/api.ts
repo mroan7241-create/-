@@ -542,7 +542,7 @@ export interface BeneficiarySummary {
   familyCount: number;
   socialSecurity: boolean;
   socialStatus: string;
-  income: number;
+  income: number | null;
   /** `address`/`landmark`: حقول قراءة تاريخية فقط — لا تُرسَل في أي طلب حفظ. */
   landmark: string | null;
   notes: string | null;

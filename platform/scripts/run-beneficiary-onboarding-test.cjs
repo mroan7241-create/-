@@ -49,6 +49,8 @@ async function main() {
   await db.$executeRawUnsafe('CREATE TABLE IF NOT EXISTS e2e_safety_canary (database_name text PRIMARY KEY, marker text NOT NULL)');
   await db.$executeRaw`INSERT INTO e2e_safety_canary(database_name, marker) VALUES (${name}, 'ALZAD_DESTRUCTIVE_E2E_TEST_DB_V1') ON CONFLICT (database_name) DO NOTHING`;
   await db.$disconnect();
-  run('--experimental-vm-modules', [resolve(root, 'node_modules/jest/bin/jest.js'), '--config', 'test/jest-e2e.json', '--runInBand', 'beneficiary-onboarding.e2e-spec.ts'], resolve(root, 'apps/api'));
+  const suites=process.argv.slice(3);
+  if(suites.some(s=>!/^beneficiar[a-z-]+\.e2e-spec\.ts$/.test(s)))throw Error('Only beneficiary test suites are allowed');
+  run('--experimental-vm-modules', [resolve(root, 'node_modules/jest/bin/jest.js'), '--config', 'test/jest-e2e.json', '--runInBand', ...(suites.length?suites:['beneficiary-onboarding.e2e-spec.ts'])], resolve(root, 'apps/api'));
 }
 main().catch(error => { console.error(error.code ?? error.message, error.meta?.code ?? '', error.meta?.message ?? ''); process.exitCode = 1; }).finally(() => { if (started) pg('pg_ctl', ['-D', resolve(cluster, 'data'), '-m', 'fast', '-w', 'stop']); });

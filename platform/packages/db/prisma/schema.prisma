@@ -893,6 +893,7 @@ model Beneficiary {
   notes                  String?
   needPriority           Int?                    @map("need_priority")
   threeDeviceReason      String?                 @map("three_device_reason")
+  submittedDeviceTypes   DeviceType[]            @default([]) @map("submitted_device_types")
   latitude               Decimal?                @db.Decimal(9, 6)
   longitude              Decimal?                @db.Decimal(9, 6)
   locationSource         LocationSource?         @map("location_source")
@@ -927,6 +928,7 @@ model Beneficiary {
   replacementsAsOld            BeneficiaryReplacement[] @relation("ReplacementOldBeneficiary")
   replacementsAsNew            BeneficiaryReplacement[] @relation("ReplacementNewBeneficiary")
   escalationCases              EscalationCase[]
+  informationRequests          BeneficiaryInformationRequest[]
 
   /// NODE-0.1: مفتاح فريد مركَّب (id, associationId) — يسمح لكيانات تابعة
   /// (BeneficiaryNeed, DeviceAllocation, DeliveryMission...) بالإشارة إلى
@@ -935,7 +937,36 @@ model Beneficiary {
   @@unique([id, associationId])
   @@index([associationId, reviewStatus])
   @@index([phone])
+  @@index([associationId, archivedAt, needPriority, id])
   @@map("beneficiaries")
+}
+
+/// Information requests preserve the submitted values until an administrator accepts the reply.
+model BeneficiaryInformationRequest {
+  id                String      @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  beneficiaryId     String      @map("beneficiary_id") @db.Uuid
+  associationId     String      @map("association_id") @db.Uuid
+  batchId           String      @map("batch_id") @db.Uuid
+  status            String      @default("OPEN")
+  items             Json
+  message           String?
+  emailEventId      String?     @map("email_event_id") @db.Uuid
+  dueAt             DateTime?   @map("due_at")
+  sourceSnapshot    Json        @map("source_snapshot")
+  sourceUpdatedAt   DateTime    @map("source_updated_at")
+  response          Json?
+  responseNote      String?     @map("response_note")
+  requestedById     String      @map("requested_by_id") @db.Uuid
+  resolvedById      String?     @map("resolved_by_id") @db.Uuid
+  submittedAt       DateTime?   @map("submitted_at")
+  resolvedAt        DateTime?   @map("resolved_at")
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
+  beneficiary       Beneficiary @relation(fields: [beneficiaryId, associationId], references: [id, associationId])
+
+  @@index([associationId, status, createdAt])
+  @@index([beneficiaryId, createdAt])
+  @@map("beneficiary_information_requests")
 }
 
 // ============================================================

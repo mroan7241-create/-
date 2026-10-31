@@ -36,6 +36,7 @@ import { parseXlsxBeneficiaryRows, parseXlsxRowToImportRow } from './xlsx-import
 import { validateNeedPriority, validateThreeDeviceReason } from './beneficiary-onboarding.util';
 import { ALLOCATION_TRIGGER_PORT, type AllocationTriggerPort } from '../allocation/allocation-trigger.port';
 import type { AuthContext } from '../auth/auth.types';
+import { adminAssociationScopeWhere, assertAdminAssociationScope, lockAdminApplicationScope } from '../auth/admin-route-permissions';
 
 type ImportReference = { id: string; type: string; value: string; parentId: string | null };
 
@@ -150,10 +151,12 @@ export class BeneficiariesService {
         return Array.isArray(response?.beneficiaryIds) && JSON.stringify([...response.beneficiaryIds].sort()) === JSON.stringify(ids);
       });
       if (!owned) throw denied();
+      // Only this verified, actor-owned disposable demo batch may remove its test information requests.
+      const informationRequestsRemoved = await tx.beneficiaryInformationRequest.deleteMany({ where: { beneficiaryId: { in: ids }, associationId: ctx.associationId! } });
       // Foreign keys also fail closed if any operational record was attached.
       await tx.beneficiaryNeed.deleteMany({ where: { beneficiaryId: { in: ids }, associationId: ctx.associationId! } });
       const removed = await tx.beneficiary.deleteMany({ where: { id: { in: ids }, associationId: ctx.associationId! } });
-      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, associationId: ctx.associationId!, action: 'TEST_BENEFICIARY_IMPORT_REMOVED', entityType: 'beneficiaries', metadata: { count: removed.count, beneficiaryIds: ids } } });
+      await tx.auditLog.create({ data: { actorAccountId: ctx.accountId, actorRole: ctx.role, associationId: ctx.associationId!, action: 'TEST_BENEFICIARY_IMPORT_REMOVED', entityType: 'beneficiaries', metadata: { count: removed.count, beneficiaryIds: ids, informationRequestsRemoved: informationRequestsRemoved.count } } });
       return { ok: true as const, removedCount: removed.count };
     });
   }
@@ -174,7 +177,7 @@ export class BeneficiariesService {
   ): Promise<PaginatedResult<unknown>> {
     const { page, pageSize, skip, take } = normalizePagination(params);
 
-    const where: Prisma.BeneficiaryWhereInput = { archivedAt: null };
+    const where: Prisma.BeneficiaryWhereInput = { archivedAt: null, association: { is: adminAssociationScopeWhere(ctx) } };
 
     // العزل بين الجمعيات مفروض **قبل** أي بحث أو ترقيم، تمامًا كِLegacy:
     // «جمعية لا تستطيع طلب صفحة تخص جمعية أخرى مهما كانت options.associationId».
@@ -236,7 +239,7 @@ export class BeneficiariesService {
 
   async getBeneficiaryDetail(ctx: AuthContext, id: string) {
     const beneficiary = await prisma.beneficiary.findFirst({
-      where: { id, archivedAt: null },
+      where: { id, archivedAt: null, association: { is: adminAssociationScopeWhere(ctx) } },
       include: { needs: { orderBy: { createdAt: 'asc' } } },
     });
     if (!beneficiary) throw beneficiaryNotFound();
@@ -287,6 +290,7 @@ export class BeneficiariesService {
 
       const association = await tx.association.findUnique({ where: { id: associationId }, select: { id: true } });
       if (!association) throw new ApiError('BENEFICIARY_ASSOCIATION_NOT_FOUND', 'اختر جمعية صحيحة', 400);
+      await assertAdminAssociationScope(await lockAdminApplicationScope(tx, ctx), associationId, tx);
       await lockParticipationForOperationalWrite(tx, associationId);
 
       await this.assertAvailablePriorities(tx, associationId, [fields.needPriority], undefined, 1);
@@ -391,6 +395,7 @@ export class BeneficiariesService {
 
         const association = await tx.association.findUnique({ where: { id: associationId }, select: { id: true } });
         if (!association) throw new ApiError('BENEFICIARY_ASSOCIATION_NOT_FOUND', 'اختر جمعية صحيحة', 400);
+        await assertAdminAssociationScope(await lockAdminApplicationScope(tx, ctx), associationId, tx);
         await lockParticipationForOperationalWrite(tx, associationId);
 
         await this.assertAvailablePriorities(tx, associationId, ok.map(row => row.fields.needPriority), undefined, ok.length);
@@ -558,6 +563,7 @@ export class BeneficiariesService {
     const existing = await prisma.beneficiary.findFirst({ where: { id, archivedAt: null } });
     if (!existing) throw beneficiaryNotFound();
     this.assertTenantAccess(ctx, existing.associationId);
+    await assertAdminAssociationScope(ctx, existing.associationId);
 
     // «جمعية المستفيد الحالية هي مصدر الحقيقة الوحيد من مسار التعديل
     // العام» — لا ADMIN ولا ASSOCIATION ينقل مستفيدًا بين جمعيتين من هنا.
@@ -599,6 +605,7 @@ export class BeneficiariesService {
       );
       if (!claim.claimed) return { replayed: true as const, response: claim.existingResponse ?? { ok: true as const } };
       await lockParticipationForOperationalWrite(tx, existing.associationId);
+      await assertAdminAssociationScope(await lockAdminApplicationScope(tx, ctx), existing.associationId, tx);
 
       await this.assertAvailablePriorities(tx, existing.associationId, [fields.needPriority], id);
 
@@ -622,6 +629,7 @@ export class BeneficiariesService {
       // الراهنة لا على لقطة قديمة.
       const locked = await this.lockBeneficiary(tx, id);
       if (!locked) throw beneficiaryNotFound();
+      await this.assertNoInformationRequest(tx, id);
       if (isFinalReviewStatus(locked.review_status as BeneficiaryReviewStatus) && ((input.needPriority !== undefined && input.needPriority !== locked.need_priority) || (input.threeDeviceReason !== undefined && (input.threeDeviceReason?.trim() ?? '') !== (locked.three_device_reason ?? '')))) {
         throw new ApiError('BENEFICIARY_PRIORITY_LOCKED', 'لا يمكن تغيير ترتيب الحاجة أو مبرر الأجهزة بعد البت في المستفيد', 409);
       }
@@ -777,10 +785,12 @@ export class BeneficiariesService {
       const needScope = await tx.beneficiaryNeed.findUnique({ where: { id: needId }, select: { associationId: true, beneficiaryId: true } });
       if (!needScope) throw new ApiError('BENEFICIARY_NEED_NOT_FOUND', 'الاحتياج غير موجود', 404);
       this.assertTenantAccess(ctx, needScope.associationId);
+      await assertAdminAssociationScope(await lockAdminApplicationScope(tx, ctx), needScope.associationId, tx);
       await lockParticipationForOperationalWrite(tx, needScope.associationId);
 
       const locked = await this.lockBeneficiary(tx, needScope.beneficiaryId);
       if (!locked) throw new ApiError('BENEFICIARY_NOT_FOUND', 'المستفيد المرتبط بهذا الاحتياج غير موجود', 404);
+      await this.assertNoInformationRequest(tx, needScope.beneficiaryId);
       const need = await tx.beneficiaryNeed.findUnique({ where: { id: needId } });
       if (!need) throw new ApiError('BENEFICIARY_NEED_NOT_FOUND', 'الاحتياج غير موجود', 404);
       this.assertTenantAccess(ctx, need.associationId);
@@ -977,6 +987,7 @@ export class BeneficiariesService {
       if (!locked) throw beneficiaryNotFound();
 
       const currentStatus = locked.review_status as BeneficiaryReviewStatus;
+      await this.assertNoInformationRequest(tx, id);
       // `assertBeneficiaryReviewTransition_`: UNDER_REVIEW وحدها قابلة
       // للانتقال؛ APPROVED/REJECTED نهائيتان بلا حلقة ذاتية ولا رجوع.
       if (isFinalReviewStatus(currentStatus)) {
@@ -1190,10 +1201,17 @@ export class BeneficiariesService {
     }
   }
 
+  private async assertNoInformationRequest(tx: Prisma.TransactionClient, id: string) {
+    if (await tx.beneficiaryInformationRequest.findFirst({ where: { beneficiaryId: id, status: { in: ['OPEN', 'SUBMITTED'] } }, select: { id: true } })) {
+      throw new ApiError('BENEFICIARY_INFORMATION_PENDING', 'يوجد طلب استكمال نشط؛ استخدم مسار الرد والمراجعة قبل تعديل الأسرة أو البت في احتياجاتها', 409);
+    }
+  }
+
   private async lockParticipationForBeneficiaryWrite(tx: Prisma.TransactionClient, ctx: AuthContext, id: string) {
     const beneficiary = await tx.beneficiary.findUnique({ where: { id }, select: { associationId: true } });
     if (!beneficiary) throw beneficiaryNotFound();
     this.assertTenantAccess(ctx, beneficiary.associationId);
+    await assertAdminAssociationScope(await lockAdminApplicationScope(tx, ctx), beneficiary.associationId, tx);
     await lockParticipationForOperationalWrite(tx, beneficiary.associationId);
   }
 
@@ -1546,7 +1564,7 @@ function mapBeneficiary(row: {
     familyCount: row.familyCount,
     socialSecurity: row.socialSecurity,
     socialStatus: row.maritalStatus,
-    income: row.income ? Number(row.income) : 0,
+    income: row.income === null ? null : Number(row.income),
     // NODE-3.1 — `address`/`landmark` حقلا **قراءة تاريخية** فقط: يبقيان في
     // شكل الرد كما هما (سجلات مهاجَرة قد تحملهما)، لكنهما ليسا حقلَي إدخال.
     landmark: row.landmark,

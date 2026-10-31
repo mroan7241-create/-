@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { BeneficiariesController } from './beneficiaries.controller';
 import { BeneficiariesService } from './beneficiaries.service';
 import { AllocationModule } from '../allocation/allocation.module';
+import { BeneficiaryWorkspaceController } from './beneficiary-workspace.controller';
+import { BeneficiaryWorkspaceService } from './beneficiary-workspace.service';
 
 /**
  * NODE-3 — المستفيدون + احتياجاتهم + المراجعة الفردية والجماعية.
@@ -12,8 +14,8 @@ import { AllocationModule } from '../allocation/allocation.module';
  */
 @Module({
   imports: [AllocationModule],
-  controllers: [BeneficiariesController],
+  controllers: [BeneficiariesController, BeneficiaryWorkspaceController],
   // PublicCodeService/IdempotencyService يأتيان من CommonModule العالمي (نسخة واحدة مشتركة).
-  providers: [BeneficiariesService],
+  providers: [BeneficiariesService, BeneficiaryWorkspaceService],
 })
 export class BeneficiariesModule {}

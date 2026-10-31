@@ -27,6 +27,7 @@ const securityHeaders = [
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  allowedDevOrigins: ['127.0.0.1', 'localhost'],
   // Managed hosts can expose the host's CPU count rather than this app's quota.
   // Bound prerender workers: 56 concurrent workers aborted the hosted build.
   experimental: { cpus: 2 },

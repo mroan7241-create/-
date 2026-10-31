@@ -107,6 +107,7 @@ export async function cleanNode3State(): Promise<void> {
   });
   const associationIds = associations.map((a) => a.id);
   if (associationIds.length > 0) {
+    await prisma.beneficiaryInformationRequest.deleteMany({ where: { associationId: { in: associationIds } } });
     await prisma.beneficiaryNeed.deleteMany({ where: { associationId: { in: associationIds } } });
     await prisma.beneficiary.deleteMany({ where: { associationId: { in: associationIds } } });
   }

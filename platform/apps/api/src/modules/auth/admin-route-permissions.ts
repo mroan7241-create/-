@@ -54,6 +54,18 @@ export async function adminAuditScopeWhere(ctx: AuthContext): Promise<Prisma.Aud
 
 /** Exact registered method/path contracts. Unknown restricted ADMIN routes deny. */
 export const ADMIN_ROUTE_POLICIES: Readonly<Record<string, AdminPermission | 'self' | 'owner'>> = {
+  'GET /beneficiary-workspace': 'beneficiaries.read',
+  'GET /beneficiary-workspace/overview': 'beneficiaries.read',
+  'GET /beneficiary-workspace/:id': 'beneficiaries.read',
+  'GET /beneficiary-workspace/:id/next': 'beneficiaries.read',
+  'POST /beneficiary-workspace/:id/review': 'beneficiaries.manage',
+  'POST /beneficiary-workspace/bulk-review': 'beneficiaries.manage',
+  'GET /beneficiary-workspace/information': 'beneficiaries.read',
+  'POST /beneficiary-workspace/information': 'beneficiaries.manage',
+  'POST /beneficiary-workspace/information/:id/resolve': 'beneficiaries.manage',
+  'GET /beneficiary-workspace/planning': 'beneficiaries.read',
+  'POST /beneficiary-workspace/planning/simulate': 'beneficiaries.read',
+  'PUT /beneficiary-workspace/planning': 'allocation.manage',
   'GET /association-applications/index': 'applications.read',
   'GET /auth/me': 'self', 'POST /auth/logout': 'self', 'PATCH /auth/password': 'self',
   'GET /accounts/admins': 'owner', 'POST /accounts/admins': 'owner',

@@ -12,6 +12,7 @@ import { storageConfig } from '../../config/storage.config';
 import { COVENANT_STAFF_RECIPIENTS } from '../auth/email/onboarding-email.service';
 import { NONSELECTION_CAMPAIGN, NONSELECTION_SUBJECT, NONSELECTION_BODY, nonselectionExclusion, nonselectionMarker } from '../applications/nonselection-notice.policy';
 import { adminApplicationRegionCodes, adminApplicationScopeWhere } from '../auth/admin-route-permissions';
+import { hasAdminPermission, isAdminApplicationScope } from '@alzad/shared';
 
 const OUTBOX_BATCH_SIZE = 100;
 const OUTBOX_MAX_ATTEMPTS = 5;
@@ -200,7 +201,7 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
           const marker = await tx.systemSetting.updateMany({ where: { key: context.markerKey, value: { path: ['eventId'], equals: event.id } }, data: { value: { status: 'SENT', eventId: event.id, sentAt: now.toISOString() } } });
           if (marker.count !== 1) throw new Error('MAIL_STATE_INVALID');
         }
-        await tx.auditLog.create({ data: { action: mailAuditAction(context.type), entityType: context.type === 'access' ? 'association_application_drafts' : (context.type === 'rejection' || context.type === 'nonselection') ? 'association_applications' : (context.type === 'covenant' || context.type === 'covenant-signing') ? 'participation_agreements' : 'accounts', entityId: context.type === 'access' ? context.draftTokens[0]!.draftId : (context.type === 'rejection' || context.type === 'nonselection') ? context.applicationId : (context.type === 'covenant' || context.type === 'covenant-signing') ? context.agreementId : context.accountId, metadata: { eventId: event.id, accepted: true, stale: !current } } });
+        await tx.auditLog.create({ data: { action: mailAuditAction(context.type), associationId: context.type === 'beneficiary-information' ? context.associationId : undefined, entityType: context.type === 'beneficiary-information' ? 'associations' : context.type === 'access' ? 'association_application_drafts' : (context.type === 'rejection' || context.type === 'nonselection') ? 'association_applications' : (context.type === 'covenant' || context.type === 'covenant-signing') ? 'participation_agreements' : 'accounts', entityId: context.type === 'beneficiary-information' ? context.associationId : context.type === 'access' ? context.draftTokens[0]!.draftId : (context.type === 'rejection' || context.type === 'nonselection') ? context.applicationId : (context.type === 'covenant' || context.type === 'covenant-signing') ? context.agreementId : context.accountId, metadata: { eventId: event.id, accepted: true, stale: !current } } });
         const completed = await tx.outboxEvent.updateMany({ where: { id: event.id, status: OutboxEventStatus.PROCESSING, lockedAt: event.lockedAt, payload: { path: ['phase'], equals: 'SMTP_ACCEPTED' } }, data: { status: OutboxEventStatus.PROCESSED, payload: payload as unknown as Prisma.InputJsonValue, processedAt: now, failedAt: null, lockedAt: null, lastError: null, attempts: { increment: 1 } } });
         if (completed.count !== 1) throw new Error('MAIL_STATE_UNAVAILABLE');
         return true;
@@ -237,7 +238,10 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async lockEmailContext(tx: Prisma.TransactionClient, context: DecryptedEmailDelivery['context']) {
-    if (context.type === 'access') {
+    if (context.type === 'beneficiary-information') {
+      if (!context.associationId || !Array.isArray(context.requestIds) || !context.requestIds.length || context.requestIds.length > 50 || !context.batchId) throw new Error('MAIL_PAYLOAD_INVALID');
+      await tx.$queryRaw`SELECT id FROM associations WHERE id=${context.associationId}::uuid FOR UPDATE`;
+    } else if (context.type === 'access') {
       if (!Array.isArray(context.draftTokens) || !context.draftTokens.length || context.draftTokens.some(token => !token.id || !token.draftId || !Array.isArray(token.predecessorIds))) throw new Error('MAIL_PAYLOAD_INVALID');
       for (const id of [...new Set(context.draftTokens.map(token => token.draftId))].sort()) await tx.$queryRaw`SELECT id FROM association_application_drafts WHERE id=${id}::uuid FOR UPDATE`;
     } else if (context.type === 'reset' || context.type === 'credentials' || context.type === 'notice') {
@@ -256,7 +260,20 @@ export class NotificationsService implements OnModuleInit, OnModuleDestroy {
 
   private async validateEmailState(tx: Prisma.TransactionClient, delivery: DecryptedEmailDelivery, eventId: string) {
     const context = delivery.context, to = delivery.params.to.trim().toLowerCase(), now = new Date();
-    if (context.type === 'access') {
+    if (context.type === 'beneficiary-information') {
+      const association = await tx.association.findUnique({ where: { id: context.associationId } });
+      const requests = await tx.beneficiaryInformationRequest.findMany({ where: { id: { in: context.requestIds }, associationId: context.associationId, batchId: context.batchId, status: 'OPEN', beneficiary: { archivedAt: null } }, select: { requestedById: true } });
+      if (!association || association.archivedAt || association.email?.trim().toLowerCase() !== to || requests.length !== context.requestIds.length) throw new Error('MAIL_STATE_INVALID');
+      const actors = await tx.account.findMany({ where: { id: { in: [...new Set(requests.map(r => r.requestedById))] } } });
+      const participation = await tx.projectParticipation.findUnique({ where: { associationId: context.associationId }, select: { application: { select: { regionOfficialCode: true } } } });
+      for (const actor of actors) {
+        if (actor.role !== 'ADMIN' || actor.status !== 'ACTIVE' || actor.archivedAt || !hasAdminPermission(actor.adminFullAccess, actor.adminPermissions, 'beneficiaries.manage')) throw new Error('MAIL_STATE_INVALID');
+        if (!actor.adminFullAccess && actor.adminApplicationScope !== null) {
+          if (!isAdminApplicationScope(actor.adminApplicationScope) || ('regionCodes' in actor.adminApplicationScope && (!participation?.application?.regionOfficialCode || !actor.adminApplicationScope.regionCodes.includes(participation.application.regionOfficialCode)))) throw new Error('MAIL_STATE_INVALID');
+        }
+      }
+      if (actors.length !== new Set(requests.map(r => r.requestedById)).size) throw new Error('MAIL_STATE_INVALID');
+    } else if (context.type === 'access') {
       for (const item of context.draftTokens) {
         const token = await tx.applicationAccessToken.findUnique({ where: { id: item.id }, include: { draft: { include: { submittedApplication: true } } } });
         if (!token || token.draftId !== item.draftId || token.consumedAt || !['ACTIVE', 'SUBMITTED'].includes(token.draft.status)) throw new Error('MAIL_STATE_INVALID');
@@ -388,7 +405,7 @@ function retryDelayMs(attempt: number) { return Math.min(60 * 60 * 1000, 30_000 
 function safeError(error: unknown) { return error instanceof Error ? error.message : String(error); }
 function isMailStateError(error: unknown) { return error instanceof Error && ['MAIL_STATE_INVALID', 'MAIL_EXPIRED'].includes(error.message); }
 function mailAuditAction(type: DecryptedEmailDelivery['context']['type']) {
-  return { access: 'APPLICATION_ACCESS_EMAIL_SENT', reset: 'PASSWORD_RESET_EMAIL_SENT', credentials: 'ONBOARDING_CREDENTIALS_EMAIL_SENT', rejection: 'APPLICATION_REJECTION_EMAIL_SENT', nonselection: 'NONSELECTION_NOTICE_EMAIL_SENT', covenant: 'COVENANT_COMPLETION_EMAIL_SENT', 'covenant-signing': 'COVENANT_PARTY_ONE_EMAIL_SENT', notice: 'SECURITY_ALERT_EMAIL_SENT' }[type];
+  return { access: 'APPLICATION_ACCESS_EMAIL_SENT', reset: 'PASSWORD_RESET_EMAIL_SENT', credentials: 'ONBOARDING_CREDENTIALS_EMAIL_SENT', rejection: 'APPLICATION_REJECTION_EMAIL_SENT', nonselection: 'NONSELECTION_NOTICE_EMAIL_SENT', covenant: 'COVENANT_COMPLETION_EMAIL_SENT', 'covenant-signing': 'COVENANT_PARTY_ONE_EMAIL_SENT', notice: 'SECURITY_ALERT_EMAIL_SENT', 'beneficiary-information':'BENEFICIARY_INFORMATION_EMAIL_SENT' }[type];
 }
 function describe(type: OutboxEventType) {
   if (type === OutboxEventType.DELIVERY_SUBMITTED) return { role: AccountRole.ASSOCIATION, title: 'تسليم بانتظار اعتماد الجمعية', body: 'أرسل المندوب إثبات التسليم وتوقيع المستفيد.', severity: NotificationSeverity.INFO };

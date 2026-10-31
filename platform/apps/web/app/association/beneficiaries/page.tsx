@@ -22,6 +22,7 @@ import { BulkImportButton } from '../../lib/beneficiary-import';
 import { useRoleGuard } from '../../lib/use-role-guard';
 import { AppShell } from '../../components/AppShell';
 import { initialQueryParam } from '../../lib/query';
+import { BeneficiaryInformationInbox } from './information-inbox';
 import {
   cardStyle,
   errorStyle,
@@ -158,6 +159,7 @@ export default function AssociationBeneficiariesPage() {
 
   return (
     <AppShell user={user}>
+      <BeneficiaryInformationInbox />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h1 style={{ color: 'var(--zad-800)', marginBottom: 4 }}>المستفيدون</h1>
