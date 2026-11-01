@@ -101,6 +101,14 @@ export class BeneficiaryWorkspaceController {
   ) {
     return this.workspace.next(ctx, id, query);
   }
+  @Get(":id/history")
+  @Roles(AccountRole.ADMIN)
+  history(
+    @CurrentUser() ctx: AuthContext,
+    @Param("id", ParseUUIDPipe) id: string,
+  ) {
+    return this.workspace.history(ctx, id);
+  }
   @Post(":id/review")
   @Roles(AccountRole.ADMIN)
   review(

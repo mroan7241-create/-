@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   apiFetch,
   newOpId,
@@ -24,6 +24,10 @@ import {
   InformationDialog,
   PlanningDialog,
 } from "./workspace-panels";
+import { useDialogFocus } from "../../lib/use-dialog-focus";
+import { WorkspaceSummary, WorkspaceReviewTabs } from "./workspace-summary";
+import { WorkspaceSelector } from "./workspace-selector";
+import { FAMILY_BUCKETS, incompleteFields, retainedVisibleSelection, bulkCounts } from "./workspace-model";
 import s from "./workspace.module.css";
 const message = (e: unknown) =>
   e instanceof Error ? e.message : "تعذر إتمام العملية";
@@ -59,7 +63,16 @@ export default function BeneficiaryWorkspace() {
     [revision, setRevision] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set()),
     [detail, setDetail] = useState<WorkspaceDetail | null>(null),
-    [detailLoading, setDetailLoading] = useState(false);
+    [detailLoading, setDetailLoading] = useState(false),
+    [opening, setOpening] = useState<WorkspaceRow | null>(null),
+    [openingId, setOpeningId] = useState<string | null>(null),
+    [detailDirty, setDetailDirty] = useState(false),
+    [detailError, setDetailError] = useState(""),
+    [overviewLoading, setOverviewLoading] = useState(false),
+    [overviewScope, setOverviewScope] = useState<string | null>(null),
+    [overviewRegion, setOverviewRegion] = useState<string | null>(null),
+    [overviewError, setOverviewError] = useState(""),
+    [nextRetry, setNextRetry] = useState<{ id: string; query: string } | null>(null);
   const [infoTargets, setInfoTargets] = useState<
       { id: string; version: string }[] | null
     >(null),
@@ -110,7 +123,10 @@ export default function BeneficiaryWorkspace() {
       { signal: abort.signal },
     )
       .then((value) => {
-        if (generation === listGeneration.current) setData(value);
+        if (generation === listGeneration.current && !abort.signal.aborted) {
+          setData(value);
+          setSelected(prev => retainedVisibleSelection(prev, value.items));
+        }
       })
       .catch((e) => {
         if (!abort.signal.aborted) setError(message(e));
@@ -123,33 +139,42 @@ export default function BeneficiaryWorkspace() {
   useEffect(() => {
     if (!user) return;
     const abort = new AbortController();
+    setOverviewLoading(true);
+    setOverviewError("");
     void apiFetch<WorkspaceOverview>(
       `/beneficiary-workspace/overview?${cohortQuery}`,
       { signal: abort.signal },
     )
       .then((value) => {
-        if (!abort.signal.aborted) setOverview(value);
+        if (!abort.signal.aborted) { setOverview(value); setOverviewScope(cohortQuery); setOverviewRegion(region); }
       })
       .catch((e) => {
-        if (!abort.signal.aborted) setError(message(e));
-      });
+        if (!abort.signal.aborted) setOverviewError(message(e));
+      }).finally(() => { if (!abort.signal.aborted) setOverviewLoading(false); });
     return () => abort.abort();
-  }, [user, cohortQuery, revision]);
+  }, [user, cohortQuery, region, revision]);
   useEffect(() => () => detailRequest.current?.abort(), []);
-  const open = useCallback(async (id: string) => {
+  useEffect(() => {
+    if (!detailDirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [detailDirty]);
+  const open = useCallback(async (id: string, row?: WorkspaceRow) => {
     detailRequest.current?.abort();
     const abort = new AbortController();
     detailRequest.current = abort;
+    setOpening(row ?? null);
+    setOpeningId(id);
+    setDetailDirty(false);
+    setDetail(null);
     setDetailLoading(true);
-    setError("");
+    setDetailError("");
     try {
-      const value = await apiFetch<WorkspaceDetail>(
-        `/beneficiary-workspace/${id}`,
-        { signal: abort.signal },
-      );
-      if (!abort.signal.aborted) setDetail(value);
+      const value = await apiFetch<WorkspaceDetail>(`/beneficiary-workspace/${id}`, { signal: abort.signal });
+      if (!abort.signal.aborted && value.id === id) { setDetail(value); setOpening(null); setOpeningId(null); }
     } catch (e) {
-      if (!abort.signal.aborted) setError(message(e));
+      if (!abort.signal.aborted) setDetailError(message(e));
     } finally {
       if (!abort.signal.aborted) setDetailLoading(false);
     }
@@ -163,6 +188,7 @@ export default function BeneficiaryWorkspace() {
     setTopTen(false);
     setBucket("ALL");
     setSearchInput("");
+    setSearch("");
     setPage(1);
   }
   function chooseAssociation(id: string) {
@@ -177,7 +203,7 @@ export default function BeneficiaryWorkspace() {
     setRevision((v) => v + 1);
   }
   const rows = data?.items ?? [],
-    stats = overview?.totals;
+    stats = overviewScope === cohortQuery ? overview?.totals : undefined;
   const selectables = rows.filter(
     (b) =>
       b.reviewStatus !== "REJECTED" &&
@@ -192,28 +218,40 @@ export default function BeneficiaryWorkspace() {
       return next;
     });
   }
+  async function retryNext(id: string, queryString: string) {
+    try {
+      const result = await apiFetch<{id: string | null}>(`/beneficiary-workspace/${id}/next?${queryString}`);
+      setNextRetry(null);
+      if (result.id) await open(result.id, rows.find(row => row.id === result.id));
+      else setNotice("حُفظت المراجعة. انتهت الأسر المتاحة داخل الجمعية والفرز الحاليين.");
+    } catch (e) {
+      setNextRetry({id, query: queryString});
+      setNotice("حُفظت المراجعة. تعذر فتح التالي؛ يمكنك إعادة جلبه دون تكرار الحفظ.");
+      setError(message(e));
+    }
+  }
   async function saveReview(payload: ReviewPayload, next: boolean) {
     if (!detail) return;
-    await apiFetch(`/beneficiary-workspace/${detail.id}/review`, {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
+    const current = detail;
     const nextQuery = new URLSearchParams(listQuery);
-    if (bucket !== "ALL") nextQuery.set("bucket", bucket);
-    const nextRow = next
-      ? await apiFetch<{ id: string | null }>(
-          `/beneficiary-workspace/${detail.id}/next?${nextQuery}`,
-        )
-      : null;
-    setNotice("حُفظت المراجعة. اعتماد الاحتياج لا يعني تخصيص جهاز من المخزون.");
+    const result = await apiFetch<{nextId?: string | null; nextLookupFailed?: boolean}>(`/beneficiary-workspace/${current.id}/review`, {
+      method: "POST",
+      body: JSON.stringify({...payload, ...(next ? {nextQuery: Object.fromEntries(nextQuery)} : {})}),
+    });
+    setNotice("حُفظت المراجعة. قبول الاحتياج لا يعني تخصيص جهاز من المخزون.");
+    setNextRetry(null);
+    setSelected(prev => { const ids = new Set(prev); ids.delete(current.id); return ids; });
+    setDetail(null);
+    setDetailDirty(false);
     refresh();
-    if (next && nextRow?.id) await open(nextRow.id);
-    else if (next) {
-      setDetail(null);
-      setNotice(
-        "حُفظت المراجعة. انتهت الأسر المتاحة للمراجعة في نطاق هذه الجمعية؛ اختر جمعية أو فرزًا آخر.",
-      );
-    } else await open(detail.id);
+    // Navigation failure must never turn a successful decision into a retryable save.
+    if (!next) { await open(current.id, current); return; }
+    if (result.nextLookupFailed) {
+      setNextRetry({id: current.id, query: nextQuery.toString()});
+      setNotice("حُفظت المراجعة. تعذر تحديد التالي؛ أعد جلب التالي فقط.");
+    } else if (typeof result.nextId === "string") await open(result.nextId, rows.find(row => row.id === result.nextId));
+    else if (result.nextId === null) setNotice("حُفظت المراجعة. انتهت الأسر المتاحة داخل الجمعية والفرز الحاليين.");
+    else await retryNext(current.id, nextQuery.toString());
   }
   async function runBulk() {
     if (!bulkAction) return;
@@ -272,330 +310,38 @@ export default function BeneficiaryWorkspace() {
   return (
     <AppShell user={user}>
       <div className={s.workspace}>
-        <header className={s.header}>
-          <div>
-            <h1>المستفيدون واحتياجاتهم</h1>
-            <p>مراجعة واضحة للأسرة، وقرار مستقل لكل جهاز.</p>
-          </div>
-          <button className={s.secondary} onClick={() => setPlanning(true)}>
-            تخطيط الأجهزة
-          </button>
-        </header>
-        <div className={s.toolbar}>
-          <label>
-            المنطقة
-            <select
-              value={region}
-              onChange={(e) => {
-                setRegion(e.target.value);
-                setAssociation("");
-                resetFilters();
-              }}
-            >
-              <option value="">جميع المناطق</option>
-              {overview?.regions.map((v) => (
-                <option key={v}>{v}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            بحث
-            <input
-              type="search"
-              placeholder="اسم المستفيد، رقمه أو المدينة"
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  setSearch(searchInput.trim());
-                  setPage(1);
-                }
-              }}
-            />
-          </label>
-          <label>
-            المدينة
-            <select
-              value={city}
-              onChange={(e) => {
-                setCity(e.target.value);
-                setPage(1);
-              }}
-            >
-              <option value="">جميع المدن</option>
-              {overview?.cities.map((v) => (
-                <option key={v}>{v}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            الجهاز
-            <select
-              value={deviceType}
-              onChange={(e) => {
-                setDevice(e.target.value);
-                setPage(1);
-              }}
-            >
-              <option value="">جميع الأجهزة</option>
-              {DEVICE_TYPES.map((v) => (
-                <option key={v} value={v}>
-                  {DEVICE_TYPE_LABELS[v]}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>الأولوية</span>
-            <span>
-              <input
-                type="checkbox"
-                checked={topTen}
-                onChange={(e) => {
-                  setTopTen(e.target.checked);
-                  setPage(1);
-                }}
-              />{" "}
-              أول 10 في كل جمعية
-            </span>
-          </label>
-          <details>
-            <summary>خيارات العرض</summary>
-            <label>
-              <span>
-                <input
-                  type="checkbox"
-                  checked={includeDemo}
-                  onChange={(e) => {
-                    setIncludeDemo(e.target.checked);
-                    setPage(1);
-                  }}
-                />{" "}
-                إظهار جمعية تجربة
-              </span>
-            </label>
-            <button
-              className={s.secondary}
-              onClick={() => {
-                setRegion("");
-                setAssociation("");
-                resetFilters();
-              }}
-            >
-              إعادة ضبط الفرز
-            </button>
-          </details>
+        <header className={s.header}><div><h1>المستفيدون واحتياجاتهم</h1><p>مراجعة الأسرة وقرار كل جهاز، في مكان واحد.</p></div><button className={s.secondary} onClick={() => setPlanning(true)}>تخطيط الأجهزة</button></header>
+        <div className={s.navigationV2}>
+          <label className={s.visuallyLabeledV2}><span>المنطقة</span><select aria-label="المنطقة" value={region} onChange={e => {setRegion(e.target.value);setAssociation("");resetFilters();}}><option value="">جميع المناطق</option>{overview?.regions.map(v => <option key={v}>{v}</option>)}</select></label>
+          <WorkspaceSelector overview={overviewRegion === region ? overview : null} associationId={associationId} onChoose={chooseAssociation} loading={overviewLoading}/>
+          <details className={s.displayOptionsV2}><summary>خيارات العرض</summary><div><label><input type="checkbox" checked={includeDemo} onChange={e => {setIncludeDemo(e.target.checked);setPage(1);}}/> إظهار جمعية تجربة</label><button className={s.close} onClick={() => {setRegion("");setAssociation("");resetFilters();}}>إعادة ضبط الفرز</button></div></details>
         </div>
-        {overview?.readOnly && (
-          <div className={s.notice}>
-            وضع القراءة فقط مفعّل مؤقتًا؛ الحفظ والإرسال متوقفان.
+        {overview?.readOnly && <div className={s.notice}>وضع القراءة فقط مفعّل مؤقتًا؛ الحفظ والإرسال متوقفان.</div>}
+        {error && <div className={s.error} role="alert">{error}</div>}
+        {notice && <div className={s.notice} role="status">{notice} {nextRetry && <button className={s.close} onClick={() => void retryNext(nextRetry.id,nextRetry.query)}>فتح التالي دون إعادة الحفظ</button>}</div>}
+        {overviewError && <div className={s.error} role="alert">تعذر تحديث المؤشرات. {overviewError} {stats ? "المعروض آخر بيانات ناجحة." : "الأعداد غير متاحة حاليًا."}<button className={s.close} onClick={refresh}>إعادة المحاولة</button></div>}
+        <div className={s.contextV2}><h2>{overview?.associations.find(a => a.id === associationId)?.name ?? (associationId ? "الجمعية المحددة" : region || "جميع الجمعيات")}</h2><p>المؤشرات لنطاق المنطقة والجمعية والمدينة والبحث والأولوية ونوع الجهاز. {overviewLoading ? "جارٍ التحديث…" : ""}</p></div>
+        <WorkspaceSummary stats={stats} bucket={bucket} onBucket={chooseBucket} onNeed={value => {setNeedStatus(value);setRequested("");setApproved("");setBucket("ALL");setPage(1);}} onType={(type,status) => {setDevice(type);setNeedStatus(status);setRequested("");setApproved("");setBucket("ALL");setPage(1);}} onCount={(kind,value) => {setRequested(kind === "requested" ? (requestedCount === value ? "" : value) : "");setApproved(kind === "approved" ? (approvedCount === value ? "" : value) : "");setBucket("ALL");setNeedStatus("");setPage(1);}}/>
+        <section className={s.main} aria-label="مراجعة الأسر">
+          <div className={s.tableControlsV2}>
+            <input type="search" aria-label="بحث عن مستفيد" placeholder="بحث باسم المستفيد أو رقمه…" value={searchInput} onChange={e => setSearchInput(e.target.value)} onKeyDown={e => {if(e.key === "Enter"){setSearch(searchInput.trim());setPage(1);}}}/>
+            <select aria-label="مدينة المستفيد" value={city} onChange={e => {setCity(e.target.value);setPage(1);}}><option value="">جميع المدن</option>{overview?.cities.map(v => <option key={v}>{v}</option>)}</select>
+            <select aria-label="نوع الجهاز" value={deviceType} onChange={e => {setDevice(e.target.value);setPage(1);}}><option value="">جميع الأجهزة</option>{DEVICE_TYPES.map(v => <option key={v} value={v}>{DEVICE_TYPE_LABELS[v]}</option>)}</select>
+            <label><input type="checkbox" checked={topTen} onChange={e => {setTopTen(e.target.checked);setPage(1);}}/> أول 10 في كل جمعية</label>
           </div>
-        )}
-        {needStatus && (
-          <button className={s.secondary} onClick={() => setNeedStatus("")}>
-            إلغاء فرز حالة الأجهزة
-          </button>
-        )}
-        {error && (
-          <div className={s.error} role="alert">
-            {error}
-          </div>
-        )}
-        {notice && (
-          <div className={s.notice} role="status">
-            {notice}
-          </div>
-        )}
-        <div className={s.cards}>
-          {[
-            ["ALL", "الأسر المرفوعة", stats?.families],
-            ["REVIEW", "مراجعة الأسرة", stats?.review],
-            ["NEEDS", "مراجعة الأجهزة", stats?.pendingNeeds],
-            ["INFORMATION", "بانتظار الجمعية", stats?.information],
-            ["REPLIED", "ردود وصلت", stats?.replied],
-            ["APPROVED", "أسر معتمدة", stats?.approved],
-            ["REJECTED", "أسر مرفوضة", stats?.rejected],
-          ].map(([key, label, count]) => (
-            <button
-              key={key}
-              className={`${s.card} ${bucket === key ? s.active : ""}`}
-              onClick={() => chooseBucket(String(key))}
-            >
-              <strong>{count ?? "—"}</strong>
-              {label}
-            </button>
-          ))}
-        </div>
-        <div className={s.layout}>
-          <aside className={s.associations}>
-            <h2>الجمعيات</h2>
-            <button
-              className={`${s.association} ${!associationId ? s.active : ""}`}
-              onClick={() => chooseAssociation("")}
-            >
-              جميع الجمعيات
-            </button>
-            {overview?.associations.map((a) => (
-              <button
-                key={a.id}
-                className={`${s.association} ${associationId === a.id ? s.active : ""}`}
-                onClick={() => chooseAssociation(a.id)}
-              >
-                <strong>{a.name}</strong>
-                <small>
-                  {a.region} · {a.stats.families} أسرة · {a.stats.requested}{" "}
-                  جهاز مطلوب
-                </small>
-              </button>
-            ))}
-          </aside>
-          <section className={s.main} aria-label="مراجعة الأسر">
-            <div className={s.breakdown}>
-              <h2>
-                {overview?.associations.find((a) => a.id === associationId)
-                  ?.name ?? "قراءة الاحتياجات"}
-              </h2>
-              <div className={s.breakdownRow}>
-                <span>الأجهزة:</span>
-                <button
-                  className={s.chip}
-                  onClick={() => {
-                    setNeedStatus("");
-                    setRequested("");
-                    setApproved("");
-                    setBucket("ALL");
-                    setPage(1);
-                  }}
-                >
-                  {stats?.requested ?? "—"} مطلوبة
-                </button>
-                <button
-                  className={s.chip}
-                  onClick={() => {
-                    setNeedStatus("APPROVED");
-                    setPage(1);
-                  }}
-                >
-                  {stats?.approvedDevices ?? "—"} معتمدة
-                </button>
-                <button
-                  className={s.chip}
-                  onClick={() => {
-                    setNeedStatus("REJECTED");
-                    setPage(1);
-                  }}
-                >
-                  {stats?.rejectedDevices ?? "—"} مرفوضة
-                </button>
-                <button
-                  className={s.chip}
-                  onClick={() => {
-                    setNeedStatus("PENDING");
-                    setPage(1);
-                  }}
-                >
-                  {stats?.pendingDevices ?? "—"} تنتظر القرار
-                </button>
-              </div>
-              <div className={s.breakdownRow}>
-                <button
-                  className={s.chip}
-                  onClick={() => {
-                    setNeedStatus("ALLOCATED");
-                    setPage(1);
-                  }}
-                >
-                  {stats?.allocatedDevices ?? "—"} مخصصة إجمالًا
-                </button>
-                <span className={s.chip}>
-                  {stats?.reservedDevices ?? "—"} محجوزة بالمستودع
-                </span>
-                <button
-                  className={s.chip}
-                  onClick={() => {
-                    setNeedStatus("WITH_DELEGATE");
-                    setPage(1);
-                  }}
-                >
-                  {stats?.withDelegate ?? "—"} مع المندوب
-                </button>
-                <button
-                  className={s.chip}
-                  onClick={() => {
-                    setNeedStatus("DELIVERED");
-                    setPage(1);
-                  }}
-                >
-                  {stats?.deliveredDevices ?? "—"} مسلمة
-                </button>
-                <span className={s.help}>
-                  حالات فرعية من المخصص؛ لا تُجمع معه.
-                </span>
-              </div>
-              <div className={s.breakdownRow}>
-                <span>الأسر حسب عدد الأجهزة المطلوبة:</span>
-                {[1, 2, 3].map((n) => (
-                  <button
-                    key={n}
-                    className={`${s.chip} ${requestedCount === String(n) ? s.active : ""}`}
-                    onClick={() => {
-                      setRequested(
-                        requestedCount === String(n) ? "" : String(n),
-                      );
-                      setApproved("");
-                      setPage(1);
-                    }}
-                  >
-                    <strong>{stats?.requestedFamilies[n] ?? "—"}</strong>
-                    {n === 1 ? "جهاز واحد" : n === 2 ? "جهازان" : "ثلاثة أجهزة"}
-                  </button>
-                ))}
-              </div>
-              <div className={s.breakdownRow}>
-                <span>الأسر حسب عدد الأجهزة المعتمدة:</span>
-                {[1, 2, 3].map((n) => (
-                  <button
-                    key={n}
-                    className={`${s.chip} ${approvedCount === String(n) ? s.active : ""}`}
-                    onClick={() => {
-                      setApproved(approvedCount === String(n) ? "" : String(n));
-                      setRequested("");
-                      setPage(1);
-                    }}
-                  >
-                    <strong>{stats?.approvedFamilies[n] ?? "—"}</strong>
-                    {n === 1 ? "جهاز واحد" : n === 2 ? "جهازان" : "ثلاثة أجهزة"}
-                  </button>
-                ))}
-                <button
-                  className={s.chip}
-                  onClick={() => chooseBucket("INCOMPLETE")}
-                >
-                  {stats?.incomplete ?? "—"} بيانات ناقصة
-                </button>
-              </div>
-              <div className={s.breakdownRow}>
-                {DEVICE_TYPES.map((type) => (
-                  <button
-                    key={type}
-                    className={`${s.chip} ${deviceType === type ? s.active : ""}`}
-                    onClick={() => {
-                      setDevice(deviceType === type ? "" : type);
-                      setPage(1);
-                    }}
-                  >
-                    {DEVICE_TYPE_LABELS[type]}:{" "}
-                    {stats?.devices[type]?.requested ?? "—"} مطلوبة /{" "}
-                    {stats?.devices[type]?.approved ?? "—"} معتمدة
-                  </button>
-                ))}
-              </div>
-              <p className={s.help}>
-                الأرقام تخص نطاق العرض المحدد. الأولوية داخل كل جمعية، وليست
-                مقارنة بين الجمعيات.{" "}
-                {overview?.excludedDemo ? "جمعية تجربة مستثناة." : ""}
-              </p>
-            </div>
+          <WorkspaceReviewTabs stats={stats} bucket={bucket} onBucket={chooseBucket}/>
+          {(bucket !== "ALL" || needStatus || requestedCount || approvedCount || deviceType || city || search || topTen || includeDemo) && <div className={s.filterChipsV2} aria-label="الفرز النشط">
+            {bucket !== "ALL" && <button className={s.chip} onClick={() => chooseBucket("ALL")}>{bucket === "INCOMPLETE" ? "بيانات ناقصة" : FAMILY_BUCKETS.find(row => row[0] === bucket)?.[1]} ×</button>}
+            {needStatus && <button className={s.chip} onClick={() => {setNeedStatus("");setPage(1);}}>{({APPROVED:"أجهزة مقبولة",REJECTED:"أجهزة مرفوضة",PENDING:"أجهزة معلقة",ALLOCATED:"أجهزة مخصصة",WITH_DELEGATE:"مع المندوب",DELIVERED:"تم تسليمه"} as Record<string,string>)[needStatus]} ×</button>}
+            {requestedCount && <button className={s.chip} onClick={() => {setRequested("");setPage(1);}}>الأسر بحسب المطلوب: {requestedCount} ×</button>}
+            {approvedCount && <button className={s.chip} onClick={() => {setApproved("");setPage(1);}}>الأسر بحسب المقبول: {approvedCount} ×</button>}
+            {deviceType && <button className={s.chip} onClick={() => {setDevice("");setPage(1);}}>{DEVICE_TYPE_LABELS[deviceType as keyof typeof DEVICE_TYPE_LABELS]} ×</button>}
+            {city && <button className={s.chip} onClick={() => {setCity("");setPage(1);}}>{city} ×</button>}
+            {search && <button className={s.chip} onClick={() => {setSearchInput("");setSearch("");setPage(1);}}>البحث: {search} ×</button>}
+            {topTen && <button className={s.chip} onClick={() => {setTopTen(false);setPage(1);}}>أول 10 ×</button>}
+            {includeDemo && <button className={s.chip} onClick={() => {setIncludeDemo(false);setPage(1);}}>تشمل جمعية تجربة ×</button>}
+            <button className={s.close} onClick={resetFilters}>إلغاء فرز الأسر</button>
+          </div>}
             {selected.size > 0 && canManage && (
               <div className={s.bulk}>
                 <strong>{selected.size} أسرة محددة</strong>
@@ -689,7 +435,7 @@ export default function BeneficiaryWorkspace() {
                         <button
                           className={s.name}
                           disabled={loading || busy}
-                          onClick={() => void open(b.id)}
+                          onClick={() => void open(b.id, b)}
                         >
                           {b.name}
                         </button>
@@ -768,16 +514,19 @@ export default function BeneficiaryWorkspace() {
               </div>
             </div>
           </section>
-        </div>
-        {detailLoading && <div className={s.notice}>جارٍ فتح ملف الأسرة…</div>}
+        {(openingId || detailLoading || detailError) && !detail && <OpeningFamilyPanel row={opening} loading={detailLoading} error={detailError} onClose={() => {detailRequest.current?.abort();setOpening(null);setOpeningId(null);setDetailLoading(false);setDetailError("");}} onRetry={() => {if(openingId) void open(openingId,opening ?? undefined);}}/>}
         {detail && (
           <FamilyPanel
             key={`${detail.id}:${detail.updatedAt}:${detail.informationRequests.map((r) => r.updatedAt).join()}`}
             detail={detail}
-            canManage={canManage}
+            canManage={canManage && !detailLoading}
+            suspended={!!infoTargets}
+            onDirtyChange={setDetailDirty}
             onClose={() => {
               detailRequest.current?.abort();
               setDetail(null);
+              setDetailDirty(false);
+              setDetailError("");
             }}
             onSave={saveReview}
             onInformation={() =>
@@ -785,13 +534,15 @@ export default function BeneficiaryWorkspace() {
             }
             onRefresh={async () => {
               refresh();
-              await open(detail.id);
+              await open(detail.id, detail);
             }}
           />
         )}
         {infoTargets && (
           <InformationDialog
             targets={infoTargets}
+            initialItems={infoTargets.length === 1 && detail?.id === infoTargets[0].id ? incompleteFields(detail) : []}
+            reviewDraftPending={detailDirty && !!detail && infoTargets.some(target => target.id === detail.id)}
             recipients={(overview?.associations ?? [])
               .filter((a) =>
                 infoTargets.some(
@@ -809,7 +560,7 @@ export default function BeneficiaryWorkspace() {
                 "حُفظت طلبات الاستكمال، وأُدرج بريد ملخص واحد لكل جمعية في طابور الإرسال. لا يعني ذلك تأكيد وصوله.",
               );
               refresh();
-              if (detail) await open(detail.id);
+              if (detail) await open(detail.id, detail);
             }}
           />
         )}
@@ -823,9 +574,9 @@ export default function BeneficiaryWorkspace() {
           />
         )}
         {bulkAction && (
-          <div className={s.dialogOverlay}>
-            <section className={s.dialog} role="dialog" aria-modal="true">
-              <h2>مراجعة {selected.size} أسرة</h2>
+          <BulkReviewModal busy={busy} onClose={() => setBulkAction(null)}>
+              <h2>مراجعة {bulkCounts(rows,selected).families} أسرة</h2>
+              <p>{bulkCounts(rows,selected).pendingNeeds} احتياجًا معلقًا ضمن الأسر المحددة من الصفحة المعروضة فقط.</p>
               <details open>
                 <summary>الأسر والقرارات التي سيجري حفظها</summary>
                 <table className={s.comparison}>
@@ -899,10 +650,24 @@ export default function BeneficiaryWorkspace() {
                   إلغاء
                 </button>
               </div>
-            </section>
-          </div>
+          </BulkReviewModal>
         )}
       </div>
     </AppShell>
   );
+}
+
+function BulkReviewModal({children,busy,onClose}:{children:ReactNode;busy:boolean;onClose:()=>void}) {
+  const focus=useDialogFocus(onClose,busy);
+  return <div className={s.dialogOverlay}><section ref={focus} className={s.dialog} role="dialog" aria-modal="true" aria-label="معاينة مراجعة الأسر المحددة">{children}</section></div>;
+}
+
+function OpeningFamilyPanel({row,loading,error,onClose,onRetry}:{row:WorkspaceRow|null;loading:boolean;error:string;onClose:()=>void;onRetry:()=>void}) {
+  const focus=useDialogFocus(onClose);
+  return <div className={s.overlay}><section ref={focus} className={s.panel} role="dialog" aria-modal="true" aria-label={row ? `فتح ملف ${row.name}` : "فتح ملف الأسرة"} aria-busy={loading}>
+    <header className={s.panelHeader}><div><h2>{row?.name ?? "ملف الأسرة"}</h2><p>{row?.association.name}</p></div><button className={s.close} onClick={onClose}>إغلاق</button></header>
+    {row && <dl className={s.fields}><div><dt>المدينة</dt><dd>{row.city}</dd></div><div><dt>أفراد الأسرة</dt><dd>{row.familyCount}</dd></div><div><dt>الدخل</dt><dd>{money(row.income)}</dd></div></dl>}
+    {loading ? <p className={s.notice} role="status">جارٍ تحميل التفاصيل الحديثة؛ تبقى القرارات معطلة حتى اكتمال التحقق.</p> : <div className={s.error} role="alert">{error || "تعذر تحميل الملف"}<button className={s.close} onClick={onRetry}>إعادة تحميل التفاصيل</button></div>}
+    <footer className={s.actions}><button className={s.button} disabled>حفظ والتالي</button><button className={s.secondary} disabled>حفظ</button></footer>
+  </section></div>;
 }

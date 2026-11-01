@@ -68,6 +68,7 @@ export interface WorkspaceRow {
   informationRequests: InformationRequest[];
 }
 export interface WorkspaceDetail extends WorkspaceRow {
+  historyLoaded?: boolean;
   maritalStatus: string;
   threeDeviceReason: string | null;
   notes: string | null;
@@ -81,6 +82,32 @@ export interface WorkspaceDetail extends WorkspaceRow {
     action: string;
     createdAt: string;
     metadata: unknown;
+  }[];
+}
+export type WorkspaceHistory = {
+  id: string;
+  version: string;
+  events: WorkspaceDetail["events"];
+  informationRequests: InformationRequest[];
+};
+export interface WorkspaceIntake {
+  total: number;
+  started: number;
+  notStarted: number;
+  partial: number;
+  reachedLimit: number;
+  families: number;
+  capacity: number;
+  remaining: number;
+  associations: {
+    id: string;
+    publicCode: string;
+    name: string;
+    region: string;
+    beneficiaryLimit: number;
+    uploadedCount: number;
+    remaining: number;
+    complete: boolean;
   }[];
 }
 export interface WorkspaceStats {
@@ -108,6 +135,7 @@ export interface WorkspaceStats {
   >;
 }
 export interface WorkspaceOverview {
+  intake?: WorkspaceIntake;
   totals: WorkspaceStats;
   associations: {
     id: string;

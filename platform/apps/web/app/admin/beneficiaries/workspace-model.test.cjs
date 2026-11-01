@@ -1,0 +1,14 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path'),ts=require('typescript');
+const output=ts.transpileModule(fs.readFileSync(path.join(__dirname,'workspace-model.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+const mod={exports:{}};vm.runInNewContext(output,{module:mod,exports:mod.exports});
+const {BASELINE_METRIC_KEYS,incompleteFields,retainedVisibleSelection,bulkCounts}=mod.exports;
+const row=(overrides={})=>({id:'a',income:0,socialSecurity:false,city:'الرس',district:'حي الاختبار',familyCount:3,needs:[{decisionStatus:'PENDING'},{decisionStatus:'APPROVED'}],...overrides});
+test('all 28 original metric definitions remain distinct, including zero-capable decision and family distributions',()=>{assert.equal(BASELINE_METRIC_KEYS.length,28);assert.equal(new Set(BASELINE_METRIC_KEYS).size,28);for(const key of ['rejected','approved','rejectedDevices','approvedDevices','pendingDevices','requestedFamilies[3]','approvedFamilies[3]','devices.OVEN.approved'])assert.ok(BASELINE_METRIC_KEYS.includes(key));});
+test('zero income and no social security are valid, not missing values',()=>{assert.equal(incompleteFields(row()).length,0)});
+test('missing income, city, district and family count produce actionable request fields',()=>{assert.equal(incompleteFields(row({income:null,city:' ',district:null,familyCount:0})).map(x=>x.field).join(','),'income,city,district,familyCount');});
+test('three-device justification is requested only when the detail actually supplies its field',()=>{const needs=Array.from({length:3},()=>({decisionStatus:'PENDING'}));assert.equal(incompleteFields(row({needs})).length,0);assert.equal(incompleteFields(row({needs,threeDeviceReason:' '}))[0].field,'threeDeviceReason');assert.equal(incompleteFields(row({needs,threeDeviceReason:'لا توجد أجهزة صالحة'})).length,0);});
+test('selection never silently includes a household which has left the visible rows',()=>{const selected=new Set(['a','b']);const result=retainedVisibleSelection(selected,[row()]);assert.equal([...result].join(','),'a');assert.equal([...selected].join(','),'a,b');});
+test('unchanged selection retains identity without an unnecessary rerender',()=>{const selected=new Set(['a']);assert.equal(retainedVisibleSelection(selected,[row()]),selected);});
+test('bulk preview counts visible households and pending needs separately',()=>{const result=bulkCounts([row(),row({id:'b',needs:[{decisionStatus:'REJECTED'}]})],new Set(['a','hidden']));assert.equal(result.families,1);assert.equal(result.pendingNeeds,1);});

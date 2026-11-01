@@ -99,6 +99,47 @@ describe("Beneficiary workspace — independent review and safe information loop
     });
     expect((await http().get(url).set("Cookie", association)).status).toBe(403);
   });
+  it("counts operational intake independently of household filters, preserves actual limits and counts rejected families", async () => {
+    const original = await prisma.association.findMany({
+      where: { id: { in: [fx.associationAId, fx.associationBId] } },
+      select: { id: true, beneficiaryLimit: true },
+    });
+    const extraIds: string[] = [];
+    const participating = [fx.associationAId, fx.associationBId];
+    try {
+      await prisma.association.update({ where: { id: fx.associationAId }, data: { beneficiaryLimit: 2 } });
+      await prisma.association.update({ where: { id: fx.associationBId }, data: { beneficiaryLimit: 80 } });
+      for (const [index, name] of ["جمعية تجربة", "اختبار رفع مؤرشف", "اختبار غير معتمد"].entries()) {
+        const association = await prisma.association.create({ data: {
+          publicCode: `E2E-INTAKE-${index}-${randomUUID()}`, name, category: "اختبار",
+          region: "الرياض", city: "الرياض", phones: [],
+          ...(index === 1 ? { archivedAt: new Date() } : {}),
+        } });
+        extraIds.push(association.id);
+        if (index !== 2) participating.push(association.id);
+      }
+      await prisma.projectParticipation.createMany({ data: participating.map((associationId) => ({
+        associationId, status: "ACTIVE" as const, activationBasis: "LEGACY_MIGRATION" as const,
+        activatedAt: new Date(),
+      })) });
+      await prisma.beneficiary.update({ where: { id: second.id }, data: { reviewStatus: "REJECTED" } });
+      const response = await http().get(`${url}/overview?region=${encodeURIComponent("الرياض")}&associationId=${fx.associationBId}&search=not-present&city=not-present&deviceType=OVEN&topTen=true&includeDemo=true`).set("Cookie", admin);
+      expect(response.status).toBe(200);
+      expect(response.body.totals.families).toBe(0);
+      const intake = response.body.intake;
+      expect(intake.associations).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: fx.associationAId, beneficiaryLimit: 2, uploadedCount: 2, remaining: 0, complete: true }),
+        expect.objectContaining({ id: fx.associationBId, beneficiaryLimit: 80, uploadedCount: 0, remaining: 80, complete: false }),
+      ]));
+      expect(intake.associations.some((a: { id: string }) => extraIds.includes(a.id))).toBe(false);
+      expect(intake).toMatchObject({ total: 2, started: 1, notStarted: 1, reachedLimit: 1, partial: 0 });
+    } finally {
+      await prisma.beneficiary.update({ where: { id: second.id }, data: { reviewStatus: "UNDER_REVIEW" } });
+      await prisma.projectParticipation.deleteMany({ where: { associationId: { in: participating } } });
+      for (const association of original) await prisma.association.update({ where: { id: association.id }, data: { beneficiaryLimit: association.beneficiaryLimit } });
+      await prisma.association.deleteMany({ where: { id: { in: extraIds } } });
+    }
+  });
   it("accepts family alone, then independent partial device decisions without allocation", async () => {
     const before = await prisma.outboxEvent.count({
         where: { type: "ALLOCATION_RETRY_DUE" },
@@ -419,8 +460,12 @@ describe("Beneficiary workspace — independent review and safe information loop
       subject: "استكمال بيانات المستفيدين — مشروع الأجهزة الكهربائية",
     });
     expect(fakeEmail.lastSecurityAlert!.body).not.toContain("تأكيد مصدر الدخل");
-    const d = await get(second.id),
-      info = d.informationRequests.find(
+    const d = await get(second.id);
+    expect(d).toMatchObject({ events: [], historyLoaded: false });
+    const history = await http().get(`${url}/${second.id}/history`).set("Cookie", admin);
+    expect(history.status).toBe(200);
+    expect(history.body.version).toBe(d.updatedAt);
+    const info = history.body.informationRequests.find(
         (q: any) => q.id === r.body.requestIds[0],
       );
     expect(info.emailStatus).toBe("SMTP_ACCEPTED");
@@ -533,6 +578,9 @@ describe("Beneficiary workspace — independent review and safe information loop
       ).toBe(0);
       expect(
         (await http().get(`${url}/${family.id}`).set("Cookie", cookie)).status,
+      ).toBe(404);
+      expect(
+        (await http().get(`${url}/${family.id}/history`).set("Cookie", cookie)).status,
       ).toBe(404);
       expect(
         (

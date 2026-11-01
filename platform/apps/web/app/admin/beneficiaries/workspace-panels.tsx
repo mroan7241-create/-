@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   apiFetch,
   newOpId,
@@ -18,6 +18,7 @@ import {
   type ReviewPayload,
   type Simulation,
   type WorkspaceDetail,
+  type WorkspaceHistory,
   type WorkspaceOverview,
 } from "../../lib/beneficiary-workspace";
 import { useOperationKey } from "../../lib/use-operation-key";
@@ -35,6 +36,45 @@ const actions: Record<string, string> = {
   BENEFICIARY_INFORMATION_CANCELLED: "أُغلق طلب الاستكمال دون تطبيق الرد",
 };
 
+// Suspend the visible scope without unmounting the review draft or running two traps.
+function useFamilyFocus(onClose: () => void, busy: boolean, enabled: boolean) {
+  const ref = useRef<HTMLElement | null>(null);
+  const state = useRef({ onClose, busy });
+  useEffect(() => { state.current = { onClose, busy }; }, [onClose, busy]);
+  useEffect(() => {
+    const root = ref.current;
+    if (!enabled || !root) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const elements = () => Array.from(root.querySelectorAll<HTMLElement>(
+      'button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href],[tabindex="0"]',
+    )).filter((el) => el.getClientRects().length > 0);
+    elements()[0]?.focus();
+    function key(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!state.current.busy) state.current.onClose();
+      }
+      if (event.key !== "Tab") return;
+      const list = elements(), first = list[0], last = list.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault(); last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault(); first?.focus();
+      }
+    }
+    root.addEventListener("keydown", key);
+    return () => {
+      root.removeEventListener("keydown", key);
+      document.body.style.overflow = overflow;
+      if (previous?.isConnected && previous.getClientRects().length) previous.focus();
+    };
+  }, [enabled]);
+  return ref;
+}
+
 export function FamilyPanel({
   detail: b,
   canManage,
@@ -42,6 +82,8 @@ export function FamilyPanel({
   onSave,
   onInformation,
   onRefresh,
+  suspended = false,
+  onDirtyChange,
 }: {
   detail: WorkspaceDetail;
   canManage: boolean;
@@ -49,6 +91,8 @@ export function FamilyPanel({
   onSave: (p: ReviewPayload, next: boolean) => Promise<void>;
   onInformation: () => void;
   onRefresh: () => Promise<void>;
+  suspended?: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [family, setFamily] = useState<"APPROVED" | "REJECTED">(
     b.reviewStatus === "REJECTED" ? "REJECTED" : "APPROVED",
@@ -65,12 +109,85 @@ export function FamilyPanel({
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [tab, setTab] = useState("review");
-  const focus = useDialogFocus(onClose, busy);
+  const draft = JSON.stringify({ family, decisions, reasons, reason });
+  const [savedDraft, setSavedDraft] = useState(draft);
+  const dirty = draft !== savedDraft;
+  const dirtyRef = useRef(dirty);
+  const [closing, setClosing] = useState(false);
+  const closeGuard = useRef<HTMLDivElement | null>(null);
+  const guardReturnFocus = useRef<HTMLElement | null>(null);
+  const [history, setHistory] = useState<WorkspaceHistory | null>(null);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+  const [historyAttempt, setHistoryAttempt] = useState(0);
+  function requestClose() {
+    if (busy || suspended) return;
+    if (closing) setClosing(false);
+    else if (dirty) {
+      guardReturnFocus.current = document.activeElement as HTMLElement | null;
+      setClosing(true);
+    }
+    else onClose();
+  }
+  const focus = useFamilyFocus(requestClose, busy, !suspended);
+  useEffect(() => {
+    dirtyRef.current = dirty;
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => {
+    if (closing && !suspended) closeGuard.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    else if (!suspended && guardReturnFocus.current?.isConnected) {
+      guardReturnFocus.current.focus();
+      guardReturnFocus.current = null;
+    }
+  }, [closing, suspended]);
+  useEffect(() => {
+    if (tab !== "history" || suspended) return;
+    if (history?.id === b.id && history.version === b.updatedAt) return;
+    const controller = new AbortController();
+    setHistoryBusy(true);
+    setHistoryError("");
+    void apiFetch<WorkspaceHistory>(`/beneficiary-workspace/${encodeURIComponent(b.id)}/history`, {
+      signal: controller.signal,
+    }).then((result) => {
+      if (controller.signal.aborted) return;
+      if (result.id !== b.id || result.version !== b.updatedAt) {
+        setHistoryError("تغيّر الملف أثناء تحميل السجل. حدّث الملف ثم راجع السجل.");
+        return;
+      }
+      setHistory(result);
+    }).catch((e: unknown) => {
+      if (!controller.signal.aborted) setHistoryError(message(e));
+    }).finally(() => {
+      if (!controller.signal.aborted) setHistoryBusy(false);
+    });
+    return () => controller.abort();
+  }, [b.id, b.updatedAt, tab, suspended, history, historyAttempt]);
+  const loadedHistory = history?.id === b.id && history.version === b.updatedAt ? history : null;
+  const historyRequests = loadedHistory
+    ? [
+        ...b.informationRequests.map((current) => {
+          const loaded = loadedHistory.informationRequests.find((r) => r.id === current.id);
+          if (!loaded) return current;
+          return loaded.updatedAt >= current.updatedAt
+            ? loaded
+            : { ...current, emailStatus: loaded.emailStatus ?? current.emailStatus };
+        }),
+        ...loadedHistory.informationRequests.filter((r) => !b.informationRequests.some((current) => current.id === r.id)),
+      ]
+    : b.informationRequests;
+  async function refreshInformation() {
+    if (dirtyRef.current) return;
+    setHistory(null);
+    setHistoryAttempt((attempt) => attempt + 1);
+    await onRefresh();
+  }
   const active = b.informationRequests.find((r) =>
     ["OPEN", "SUBMITTED"].includes(r.status),
   );
   const operationKey = useOperationKey();
-  async function save(next: boolean) {
+  async function save(next: boolean, closeAfterSave = false) {
+    if (busy || suspended || !canManage || active) return;
     setBusy(true);
     setError("");
     try {
@@ -96,6 +213,9 @@ export function FamilyPanel({
                 })),
       };
       await onSave({ ...intent, opId: operationKey(intent) }, next);
+      setSavedDraft(draft);
+      setClosing(false);
+      if (closeAfterSave) onClose();
     } catch (e) {
       setError(message(e));
     } finally {
@@ -103,12 +223,12 @@ export function FamilyPanel({
     }
   }
   return (
-    <div className={s.overlay}>
+    <div className={s.overlay} hidden={suspended} style={suspended ? { display: "none" } : undefined} aria-hidden={suspended || undefined}>
       <section
         ref={focus}
         className={s.panel}
-        role="dialog"
-        aria-modal="true"
+        role={suspended ? undefined : "dialog"}
+        aria-modal={suspended ? undefined : true}
         aria-label={`ملف ${b.name}`}
       >
         <header className={s.panelHeader}>
@@ -119,10 +239,23 @@ export function FamilyPanel({
               {b.publicCode}
             </p>
           </div>
-          <button disabled={busy} className={s.close} onClick={onClose}>
+          <button disabled={busy} className={s.close} onClick={requestClose}>
             إغلاق
           </button>
         </header>
+        {closing && (
+          <div className={s.panelV2Guard} ref={closeGuard}>
+            <h3>لديك تغييرات لم تُحفظ</h3>
+            <p>هل تريد حفظ القرارات قبل إغلاق ملف الأسرة؟</p>
+            {error && <p className={s.error} role="alert">{error}</p>}
+            <div className={s.panelV2GuardActions}>
+              <button className={s.secondary} disabled={busy} onClick={() => setClosing(false)}>متابعة التحرير</button>
+              <button className={s.button} disabled={busy || !canManage || !!active} onClick={() => void save(false, true)}>{busy ? "جارٍ الحفظ…" : "حفظ وإغلاق"}</button>
+              <button className={s.secondary} disabled={busy} onClick={() => { onDirtyChange?.(false); onClose(); }}>تجاهل التغييرات وإغلاق</button>
+            </div>
+          </div>
+        )}
+        <div hidden={closing} className={s.panelV2Content}>
         <div className={s.breakdownRow}>
           <button
             className={`${s.chip} ${tab === "review" ? s.active : ""}`}
@@ -134,15 +267,16 @@ export function FamilyPanel({
             className={`${s.chip} ${tab === "history" ? s.active : ""}`}
             onClick={() => setTab("history")}
           >
-            السجل والاستكمال ({b.informationRequests.length})
+            السجل والاستكمال
           </button>
         </div>
         {error && (
           <div className={s.error} role="alert">
             {error}{" "}
-            <button className={s.close} onClick={() => void onRefresh()}>
+            <button className={s.close} disabled={dirty || busy} onClick={() => void onRefresh()}>
               تحديث الملف
             </button>
+            {dirty && <span> احتفظ بتغييراتك أو أغلق الملف قبل إعادة تحميله.</span>}
           </div>
         )}
         {tab === "review" ? (
@@ -282,18 +416,25 @@ export function FamilyPanel({
           </>
         ) : (
           <>
-            {b.informationRequests.map((r) => (
+            {historyBusy && <p className={s.help} role="status">جارٍ تحميل السجل…</p>}
+            {historyError && <div className={s.error} role="alert">{historyError} <button className={s.close} onClick={() => setHistoryAttempt((attempt) => attempt + 1)}>إعادة المحاولة</button> <button className={s.close} disabled={dirty || busy} onClick={() => void onRefresh()}>تحديث الملف</button>{dirty && <span> أغلق الملف مع حفظ التغييرات أو تجاهلها قبل إعادة تحميله.</span>}</div>}
+            {dirty && (
+              <div className={s.notice} role="status">
+                لديك تعديلات على القرارات لم تُحفظ. احفظها أو تجاهلها قبل اعتماد رد الجمعية أو إغلاق طلب الاستكمال؛ يمكنك الاطلاع على السجل الآن.
+              </div>
+            )}
+            {historyRequests.map((r) => (
               <InformationReview
                 key={r.id}
                 request={r}
-                canManage={canManage}
-                onDone={onRefresh}
+                canManage={canManage && !dirty}
+                onDone={refreshInformation}
               />
             ))}
             <section className={s.section}>
               <h3>سجل الإجراءات</h3>
               <ul className={s.timeline}>
-                {b.events.map((e) => (
+                {(loadedHistory?.events ?? []).map((e) => (
                   <li key={e.id}>
                     {actions[e.action] ?? "تحديث بيانات الأسرة"}
                     <small>
@@ -302,7 +443,7 @@ export function FamilyPanel({
                   </li>
                 ))}
               </ul>
-              {!b.events.length && (
+              {loadedHistory && !loadedHistory.events.length && (
                 <p className={s.help}>لا توجد إجراءات مسجلة لهذا الملف بعد.</p>
               )}
             </section>
@@ -335,11 +476,12 @@ export function FamilyPanel({
                 </button>
               </>
             )}
-            <button className={s.secondary} disabled={busy} onClick={onClose}>
+            <button className={s.secondary} disabled={busy} onClick={requestClose}>
               إغلاق
             </button>
           </footer>
         )}
+        </div>
       </section>
     </div>
   );
@@ -348,17 +490,21 @@ export function FamilyPanel({
 export function InformationDialog({
   targets,
   recipients,
+  initialItems = [],
+  reviewDraftPending = false,
   onClose,
   onDone,
 }: {
   targets: { id: string; version: string }[];
   recipients: { name: string; email: string | null }[];
+  initialItems?: InformationItem[];
+  reviewDraftPending?: boolean;
   onClose: () => void;
   onDone: () => Promise<void>;
 }) {
   const [items, setItems] = useState<
       Partial<Record<InformationField, InformationItem>>
-    >({}),
+    >(() => Object.fromEntries(initialItems.map((item) => [item.field, { ...item }]))),
     [intro, setIntro] = useState(
       "يرجى مراجعة البيانات المحددة والرد من صفحة المستفيدين.",
     ),
@@ -368,6 +514,7 @@ export function InformationDialog({
   const [due, setDue] = useState("");
   const focus = useDialogFocus(onClose, busy);
   async function send() {
+    if (busy) return;
     setBusy(true);
     setError("");
     try {
@@ -394,6 +541,11 @@ export function InformationDialog({
     <div className={s.dialogOverlay}>
       <section ref={focus} className={s.dialog} role="dialog" aria-modal="true">
         <h2>طلب استكمال / تحقق — {targets.length} أسرة</h2>
+        {reviewDraftPending && (
+          <div className={s.error} role="status">
+            إرسال طلب الاستكمال يوقف المراجعة ويلغي تعديلات القرارات غير المحفوظة. اختر «إلغاء» للعودة إلى مسودة القرار والاحتفاظ بها.
+          </div>
+        )}
         <div className={s.notice}>
           {recipients.map((r) => (
             <p key={r.name}>
@@ -500,7 +652,7 @@ export function InformationDialog({
             }
             onClick={() => void send()}
           >
-            {busy ? "جارٍ الحفظ…" : "حفظ الطلب وإرسال الإشعار"}
+            {busy ? "جارٍ الحفظ…" : reviewDraftPending ? "إرسال الاستكمال وتجاهل مسودة القرار" : "حفظ الطلب وإرسال الإشعار"}
           </button>
           <button className={s.secondary} disabled={busy} onClick={onClose}>
             إلغاء

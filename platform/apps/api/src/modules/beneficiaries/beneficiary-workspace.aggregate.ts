@@ -1,6 +1,34 @@
 import { Prisma, prisma } from "@alzad/db";
 import type { WorkspaceQueryDto } from "./dto/beneficiary-workspace.dto";
 
+/** Intake counts all live submitted families, including rejected ones, just like the write quota. */
+export function workspaceIntake(
+  associations: Array<{ id: string; publicCode: string; name: string; region: string; beneficiaryLimit: number }>,
+  counts: Array<{ associationId: string; count: number }>,
+) {
+  const byAssociation = new Map(counts.map((row) => [row.associationId, row.count]));
+  const items = associations.map((association) => {
+    const count = byAssociation.get(association.id) ?? 0;
+    return {
+      ...association,
+      uploadedCount: count,
+      remaining: Math.max(0, association.beneficiaryLimit - count),
+      complete: count >= association.beneficiaryLimit,
+    };
+  });
+  return {
+    total: items.length,
+    started: items.filter((row) => row.uploadedCount > 0).length,
+    notStarted: items.filter((row) => row.uploadedCount === 0).length,
+    reachedLimit: items.filter((row) => row.complete).length,
+    partial: items.filter((row) => row.uploadedCount > 0 && !row.complete).length,
+    families: items.reduce((sum, row) => sum + row.uploadedCount, 0),
+    capacity: items.reduce((sum, row) => sum + row.beneficiaryLimit, 0),
+    remaining: items.reduce((sum, row) => sum + row.remaining, 0),
+    associations: items,
+  };
+}
+
 export interface AggregateRow {
   associationId: string;
   families: number;

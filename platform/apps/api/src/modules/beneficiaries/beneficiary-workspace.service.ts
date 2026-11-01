@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { AccountRole, Prisma, prisma, type DeviceType } from "@alzad/db";
 import { randomUUID } from "node:crypto";
 import { isEmail } from "class-validator";
@@ -36,6 +36,7 @@ import {
   filterCountIds,
   listWorkspaceRows,
   workspaceStats,
+  workspaceIntake,
 } from "./beneficiary-workspace.aggregate";
 
 const ACTIVE_REQUEST = ["OPEN", "SUBMITTED"];
@@ -67,6 +68,7 @@ const snapshot = (b: Record<string, unknown>, items: InformationItem[]) =>
 
 @Injectable()
 export class BeneficiaryWorkspaceService {
+  private readonly logger = new Logger(BeneficiaryWorkspaceService.name);
   constructor(private readonly idempotency: IdempotencyService) {}
   private assertWritable() {
     if (process.env.BENEFICIARY_WORKSPACE_READ_ONLY === "true")
@@ -79,6 +81,8 @@ export class BeneficiaryWorkspaceService {
   private async withMailStatus<T extends { emailEventId: string | null }>(
     requests: T[],
   ) {
+    if (!requests.some((request) => request.emailEventId))
+      return requests.map((request) => ({ ...request, emailStatus: "NOT_QUEUED" }));
     const events = await prisma.outboxEvent.findMany({
       where: {
         id: {
@@ -225,7 +229,7 @@ export class BeneficiaryWorkspaceService {
     const associations = allowed.filter(
       (a) => !q.region || a.region === q.region,
     );
-    const [aggregates, cities, allocationCounts] = await Promise.all([
+    const [aggregates, cities, allocationCounts, intake] = await Promise.all([
       aggregateWorkspace(
         associations.map((a) => a.id),
         q,
@@ -245,6 +249,7 @@ export class BeneficiaryWorkspaceService {
         },
         select: { associationId: true, device: { select: { status: true } } },
       }),
+      this.intake(ctx, q),
     ]);
     const stockStats = (id?: string) => {
       const rows = allocationCounts.filter(
@@ -282,19 +287,45 @@ export class BeneficiaryWorkspaceService {
       regions: [...new Set(allowed.map((a) => a.region))].sort(),
       excludedDemo: q.includeDemo !== "true",
       readOnly: process.env.BENEFICIARY_WORKSPACE_READ_ONLY === "true",
+      intake,
     };
+  }
+  private async intake(ctx: AuthContext, q: WorkspaceQueryDto) {
+    // Intake is an operational denominator, never a count of the current household search.
+    // Demo/archived/non-operational associations stay excluded even in a demo review view.
+    const associations = await prisma.association.findMany({
+      where: {
+        AND: [
+          this.associationWhere(ctx, { region: q.region }),
+          {
+            status: "ACTIVE",
+            participation: {
+              is: {
+                status: { in: ["ACTIVE", "EXECUTING"] },
+                activatedAt: { not: null },
+                activationAnomaly: false,
+              },
+            },
+          },
+        ],
+      },
+      select: {
+        id: true, publicCode: true, name: true, region: true, beneficiaryLimit: true,
+        _count: { select: { beneficiaries: { where: { archivedAt: null } } } },
+      },
+      orderBy: [{ region: "asc" }, { name: "asc" }],
+    });
+    return workspaceIntake(
+      associations.map(({ _count, ...association }) => association),
+      associations.map((row) => ({ associationId: row.id, count: row._count.beneficiaries })),
+    );
   }
   async detail(ctx: AuthContext, id: string) {
     const row = await prisma.beneficiary.findFirst({
       where: {
         id,
         archivedAt: null,
-        association: {
-          is:
-            ctx.role === AccountRole.ASSOCIATION
-              ? { id: ctx.associationId ?? "" }
-              : adminAssociationScopeWhere(ctx),
-        },
+        association: { is: this.associationWhere(ctx, { includeDemo: "true" }) },
       },
       include: {
         association: {
@@ -307,27 +338,51 @@ export class BeneficiaryWorkspaceService {
           },
         },
         needs: true,
-        informationRequests: { orderBy: { createdAt: "desc" }, take: 20 },
+        informationRequests: {
+          where: { status: { in: ACTIVE_REQUEST } },
+          orderBy: { createdAt: "desc" },
+        },
       },
     });
     if (!row) throw missing();
-    const events =
+    return {
+      ...row,
+      income: row.income === null ? null : Number(row.income),
+      latitude: row.latitude === null ? null : Number(row.latitude),
+      longitude: row.longitude === null ? null : Number(row.longitude),
+      events: [],
+      historyLoaded: false,
+      informationFields: INFORMATION_FIELDS,
+    };
+  }
+  async history(ctx: AuthContext, id: string) {
+    // Authorize the family before reading history or delivery metadata.
+    const row = await prisma.beneficiary.findFirst({
+      where: {
+        id, archivedAt: null,
+        association: { is: this.associationWhere(ctx, { includeDemo: "true" }) },
+      },
+      select: { id: true, updatedAt: true },
+    });
+    if (!row) throw missing();
+    const [requests, events] = await Promise.all([
+      prisma.beneficiaryInformationRequest.findMany({
+        where: { beneficiaryId: id }, orderBy: { createdAt: "desc" }, take: 20,
+      }),
       ctx.role === AccountRole.ADMIN
-        ? await prisma.auditLog.findMany({
+        ? prisma.auditLog.findMany({
             where: { entityType: "beneficiaries", entityId: id },
             select: { id: true, action: true, createdAt: true, metadata: true },
             orderBy: { createdAt: "desc" },
             take: 30,
           })
-        : [];
+        : Promise.resolve([]),
+    ]);
     return {
-      ...row,
-      informationRequests: await this.withMailStatus(row.informationRequests),
-      income: row.income === null ? null : Number(row.income),
-      latitude: row.latitude === null ? null : Number(row.latitude),
-      longitude: row.longitude === null ? null : Number(row.longitude),
+      id: row.id,
+      version: row.updatedAt.toISOString(),
+      informationRequests: await this.withMailStatus(requests),
       events,
-      informationFields: INFORMATION_FIELDS,
     };
   }
   async next(ctx: AuthContext, id: string, q: WorkspaceQueryDto) {
@@ -411,7 +466,8 @@ export class BeneficiaryWorkspaceService {
   }
   async review(ctx: AuthContext, id: string, input: WorkspaceReviewDto) {
     this.assertWritable();
-    return prisma.$transaction(async (tx) => {
+    const { nextQuery, ...decision } = input;
+    const saved = await prisma.$transaction(async (tx) => {
       const b = await this.lockFamily(tx, ctx, id),
         scope = `beneficiary-workspace-review:${id}`;
       const claim = await this.idempotency.claim(
@@ -419,7 +475,7 @@ export class BeneficiaryWorkspaceService {
         ctx.accountId,
         scope,
         input.opId,
-        { id, ...input },
+        { id, ...decision },
       );
       if (!claim.claimed) return claim.existingResponse;
       assertFreshVersion(b.updatedAt, input.version);
@@ -575,6 +631,17 @@ export class BeneficiaryWorkspaceService {
       );
       return result;
     });
+    if (!nextQuery) return saved;
+    try {
+      // Navigation is recomputed on replay, after commit; never store stale household details.
+      const next = await this.next(ctx, id, nextQuery);
+      return { ...(saved as object), nextId: next.id, nextLookupFailed: false };
+    } catch (error) {
+      this.logger.warn(
+        `Saved review; next lookup failed (${error instanceof ApiError ? error.code : "INTERNAL_ERROR"})`,
+      );
+      return { ...(saved as object), nextId: null, nextLookupFailed: true };
+    }
   }
   async bulk(ctx: AuthContext, items: WorkspaceBulkItemDto[]) {
     if (new Set(items.map((i) => i.id)).size !== items.length)

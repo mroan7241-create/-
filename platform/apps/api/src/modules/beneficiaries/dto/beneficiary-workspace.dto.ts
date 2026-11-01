@@ -53,7 +53,7 @@ export class WorkspaceNeedDecisionDto {
   @IsIn(["APPROVED", "REJECTED"]) decision!: "APPROVED" | "REJECTED";
   @IsOptional() @IsString() @MaxLength(1000) reason?: string;
 }
-export class WorkspaceReviewDto {
+export class WorkspaceDecisionDto {
   @IsString() @MaxLength(100) opId!: string;
   @IsISO8601() version!: string;
   @IsOptional() @IsIn(["APPROVED", "REJECTED"]) familyDecision?:
@@ -66,7 +66,14 @@ export class WorkspaceReviewDto {
   @Type(() => WorkspaceNeedDecisionDto)
   needs!: WorkspaceNeedDecisionDto[];
 }
-export class WorkspaceBulkItemDto extends WorkspaceReviewDto {
+export class WorkspaceReviewDto extends WorkspaceDecisionDto {
+  /** Navigation is optional and never part of the saved decision/idempotency payload. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => WorkspaceQueryDto)
+  nextQuery?: WorkspaceQueryDto;
+}
+export class WorkspaceBulkItemDto extends WorkspaceDecisionDto {
   @IsUUID() id!: string;
 }
 export class WorkspaceBulkDto {
