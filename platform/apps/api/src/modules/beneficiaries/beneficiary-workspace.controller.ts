@@ -36,6 +36,11 @@ export class BeneficiaryWorkspaceController {
   overview(@CurrentUser() ctx: AuthContext, @Query() query: WorkspaceQueryDto) {
     return this.workspace.overview(ctx, query);
   }
+  @Get("priorities")
+  @Roles(AccountRole.ADMIN)
+  priorities(@CurrentUser() ctx: AuthContext, @Query() query: WorkspaceQueryDto) {
+    return this.workspace.priorities(ctx, query);
+  }
   @Get("planning")
   @Roles(AccountRole.ADMIN)
   planning(@CurrentUser() ctx: AuthContext) {

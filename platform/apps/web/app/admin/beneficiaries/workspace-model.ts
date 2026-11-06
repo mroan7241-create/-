@@ -1,4 +1,9 @@
-import type { InformationItem, WorkspaceRow } from "../../lib/beneficiary-workspace";
+import type { InformationItem, WorkspaceRow, PriorityRecommendation } from "../../lib/beneficiary-workspace";
+
+export function priorityForRow(row: Pick<WorkspaceRow,"id"|"updatedAt">, recommendations?:Record<string,PriorityRecommendation>) {
+  const priority=recommendations?.[row.id],time=new Date(row.updatedAt).getTime();
+  return priority&&Number.isFinite(time)&&priority.sourceVersion===new Date(time).toISOString()?priority:null;
+}
 
 export const FAMILY_BUCKETS = [
   ["ALL", "جميع الأسر", "families"],

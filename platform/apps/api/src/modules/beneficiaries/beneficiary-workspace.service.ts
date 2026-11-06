@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { AccountRole, Prisma, prisma, type DeviceType } from "@alzad/db";
 import { randomUUID } from "node:crypto";
 import { isEmail } from "class-validator";
+import { classifyPriorities } from "./beneficiary-priority.rules";
 import { ApiError } from "../../common/api-error";
 import { IdempotencyService } from "../../common/idempotency.service";
 import { lockParticipationForOperationalWrite } from "../../common/participation-write-lock.util";
@@ -207,6 +208,21 @@ export class BeneficiaryWorkspaceService {
       associations.map((a) => a.id),
       q,
     );
+  }
+  async priorities(ctx: AuthContext, q: WorkspaceQueryDto) {
+      if (!q.associationId) throw new ApiError("PRIORITY_ASSOCIATION_REQUIRED", "اختر جمعية لعرض تقدير الحاجة", 400);
+      const association = await prisma.association.findFirst({ where: this.associationWhere(ctx, {associationId:q.associationId}), select:{id:true} });
+      if (!association) throw missing();
+      // Separate read endpoint: analysis never blocks the household list or loads on every search.
+      const cohort = await prisma.beneficiary.findMany({
+        where: { archivedAt: null, associationId: q.associationId, association: { is: this.associationWhere(ctx) } },
+        take: 5001,
+        select: { id: true, associationId: true, income: true, familyCount: true, needPriority: true, socialSecurity: true,
+          updatedAt: true, threeDeviceReason: true, notes: true, maritalStatus: true },
+      });
+      if (cohort.length > 5000) throw new ApiError("PRIORITY_COHORT_LIMIT", "عدد الأسر يتجاوز حد التحليل؛ لم يُحسب ترتيب جزئي", 400);
+      const priorities = classifyPriorities(cohort.map(row => ({ ...row, income: row.income === null ? null : Number(row.income), updatedAt: row.updatedAt.toISOString() })));
+      return { associationId:q.associationId, computedAt:new Date().toISOString(), summary:priorities.summaries[q.associationId]??{total:0,classified:0,unclassified:0,high:0,medium:0,low:0,median:null,highLimit:null,mediumLimit:null}, policy:priorities.policy, recommendations:Object.fromEntries(priorities.recommendations) };
   }
   async overview(ctx: AuthContext, q: WorkspaceQueryDto) {
     const allowed = await prisma.association.findMany({

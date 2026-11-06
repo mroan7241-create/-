@@ -4,6 +4,14 @@ const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path'),ts=r
 const output=ts.transpileModule(fs.readFileSync(path.join(__dirname,'workspace-model.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
 const mod={exports:{}};vm.runInNewContext(output,{module:mod,exports:mod.exports});
 const {BASELINE_METRIC_KEYS,incompleteFields,retainedVisibleSelection,bulkCounts}=mod.exports;
+test('financial recommendation is attached only to the same household and exact source version',()=>{
+  const row={id:'a',updatedAt:'2026-11-06T00:00:00.000Z'},p={sourceVersion:row.updatedAt};
+  assert.equal(mod.exports.priorityForRow(row,{a:p}),p);
+  assert.equal(mod.exports.priorityForRow({...row,id:'b'},{a:p}),null);
+  assert.equal(mod.exports.priorityForRow({...row,updatedAt:'2026-11-06T00:00:00.001Z'},{a:p}),null);
+  assert.equal(mod.exports.priorityForRow({...row,updatedAt:'invalid'},{a:p}),null);
+  assert.equal(mod.exports.priorityForRow(row),null);
+});
 const row=(overrides={})=>({id:'a',income:0,socialSecurity:false,city:'الرس',district:'حي الاختبار',familyCount:3,needs:[{decisionStatus:'PENDING'},{decisionStatus:'APPROVED'}],...overrides});
 test('all 28 original metric definitions remain distinct, including zero-capable decision and family distributions',()=>{assert.equal(BASELINE_METRIC_KEYS.length,28);assert.equal(new Set(BASELINE_METRIC_KEYS).size,28);for(const key of ['rejected','approved','rejectedDevices','approvedDevices','pendingDevices','requestedFamilies[3]','approvedFamilies[3]','devices.OVEN.approved'])assert.ok(BASELINE_METRIC_KEYS.includes(key));});
 test('zero income and no social security are valid, not missing values',()=>{assert.equal(incompleteFields(row()).length,0)});

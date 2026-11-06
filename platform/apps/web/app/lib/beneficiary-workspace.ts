@@ -44,6 +44,7 @@ export interface InformationRequest {
   };
 }
 export interface WorkspaceRow {
+  priority?: PriorityRecommendation | null;
   id: string;
   publicCode: string;
   name: string;
@@ -66,6 +67,18 @@ export interface WorkspaceRow {
   updatedAt: string;
   needs: WorkspaceNeed[];
   informationRequests: InformationRequest[];
+}
+export interface PriorityRecommendation {
+  policyVersion: string; basis: "FINANCIAL_ONLY"; sourceVersion: string;
+  perPerson: number | null; needClass: "HIGH" | "MEDIUM" | "LOW" | null;
+  classRank: number | null; financialRank: number | null; tiedFinancially: boolean;
+  originalPriority: number | null; warnings: string[];
+  context: { source: string; text: string }[];
+}
+export interface PrioritySummary {
+  total: number; classified: number; unclassified: number;
+  high: number; medium: number; low: number;
+  median: number | null; highLimit: number | null; mediumLimit: number | null;
 }
 export interface WorkspaceDetail extends WorkspaceRow {
   historyLoaded?: boolean;

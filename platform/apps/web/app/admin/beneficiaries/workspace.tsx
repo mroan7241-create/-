@@ -27,7 +27,8 @@ import {
 import { useDialogFocus } from "../../lib/use-dialog-focus";
 import { WorkspaceSummary, WorkspaceReviewTabs } from "./workspace-summary";
 import { WorkspaceSelector } from "./workspace-selector";
-import { FAMILY_BUCKETS, incompleteFields, retainedVisibleSelection, bulkCounts } from "./workspace-model";
+import { PriorityCell, PrioritySummaryBar, useHouseholdPriorities } from "./priority-view";
+import { FAMILY_BUCKETS, incompleteFields, retainedVisibleSelection, bulkCounts, priorityForRow } from "./workspace-model";
 import s from "./workspace.module.css";
 const message = (e: unknown) =>
   e instanceof Error ? e.message : "تعذر إتمام العملية";
@@ -85,6 +86,7 @@ export default function BeneficiaryWorkspace() {
   const detailRequest = useRef<AbortController | null>(null),
     listGeneration = useRef(0);
   const operationKey = useOperationKey();
+  const priorityAnalysis=useHouseholdPriorities(!!user,associationId,revision);
   const query = new URLSearchParams();
   if (region) query.set("region", region);
   if (associationId) query.set("associationId", associationId);
@@ -202,7 +204,9 @@ export default function BeneficiaryWorkspace() {
   function refresh() {
     setRevision((v) => v + 1);
   }
-  const rows = data?.items ?? [],
+  const rows = (data?.items ?? []).map(row=>{
+      return {...row,priority:priorityForRow(row,priorityAnalysis.value?.recommendations)};
+    }),
     stats = overviewScope === cohortQuery ? overview?.totals : undefined;
   const selectables = rows.filter(
     (b) =>
@@ -322,6 +326,9 @@ export default function BeneficiaryWorkspace() {
         {overviewError && <div className={s.error} role="alert">تعذر تحديث المؤشرات. {overviewError} {stats ? "المعروض آخر بيانات ناجحة." : "الأعداد غير متاحة حاليًا."}<button className={s.close} onClick={refresh}>إعادة المحاولة</button></div>}
         <div className={s.contextV2}><h2>{overview?.associations.find(a => a.id === associationId)?.name ?? (associationId ? "الجمعية المحددة" : region || "جميع الجمعيات")}</h2><p>المؤشرات لنطاق المنطقة والجمعية والمدينة والبحث والأولوية ونوع الجهاز. {overviewLoading ? "جارٍ التحديث…" : ""}</p></div>
         <WorkspaceSummary stats={stats} bucket={bucket} onBucket={chooseBucket} onNeed={value => {setNeedStatus(value);setRequested("");setApproved("");setBucket("ALL");setPage(1);}} onType={(type,status) => {setDevice(type);setNeedStatus(status);setRequested("");setApproved("");setBucket("ALL");setPage(1);}} onCount={(kind,value) => {setRequested(kind === "requested" ? (requestedCount === value ? "" : value) : "");setApproved(kind === "approved" ? (approvedCount === value ? "" : value) : "");setBucket("ALL");setNeedStatus("");setPage(1);}}/>
+        {priorityAnalysis.loading&&<p className={s.help} role="status">جارٍ حساب تقدير الحاجة داخل الجمعية؛ يمكنك متابعة المراجعة.</p>}
+        {!associationId&&<p className={s.help}>اختر جمعية لعرض تقدير الحاجة وترتيب كل أسرة داخلها.</p>}
+        <PrioritySummaryBar summary={priorityAnalysis.value?.summary} unavailable={priorityAnalysis.unavailable}/>
         <section className={s.main} aria-label="مراجعة الأسر">
           <div className={s.tableControlsV2}>
             <input type="search" aria-label="بحث عن مستفيد" placeholder="بحث باسم المستفيد أو رقمه…" value={searchInput} onChange={e => setSearchInput(e.target.value)} onKeyDown={e => {if(e.key === "Enter"){setSearch(searchInput.trim());setPage(1);}}}/>
@@ -451,6 +458,7 @@ export default function BeneficiaryWorkspace() {
                         <small className={b.income === null ? s.missing : ""}>
                           {money(b.income)}
                         </small>
+                        <PriorityCell key={`${b.id}:${b.updatedAt}:${revision}`} row={b} disabled={loading||busy}/>
                       </td>
                       <td>
                         <div className={s.needs}>

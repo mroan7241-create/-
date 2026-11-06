@@ -56,6 +56,7 @@ export async function adminAuditScopeWhere(ctx: AuthContext): Promise<Prisma.Aud
 export const ADMIN_ROUTE_POLICIES: Readonly<Record<string, AdminPermission | 'self' | 'owner'>> = {
   'GET /beneficiary-workspace': 'beneficiaries.read',
   'GET /beneficiary-workspace/overview': 'beneficiaries.read',
+  'GET /beneficiary-workspace/priorities': 'beneficiaries.read',
   'GET /beneficiary-workspace/:id': 'beneficiaries.read',
   'GET /beneficiary-workspace/:id/next': 'beneficiaries.read',
   'GET /beneficiary-workspace/:id/history': 'beneficiaries.read',
