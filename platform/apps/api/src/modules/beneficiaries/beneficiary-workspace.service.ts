@@ -153,6 +153,69 @@ export class BeneficiaryWorkspaceService {
           unused:Math.max(0,baseQuota-result.summary.used-reservedOther),overQuota:Math.max(0,result.summary.used+reservedOther-baseQuota)}};
     },{isolationLevel:'RepeatableRead',timeout:15000});
   }
+  /** One scoped cohort read for the project strip; no per-association request fan-out. */
+  async countProposalOverview(ctx: AuthContext, q: {total:number}) {
+    if(!Number.isInteger(q.total)||q.total<0||q.total>10000)
+      throw new ApiError('COUNT_TOTAL_INVALID','أدخل إجماليًا صحيحًا من صفر إلى 10000',400);
+    return prisma.$transaction(async tx => {
+      const active: Prisma.AssociationWhereInput={archivedAt:null,status:'ACTIVE',NOT:demoWhere};
+      const associations=await tx.association.findMany({
+        where:{AND:[active,this.associationWhere(ctx)]},select:{id:true,name:true,region:true},orderBy:{name:'asc'},take:101,
+      });
+      if(associations.length>100)throw new ApiError('COUNT_COHORT_LIMIT','نطاق الجمعيات أكبر من حد المحاكاة',400);
+      const associationCount=await tx.association.count({where:active});
+      if(!associationCount)throw new ApiError('COUNT_NO_ASSOCIATIONS','لا توجد جمعيات ضمن المحاكاة',400);
+      const ids=associations.map(a=>a.id);
+      const cohort=await tx.beneficiary.findMany({
+        where:{archivedAt:null,associationId:{in:ids},association:{is:this.associationWhere(ctx)}},take:20001,
+        select:{id:true,associationId:true,income:true,familyCount:true,needPriority:true,socialSecurity:true,updatedAt:true,reviewStatus:true,
+          needs:{select:{id:true,deviceType:true,decisionStatus:true,allocations:{where:{status:'ACTIVE'},select:{id:true}}}}},
+      });
+      if(cohort.length>20000)throw new ApiError('COUNT_COHORT_LIMIT','نطاق الأسر أكبر من حد المحاكاة؛ لم تُعرض أرقام جزئية',400);
+      const allocations=await tx.deviceAllocation.findMany({
+        where:{associationId:{in:ids},status:'ACTIVE'},take:60001,
+        select:{associationId:true,beneficiaryNeed:{select:{deviceType:true}}}});
+      if(allocations.length>60000)throw new ApiError('COUNT_COHORT_LIMIT','نطاق التخصيصات أكبر من حد المحاكاة',400);
+      const baseQuota=Math.floor(q.total/associationCount);
+      const groups=new Map(ids.map(id=>[id,cohort.filter(r=>r.associationId===id)]));
+      const work=Array.from(groups.values()).reduce((sum,rows)=>sum+Math.min(baseQuota,rows.reduce((n,r)=>n+r.needs.length,0))*rows.length,0);
+      if(work>3000000)throw new ApiError('COUNT_WORK_LIMIT','نطاق المحاكاة كبير؛ قلّل إجمالي الأجهزة قبل إعادة المحاولة',400);
+      const rows=associations.map(a=>{
+        const families=groups.get(a.id)!;
+        if(families.length>5000)throw new ApiError('COUNT_COHORT_LIMIT','عدد أسر إحدى الجمعيات يتجاوز حد المحاكاة',400);
+        const prior=classifyPriorities(families.map(r=>({...r,income:r.income===null?null:Number(r.income),updatedAt:r.updatedAt.toISOString()})));
+        const allocated=allocations.filter(x=>x.associationId===a.id);
+        const existing=allocated.length;
+        const cohortExisting=families.reduce((n,r)=>n+r.needs.filter(x=>x.allocations.length>0).length,0);
+        const reservedOther=Math.max(0,existing-cohortExisting);
+        if(Math.min(Math.max(0,baseQuota-reservedOther),families.reduce((n,r)=>n+r.needs.length,0))*families.length>300000)
+          throw new ApiError('COUNT_WORK_LIMIT','عدد أسر إحدى الجمعيات يتجاوز حد الحساب الآمن',400);
+        const result=proposeCounts(families.map(r=>({id:r.id,sourceVersion:r.updatedAt.toISOString(),
+          requestedCount:r.needs.filter(n=>n.decisionStatus!=='REJECTED'||n.allocations.length>0).length,
+          existingCount:r.needs.filter(n=>n.allocations.length>0).length,
+          needClass:prior.recommendations.get(r.id)?.needClass??null,
+          financialRank:prior.recommendations.get(r.id)?.financialRank??null,excluded:r.reviewStatus==='REJECTED',
+        })),Math.max(0,baseQuota-reservedOther));
+        // Count known types only: existing allocations and complete request sets.
+        // A partial 2-of-3 proposal contributes two unknown units, never invented types.
+        const resolvedTypes:Record<string,number>={REFRIGERATOR:0,OVEN:0,WASHING_MACHINE:0};
+        for(const x of allocated){const type=x.beneficiaryNeed.deviceType;resolvedTypes[type]=(resolvedTypes[type]??0)+1;}
+        let unresolvedDevices=0;
+        for(const family of families){
+          const p=result.recommendations[family.id];
+          if(p.typeSelectionRequired){unresolvedDevices+=p.additionalCount;continue;}
+          if(p.proposedCount>0)for(const need of family.needs)
+            if(need.decisionStatus!=='REJECTED'&&need.allocations.length===0)
+              resolvedTypes[need.deviceType]=(resolvedTypes[need.deviceType]??0)+1;
+        }
+        return {associationId:a.id,name:a.name,region:a.region,households:families.length,resolvedTypes,unresolvedDevices,
+          summary:{...result.summary,quota:baseQuota,used:result.summary.used+reservedOther,
+            unused:Math.max(0,baseQuota-result.summary.used-reservedOther),overQuota:Math.max(0,result.summary.used+reservedOther-baseQuota)}};
+      });
+      return {total:q.total,associationCount,baseQuota,divisionRemainder:q.total%associationCount,
+        scopeComplete:rows.length===associationCount,computedAt:new Date().toISOString(),simulationOnly:true,rows};
+    },{isolationLevel:'RepeatableRead',timeout:15000});
+  }
   private associationWhere(
     ctx: AuthContext,
     q: WorkspaceQueryDto = {},

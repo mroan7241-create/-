@@ -1,6 +1,6 @@
 # Count-only beneficiary proposal — local implementation
 
-This feature is a read-only financial simulation, not beneficiary approval, need approval, stock allocation, signature or mail. It adds a separate GET endpoint and an opt-in compact section/column on the existing beneficiary page. The existing planning dialog and write flows are unchanged. No migration, dependency or environment change is required.
+This feature is a read-only financial simulation, not beneficiary approval, need approval, stock allocation, signature or mail. It adds GET endpoints and a compact central project section/column on the existing beneficiary page. The existing planning dialog and write flows are unchanged. No migration, dependency or environment change is required.
 
 ## Proposed policy, visible in the UI
 
@@ -23,8 +23,16 @@ The response carries the exact parent source version plus a fingerprint of the f
 
 ## Checks and limits
 
-- 11 feature API tests cover integer/cap/conservation/monotonicity properties, unresolved ties, existing allocations, scope, global denominator and cohort limits. Existing priority/workspace tests also passed (43 API tests across the six relevant suites).
+- 14 feature API tests cover integer/cap/conservation/monotonicity properties, unresolved ties, existing allocations, scope, global denominator and cohort limits. The project and selected-family calculations agree, and known types plus unknown device counts conserve the used quota. Earlier priority/workspace checks also passed.
 - 121 web tests passed, including hiding source/review/device-stale proposals. API and web production builds passed.
 - The actual rule engine was run against the saved read-only study cohort:1123 unique household IDs from24 associations, totals1000/1150/1200. All count/cap/conservation checks passed. Existing allocation counts were assumed zero for that offline comparison, since the study snapshot does not contain them. Runtime about92ms for all three scenarios on the local run; excludes DB/network and is not a live speed claim.
-- Local preview uses the actual React components/CSS and actual pure rule engine with synthetic household data. Its small standalone interaction harness is not the authenticated full Next application and does not verify the real React fetch lifecycle end to end. It demonstrates0/1/2/3 proposals,2-of-3 without choosing types, total changes and a390px dialog without horizontal overflow.
+- Local preview uses the actual React components/CSS and actual pure rule engine with 24 synthetic associations and all 50 households per association. Its standalone interaction harness is not the authenticated full Next application and does not verify the real React fetch lifecycle end to end. It demonstrates 0/1/2/3 proposals, partial requests without choosing types, automatic total changes, association navigation, type summaries and a 390px dialog without horizontal overflow.
 - No authenticated production check or deployment is claimed. API then web release remains pending. The before-source archive, preview and verification artifacts are in `Downloads/alzad-count-proposals-checkpoint-20261108`.
+
+## Central project UX follow-up
+
+- The project total is visible at the top, independent of the selected association. After activation, a valid edit waits 450ms for typing to settle, hides stale values immediately and cancels superseded fetches.
+- `GET /beneficiary-workspace/count-proposals/overview?total=1150` returns authorized association summaries in four bounded scoped reads within one repeatable-read transaction. There is no fan-out of 24 per-association requests. The global denominator remains global even for regional administrators. No household names, phones or financial records are returned by this summary endpoint.
+- Scope limits: 100 associations, 20,000 active household rows, 60,000 allocation rows, per-association and combined calculation work guards. Failures return no partial project total.
+- Known type counts include existing allocations and complete proposed request sets only. Partial requests contribute to a separate unknown-type count. These are never labelled new approved device totals.
+- The total currently drives a read-only simulation; it is not a persisted project setting. No final count-plan approval or type-selection write workflow has been added. That boundary must stay explicit when reporting the work.

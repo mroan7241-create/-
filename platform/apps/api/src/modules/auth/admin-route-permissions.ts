@@ -58,6 +58,7 @@ export const ADMIN_ROUTE_POLICIES: Readonly<Record<string, AdminPermission | 'se
   'GET /beneficiary-workspace/overview': 'beneficiaries.read',
   'GET /beneficiary-workspace/priorities': 'beneficiaries.read',
     'GET /beneficiary-workspace/count-proposals': 'beneficiaries.read',
+    'GET /beneficiary-workspace/count-proposals/overview': 'beneficiaries.read',
   'GET /beneficiary-workspace/:id': 'beneficiaries.read',
   'GET /beneficiary-workspace/:id/next': 'beneficiaries.read',
   'GET /beneficiary-workspace/:id/history': 'beneficiaries.read',

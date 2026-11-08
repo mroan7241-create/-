@@ -20,6 +20,7 @@ import {
   InformationResolveDto,
   PlanningDto,
   CountProposalQueryDto,
+  CountProposalTotalDto,
   WorkspaceBulkDto,
   WorkspaceQueryDto,
   WorkspaceReviewDto,
@@ -42,6 +43,12 @@ export class BeneficiaryWorkspaceController {
   @Roles(AccountRole.ADMIN)
   priorities(@CurrentUser() ctx: AuthContext, @Query() query: WorkspaceQueryDto) {
     return this.workspace.priorities(ctx, query);
+  }
+  @Get("count-proposals/overview")
+  @Roles(AccountRole.ADMIN)
+  @Header('Cache-Control','private, no-store')
+  countProposalOverview(@CurrentUser() ctx: AuthContext, @Query() query: CountProposalTotalDto) {
+    return this.workspace.countProposalOverview(ctx, query);
   }
   @Get("count-proposals")
   @Roles(AccountRole.ADMIN)

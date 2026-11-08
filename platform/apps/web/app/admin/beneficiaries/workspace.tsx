@@ -318,6 +318,7 @@ export default function BeneficiaryWorkspace() {
     <AppShell user={user}>
       <div className={s.workspace}>
         <header className={s.header}><div><h1>المستفيدون واحتياجاتهم</h1><p>مراجعة الأسرة وقرار كل جهاز، في مكان واحد.</p></div><button className={s.secondary} onClick={() => setPlanning(true)}>تخطيط الأجهزة</button></header>
+        <CountProposalBar model={countProposal} associationId={associationId} onChoose={id=>{setRegion("");chooseAssociation(id);}}/>
         <div className={s.navigationV2}>
           <label className={s.visuallyLabeledV2}><span>المنطقة</span><select aria-label="المنطقة" value={region} onChange={e => {setRegion(e.target.value);setAssociation("");resetFilters();}}><option value="">جميع المناطق</option>{overview?.regions.map(v => <option key={v}>{v}</option>)}</select></label>
           <WorkspaceSelector overview={overviewRegion === region ? overview : null} associationId={associationId} onChoose={chooseAssociation} loading={overviewLoading}/>
@@ -332,7 +333,6 @@ export default function BeneficiaryWorkspace() {
         {priorityAnalysis.loading&&<p className={s.help} role="status">جارٍ حساب تقدير الحاجة داخل الجمعية؛ يمكنك متابعة المراجعة.</p>}
         {!associationId&&<p className={s.help}>اختر جمعية لعرض تقدير الحاجة وترتيب كل أسرة داخلها.</p>}
         <PrioritySummaryBar summary={priorityAnalysis.value?.summary} unavailable={priorityAnalysis.unavailable}/>
-        <CountProposalBar model={countProposal} associationId={associationId}/>
         <section className={s.main} aria-label="مراجعة الأسر">
           <div className={s.tableControlsV2}>
             <input type="search" aria-label="بحث عن مستفيد" placeholder="بحث باسم المستفيد أو رقمه…" value={searchInput} onChange={e => setSearchInput(e.target.value)} onKeyDown={e => {if(e.key === "Enter"){setSearch(searchInput.trim());setPage(1);}}}/>

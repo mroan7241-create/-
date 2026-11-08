@@ -17,8 +17,10 @@ import {
   ValidateNested,
 } from "class-validator";
 import { PaginationQueryDto } from "../../../common/validation/pagination-query.dto";
-export class CountProposalQueryDto {
+export class CountProposalTotalDto {
   @Type(() => Number) @IsInt() @Min(0) @Max(10000) total!: number;
+}
+export class CountProposalQueryDto extends CountProposalTotalDto {
   @IsUUID() associationId!: string;
 }
 export class WorkspaceQueryDto extends PaginationQueryDto {
