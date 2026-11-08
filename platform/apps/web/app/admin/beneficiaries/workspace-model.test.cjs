@@ -13,6 +13,17 @@ test('financial recommendation is attached only to the same household and exact 
   assert.equal(mod.exports.priorityForRow(row),null);
 });
 const row=(overrides={})=>({id:'a',income:0,socialSecurity:false,city:'الرس',district:'حي الاختبار',familyCount:3,needs:[{decisionStatus:'PENDING'},{decisionStatus:'APPROVED'}],...overrides});
+
+test('count proposal is hidden when the household source, review or device decisions changed',()=>{
+ const b=row({updatedAt:'2026-11-08T00:00:00.000Z',reviewStatus:'UNDER_REVIEW',needs:[{id:'n',decisionStatus:'PENDING'}]});
+ const p={sourceVersion:b.updatedAt,requestSignature:JSON.stringify(['UNDER_REVIEW',['n','PENDING']])};
+ assert.equal(mod.exports.countProposalForRow(b,{a:p}),p);
+ assert.equal(mod.exports.countProposalForRow({...b,id:'other'},{a:p}),null);
+ assert.equal(mod.exports.countProposalForRow({...b,reviewStatus:'REJECTED'},{a:p}),null);
+ assert.equal(mod.exports.countProposalForRow({...b,updatedAt:'2026-11-08T00:00:00.001Z'},{a:p}),null);
+ assert.equal(mod.exports.countProposalForRow({...b,needs:[{id:'n',decisionStatus:'APPROVED'}]},{a:p}),null);
+ assert.equal(mod.exports.countProposalForRow(b),null);
+});
 test('all 28 original metric definitions remain distinct, including zero-capable decision and family distributions',()=>{assert.equal(BASELINE_METRIC_KEYS.length,28);assert.equal(new Set(BASELINE_METRIC_KEYS).size,28);for(const key of ['rejected','approved','rejectedDevices','approvedDevices','pendingDevices','requestedFamilies[3]','approvedFamilies[3]','devices.OVEN.approved'])assert.ok(BASELINE_METRIC_KEYS.includes(key));});
 test('zero income and no social security are valid, not missing values',()=>{assert.equal(incompleteFields(row()).length,0)});
 test('missing income, city, district and family count produce actionable request fields',()=>{assert.equal(incompleteFields(row({income:null,city:' ',district:null,familyCount:0})).map(x=>x.field).join(','),'income,city,district,familyCount');});

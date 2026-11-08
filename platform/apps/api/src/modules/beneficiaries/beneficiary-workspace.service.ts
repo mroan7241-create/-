@@ -3,6 +3,7 @@ import { AccountRole, Prisma, prisma, type DeviceType } from "@alzad/db";
 import { randomUUID } from "node:crypto";
 import { isEmail } from "class-validator";
 import { classifyPriorities } from "./beneficiary-priority.rules";
+import { proposeCounts } from "./beneficiary-count-proposal.rules";
 import { ApiError } from "../../common/api-error";
 import { IdempotencyService } from "../../common/idempotency.service";
 import { lockParticipationForOperationalWrite } from "../../common/participation-write-lock.util";
@@ -116,6 +117,42 @@ export class BeneficiaryWorkspaceService {
     });
   }
 
+  async countProposals(ctx: AuthContext, q: {total:number;associationId:string}) {
+    if(!Number.isInteger(q.total)||q.total<0||q.total>10000) throw new ApiError('COUNT_TOTAL_INVALID','أدخل إجماليًا صحيحًا من صفر إلى 10000',400);
+    return prisma.$transaction(async tx => {
+      const active: Prisma.AssociationWhereInput={archivedAt:null,status:'ACTIVE',NOT:demoWhere};
+      const association=await tx.association.findFirst({where:{AND:[active,this.associationWhere(ctx,{associationId:q.associationId})]},select:{id:true}});
+      if(!association)throw missing();
+      // Global count only, not names/data from outside the administrator's scope.
+      const associationCount=await tx.association.count({where:active});
+      if(!associationCount)throw new ApiError('COUNT_NO_ASSOCIATIONS','لا توجد جمعيات ضمن المحاكاة',400);
+      const cohort=await tx.beneficiary.findMany({
+        where:{archivedAt:null,associationId:association.id,association:{is:this.associationWhere(ctx)}},take:5001,
+        select:{id:true,associationId:true,income:true,familyCount:true,needPriority:true,socialSecurity:true,updatedAt:true,reviewStatus:true,
+          needs:{select:{id:true,decisionStatus:true,allocations:{where:{status:'ACTIVE'},select:{id:true}}}}},
+      });
+      if(cohort.length>5000)throw new ApiError('COUNT_COHORT_LIMIT','عدد الأسر يتجاوز حد المحاكاة؛ لم يُحسب مقترح جزئي',400);
+      const allocated=await tx.deviceAllocation.count({where:{associationId:association.id,status:'ACTIVE'}});
+      const priorities=classifyPriorities(cohort.map(r=>({...r,income:r.income===null?null:Number(r.income),updatedAt:r.updatedAt.toISOString()})));
+      const baseQuota=Math.floor(q.total/associationCount);
+      const cohortExisting=cohort.reduce((n,r)=>n+r.needs.filter(x=>x.allocations.length>0).length,0);
+      const reservedOther=Math.max(0,allocated-cohortExisting);
+      if(Math.min(Math.max(0,baseQuota-reservedOther),cohort.reduce((n,r)=>n+r.needs.length,0))*cohort.length>300000)
+        throw new ApiError('COUNT_WORK_LIMIT','نطاق المحاكاة كبير؛ يلزم تقليل الإجمالي لهذه الجمعية قبل إعادة المحاولة',400);
+      const result=proposeCounts(cohort.map(r=>({id:r.id,sourceVersion:r.updatedAt.toISOString(),
+        requestedCount:r.needs.filter(n=>n.decisionStatus!=='REJECTED'||n.allocations.length>0).length,
+        existingCount:r.needs.filter(n=>n.allocations.length>0).length,
+        needClass:priorities.recommendations.get(r.id)?.needClass??null,financialRank:priorities.recommendations.get(r.id)?.financialRank??null,
+        excluded:r.reviewStatus==='REJECTED',
+      })),Math.max(0,baseQuota-reservedOther));
+      const recommendations=Object.fromEntries(cohort.map(r=>[r.id,{...result.recommendations[r.id],
+        requestSignature:JSON.stringify([r.reviewStatus,...r.needs.map(n=>[n.id,n.decisionStatus]).sort((a,b)=>a[0].localeCompare(b[0]))])}]));
+      return {...result,recommendations,associationId:association.id,total:q.total,associationCount,baseQuota,
+        divisionRemainder:q.total%associationCount,reservedOther,computedAt:new Date().toISOString(),simulationOnly:true,
+        summary:{...result.summary,quota:baseQuota,used:result.summary.used+reservedOther,
+          unused:Math.max(0,baseQuota-result.summary.used-reservedOther),overQuota:Math.max(0,result.summary.used+reservedOther-baseQuota)}};
+    },{isolationLevel:'RepeatableRead',timeout:15000});
+  }
   private associationWhere(
     ctx: AuthContext,
     q: WorkspaceQueryDto = {},

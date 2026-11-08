@@ -3,6 +3,9 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsInt,
+  Min,
+  Max,
   IsBoolean,
   IsIn,
   IsISO8601,
@@ -14,6 +17,10 @@ import {
   ValidateNested,
 } from "class-validator";
 import { PaginationQueryDto } from "../../../common/validation/pagination-query.dto";
+export class CountProposalQueryDto {
+  @Type(() => Number) @IsInt() @Min(0) @Max(10000) total!: number;
+  @IsUUID() associationId!: string;
+}
 export class WorkspaceQueryDto extends PaginationQueryDto {
   @IsOptional() @IsUUID() associationId?: string;
   @IsOptional() @IsString() @MaxLength(100) region?: string;

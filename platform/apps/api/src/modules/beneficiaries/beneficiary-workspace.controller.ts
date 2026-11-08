@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Param,
   ParseUUIDPipe,
   Post,
@@ -18,6 +19,7 @@ import {
   InformationReplyDto,
   InformationResolveDto,
   PlanningDto,
+  CountProposalQueryDto,
   WorkspaceBulkDto,
   WorkspaceQueryDto,
   WorkspaceReviewDto,
@@ -40,6 +42,12 @@ export class BeneficiaryWorkspaceController {
   @Roles(AccountRole.ADMIN)
   priorities(@CurrentUser() ctx: AuthContext, @Query() query: WorkspaceQueryDto) {
     return this.workspace.priorities(ctx, query);
+  }
+  @Get("count-proposals")
+  @Roles(AccountRole.ADMIN)
+  @Header('Cache-Control','private, no-store')
+  countProposals(@CurrentUser() ctx: AuthContext, @Query() query: CountProposalQueryDto) {
+    return this.workspace.countProposals(ctx, query);
   }
   @Get("planning")
   @Roles(AccountRole.ADMIN)

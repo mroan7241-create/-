@@ -28,6 +28,8 @@ import { useDialogFocus } from "../../lib/use-dialog-focus";
 import { WorkspaceSummary, WorkspaceReviewTabs } from "./workspace-summary";
 import { WorkspaceSelector } from "./workspace-selector";
 import { PriorityCell, PrioritySummaryBar, useHouseholdPriorities } from "./priority-view";
+import {CountProposalBar,CountProposalCell,useCountProposals} from './count-proposal-view';
+import {countProposalForRow} from './workspace-model';
 import { FAMILY_BUCKETS, incompleteFields, retainedVisibleSelection, bulkCounts, priorityForRow } from "./workspace-model";
 import s from "./workspace.module.css";
 const message = (e: unknown) =>
@@ -87,6 +89,7 @@ export default function BeneficiaryWorkspace() {
     listGeneration = useRef(0);
   const operationKey = useOperationKey();
   const priorityAnalysis=useHouseholdPriorities(!!user,associationId,revision);
+  const countProposal=useCountProposals(!!user,associationId,revision);
   const query = new URLSearchParams();
   if (region) query.set("region", region);
   if (associationId) query.set("associationId", associationId);
@@ -329,6 +332,7 @@ export default function BeneficiaryWorkspace() {
         {priorityAnalysis.loading&&<p className={s.help} role="status">جارٍ حساب تقدير الحاجة داخل الجمعية؛ يمكنك متابعة المراجعة.</p>}
         {!associationId&&<p className={s.help}>اختر جمعية لعرض تقدير الحاجة وترتيب كل أسرة داخلها.</p>}
         <PrioritySummaryBar summary={priorityAnalysis.value?.summary} unavailable={priorityAnalysis.unavailable}/>
+        <CountProposalBar model={countProposal} associationId={associationId}/>
         <section className={s.main} aria-label="مراجعة الأسر">
           <div className={s.tableControlsV2}>
             <input type="search" aria-label="بحث عن مستفيد" placeholder="بحث باسم المستفيد أو رقمه…" value={searchInput} onChange={e => setSearchInput(e.target.value)} onKeyDown={e => {if(e.key === "Enter"){setSearch(searchInput.trim());setPage(1);}}}/>
@@ -418,6 +422,7 @@ export default function BeneficiaryWorkspace() {
                     <th>المستفيد والجمعية</th>
                     <th>المدينة</th>
                     <th>الأسرة / الدخل</th>
+                    {countProposal.active&&<th>المقترح</th>}
                     <th>الأجهزة المطلوبة</th>
                     <th>الحالة</th>
                   </tr>
@@ -460,6 +465,7 @@ export default function BeneficiaryWorkspace() {
                         </small>
                         <PriorityCell key={`${b.id}:${b.updatedAt}:${revision}`} row={b} disabled={loading||busy}/>
                       </td>
+                      {countProposal.active&&<td><CountProposalCell key={`${b.id}:${b.updatedAt}:${revision}:${countProposal.total}:${countProposal.value?.computedAt??'pending'}`} row={b} proposal={countProposalForRow(b,countProposal.value?.recommendations)} disabled={loading||busy||countProposal.loading}/></td>}
                       <td>
                         <div className={s.needs}>
                           {b.needs.map((n) => (

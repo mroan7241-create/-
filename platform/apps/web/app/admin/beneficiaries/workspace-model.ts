@@ -41,6 +41,13 @@ export function retainedVisibleSelection(selected: Set<string>, rows: WorkspaceR
   return result.size === selected.size ? selected : result;
 }
 
+export function countProposalForRow<T extends {sourceVersion:string;requestSignature:string}>(row:WorkspaceRow, recommendations?:Record<string,T>):T|null {
+  const proposal=recommendations?.[row.id];
+  if(!proposal||!Number.isFinite(Date.parse(row.updatedAt))||proposal.sourceVersion!==row.updatedAt)return null;
+  const signature=JSON.stringify([row.reviewStatus,...row.needs.map(n=>[n.id,n.decisionStatus]).sort((a,b)=>a[0].localeCompare(b[0]))]);
+  return proposal.requestSignature===signature?proposal:null;
+}
+
 export function bulkCounts(rows: WorkspaceRow[], selected: Set<string>) {
   const targets = rows.filter(row => selected.has(row.id));
   return { families: targets.length, pendingNeeds: targets.reduce((sum, row) => sum + row.needs.filter(n => n.decisionStatus === "PENDING").length, 0) };
